@@ -1,0 +1,5 @@
+import Pkg; Pkg.add("Plots")
+import Pkg; Pkg.add("SparseArrays")
+
+
+import Pkg; Pkg.add("SparseArrayKit")
