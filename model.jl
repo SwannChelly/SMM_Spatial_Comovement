@@ -2,7 +2,7 @@ using SparseArrays
 using Distributions
 using Random
 
-
+# import Pkg; Pkg.add("Distributions")
 
 
 struct Economy
@@ -35,9 +35,9 @@ end
 
 function build_economy(;R=3, S=1, eta=0.5, omega=nothing, theta=1.0, phi_bar=0.9, w=nothing,
                        distances=nothing, alpha=1.0, beta=1.0, filter_N_upstream=nothing,
-                       filter_A_downstream=ones(Bool, R), mu_T=0.095, sigma_T=1.395, sigma=1.0)
+                       filter_A_downstream=ones(Bool, R), mu_T=10, sigma_T=1.395, sigma=1.0)
     
-    Random.seed!(1234)
+    # Random.seed!(1234)
     # We will use the upstream variable in the rest of the simulation for ease of computation. 
     # We assume that in each region there is at most N firm alive. For a region R the actual number of firms that are alive is given by self.N_upstream
     # Then we sort them for each sector on a single line in the upstream array (of size S x 1 x RN)
@@ -56,7 +56,7 @@ function build_economy(;R=3, S=1, eta=0.5, omega=nothing, theta=1.0, phi_bar=0.9
     poisson_dist = Poisson.(T .* phi_bar^(-theta))
     N_upstream = fill(4, S, R)
     N_upstream[:,end] .= 1
-    #N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
+    # N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
     N = maximum(N_upstream)
 
     upstream = create_sparse_upstream(N_upstream, S, R, N)
@@ -139,6 +139,8 @@ upstream = eco.upstream
 tau = eco.tau
 N_upstream = eco.N_upstream
 lbd = eco.lbd
+omega = eco.omega
+eta = eco.eta
 
 w_extended = repeat(w, inner=(1, N))
 pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar
@@ -201,14 +203,71 @@ extended_upstream = repeat(upstream,outer = (1,R))
 extended_lbd = extended_upstream.*extended_lbd
 rd = random_like_sparse(extended_upstream)
 matching = compare_sparse(rd,extended_lbd)
+
+function from_S_RNN_to_flat(df,S,R,N)
+    """
+    df: matrix of size (S,RRN)  
+    For example contains for each sector and each downstream region the list of possible prices (those that are not equal to 0)
+    We change its shape such as it has (S,R,R,N) with (Sector, Downstream region, Upstream region, Matched firms in the downstream region)
+    """
+    flat = reshape(df, S, R*N,R)
+    flat = permutedims(flat,(3,2,1))
+    return flat
+end
+function from_flat_to_structured(flat,S,R,N)
+    structured = reshape(flat, R, N, R, S)
+    structured = permutedims(structured, (3, 2, 1, 4))
+    return structured
+end
+
 acceptable_prices = Array(divide_sparse(matching,prices_repeated))
+acceptable_prices_flat = from_S_RNN_to_flat(acceptable_prices,S,R,N)
+
+matched_prices = Array(matching.*prices_repeated)
+matched_prices_flat = from_S_RNN_to_flat(matched_prices,S,R,N)
+p_sj_coord = argmax(acceptable_prices_flat, dims=2) # Coordinate of the best firm in j
+
+# Set the best firm coordinate's price to the matched price at that coordinate
+p_sj = zeros(size(matched_prices_flat))
+p_sj[p_sj_coord] = matched_prices_flat[p_sj_coord]
+p_sj = from_flat_to_structured(p_sj,S,R,N)
+
+price_indices = reshape(sum(sum(p_sj,dims = 1),dims = 2),(S,R))
+omega_ = repeat(omega,outer = (1,R))
+price_indices = price_indices.^eta.^omega_
+price_indices = reshape(sum(price_indices,dims = 1),R)
 
 
-# acceptable_prices: matrix of size (S,RRN)
-# Contains for each sector and each downstream region the list of possible prices (those that are not equal to 0)
-# We change its shape such as it has (S,R,R,N) with (Sector, Downstream region, Upstream region, Matched firms in the downstream region)
-acceptable_prices = reshape(acceptable_prices, S, R*N,R)
-acceptable_prices = permutedims(acceptable_prices,(3,2,1))
+# Trade flows
+function g(price_indices,sigma = 2)
+    return price_indices.^(-sigma)
+end
 
-acceptable_prices = reshape(acceptable_prices, R, N, R, S)
-acceptable_prices = permutedims(acceptable_prices, (3, 2, 1, 4))
+# Create vector of demand for each aerospace industry 
+X_j = g(price_indices,2).*1.0
+
+# We create M_sij the trade flow from upstream firms in (s,i) to downstream firms in j
+# First we build a R x R x S matrix with (Downstream,Upstream,Sector)
+# The first matrix has R rows. If the coefficient in row r is not 0, it means that it serves region r at the in row r. 
+
+omega_ = reshape(permutedims(repeat(omega,inner = (1,R*R)),(2,1)),(R,1,R,S))
+M_sij = sum(p_sj,dims = 2)
+M_sij = permutedims(M_sij, (3, 2, 1, 4))
+M_sij = (M_sij./price_indices).^(1-eta).*omega_.*X_j
+
+# M_sj 
+# chi_si = M_{si.}/M_{sA}
+M_si = reshape(sum(M_sij,dims = 1),(R,S))
+M_sA = sum(M_si,dims = 1)
+chi_si = M_si./M_sA
+
+# pi_sA
+pi_sA = M_sA/sum(M_sA)
+
+# pi_jA: Share of region $i$ in the total purchase of the aerospace industry. 
+
+
+
+
+
+

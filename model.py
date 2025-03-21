@@ -165,3 +165,129 @@ class Economy:
 
 
 self = Economy(**dict_var)
+
+
+import torch
+from time import time
+
+def g(P, sigma=2):
+    return P ** (-sigma)
+
+
+class Economy:
+    def __init__(self, R=3, S=1, N_upstream=None, downstream=None,
+                 eta=0.5, omega=None, theta=1, phi_bar=0.9, w=None,
+                 distances=None, alpha=None, beta=None,
+                 filter_N_upstream=None, filter_A_downstream=None,
+                 mu_T=0.095, sigma_T=1.395, sigma=1, seed=0, **kwargs):
+
+        torch.manual_seed(seed)
+
+        t1 = time()
+        self.R = R
+        self.S = S
+        self.eta = eta
+        self.filter_A_downstream = filter_A_downstream
+        self.sigma = sigma
+        self.phi_bar = phi_bar
+        self.omega = omega
+
+        t2 = time()
+        print("Init", t2 - t1)
+        t1 = t2
+
+        self.distances = (torch.rand((self.R, self.R)).abs() if distances is None else distances)
+        if distances is None:
+            self.distances = self.distances + self.distances.T
+
+        if isinstance(alpha, int):
+            alpha = torch.ones(self.S) * alpha
+        if isinstance(beta, int):
+            beta = torch.ones(self.S) * beta
+
+        self.tau = (torch.rand((self.S, self.R, self.R)) if alpha is None
+                    else self.distances[None, :, :] ** -alpha[:, None, None])
+        self.lbd = (torch.rand((self.S, self.R, self.R)) if beta is None
+                    else self.distances[None, :, :] ** -beta[:, None, None])
+
+        self.T = torch.exp(torch.normal(mu_T, sigma_T, size=(self.S, self.R)))
+
+        t2 = time()
+        print("T", t2 - t1)
+        t1 = t2
+
+        self.N_upstream = (torch.poisson(self.T * self.phi_bar ** (-theta)) if N_upstream is None
+                           else N_upstream)
+        if filter_N_upstream is not None:
+            self.N_upstream = self.N_upstream * filter_N_upstream
+
+        self.N = int(self.N_upstream.max().item())
+        self.upstream = (torch.arange(self.N)[None, None, :]
+                         < self.N_upstream[:, :, None]).int().reshape(self.S, 1, -1)
+
+        self.w = (torch.rand((S, R)).abs() if w is None else w)
+        self.w = self.w.reshape(self.S, 1, -1).repeat(1, 1, self.N)
+
+        self.pareto_draws = (torch.distributions.pareto.Pareto(scale=1.0, concentration=theta)
+                             .sample((self.S, 1, self.N)) * self.phi_bar)
+        self.prices = self.w / self.pareto_draws
+        self.prices = self.prices * self.tau.repeat(1, 1, self.N)
+
+        t2 = time()
+        print("Pareto", t2 - t1)
+        t1 = t2
+
+        extended_upstream = self.upstream.repeat(1, self.R, 1)
+        extended_lbd = self.lbd.repeat(1, 1, self.N)
+        matching = (torch.rand(extended_upstream.shape) > (extended_upstream * extended_lbd)).int()
+        matching = matching * extended_upstream
+
+        t2 = time()
+        print("Matching", t2 - t1)
+        t1 = t2
+
+        acceptable_prices = matching * (1 / self.prices)
+        max_indices = acceptable_prices.argmax(dim=-1)
+        self.network = torch.zeros_like(acceptable_prices)
+        arange_s = torch.arange(acceptable_prices.shape[0]).unsqueeze(1)
+        arange_r = torch.arange(acceptable_prices.shape[1]).repeat(acceptable_prices.shape[0], 1)
+        self.network[arange_s, arange_r, max_indices] = 1
+
+        t2 = time()
+        print("Network", t2 - t1)
+        t1 = t2
+
+        if omega is None:
+            self.omega = torch.rand((S, 1))
+        prices_omega = (self.network * self.prices) ** (1 - self.eta) * self.omega[:, None, None]
+        self.price_index = (prices_omega.sum(-1).sum(0)) ** (1 / (1 - self.eta))
+
+        t2 = time()
+        print(t2 - t1)
+        t1 = t2
+
+    def trade_flow(self, X=1, g=g):
+        X_j = X * g(self.price_index, sigma=self.sigma)
+        tmp = self.omega * X_j
+        trade_flows = tmp[:, :, None] * ((self.prices * self.network) / self.price_index[None, :, None]) ** (1 - self.eta)
+        trade_flows = trade_flows.reshape(self.S, self.R, self.R, self.N).sum(-1)
+        trade_flows = trade_flows.permute(0, 2, 1)
+        return trade_flows
+
+    def build_moments(self, X=1, g=g):
+        trade_flows = self.trade_flow(X, g)
+        trade_flows = trade_flows[:, :, self.filter_A_downstream != 0]
+
+        chi_sij = torch.zeros((self.S, self.R, self.R))
+        chi_sij[:, :, self.filter_A_downstream != 0] = trade_flows / trade_flows.sum(1, keepdim=True)
+
+        chi_si = torch.zeros((self.S, self.R))
+        chi_si[:, self.filter_A_downstream != 0] = trade_flows.sum(1) / trade_flows.sum((1, 2), keepdim=True).squeeze()
+
+        pi_sA = trade_flows.sum((1, 2)) / trade_flows.sum()
+
+        pi_jA = torch.zeros((self.R,))
+        pi_jA[self.filter_A_downstream != 0] = trade_flows.sum(0).sum(0) / trade_flows.sum()
+
+        moments = {"chi_sij": chi_sij, "chi_si": chi_si, "pi_sA": pi_sA, "pi_jA": pi_jA}
+        return moments
