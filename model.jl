@@ -235,6 +235,14 @@ function build_economy(;R=3, S=1, eta=0.5, omega=nothing, theta=1.0, phi_bar=0.9
     M_j  = sum(M_sj,dims = 2)
     pi_jA = M_j/sum(M_j)
 
+    rho_si = permutedims(p_sj, (3, 2, 1, 4))
+    rho_si = sum(rho_si,dims = 1)
+
+    rho_si = abs.(rho_si./rho_si)
+    rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
+    rho_si = reshape(sum(rho_si,dims = 2),(S,R))
+    rho_si = rho_si./N_upstream
+
     return Economy(R, S, chi_si,pi_sA,pi_jA,rho_si)
 
 end
@@ -388,7 +396,12 @@ M_sj = reshape(sum(sum(p_sj,dims = 2),dims = 1),(R,S))
 M_j  = sum(M_sj,dims = 2)
 pi_jA = M_j/sum(M_j)
 
+# rho_si
 
+rho_si = permutedims(p_sj, (3, 2, 1, 4))
+rho_si = sum(rho_si,dims = 1)
 
-p_sj
-
+rho_si = abs.(rho_si./rho_si)
+rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
+rho_si = reshape(sum(rho_si,dims = 2),(S,R))
+rho_si = rho_si./N_upstream
