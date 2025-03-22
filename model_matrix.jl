@@ -254,8 +254,10 @@ end
 # Example to generate an Economy object and display its attributes:
 eco = build_economy(R=3, S=2)
 
-R=3
-S=2
+
+t1 = time()
+R=129
+S=64
 eta=0.5
 omega=nothing
 theta=1.0
@@ -266,21 +268,27 @@ alpha=1.0
 beta=1.0
 filter_N_upstream=nothing
 filter_A_downstream=ones(Bool, R)
-mu_T=1
+mu_T=0.0135*100
 sigma_T=1.395
 sigma=1.0
 g = CES
+
+using NPZ
+distances = NPZ.npzread("./distances.npy")  # for `.npz`
+filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
+filter_N_downstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
+
 
 
 Random.seed!(1234)
     
 # Initialise frictions and parameters
-# distances = isnothing(distances) ? begin
-#     D = rand(R,R) .+1   
-#     (D+D')/2         # multiply by its transpose to ensure symmetry
-# end : distances  # use the provided distances matrix if available
+distances = isnothing(distances) ? begin
+    D = rand(R,R) .+1   
+    (D+D')/2         # multiply by its transpose to ensure symmetry
+end : distances  # use the provided distances matrix if available
 # For testing
-distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
+# distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
 alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
 beta = isa(beta, Float64) ? fill(beta, S) : beta
 tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
@@ -295,11 +303,11 @@ omega = isnothing(omega) ? rand(S, 1) : omega
 T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes
 poisson_dist = Poisson.(T .* phi_bar^(-theta))
 # Used for testing
-N_upstream = fill(4, S, R)
-N_upstream[:,end] .= 1
+# N_upstream = fill(4, S, R)
+# N_upstream[:,end] .= 1
 # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
 ## We set manually the regions where there are no firms if filter_N_upstream is given. 
-# N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
+N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
 N = maximum(N_upstream)
 upstream = create_sparse_upstream(N_upstream, S, R, N)
 
@@ -310,6 +318,7 @@ pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar
 rows, cols, _ = findnz(upstream)
 pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
 prices = remove_inf_sparse(w_extended./pareto_draws)
+print(time()-t1)
 
 # Prices augmented by iceberg costs. 
 
@@ -405,3 +414,6 @@ rho_si = abs.(rho_si./rho_si)
 rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
 rho_si = reshape(sum(rho_si,dims = 2),(S,R))
 rho_si = rho_si./N_upstream
+
+
+
