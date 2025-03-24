@@ -1,8 +1,9 @@
 ##### SMM for Spatial Comovement #####
 # Author: Swann Chelly 
-# Latest update: Build model and trade flow 21/03/2025
+# Latest update: Build model and trade flow 24/03/2025
 # List of concerns
 ## How to add the outside sector ? 
+## Choisir un nombre d'entreprises et les tirer selon Gaubert 2021
 
 # To Do: 
 # Add the rho_si moment. 
@@ -15,6 +16,7 @@
 using SparseArrays
 using Distributions
 using Random
+using NPZ
 
 using Pkg
 
@@ -109,7 +111,7 @@ end
 # eco = build_economy(R=3, S=2)
 distances = NPZ.npzread("./distances.npy")  # for `.npz`
 filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
-filter_N_downstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
+filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
 
 t1 = time()
 R=129
@@ -124,6 +126,7 @@ alpha=1.0
 beta=1.0
 # filter_N_upstream=nothing
 # filter_A_downstream=ones(Bool, R)
+# filter_A_downstream[1] = 0
 mu_T=0.0135*100
 sigma_T=1.395
 sigma=1.0
@@ -162,32 +165,24 @@ poisson_dist = Poisson.(T .* phi_bar^(-theta))
 # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
 ## We set manually the regions where there are no firms if filter_N_upstream is given. 
 N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
-N = maximum(N_upstream)
+N = Integer(maximum(N_upstream))
 upstream = create_sparse_upstream(N_upstream, S, R, N)
 
 # Generate wages, productivity. Construct firm level prices. 
-w = isnothing(w) ? abs.(rand(S, R)) : w
-w_extended = repeat(w, inner=(1, N))
-pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar
-rows, cols, _ = findnz(upstream)
+w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
+w_extended = repeat(w, inner=(1, N)) # Extension of this wage fro fitting upstream shape. 
+
+# Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)
+pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar 
+rows, cols, _ = findnz(upstream) 
 pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
-prices = remove_inf_sparse(w_extended./pareto_draws)
+prices = remove_inf_sparse(w_extended./pareto_draws) # Competitive equilibrium, prices are wages / productivity. 
 
-# On veut pouvoir créer le supplier set de j. 
-# On extrait les trade friction vers pour tous les secteurs (identique across secteur)
-# On multiplie ça avec matching
 
+# So far tau is a (R,R,S) matrix with (i,j,s) the trade cost for shipping products of sector s from i to j. 
+# We change it into a (S,R,R) matrix with (s,i,j) the trade cost from shipping products of sectors s from i to j. 
 lbd_reshaped = permutedims(lbd,(3,1,2))
 tau_reshaped = permutedims(tau,(3,1,2))
-
-j = 4
-lbd_ = repeat(lbd_reshaped[:,:,j],inner = (1,N)).*upstream # On récupère les frictions pour vendre à j, et on les store en sparse
-r = geq_sparse(random_like_sparse(prices),lbd_) # On génère les matchings aléatoire
-matching = divide_sparse(r,prices)  # On divise pour pouvoir trouver les prix mimum après. 
-matching_coord = argmax(matching,dims = 2)
-
-
-
 
 price_indices = copy(filter_A_downstream).*1.0 
 M_sij = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
@@ -199,11 +194,11 @@ for j = 1:length(filter_A_downstream) # Iterate on downstream regions.
         prices_ = repeat(tau_reshaped[:,:,j],inner = (1,N)).*prices # Prices augmented by trade costs
 
         # Serching for highest search cost
-        matching = divide_sparse(r,prices) # Ensure to divide when prices != 0 among selected suppliers. 
+        matching = divide_sparse(r,prices_) # Ensure to divide when prices != 0 among selected suppliers. 
         matching_coord = argmax(matching,dims = 2) # Find the best supplier
         prices_ = prices_[matching_coord] # Extract best prices (augmented by trade costs)
-        price_index = sum(prices_.^eta.*omega) # Build price index. 
-        i = div.(getindex.(matching_coord,2),N) # Find the region of the best supplier and update M_sij
+        price_index = sum(prices_.^(1-eta).*omega).^(1/(1-eta)) # Build price index. 
+        i = div.(getindex.(matching_coord,2),N) .+ 1# Find the region of the best supplier and update M_sij
         for s = 1:S
             M_sij[i[s],j,s] = prices_[s]
         end
@@ -243,13 +238,11 @@ vals = ones(length(coords))  # values to place at those coordinates
 
 # Create sparse matrix
 rho_si = sparse(rows, cols, vals, S, R*N)
-rho_si = reshape(rho_si, S,R,N)
-rho_si = permutedims(rho_si,(2,3,1))
-rho_si = reshape(sum(rho_si,dims = 2),(S,R))
+rho_si = reshape(rho_si, S,N,R)
+rho_si = permutedims(rho_si,(3,2,1))
+rho_si = permutedims(reshape(sum(rho_si,dims = 2),(R,S)),(2,1))
 rho_si = rho_si./N_upstream
 rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
 rho_si = replace(rho_si, Inf => 0.0)
-rho_si
 
-print(time()-t1)
 
