@@ -4,6 +4,8 @@
 # List of concerns
 ## How to add the outside sector ? 
 ## Choisir un nombre d'entreprises et les tirer selon Gaubert 2021
+## Ajouter les entreprises de l'étranger. 
+## Trouver les distributions dans lesquels tirer (grille. )
 
 # To Do: 
 # Add the rho_si moment. 
@@ -14,10 +16,11 @@
 # import Pkg; Pkg.add("SparseArrays")
 # import Pkg; Pkg.add("NPZ")
 using Distributed
- using SparseArrays
- using Distributions
- using Random
- using NPZ
+using SparseArrays
+using Distributions
+using Random
+using NPZ
+using LinearAlgebra
 
 
 
@@ -112,9 +115,11 @@ distances = NPZ.npzread("./distances.npy")  # for `.npz`
 filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
 filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
 
+
+
 t1 = time()
-R=129
-S=64
+R=size(distances)[1]
+S=size(filter_N_upstream)[1]
 eta=0.5
 omega=nothing
 theta=1.0
@@ -140,10 +145,11 @@ end : distances  # use the provided distances matrix if available
 
 
 
- function SMM(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances = distances,filter_N_upstream = filter_N_upstream,filter_A_downstream = filter_A_downstream,g = CES)
+function SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,distances = distances,filter_N_upstream = filter_N_upstream,filter_A_downstream = filter_A_downstream,g = CES)
 
     # For testing
     # distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
+    S,R = size(filter_N_upstream)
     alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
@@ -245,14 +251,20 @@ end : distances  # use the provided distances matrix if available
     rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
     rho_si = replace(rho_si, Inf => 0.0)
 
+    chi_si = chi_si[filter_N_upstream'.!=0.]
+    rho_si = rho_si[filter_N_upstream.!=0.]
+    pi_jA = pi_jA[filter_A_downstream.!=0]
+
     return chi_si,pi_jA,pi_sA,rho_si
 
 end
 
 
-simulated_moments = SMM(R,S,eta,omega,theta,phi_bar,nothing,alpha,beta,mu_T,sigma_T,2)
+simulated_moments = SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,2)
 
 
+
+simulated_moments
 # Moments 
 ## - chi_si: the share of Aerospace industry goods of sector s purschased from region i. 
 ## - pi_jA: the importance of region j in the total purchase of the aerospace industry
@@ -262,22 +274,56 @@ simulated_moments = SMM(R,S,eta,omega,theta,phi_bar,nothing,alpha,beta,mu_T,sigm
 
 
 # Estimation procedure. 
+## Practicle guide: https://opensourceecon.github.io/CompMethods/struct_est/SMM.html
 
-## 1) Gradient descent
-## Take and initial grid (Halton ? ) and perform in parallel gradient descent. Compute the resulting loss after 100 optimization and start with the new points ? 
-
+## Put more simply, you want the random draws for all the simulations to be held constant so that the only thing changing in the minimization problem is the value of the vector of parameters
+### Keep seed constant through sampling. 
+### Want to reduce the dimension of the moments such as to keep only values that are set to be non zeros. 
 
 ## 
 
 
-function loss_function(empirical_moments,simulated_moments)
+emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
+emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
+emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"),(R,1))
+emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"),(1,S))
+
+emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.]
+emp_rho_si = emp_rho_si[filter_N_upstream.!=0.]
+emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+
+empirical_moments = [emp_chi_si,emp_pi_jA,emp_pi_sA,emp_rho_si]
+empirical_moments = vcat([vec(item) for item in empirical_moments]...)
+empirical_moments = reshape(empirical_moments,(1,length(empirical_moments)))
+
+
+function optimization_SMM(starting_point,empirical_moments,N_max)
+    """
+    starting_point: set of initial parameters
+    empirical_moments: moments on which to compare with 
+    N_max: number of iterations
+    """
     loss = []
-    for i = 1:length(empirical_moments)
-        push!(loss,sum((empirical_moments[i]-simulated_moments[i]).^2))
+    for i  = 1:N_max
+        simulated_moments = SMM(starting_point)
+        !push(loss,loss_function(empirical_moments = empirical_moments,simulated_moments = simulated_moments))
+        starting_point = upgrade_starting_point(loss,starting_point)
     end
-    return sum(loss)
+    return starting_point,loss
+
+end
+
+function loss_function(empirical_moments,simulated_moments,W = nothing)
+    # To Do: Make such that the difference is in percentage change. 
+    simulated_moments = vcat([vec(item) for item in simulated_moments]...)
+    N = length(simulated_moments)
+    simulated_moments = reshape(simulated_moments,(1,N))
+    err = empirical_moments-simulated_moments
+    W = isnothing(W) ? I(N) : W 
+    return err*W*err'
 end
 
 
 
+loss_function(empirical_moments,simulated_moments)
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
