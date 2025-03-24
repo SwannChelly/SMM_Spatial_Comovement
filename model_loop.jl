@@ -12,22 +12,23 @@
 
 # import Pkg; Pkg.add("Distributions")
 # import Pkg; Pkg.add("SparseArrays")
+# import Pkg; Pkg.add("NPZ")
+using Distributed
+ using SparseArrays
+ using Distributions
+ using Random
+ using NPZ
 
-@everywhere using SparseArrays
-@everywhere using Distributions
-@everywhere using Random
-@everywhere using NPZ
 
 
-
-@everywhere function CES(price_indices,sigma = 2)
+ function CES(price_indices,sigma = 2)
     """
     Take price indices and return the CES demand out of those price index. 
     """
     return price_indices.^(-sigma)
 end
 
-@everywhere function create_sparse_upstream(N_upstream, S, R, N)
+ function create_sparse_upstream(N_upstream, S, R, N)
     """
     Starting with N_upstream that contains the number of active firm per region, we create an upstream matrix. 
     This is a sparse matrix of size (R,N,S) with N = maximum(N_upstream) that contains 1 when the firm is active. 
@@ -38,7 +39,7 @@ end
 
 
 
-@everywhere function geq_sparse(df1,df2)
+ function geq_sparse(df1,df2)
     """
     Compare if non-zero values of df1 are greater than non-zero values of df2. 
     """
@@ -50,7 +51,7 @@ end
 
 
 
-@everywhere function divide_sparse(df1,df2)
+ function divide_sparse(df1,df2)
     """
     Divide non-zero values of df1 by those of df2. Built to avoid infinite values. 
     """
@@ -60,7 +61,7 @@ end
     return df
 end
 
-@everywhere function from_S_RNN_to_flat(df,S,R,N)
+ function from_S_RNN_to_flat(df,S,R,N)
     """
     df: matrix of size (S,RRN)  
     For example contains for each sector and each downstream region the list of possible prices (those that are not equal to 0)
@@ -70,7 +71,7 @@ end
     flat = permutedims(flat,(3,2,1))
     return flat
 end
-@everywhere function from_flat_to_structured(flat,S,R,N)
+ function from_flat_to_structured(flat,S,R,N)
     structured = reshape(flat, R, N, R, S)
     structured = permutedims(structured, (3, 2, 1, 4))
     return structured
@@ -78,7 +79,7 @@ end
 
 
 
-@everywhere function remove_inf_sparse(df)
+ function remove_inf_sparse(df)
     rows, cols, vals = findnz(df)
     # Identify the positions of `Inf` values
     inf_indices = isinf.(vals)
@@ -91,7 +92,7 @@ end
 end
 
 
-@everywhere function random_like_sparse(df)
+ function random_like_sparse(df)
     """    
     From a sparse matrix, create a similar one with random values. 
     """
@@ -118,7 +119,7 @@ eta=0.5
 omega=nothing
 theta=1.0
 phi_bar=0.9
-w=nothing
+w=nothing # As we don't have an outside sector, we dont take into account the wages for now. 
 # distances=nothing
 alpha=1.0
 beta=1.0
@@ -139,7 +140,7 @@ end : distances  # use the provided distances matrix if available
 
 
 
-@everywhere function SMM(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances = distances,filter_N_upstream = filter_N_upstream,filter_A_downstream = filter_A_downstream,g = CES)
+ function SMM(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances = distances,filter_N_upstream = filter_N_upstream,filter_A_downstream = filter_A_downstream,g = CES)
 
     # For testing
     # distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
@@ -205,7 +206,8 @@ end : distances  # use the provided distances matrix if available
     end
 
     # Build demand. 
-    X_j = g(price_indices,sigma).*1.0
+    #X_j = g(price_indices,sigma).*1.0
+    X_j = price_indices.^(-sigma).*1.0
 
     # Build trade flow M_sij. In (i,j,s), so far contains the price of the firm in i that serves j (if selected) and 0 otherwise. 
     # We create trade flows using w_sj(p_sj/P_j)**(1-eta)*X_j
@@ -248,7 +250,7 @@ end : distances  # use the provided distances matrix if available
 end
 
 
-# chi_si,pi_jA,pi_sA,rho_si = SMM(R,S,eta,omega,theta,phi_bar,nothing,alpha,beta,mu_T,sigma_T,2)
+simulated_moments = SMM(R,S,eta,omega,theta,phi_bar,nothing,alpha,beta,mu_T,sigma_T,2)
 
 
 # Moments 
@@ -263,36 +265,19 @@ end
 
 ## 1) Gradient descent
 ## Take and initial grid (Halton ? ) and perform in parallel gradient descent. Compute the resulting loss after 100 optimization and start with the new points ? 
+
+
 ## 
-using Base.Threads
-t1 = time()
-function parallel_loop()
-    results = Any[]
-    @threads for i in 1:10
-        push!(results,SMM(R,S,eta,omega,theta,phi_bar,nothing,alpha,beta,mu_T,sigma_T,2))
+
+
+function loss_function(empirical_moments,simulated_moments)
+    loss = []
+    for i = 1:length(empirical_moments)
+        push!(loss,sum((empirical_moments[i]-simulated_moments[i]).^2))
     end
-    return results
-end
-parallel_loop()
-print(time()-t1)
-
-
-@everywhere using Distributed
-addprocs(50)
-
-@everywhere function some_expensive_computation(params)
-    R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances,filter_N_upstream,filter_A_downstream,g =  params
-    return SMM(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances,filter_N_upstream,filter_A_downstream,g)
+    return sum(loss)
 end
 
-params_list = [(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances,filter_N_upstream,filter_A_downstream,CES) for i in 1:50]
 
 
-t1 = time()
-results = pmap(some_expensive_computation, params_list)
-print(time()-t1)
-
-function loss(empirical_moments,simulated_moments)
-    return empirical_moments-simulated_moments
-end
-
+# ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
