@@ -74,6 +74,7 @@ end
     flat = permutedims(flat,(3,2,1))
     return flat
 end
+
  function from_flat_to_structured(flat,S,R,N)
     structured = reshape(flat, R, N, R, S)
     structured = permutedims(structured, (3, 2, 1, 4))
@@ -111,41 +112,41 @@ end
 
 # Example to generate an Economy object and display its attributes:
 # eco = build_economy(R=3, S=2)
-distances = NPZ.npzread("./distances.npy")  # for `.npz`
-filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
-filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
+# distances = NPZ.npzread("./distances.npy")  # for `.npz`
+# filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
+# filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
 
 
 
-t1 = time()
-R=size(distances)[1]
-S=size(filter_N_upstream)[1]
-eta=0.5
-omega=nothing
-theta=1.0
-phi_bar=0.9
-w=nothing # As we don't have an outside sector, we dont take into account the wages for now. 
-# distances=nothing
-alpha=1.0
-beta=1.0
-# filter_N_upstream=nothing
-# filter_A_downstream=ones(Bool, R)
-# filter_A_downstream[1] = 0
-mu_T=0.0135*100
-sigma_T=1.395
-sigma=1.0
-g = CES
+# t1 = time()
+# R=size(distances)[1]
+# S=size(filter_N_upstream)[1]
+# eta=0.5
+# omega=nothing
+# theta=1.0
+# phi_bar=0.9
+# w=nothing # As we don't have an outside sector, we dont take into account the wages for now. 
+# # distances=nothing
+# alpha=1.0
+# beta=1.0
+# # filter_N_upstream=nothing
+# # filter_A_downstream=ones(Bool, R)
+# # filter_A_downstream[1] = 0
+# mu_T=0.0135*100
+# sigma_T=1.395
+# sigma=2.0
+# g = CES
 
 
 # Initialise frictions and parameters
-distances = isnothing(distances) ? begin
-    D = rand(R,R) .+1   
-    (D+D')/2         # multiply by its transpose to ensure symmetry
-end : distances  # use the provided distances matrix if available
+# distances = isnothing(distances) ? begin
+#     D = rand(R,R) .+1   
+#     (D+D')/2         # multiply by its transpose to ensure symmetry
+# end : distances  # use the provided distances matrix if available
 
 
 
-function SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,distances = distances,filter_N_upstream = filter_N_upstream,filter_A_downstream = filter_A_downstream,g = CES)
+function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega = nothing)
 
     # For testing
     # distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
@@ -154,13 +155,15 @@ function SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,distances = d
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
     lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
-    omega = isnothing(omega) ? rand(S, 1) : omega
+    omega = isnothing(omega) ? ones(1,S)./S : omega
+    seed = isnothing(seed) ? 1 : seed
 
 
     # Initialise the firms
     ## We will use the upstream variable in the rest of the simulation for ease of computation. 
     ## We assume that in each region there is at most N firm alive. For a region R the actual number of firms that are alive is given by self.N_upstream
     ## Then we sort them for each sector on a single line in the upstream array (of size S x 1 x RN)
+    Random.seed!(seed)
     T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes
     poisson_dist = Poisson.(T .* phi_bar^(-theta))
     # Used for testing
@@ -238,6 +241,7 @@ function SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,distances = d
 
     # rho_si | So far doesn't works. Might want to check why ? 
     coords = unique(vcat(coords...))
+
     rows = [c.I[1] for c in coords]
     cols = [c.I[2] for c in coords]
     vals = ones(length(coords))  # values to place at those coordinates
@@ -254,17 +258,32 @@ function SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,distances = d
     chi_si = chi_si[filter_N_upstream'.!=0.]
     rho_si = rho_si[filter_N_upstream.!=0.]
     pi_jA = pi_jA[filter_A_downstream.!=0]
+    pi_sA = reshape(pi_sA,S)
 
     return chi_si,pi_jA,pi_sA,rho_si
 
 end
 
+function SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
+    chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_  = Any[],Any[],Any[],Any[]
+    for seed = 1:10
+        chi_si,pi_jA,pi_sA,rho_si = SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
+        push!(chi_si_,chi_si)
+        push!(pi_jA_,pi_jA)
+        push!(pi_sA_,pi_sA)
+        push!(rho_si_,rho_si)
+    end
+    chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
+    pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
+    pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
+    rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
+    return chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_
+end
 
-simulated_moments = SMM(eta,omega,theta,phi_bar,alpha,beta,mu_T,sigma_T,2)
 
 
 
-simulated_moments
+
 # Moments 
 ## - chi_si: the share of Aerospace industry goods of sector s purschased from region i. 
 ## - pi_jA: the importance of region j in the total purchase of the aerospace industry
@@ -283,37 +302,21 @@ simulated_moments
 ## 
 
 
-emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
-emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"),(R,1))
-emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"),(1,S))
+# emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
+# emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
+# emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"),(R,1))
+# emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"),(1,S))
 
-emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.]
-emp_rho_si = emp_rho_si[filter_N_upstream.!=0.]
-emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+# emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.]
+# emp_rho_si = emp_rho_si[filter_N_upstream.!=0.]
+# emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
 
-empirical_moments = [emp_chi_si,emp_pi_jA,emp_pi_sA,emp_rho_si]
-empirical_moments = vcat([vec(item) for item in empirical_moments]...)
-empirical_moments = reshape(empirical_moments,(1,length(empirical_moments)))
+# empirical_moments = [emp_chi_si,emp_pi_jA,emp_pi_sA,emp_rho_si]
+# empirical_moments = vcat([vec(item) for item in empirical_moments]...)
+# empirical_moments = reshape(empirical_moments,(1,length(empirical_moments)))
 
 
-function optimization_SMM(starting_point,empirical_moments,N_max)
-    """
-    starting_point: set of initial parameters
-    empirical_moments: moments on which to compare with 
-    N_max: number of iterations
-    """
-    loss = []
-    for i  = 1:N_max
-        simulated_moments = SMM(starting_point)
-        !push(loss,loss_function(empirical_moments = empirical_moments,simulated_moments = simulated_moments))
-        starting_point = upgrade_starting_point(loss,starting_point)
-    end
-    return starting_point,loss
-
-end
-
-function loss_function(empirical_moments,simulated_moments,W = nothing)
+function loss_function(simulated_moments,W = nothing)
     # To Do: Make such that the difference is in percentage change. 
     simulated_moments = vcat([vec(item) for item in simulated_moments]...)
     N = length(simulated_moments)
@@ -324,6 +327,10 @@ function loss_function(empirical_moments,simulated_moments,W = nothing)
 end
 
 
+function full_SMM(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,W = nothing)
+    simulated_moments = SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
+    return loss_function(simulated_moments,W)
+end
 
-loss_function(empirical_moments,simulated_moments)
+
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9

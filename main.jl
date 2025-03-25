@@ -1,68 +1,58 @@
 using Distributed
 using NPZ
 
-addprocs(2)
+addprocs(100)
+@everywhere using NPZ
 
 @everywhere include("model_loop.jl")
 
-# Example to generate an Economy object and display its attributes:
-# eco = build_economy(R=3, S=2)
-distances = NPZ.npzread("./distances.npy")  # for `.npz`
-filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
-filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
-
+# Load large data once on the main process:
+distances_local = NPZ.npzread("./distances.npy")
+filter_A_downstream_local = NPZ.npzread("./filter_A_downstream.npy")
+filter_N_upstream_local = NPZ.npzread("./filter_N_upstream.npy")
 
 emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
 emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"),(R,1))
-emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"),(1,S))
+emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (128, 1))  # example R=129
+emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, 18))   # example S=64
 
-emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.]
-emp_rho_si = emp_rho_si[filter_N_upstream.!=0.]
-emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+emp_chi_si = emp_chi_si[filter_N_upstream_local'.!=0.0]
+emp_rho_si = emp_rho_si[filter_N_upstream_local.!=0.0]
+emp_pi_jA = emp_pi_jA[filter_A_downstream_local.!=0]
 
-empirical_moments = [emp_chi_si,emp_pi_jA,emp_pi_sA,emp_rho_si]
-empirical_moments = vcat([vec(item) for item in empirical_moments]...)
+empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
+empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
 
-inv_W = empirical_moments.^(-1)
-inv_W = I(length(inv_W)).*inv_W
+# Then broadcast those large fixed arrays to all workers:
+@everywhere const distances = $(distances_local)
+@everywhere const filter_A_downstream = $(filter_A_downstream_local)
+@everywhere const filter_N_upstream = $(filter_N_upstream_local)
+@everywhere const empirical_moments = $(empirical_moments_local)
 
-t1 = time()
-R=129
-S=64
-eta=0.5
-omega=nothing
-theta=1.0
-phi_bar=0.9
-w=nothing
-# distances=nothing
-alpha=1.0
-beta=1.0
-# filter_N_upstream=nothing
-# filter_A_downstream=ones(Bool, R)
-# filter_A_downstream[1] = 0
-mu_T=0.0135*100
-sigma_T=1.395
-sigma=1.0
-g = CES
+# Now workers will have them once in memory.
 
-
-@everywhere function some_expensive_computation(params)
-    R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances,filter_N_upstream,filter_A_downstream,g =  params
-    return SMM(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances,filter_N_upstream,filter_A_downstream,g)
+@everywhere function parallel_SMM(params)
+    eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = params
+    return full_SMM(eta, theta, phi_bar, alpha, beta, mu_T, sigma_T, sigma)
 end
 
-params_list = [(R,S,eta,omega,theta,phi_bar,w,alpha,beta,mu_T,sigma_T,sigma,distances,filter_N_upstream,filter_A_downstream,nothing) for i in 1:2]
+# Then just launch your parallel runs:
+eta = 0.5
+theta = 1.0
+phi_bar = 0.9
+alpha = 1.0
+beta = 1.0
+mu_T = 1.35
+sigma_T = 1.395
+sigma = 1.0  
 
-
+params_list = [(eta, theta, phi_bar, alpha, beta, mu_T, sigma_T, sigma) for _ in 1:100]
 t1 = time()
-results = pmap(some_expensive_computation, params_list)
+results = pmap(parallel_SMM, params_list)
 print(time()-t1)
-
-
-
 
 if !isempty(workers())
     rmprocs(workers())
 end
-GC.gc() 
+GC.gc()
+# ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
