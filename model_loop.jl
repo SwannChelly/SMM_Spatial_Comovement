@@ -110,8 +110,7 @@ end
 
 
 
-# Example to generate an Economy object and display its attributes:
-# eco = build_economy(R=3, S=2)
+# # Example to generate an Economy object and display its attributes:
 # distances = NPZ.npzread("./distances.npy")  # for `.npz`
 # filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
 # filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
@@ -138,7 +137,7 @@ end
 # g = CES
 
 
-# Initialise frictions and parameters
+# #Initialise frictions and parameters
 # distances = isnothing(distances) ? begin
 #     D = rand(R,R) .+1   
 #     (D+D')/2         # multiply by its transpose to ensure symmetry
@@ -174,6 +173,7 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
     N = Integer(maximum(N_upstream))
     upstream = create_sparse_upstream(N_upstream, S, R, N)
+    N_firms = sum(upstream)
 
     # Generate wages, productivity. Construct firm level prices. 
     # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
@@ -260,24 +260,26 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     pi_jA = pi_jA[filter_A_downstream.!=0]
     pi_sA = reshape(pi_sA,S)
 
-    return chi_si,pi_jA,pi_sA,rho_si
+    return chi_si,pi_jA,pi_sA,rho_si,N_firms
 
 end
 
 function SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-    chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_  = Any[],Any[],Any[],Any[]
+    chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_,N_firms_  = Any[],Any[],Any[],Any[],Any[]
     for seed = 1:10
-        chi_si,pi_jA,pi_sA,rho_si = SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
+        chi_si,pi_jA,pi_sA,rho_si,N_firms = SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
         push!(chi_si_,chi_si)
         push!(pi_jA_,pi_jA)
         push!(pi_sA_,pi_sA)
         push!(rho_si_,rho_si)
+        push!(N_firms_,N_firms)
     end
     chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
     pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
     pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
     rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
-    return chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_
+    N_firms = mean(N_firms_)
+    return chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_,N_firms
 end
 
 
@@ -318,7 +320,8 @@ end
 
 function loss_function(simulated_moments,W = nothing)
     # To Do: Make such that the difference is in percentage change. 
-    simulated_moments = vcat([vec(item) for item in simulated_moments]...)
+    
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
     err = empirical_moments-simulated_moments
@@ -329,8 +332,10 @@ end
 
 function full_SMM(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,W = nothing)
     simulated_moments = SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-    return loss_function(simulated_moments,W)
+    N_firms = simulated_moments[end]
+    return loss_function(simulated_moments,W),simulated_moments
 end
+
 
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9

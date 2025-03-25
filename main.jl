@@ -1,6 +1,12 @@
+# Pkg.add("QuasiMonteCarlo")
+# import Pkg; Pkg.add("QuasiMonteCarlo")
+#import Pkg; Pkg.add("StatsPlots")
+import Pkg; Pkg.add("DataFrames")
 using Distributed
 using NPZ
-
+using QuasiMonteCarlo
+using StatsPlots
+using DataFrames
 addprocs(100)
 @everywhere using NPZ
 
@@ -36,17 +42,20 @@ empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]..
     return full_SMM(eta, theta, phi_bar, alpha, beta, mu_T, sigma_T, sigma)
 end
 
-# Then just launch your parallel runs:
-eta = 0.5
-theta = 1.0
-phi_bar = 0.9
-alpha = 1.0
-beta = 1.0
-mu_T = 1.35
-sigma_T = 1.395
-sigma = 1.0  
+@everywhere function generate_halton_grid(n)
+    lb = [0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5]
+    ub = [0.9, 2.0, 1.0, 1.5, 1.5, 1.5, 1.8, 1.5]
+    
+    halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+    
+    # This will create a vector of 100 tuples, each with 8 parameters
+    return [Tuple(halton_samples[:,i]) for i in 1:(n-1)]
+end
 
-params_list = [(eta, theta, phi_bar, alpha, beta, mu_T, sigma_T, sigma) for _ in 1:100]
+# Generate the grid and run parallel SMM
+params_list = generate_halton_grid(100)
+# params_list = [(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
+
 t1 = time()
 results = pmap(parallel_SMM, params_list)
 print(time()-t1)
@@ -56,3 +65,47 @@ if !isempty(workers())
 end
 GC.gc()
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
+
+
+# Display results
+values = [matrix[1] for matrix in results]
+histogram(values, bins=10, xlabel="Value", ylabel="Frequency", title="Histogram of Vector")
+
+# Convert each tuple of parameters into a row vector
+params_matrix = hcat([collect(params) for params in params_list]...)
+
+# Create a DataFrame
+param_names = ["eta", "theta", "phi_bar", "alpha", "beta", "mu_T", "sigma_T", "sigma"]  # Column names for the parameters
+
+# Transpose the params_matrix so that each row represents a parameter set
+df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
+rename!(df, param_names)  # Rename columns to match parameter names
+
+# Calculate the new columns
+score = [score[1][1] for score in results]
+delta_chi_si = [mean((score[2][1] - emp_chi_si) ./ emp_chi_si) for score in results]
+delta_pi_jA = [mean((score[2][2] - emp_pi_jA) ./ emp_pi_jA) for score in results]
+delta_pi_sA = [mean((score[2][3] - emp_pi_sA') ./ emp_pi_sA') for score in results]
+delta_rho_si = [mean((score[2][4] - emp_rho_si) ./ emp_rho_si) for score in results]
+N_firms = [score[2][5] for score in results]
+
+# Add the new columns to the DataFrame
+df[!, "score"] = score
+df[!, "delta_chi_si"] = delta_chi_si
+df[!, "delta_pi_jA"] = delta_pi_jA
+df[!, "delta_pi_sA"] = delta_pi_sA
+df[!, "delta_rho_si"] = delta_rho_si
+df[!, "N_firms"] = N_firms
+
+# Sort the DataFrame by the 'score' column in ascending order
+sort!(df, :score)
+
+# Display the updated DataFrame
+println(df)
+
+
+
+df[!, "score"] = [score[1] for (_, score) in params_with_scores]  # Add the score column
+sort!(df, :score)
+# Display the DataFrame
+println(df)
