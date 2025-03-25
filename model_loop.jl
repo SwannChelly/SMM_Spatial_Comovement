@@ -332,7 +332,6 @@ end
 
 function full_SMM(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,W = nothing)
     simulated_moments = SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-    N_firms = simulated_moments[end]
     return loss_function(simulated_moments,W),simulated_moments
 end
 

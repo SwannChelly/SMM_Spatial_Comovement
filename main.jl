@@ -43,8 +43,8 @@ empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]..
 end
 
 @everywhere function generate_halton_grid(n)
-    lb = [0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5]
-    ub = [0.9, 2.0, 1.0, 1.5, 1.5, 1.5, 1.8, 1.5]
+    lb = [0.1, 0.5, 0.8, 0.5, 0.5, 0.01, 1.0, 1.1]
+    ub = [0.9, 10, 10, 1.5, 1.5, 1.5, 1.8, 3]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -52,12 +52,25 @@ end
     return [Tuple(halton_samples[:,i]) for i in 1:(n-1)]
 end
 
+
+@everywhere function parallel_SMM_safe(params)
+    try
+        # Perform the actual computation (replace with your actual logic)
+        result = parallel_SMM(params)
+        return result
+    catch e
+        # If an error occurs, return a message or a placeholder result
+        println("Error occurred with parameters: $params.")
+        return nothing  # You can also return an error message or a custom value
+    end
+end
+
 # Generate the grid and run parallel SMM
 params_list = generate_halton_grid(100)
 # params_list = [(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
 
 t1 = time()
-results = pmap(parallel_SMM, params_list)
+results = pmap(parallel_SMM_safe, params_list)
 print(time()-t1)
 
 if !isempty(workers())
@@ -82,12 +95,12 @@ df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 
 # Calculate the new columns
-score = [score[1][1] for score in results]
-delta_chi_si = [mean((score[2][1] - emp_chi_si) ./ emp_chi_si) for score in results]
-delta_pi_jA = [mean((score[2][2] - emp_pi_jA) ./ emp_pi_jA) for score in results]
-delta_pi_sA = [mean((score[2][3] - emp_pi_sA') ./ emp_pi_sA') for score in results]
-delta_rho_si = [mean((score[2][4] - emp_rho_si) ./ emp_rho_si) for score in results]
-N_firms = [score[2][5] for score in results]
+score = [score !== nothing ? score[1][1] : nothing for score in results]
+delta_chi_si = [score !== nothing ? mean((score[2][1] - emp_chi_si) ./ emp_chi_si) : nothing for score in results]
+delta_pi_jA = [score !== nothing ? mean((score[2][2] - emp_pi_jA) ./ emp_pi_jA) : nothing for score in results]
+delta_pi_sA = [score !== nothing ? mean((score[2][3] - emp_pi_sA') ./ emp_pi_sA') : nothing for score in results]
+delta_rho_si = [score !== nothing ? mean((score[2][4] - emp_rho_si) ./ emp_rho_si) : nothing for score in results]
+N_firms = [score !== nothing ? score[2][5] : nothing for score in results]
 
 # Add the new columns to the DataFrame
 df[!, "score"] = score
@@ -96,16 +109,11 @@ df[!, "delta_pi_jA"] = delta_pi_jA
 df[!, "delta_pi_sA"] = delta_pi_sA
 df[!, "delta_rho_si"] = delta_rho_si
 df[!, "N_firms"] = N_firms
+df[!, :score] .= map(x -> x === nothing ? Inf : x, df[!, :score])
 
-# Sort the DataFrame by the 'score' column in ascending order
+# Now sort by 'score' column
 sort!(df, :score)
+
 
 # Display the updated DataFrame
-println(df)
-
-
-
-df[!, "score"] = [score[1] for (_, score) in params_with_scores]  # Add the score column
-sort!(df, :score)
-# Display the DataFrame
 println(df)
