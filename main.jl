@@ -44,8 +44,8 @@ empirical_moments_local = vcat([vec(empirical_moments_local),vec([10990])]...)'
 end
 
 @everywhere function generate_halton_grid(n)
-    lb = [0.1, 1, 0.8, 0.5, 0.5, 0.01, 1.0, 1.1]
-    ub = [0.9, 6, 2, 1.5, 1.5, 1.5, 1.8, 3]
+    lb = [0.1, 4, 0.8, 0.9, 0.9, 0.9, 1.5, 2]
+    ub = [0.9, 6, 0.9, 1.2, 1.2, 1.3, 2, 2.5]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -121,4 +121,8 @@ sort!(df, :score)
 
 
 # Display the updated DataFrame
-println(df)
+best_params = first(df,50)
+selected_columns = [:A, :B]
+
+# Compute min and max for each selected column
+result = combine(df, selected_columns .=> [minimum, maximum])
