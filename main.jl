@@ -19,8 +19,8 @@ filter_N_upstream_local = NPZ.npzread("./filter_N_upstream.npy")
 
 emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
 emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (128, 1))  # example R=129
-emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, 18))   # example S=64
+emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[1], 1))  # example R=129
+emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[2]))   # example S=64
 
 emp_chi_si = emp_chi_si[filter_N_upstream_local'.!=0.0]
 emp_rho_si = emp_rho_si[filter_N_upstream_local.!=0.0]
@@ -28,6 +28,7 @@ emp_pi_jA = emp_pi_jA[filter_A_downstream_local.!=0]
 
 empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
 empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
+empirical_moments_local = vcat([vec(empirical_moments_local),vec([10990])]...)'
 
 # Then broadcast those large fixed arrays to all workers:
 @everywhere const distances = $(distances_local)
@@ -43,8 +44,8 @@ empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]..
 end
 
 @everywhere function generate_halton_grid(n)
-    lb = [0.1, 0.5, 0.8, 0.5, 0.5, 0.01, 1.0, 1.1]
-    ub = [0.9, 10, 10, 1.5, 1.5, 1.5, 1.8, 3]
+    lb = [0.1, 1, 0.8, 0.5, 0.5, 0.01, 1.0, 1.1]
+    ub = [0.9, 6, 2, 1.5, 1.5, 1.5, 1.8, 3]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -53,7 +54,7 @@ end
 end
 
 
-@everywhere function parallel_SMM_safe(params)
+@everywhere function parallel_SMM_safe(params,show_err = false)
     try
         # Perform the actual computation (replace with your actual logic)
         result = parallel_SMM(params)
@@ -61,17 +62,20 @@ end
     catch e
         # If an error occurs, return a message or a placeholder result
         println("Error occurred with parameters: $params.")
+        if show_err
+            println(e)
+        end
         return nothing  # You can also return an error message or a custom value
     end
 end
-
 # Generate the grid and run parallel SMM
-params_list = generate_halton_grid(100)
+params_list = generate_halton_grid(1000)
 # params_list = [(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
 
 t1 = time()
 results = pmap(parallel_SMM_safe, params_list)
-print(time()-t1)
+t1 = time()-t1
+print(t1)
 
 if !isempty(workers())
     rmprocs(workers())
@@ -81,8 +85,8 @@ GC.gc()
 
 
 # Display results
-values = [matrix[1] for matrix in results]
-histogram(values, bins=10, xlabel="Value", ylabel="Frequency", title="Histogram of Vector")
+# values = [matrix[1] for matrix in results]
+# histogram(values, bins=10, xlabel="Value", ylabel="Frequency", title="Histogram of Vector")
 
 # Convert each tuple of parameters into a row vector
 params_matrix = hcat([collect(params) for params in params_list]...)
@@ -110,6 +114,7 @@ df[!, "delta_pi_sA"] = delta_pi_sA
 df[!, "delta_rho_si"] = delta_rho_si
 df[!, "N_firms"] = N_firms
 df[!, :score] .= map(x -> x === nothing ? Inf : x, df[!, :score])
+df[!, :N_firms] .= map(x -> x === nothing ? Inf : x, df[!, :N_firms])
 
 # Now sort by 'score' column
 sort!(df, :score)

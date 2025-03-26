@@ -144,6 +144,19 @@ end
 # end : distances  # use the provided distances matrix if available
 
 
+# emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
+# emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
+# emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[1], 1))  # example R=129
+# emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[2]))   # example S=64
+
+# emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.0]
+# emp_rho_si = emp_rho_si[filter_N_upstream.!=0.0]
+# emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+
+# empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
+# empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
+# empirical_moments = vcat([vec(empirical_moments_local),vec([10990])]...)
+
 
 function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega = nothing)
 
@@ -266,7 +279,7 @@ end
 
 function SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
     chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_,N_firms_  = Any[],Any[],Any[],Any[],Any[]
-    for seed = 1:10
+    for seed = 1:20
         chi_si,pi_jA,pi_sA,rho_si,N_firms = SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
         push!(chi_si_,chi_si)
         push!(pi_jA_,pi_jA)
@@ -304,28 +317,18 @@ end
 ## 
 
 
-# emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
-# emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-# emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"),(R,1))
-# emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"),(1,S))
-
-# emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.]
-# emp_rho_si = emp_rho_si[filter_N_upstream.!=0.]
-# emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
-
-# empirical_moments = [emp_chi_si,emp_pi_jA,emp_pi_sA,emp_rho_si]
-# empirical_moments = vcat([vec(item) for item in empirical_moments]...)
-# empirical_moments = reshape(empirical_moments,(1,length(empirical_moments)))
 
 
 function loss_function(simulated_moments,W = nothing)
     # To Do: Make such that the difference is in percentage change. 
-    
+    N = simulated_moments[end]
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
+    simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
-    err = empirical_moments-simulated_moments
-    W = isnothing(W) ? I(N) : W 
+    err = (empirical_moments-simulated_moments)
+    #W = isnothing(W) ? I(N) : W 
+    W = I(length(empirical_moments)).*(empirical_moments).^(-1)
     return err*W*err'
 end
 
@@ -335,6 +338,6 @@ function full_SMM(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,W = nothing)
     return loss_function(simulated_moments,W),simulated_moments
 end
 
-
+# simulated_moments = SMM_loop(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5)
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
