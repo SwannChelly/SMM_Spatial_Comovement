@@ -128,19 +128,16 @@ end
 # # distances=nothing
 # alpha=1.0
 # beta=1.0
-# # R = 3
-# # S = 2
 # # filter_N_upstream=nothing
 # # filter_A_downstream=ones(Bool, R)
 # # filter_A_downstream[1] = 0
-# distances = nothing
 # mu_T=0.0135*100
 # sigma_T=1.395
 # sigma=2.0
 # g = CES
 
 
-#Initialise frictions and parameters
+# #Initialise frictions and parameters
 # distances = isnothing(distances) ? begin
 #     D = rand(R,R) .+1   
 #     (D+D')/2         # multiply by its transpose to ensure symmetry
@@ -159,11 +156,10 @@ end
 # empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
 # empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
 # empirical_moments = vcat([vec(empirical_moments_local),vec([10990])]...)
-# eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,1.2932,0.650773,1.08351,1.30467,1.76248,2.32003
+0.3415   8.75738    0.9932  0.650773  1.08351   1.30467   1.76248  2.32003
 
 function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega = nothing)
-    Times = Any[]
-    t1 = time()
+
     # For testing
     # distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
     S,R = size(filter_N_upstream)
@@ -173,10 +169,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
     omega = isnothing(omega) ? ones(1,S)./S : omega
     seed = isnothing(seed) ? 1 : seed
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Initialise values: ",t1)
-    t1 = time()
 
 
     # Initialise the firms
@@ -196,11 +188,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     upstream = create_sparse_upstream(N_upstream, S, R, N)
     N_firms = sum(upstream)
 
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Initialise N  firms: ",t1)
-    t1 = time()
-
     # Generate wages, productivity. Construct firm level prices. 
     # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
     # w_extended = repeat(w, inner=(1, N)) # Extension of this wage fro fitting upstream shape. 
@@ -217,38 +204,21 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     lbd_reshaped = permutedims(lbd,(3,1,2))
     tau_reshaped = permutedims(tau,(3,1,2))
 
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Initialise pareto: ",t1)
-    t1 = time()
-
-    rows, cols, _ = findnz(upstream)
-    coords_upstream = [(r, c) for (r, c) in zip(rows, cols)]
-
     price_indices = copy(filter_A_downstream).*1.0 
     M_sij = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
     coords = Any[] # We keep the coordinate of the best price in order to build rho_si
     for j = 1:length(filter_A_downstream) # Iterate on downstream regions. 
         if filter_A_downstream[j] == 1
-            # lbd_ = repeat(lbd_reshaped[:,:,j],inner = (1,N)).*upstream # Frictions to serve region j
-            
-            lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
-            lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
-
+            lbd_ = repeat(lbd_reshaped[:,:,j],inner = (1,N)).*upstream # Frictions to serve region j
             r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
-
-            # tau_ = repeat(tau_reshaped[:,:,j],inner = (1,N)) # Prices augmented by trade costs
-
-            tau_ = [tau_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
-            tau_ = sparse(rows, cols, tau_, size(upstream)...)
-            prices_ = tau_.*prices # Prices augmented by trade costs
+            prices_ = repeat(tau_reshaped[:,:,j],inner = (1,N)).*prices # Prices augmented by trade costs
 
             # Serching for highest search cost
             matching = divide_sparse(r,prices_) # Ensure to divide when prices != 0 among selected suppliers. 
             matching_coord = argmax(matching,dims = 2) # Find the best supplier
             prices_ = prices_[matching_coord] # Extract best prices (augmented by trade costs)
             price_index = sum(prices_.^(1-eta).*omega).^(1/(1-eta)) # Build price index. 
-            i = div.(getindex.(matching_coord,2).-1,N) .+ 1# Find the region of the best supplier and update M_sij
+            i = div.(getindex.(matching_coord,2),N) .+ 1# Find the region of the best supplier and update M_sij
             for s = 1:S
                 M_sij[i[s],j,s] = prices_[s]
             end
@@ -256,11 +226,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
             push!(coords,matching_coord) # Store the coordinate of the best suppliers in the flat, upstream like, format
         end
     end
-
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Compute matching, find best values: ",t1)
-    t1 = time()
 
     # Build demand. 
     #X_j = g(price_indices,sigma).*1.0
@@ -270,11 +235,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     # We create trade flows using w_sj(p_sj/P_j)**(1-eta)*X_j
     M_sij = (M_sij./reshape(price_indices,(1,R))).^(1-eta).*reshape(X_j,(1,R)).*reshape(omega,(1,1,S))
     M_sij = ifelse.(isnan.(M_sij), 0.0, M_sij)
-
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Build M_sij: ",t1)
-    t1 = time()
 
     # Build moments
     # M_sj 
@@ -292,11 +252,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     M_j  = sum(M_sj,dims = 2)
     pi_jA = M_j/sum(M_j)
 
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Build first moments: ",t1)
-    t1 = time()
-
     # rho_si | So far doesn't works. Might want to check why ? 
     coords = unique(vcat(coords...))
 
@@ -307,45 +262,20 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     # Create sparse matrix
     rho_si = sparse(rows, cols, vals, S, R*N)
     rho_si = reshape(rho_si, S,N,R)
-    # println("rho: ",Base.summarysize(rho_si))
     rho_si = permutedims(rho_si,(3,2,1))
     rho_si = permutedims(reshape(sum(rho_si,dims = 2),(R,S)),(2,1))
     rho_si = rho_si./N_upstream
     rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
     rho_si = replace(rho_si, Inf => 0.0)
 
-    # t1 = time()-t1
-    # push!(Times,t1)
-    # println("Build trade_flows: ",t1)
-    # t1 = time()
-
     chi_si = chi_si[filter_N_upstream'.!=0.]
     rho_si = rho_si[filter_N_upstream.!=0.]
     pi_jA = pi_jA[filter_A_downstream.!=0]
     pi_sA = reshape(pi_sA,S)
 
-    # t = repeat(lbd_reshaped[:,:,1],inner = (1,N))
-    # println("rho: ",Base.summarysize(rho_si)/(1024^3))
-    # println("test: ",Base.summarysize(t)/(1024^3))
-    # println("lbd: ",Base.summarysize(lbd)/(1024^3))
-    # println("tau: ",Base.summarysize(tau)/(1024^3))
-    # println("upstream: ",Base.summarysize(upstream)/(1024^3))
-    # println("N_upstream: ",Base.summarysize(N_upstream)/(1024^3))
-    # println("pareto_draws: ",Base.summarysize(prices)/(1024^3))
-    # println("prices: ",Base.summarysize(prices)/(1024^3))
-
-    
-
-    return chi_si,pi_jA,pi_sA,rho_si,N_firms,Times
+    return chi_si,pi_jA,pi_sA,rho_si,N_firms
 
 end
-
-# t1 = time()
-# eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,0.6932,0.650773,1.08351,1.30467,1.76248,2.32003
-
-# SMM(1,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-# t1 = time()-t1
-# println(t1)
 
 function SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
     chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_,N_firms_  = Any[],Any[],Any[],Any[],Any[]
@@ -386,11 +316,14 @@ end
 
 ## 
 
+
+
+
 function loss_function(simulated_moments,W = nothing)
     # To Do: Make such that the difference is in percentage change. 
     N = simulated_moments[end]
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
-    #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
+    simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
     err = (empirical_moments-simulated_moments)
@@ -408,111 +341,3 @@ end
 # simulated_moments = SMM_loop(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5)
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
-# seed = 1
-
-# Times = Any[]
-# t1 = time()
-# # For testing
-# #distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
-# S,R = size(filter_N_upstream)
-# # alpha = 1.
-# # beta = 1.
-# alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
-# beta = isa(beta, Float64) ? fill(beta, S) : beta
-# tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
-# lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
-# omega = isnothing(omega) ? ones(1,S)./S : omega
-# seed = isnothing(seed) ? 1 : seed
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise values: ",t1)
-# t1 = time()
-
-
-# # Initialise the firms
-# ## We will use the upstream variable in the rest of the simulation for ease of computation. 
-# ## We assume that in each region there is at most N firm alive. For a region R the actual number of firms that are alive is given by self.N_upstream
-# ## Then we sort them for each sector on a single line in the upstream array (of size S x 1 x RN)
-# Random.seed!(seed)
-# T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes
-# poisson_dist = Poisson.(T .* phi_bar^(-theta))
-# # Used for testing
-# # N_upstream = fill(4, S, R)
-# # N_upstream[:,end] .= 1
-# # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
-# ## We set manually the regions where there are no firms if filter_N_upstream is given. 
-# N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
-# N = Integer(maximum(N_upstream))
-# upstream = create_sparse_upstream(N_upstream, S, R, N)
-# N_firms = sum(upstream)
-
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise N  firms: ",t1)
-# t1 = time()
-
-# # Generate wages, productivity. Construct firm level prices. 
-# # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
-# # w_extended = repeat(w, inner=(1, N)) # Extension of this wage fro fitting upstream shape. 
-
-# # Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)
-# pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar 
-# rows, cols, _ = findnz(upstream) 
-# pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
-# prices = remove_inf_sparse((pareto_draws).^(-1)) # Competitive equilibrium, prices are wages / productivity. 
-
-
-# # So far tau is a (R,R,S) matrix with (i,j,s) the trade cost for shipping products of sector s from i to j. 
-# # We change it into a (S,R,R) matrix with (s,i,j) the trade cost from shipping products of sectors s from i to j. 
-# lbd_reshaped = permutedims(lbd,(3,1,2))
-# tau_reshaped = permutedims(tau,(3,1,2))
-
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise pareto: ",t1)
-# t1 = time()
-
-
-# rows, cols, _ = findnz(upstream)
-# coords = [(r, c) for (r, c) in zip(rows, cols)]
-# i = div.(cols.-1,N) .+ 1
-
-# price_indices = copy(filter_A_downstream).*1.0 
-# M_sij = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
-# #coords = Any[] # We keep the coordinate of the best price in order to build rho_si
-# j = 1
-# t1 = time()
-# # lbd_1 = repeat(lbd_reshaped[:,:,j],inner = (1,N)).*upstream # Frictions to serve region j
-
-# lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords]
-# lbd_2 = sparse(rows, cols, lbd_, size(upstream)...)
-
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise pareto: ",t1)
-
-
-
-# r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
-# prices_ = repeat(tau_reshaped[:,:,j],inner = (1,N)).*prices # Prices augmented by trade costs
-
-# # Serching for highest search cost
-# matching = divide_sparse(r,prices_) # Ensure to divide when prices != 0 among selected suppliers. 
-# matching_coord = argmax(matching,dims = 2) # Find the best supplier
-# prices_ = prices_[matching_coord] # Extract best prices (augmented by trade costs)
-# price_index = sum(prices_.^(1-eta).*omega).^(1/(1-eta)) # Build price index. 
-# i = div.(getindex.(matching_coord,2),N) .+ 1# Find the region of the best supplier and update M_sij
-# for s = 1:S
-#     M_sij[i[s],j,s] = prices_[s]
-# end
-# price_indices[j] = price_index  
-# push!(coords,matching_coord) # Store the coordinate of the best suppliers in the flat, upstream like, format
-
-# repeat(lbd_reshaped[:,:,j],inner = (1,N))
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise pareto: ",t1)
-
-
-
-# coords
