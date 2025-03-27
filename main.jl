@@ -4,6 +4,7 @@
 # import Pkg; Pkg.add("DataFrames")
 # import Pkg; Pkg.add("NPZ")
 # import Pkg; Pkg.add("Distributions")
+# import Pkg; Pkg.add("Plots")
 
 using Distributed
 using NPZ
@@ -110,6 +111,7 @@ delta_rho_si = [score !== nothing ? mean((score[2][4] - emp_rho_si) ./ emp_rho_s
 N_firms = [score !== nothing ? score[2][5] : nothing for score in results]
 
 # Add the new columns to the DataFrame
+df[!,"score_index"] = vec(1:length(score))
 df[!, "score"] = score
 df[!, "delta_chi_si"] = delta_chi_si
 df[!, "delta_pi_jA"] = delta_pi_jA
@@ -127,3 +129,45 @@ sort!(df, :score)
 best_params = first(df,50)
 min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
+
+best_index = best_params[1,:score_index]
+# Create first histogram
+p1 = histogram(emp_chi_si, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf)
+histogram!(p1, results[best_index][2][1], alpha=0.5, bins=30, label="Best simulated", color=:red, normalize=:pdf)
+
+
+# Create first histogram
+p2 = histogram(delta_pi_jA, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf)
+histogram!(p2, results[best_index][2][2], alpha=0.5, bins=30, label="Best simulated", color=:red, normalize=:pdf)
+
+
+# Create first histogram
+p3 = histogram(delta_pi_sA, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf)
+histogram!(p3, results[best_index][2][3], alpha=0.5, bins=30, label="Best simulated", color=:red, normalize=:pdf)
+
+
+# Create first histogram
+p4 = histogram(emp_rho_si, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf)
+histogram!(p4, results[best_index][2][4], alpha=0.5, bins=30, label="Best simulated", color=:red, normalize=:pdf)
+
+
+using Plots
+
+# Create individual histograms with LaTeX titles
+p1 = histogram(emp_chi_si, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="chi_{si}")
+histogram!(p1, results[best_index][2][1], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
+
+p2 = histogram(emp_pi_jA, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="pi_{jA}")
+histogram!(p2, results[best_index][2][2], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
+
+p3 = histogram(emp_pi_sA', alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="pi_{sA}")
+histogram!(p3, results[best_index][2][3], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
+
+p4 = histogram(emp_rho_si, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="rho_{si}")
+histogram!(p4, results[best_index][2][4], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
+
+# Combine into a 2x2 subplot layout
+plot(p1, p2, p3, p4, layout=(2,2), size=(800,800))
+
+
+
