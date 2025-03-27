@@ -1,7 +1,10 @@
 # Pkg.add("QuasiMonteCarlo")
 # import Pkg; Pkg.add("QuasiMonteCarlo")
-#import Pkg; Pkg.add("StatsPlots")
-import Pkg; Pkg.add("DataFrames")
+# import Pkg; Pkg.add("StatsPlots")
+# import Pkg; Pkg.add("DataFrames")
+# import Pkg; Pkg.add("NPZ")
+# import Pkg; Pkg.add("Distributions")
+
 using Distributed
 using NPZ
 using QuasiMonteCarlo
@@ -122,7 +125,5 @@ sort!(df, :score)
 
 # Display the updated DataFrame
 best_params = first(df,50)
-selected_columns = [:A, :B]
-
-# Compute min and max for each selected column
-result = combine(df, selected_columns .=> [minimum, maximum])
+min_vec = [minimum(best_params[!, col]) for col in param_names]
+max_vec = [maximum(best_params[!, col]) for col in param_names]
