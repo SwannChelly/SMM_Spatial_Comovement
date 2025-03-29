@@ -1,0 +1,7 @@
+import Pkg; Pkg.add("QuasiMonteCarlo")
+import Pkg; Pkg.add("StatsPlots")
+import Pkg; Pkg.add("DataFrames")
+import Pkg; Pkg.add("NPZ")
+import Pkg; Pkg.add("Distributions")
+import Pkg; Pkg.add("Plots")
+import Pkg; Pkg.add("CSV")

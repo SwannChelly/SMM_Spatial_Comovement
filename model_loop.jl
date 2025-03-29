@@ -3,8 +3,7 @@
 # Latest update: Build model and trade flow 24/03/2025
 # List of concerns
 ## How to add the outside sector ? 
-## Choisir un nombre d'entreprises et les tirer selon Gaubert 2021
-## Ajouter les entreprises de l'étranger. 
+## Choisir un nombre d'entreprises et les tirer selon Gaubert 2021 ? 
 ## Trouver les distributions dans lesquels tirer (grille. )
 
 # To Do: 
@@ -12,9 +11,7 @@
 # Import data for testing. 
 
 
-# import Pkg; Pkg.add("Distributions")
-# import Pkg; Pkg.add("SparseArrays")
-# import Pkg; Pkg.add("NPZ")
+
 using Distributed
 using SparseArrays
 using Distributions
@@ -22,7 +19,7 @@ using Random
 using NPZ
 using LinearAlgebra
 
-
+############### Define functions to use ###############
 
  function CES(price_indices,sigma = 2)
     """
@@ -40,8 +37,6 @@ end
     return sparse(reshape(permutedims(upstream_dense,(3,2,1)), S,:))
 end
 
-
-
  function geq_sparse(df1,df2)
     """
     Compare if non-zero values of df1 are greater than non-zero values of df2. 
@@ -51,8 +46,6 @@ end
     df = sparse(rows, cols, nzvals1.>=nzvals2, size(df1)...)
     return df
 end
-
-
 
  function divide_sparse(df1,df2)
     """
@@ -64,7 +57,7 @@ end
     return df
 end
 
- function from_S_RNN_to_flat(df,S,R,N)
+function from_S_RNN_to_flat(df,S,R,N)
     """
     df: matrix of size (S,RRN)  
     For example contains for each sector and each downstream region the list of possible prices (those that are not equal to 0)
@@ -75,15 +68,13 @@ end
     return flat
 end
 
- function from_flat_to_structured(flat,S,R,N)
+function from_flat_to_structured(flat,S,R,N)
     structured = reshape(flat, R, N, R, S)
     structured = permutedims(structured, (3, 2, 1, 4))
     return structured
 end
 
-
-
- function remove_inf_sparse(df)
+function remove_inf_sparse(df)
     rows, cols, vals = findnz(df)
     # Identify the positions of `Inf` values
     inf_indices = isinf.(vals)
@@ -95,8 +86,7 @@ end
     return df
 end
 
-
- function random_like_sparse(df)
+function random_like_sparse(df)
     """    
     From a sparse matrix, create a similar one with random values. 
     """
@@ -108,7 +98,7 @@ end
 
 
 
-
+############### Parameters for testing #####################
 
 # # Example to generate an Economy object and display its attributes:
 # distances = NPZ.npzread("./distances.npy")  # for `.npz`
@@ -160,6 +150,9 @@ end
 # empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
 # empirical_moments = vcat([vec(empirical_moments_local),vec([10990])]...)
 # eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,1.2932,0.650773,1.08351,1.30467,1.76248,2.32003
+
+
+############### Model ###############
 
 function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega = nothing)
     Times = Any[]
@@ -366,11 +359,8 @@ function SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
 end
 
 
-
-
-
 # Moments 
-## - chi_si: the share of Aerospace industry goods of sector s purschased from region i. 
+## - chi_si: the share of Aerospace industry goods of sector s purchased from region i. 
 ## - pi_jA: the importance of region j in the total purchase of the aerospace industry
 ## - pi_sA: the share of purchase of goods from sector s in the total purchase of the aerospace industry 
 ## - rho_si: the extensive margin | # of suppliers / # of potential suppliers
@@ -378,13 +368,11 @@ end
 
 
 # Estimation procedure. 
-## Practicle guide: https://opensourceecon.github.io/CompMethods/struct_est/SMM.html
+## Guide: https://opensourceecon.github.io/CompMethods/struct_est/SMM.html
 
 ## Put more simply, you want the random draws for all the simulations to be held constant so that the only thing changing in the minimization problem is the value of the vector of parameters
 ### Keep seed constant through sampling. 
 ### Want to reduce the dimension of the moments such as to keep only values that are set to be non zeros. 
-
-## 
 
 function loss_function(simulated_moments,W = nothing)
     # To Do: Make such that the difference is in percentage change. 
@@ -512,7 +500,5 @@ end
 # t1 = time()-t1
 # push!(Times,t1)
 # println("Initialise pareto: ",t1)
-
-
 
 # coords
