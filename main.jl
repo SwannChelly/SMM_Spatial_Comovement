@@ -14,26 +14,28 @@ using DataFrames
 using Plots
 using CSV
 
-addprocs(100)
 @everywhere using NPZ
-
 @everywhere include("model_loop.jl")
 
-# Load large data once on the main process:
+addprocs(100)
+
+############## Load Parameters #################
+
+
 distances_local = NPZ.npzread("./distances.npy")
 filter_A_downstream_local = NPZ.npzread("./filter_A_downstream.npy")
 filter_N_upstream_local = NPZ.npzread("./filter_N_upstream.npy")
 
 emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
 emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[1], 1))  # example R=129
-emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[2]))   # example S=64
+emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[2], 1))  # example R=129
+emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[1]))   # example S=64
 
-emp_chi_si = emp_chi_si[filter_N_upstream_local'.!=0.0]
+emp_chi_si = emp_chi_si[filter_N_upstream_local.!=0.0]
 emp_rho_si = emp_rho_si[filter_N_upstream_local.!=0.0]
 emp_pi_jA = emp_pi_jA[filter_A_downstream_local.!=0]
 
-empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
+empirical_moments_local = [emp_chi_si, emp_pi_sA, emp_rho_si]
 empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
 #empirical_moments_local = vcat([vec(empirical_moments_local),vec([10990])]...)'
 
@@ -42,17 +44,22 @@ empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]..
 @everywhere const filter_A_downstream = $(filter_A_downstream_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const empirical_moments = $(empirical_moments_local)
+@everywhere const omega = $(copy(emp_pi_sA))
+@everywhere const share_imp_total_cost = $(0.38)
+@everywhere const foreign_price = $(1)
+@everywhere const sigma = $(2.46)
 
 # Now workers will have them once in memory.
 
 @everywhere function parallel_SMM(params)
-    eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = params
-    return full_SMM(eta, theta, phi_bar, alpha, beta, mu_T, sigma_T, sigma)
+    theta,phi_bar,alpha,beta,mu_T,sigma_T = params
+    return full_SMM(theta, phi_bar, alpha, beta, mu_T, sigma_T)
 end
 
 @everywhere function generate_halton_grid(n)
-    lb = [0.1, 4, 0.8, 0.9, 0.9, 0.9, 1.5, 2]
-    ub = [0.9, 6, 0.9, 1.2, 1.2, 1.3, 2, 2.5]
+    #    theta,phi_bar,alpha,beta,mu_T,sigma_T 
+    lb = [4, 0.8, 0.9, 0.9, 0.9, 1.5]
+    ub = [6, 0.9, 1.2, 1.2, 1.3, 2]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -61,10 +68,11 @@ end
 end
 
 
-@everywhere function parallel_SMM_safe(params,show_err = false)
+@everywhere function parallel_SMM_safe(params,show_err = true)
     try
         # Perform the actual computation (replace with your actual logic)
         result = parallel_SMM(params)
+
         return result
     catch e
         # If an error occurs, return a message or a placeholder result
@@ -76,8 +84,8 @@ end
     end
 end
 # Generate the grid and run parallel SMM
-params_list = generate_halton_grid(1000)
-# params_list = [(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
+params_list = generate_halton_grid(100)
+# params_list = [(0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
 
 t1 = time()
 results = pmap(parallel_SMM_safe, params_list)
@@ -99,7 +107,7 @@ GC.gc()
 params_matrix = hcat([collect(params) for params in params_list]...)
 
 # Create a DataFrame
-param_names = ["eta", "theta", "phi_bar", "alpha", "beta", "mu_T", "sigma_T", "sigma"]  # Column names for the parameters
+param_names = ["theta", "phi_bar", "alpha", "beta", "mu_T", "sigma_T"]  # Column names for the parameters
 
 # Transpose the params_matrix so that each row represents a parameter set
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
@@ -108,7 +116,7 @@ rename!(df, param_names)  # Rename columns to match parameter names
 # Calculate the new columns
 score = [score !== nothing ? score[1][1] : nothing for score in results]
 delta_chi_si = [score !== nothing ? mean((score[2][1] - emp_chi_si) ./ emp_chi_si) : nothing for score in results]
-delta_pi_jA = [score !== nothing ? mean((score[2][2] - emp_pi_jA) ./ emp_pi_jA) : nothing for score in results]
+# delta_pi_jA = [score !== nothing ? mean((score[2][2] - emp_pi_jA) ./ emp_pi_jA) : nothing for score in results]
 delta_pi_sA = [score !== nothing ? mean((score[2][3] - emp_pi_sA') ./ emp_pi_sA') : nothing for score in results]
 delta_rho_si = [score !== nothing ? mean((score[2][4] - emp_rho_si) ./ emp_rho_si) : nothing for score in results]
 N_firms = [score !== nothing ? score[2][5] : nothing for score in results]
@@ -117,7 +125,7 @@ N_firms = [score !== nothing ? score[2][5] : nothing for score in results]
 df[!,"score_index"] = vec(1:length(score))
 df[!, "score"] = score
 df[!, "delta_chi_si"] = delta_chi_si
-df[!, "delta_pi_jA"] = delta_pi_jA
+# df[!, "delta_pi_jA"] = delta_pi_jA
 df[!, "delta_pi_sA"] = delta_pi_sA
 df[!, "delta_rho_si"] = delta_rho_si
 df[!, "N_firms"] = N_firms
@@ -138,8 +146,8 @@ best_index = best_params[1,:score_index]
 p1 = histogram(emp_chi_si, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="chi_{si}")
 histogram!(p1, results[best_index][2][1], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
 
-p2 = histogram(emp_pi_jA, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="pi_{jA}")
-histogram!(p2, results[best_index][2][2], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
+# p2 = histogram(emp_pi_jA, alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="pi_{jA}")
+# histogram!(p2, results[best_index][2][2], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
 
 p3 = histogram(emp_pi_sA', alpha=0.5, bins=30, label="Empirical", color=:blue, normalize=:pdf, title="pi_{sA}")
 histogram!(p3, results[best_index][2][3], alpha=0.5, bins=30, label="Simulated", color=:red, normalize=:pdf)
@@ -151,8 +159,6 @@ histogram!(p4, results[best_index][2][4], alpha=0.5, bins=30, label="Simulated",
 plot(p1, p2, p3, p4, layout=(2,2), size=(800,800))
 savefig("histograms.pdf")
 CSV.write("parameters.csv",best_params)
-
-df
 
 
 

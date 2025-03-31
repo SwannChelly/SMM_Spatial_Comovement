@@ -100,7 +100,7 @@ end
 
 ############### Parameters for testing #####################
 
-# # Example to generate an Economy object and display its attributes:
+# Example to generate an Economy object and display its attributes:
 # distances = NPZ.npzread("./distances.npy")  # for `.npz`
 # filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
 # filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
@@ -130,7 +130,7 @@ end
 # g = CES
 
 
-#Initialise frictions and parameters
+# # Initialise frictions and parameters
 # distances = isnothing(distances) ? begin
 #     D = rand(R,R) .+1   
 #     (D+D')/2         # multiply by its transpose to ensure symmetry
@@ -139,22 +139,26 @@ end
 
 # emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
 # emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-# emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[1], 1))  # example R=129
-# emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[2]))   # example S=64
+# emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[2], 1))  # example R=129
+# emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[1]))   # example S=64
 
-# emp_chi_si = emp_chi_si[filter_N_upstream'.!=0.0]
+# emp_chi_si = emp_chi_si[filter_N_upstream.!=0.0]
 # emp_rho_si = emp_rho_si[filter_N_upstream.!=0.0]
 # emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
 
 # empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
 # empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
 # empirical_moments = vcat([vec(empirical_moments_local),vec([10990])]...)
-# eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,1.2932,0.650773,1.08351,1.30467,1.76248,2.32003
+
+# omega = emp_pi_sA
+# theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 8.,1.,1.,1.,1.30467,1.76248,2.32003
+# foreign_price = 1
+# share_imp_total_cost = 0.38
 
 
 ############### Model ###############
 
-function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega = nothing)
+function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     Times = Any[]
     t1 = time()
     # For testing
@@ -164,13 +168,7 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
     lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
-    omega = isnothing(omega) ? ones(1,S)./S : omega
     seed = isnothing(seed) ? 1 : seed
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Initialise values: ",t1)
-    t1 = time()
-
 
     # Initialise the firms
     ## We will use the upstream variable in the rest of the simulation for ease of computation. 
@@ -189,11 +187,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     upstream = create_sparse_upstream(N_upstream, S, R, N)
     N_firms = sum(upstream)
 
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Initialise N  firms: ",t1)
-    t1 = time()
-
     # Generate wages, productivity. Construct firm level prices. 
     # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
     # w_extended = repeat(w, inner=(1, N)) # Extension of this wage fro fitting upstream shape. 
@@ -204,22 +197,16 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
     prices = remove_inf_sparse((pareto_draws).^(-1)) # Competitive equilibrium, prices are wages / productivity. 
 
-
     # So far tau is a (R,R,S) matrix with (i,j,s) the trade cost for shipping products of sector s from i to j. 
     # We change it into a (S,R,R) matrix with (s,i,j) the trade cost from shipping products of sectors s from i to j. 
     lbd_reshaped = permutedims(lbd,(3,1,2))
     tau_reshaped = permutedims(tau,(3,1,2))
 
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Initialise pareto: ",t1)
-    t1 = time()
-
     rows, cols, _ = findnz(upstream)
     coords_upstream = [(r, c) for (r, c) in zip(rows, cols)]
 
     price_indices = copy(filter_A_downstream).*1.0 
-    M_sij = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
+    M_sij_ = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
     coords = Any[] # We keep the coordinate of the best price in order to build rho_si
     for j = 1:length(filter_A_downstream) # Iterate on downstream regions. 
         if filter_A_downstream[j] == 1
@@ -227,47 +214,46 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
             
             lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
-
+    
             r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
-
+            N_trial = 0
+            while (prod(sum(r,dims=2)) == 0) & (N_trial < N_trial_max) # Simple check to see if the matching return a potential supplier for each sector 
+                r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+                N_trial = N_trial+1
+            end
+            if N_trial >= N_trial_max
+                return nothing 
+            end 
             # tau_ = repeat(tau_reshaped[:,:,j],inner = (1,N)) # Prices augmented by trade costs
-
+    
             tau_ = [tau_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             tau_ = sparse(rows, cols, tau_, size(upstream)...)
             prices_ = tau_.*prices # Prices augmented by trade costs
-
+    
             # Serching for highest search cost
             matching = divide_sparse(r,prices_) # Ensure to divide when prices != 0 among selected suppliers. 
             matching_coord = argmax(matching,dims = 2) # Find the best supplier
             prices_ = prices_[matching_coord] # Extract best prices (augmented by trade costs)
-            price_index = sum(prices_.^(1-eta).*omega).^(1/(1-eta)) # Build price index. 
+            
+            price_index = prod((prices_./omega').^(omega')).*((foreign_price/share_imp_total_cost)^share_imp_total_cost) # Build price index CES 
+           
             i = div.(getindex.(matching_coord,2).-1,N) .+ 1# Find the region of the best supplier and update M_sij
             for s = 1:S
-                M_sij[i[s],j,s] = prices_[s]
+                M_sij_[i[s],j,s] = 1 #prices_[s] # Keep the coordinate of the region where there is a supplier for downstream sector j in sector s. 
             end
             price_indices[j] = price_index  
             push!(coords,matching_coord) # Store the coordinate of the best suppliers in the flat, upstream like, format
         end
     end
 
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Compute matching, find best values: ",t1)
-    t1 = time()
-
-    # Build demand. 
-    #X_j = g(price_indices,sigma).*1.0
-    X_j = price_indices.^(-sigma).*1.0
+    B_A = 1.0
 
     # Build trade flow M_sij. In (i,j,s), so far contains the price of the firm in i that serves j (if selected) and 0 otherwise. 
-    # We create trade flows using w_sj(p_sj/P_j)**(1-eta)*X_j
-    M_sij = (M_sij./reshape(price_indices,(1,R))).^(1-eta).*reshape(X_j,(1,R)).*reshape(omega,(1,1,S))
+    # Trade flows are w_sj * q_j p_j = w_sj * p_j^(1-\omega)* B_A
+    price_indices_ = copy(price_indices)
+    price_indices_[price_indices_.!=0] = price_indices_[price_indices_.!=0].^(1-sigma)
+    M_sij = M_sij_.*reshape(omega,(1,1,S)).*(price_indices_).*B_A
     M_sij = ifelse.(isnan.(M_sij), 0.0, M_sij)
-
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Build M_sij: ",t1)
-    t1 = time()
 
     # Build moments
     # M_sj 
@@ -284,11 +270,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     M_sj = reshape(sum(M_sij,dims = 1),(R,S))
     M_j  = sum(M_sj,dims = 2)
     pi_jA = M_j/sum(M_j)
-
-    t1 = time()-t1
-    # push!(Times,t1)
-    # println("Build first moments: ",t1)
-    t1 = time()
 
     # rho_si | So far doesn't works. Might want to check why ? 
     coords = unique(vcat(coords...))
@@ -307,11 +288,6 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
     rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
     rho_si = replace(rho_si, Inf => 0.0)
 
-    # t1 = time()-t1
-    # push!(Times,t1)
-    # println("Build trade_flows: ",t1)
-    # t1 = time()
-
     chi_si = chi_si[filter_N_upstream'.!=0.]
     rho_si = rho_si[filter_N_upstream.!=0.]
     pi_jA = pi_jA[filter_A_downstream.!=0]
@@ -329,7 +305,7 @@ function SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,g = CES,omega 
 
     
 
-    return chi_si,pi_jA,pi_sA,rho_si,N_firms,Times
+    return chi_si,pi_sA,rho_si,N_firms#,Times # dont return pi_jA since we dont calibrate it so far
 
 end
 
@@ -340,22 +316,30 @@ end
 # t1 = time()-t1
 # println(t1)
 
-function SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-    chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_,N_firms_  = Any[],Any[],Any[],Any[],Any[]
+function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
+    chi_si_ ,pi_sA_ ,rho_si_,N_firms_  = Any[],Any[],Any[],Any[],Any[]
+    
     for seed = 1:20
-        chi_si,pi_jA,pi_sA,rho_si,N_firms = SMM(seed,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-        push!(chi_si_,chi_si)
-        push!(pi_jA_,pi_jA)
-        push!(pi_sA_,pi_sA)
-        push!(rho_si_,rho_si)
-        push!(N_firms_,N_firms)
+        simulation = SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max)
+        if simulation != nothing
+            chi_si,pi_sA,rho_si,N_firms = simulation
+            push!(chi_si_,chi_si)
+            # push!(pi_jA_,pi_jA)
+            push!(pi_sA_,pi_sA)
+            push!(rho_si_,rho_si)
+            push!(N_firms_,N_firms)
+        end
     end
-    chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
-    pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
-    pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
-    rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
-    N_firms = mean(N_firms_)
-    return chi_si_ ,pi_jA_ ,pi_sA_ ,rho_si_,N_firms
+    if length(chi_si_) > 1
+        chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
+        # pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
+        pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
+        rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
+        N_firms = mean(N_firms_)
+        return chi_si_  ,pi_sA_ ,rho_si_,N_firms
+    else
+        return nothing 
+    end
 end
 
 
@@ -388,9 +372,14 @@ function loss_function(simulated_moments,W = nothing)
 end
 
 
-function full_SMM(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma,W = nothing)
-    simulated_moments = SMM_loop(eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-    return loss_function(simulated_moments,W),simulated_moments
+function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T,W = nothing)
+    simulated_moments = SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T)
+    if simulated_moments != nothing
+        return loss_function(simulated_moments,W),simulated_moments
+    else
+        simulated_moments = [nothing for i in 1:6]
+        return nothing,simulated_moments
+    end
 end
 
 # simulated_moments = SMM_loop(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5)
