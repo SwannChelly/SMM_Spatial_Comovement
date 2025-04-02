@@ -288,8 +288,8 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
     rho_si = replace(rho_si, Inf => 0.0)
 
-    chi_si = chi_si[filter_N_upstream'.!=0.]
-    rho_si = rho_si[filter_N_upstream.!=0.]
+    chi_si = chi_si[(filter_N_upstream'.*filter_out_reference_region') .!=0.0]
+    rho_si = rho_si[(filter_N_upstream.*filter_out_reference_region) .!=0.0]
     pi_jA = pi_jA[filter_A_downstream.!=0]
     pi_sA = reshape(pi_sA,S)
 
@@ -305,9 +305,11 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
 
     
 
-    return chi_si,pi_sA,rho_si,N_firms#,Times # dont return pi_jA since we dont calibrate it so far
+    return chi_si,rho_si,pi_jA,pi_sA,N_firms#,Times # dont return pi_jA since we dont calibrate it so far
 
 end
+
+# full_SMM(4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
 
 # t1 = time()
 # eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,0.6932,0.650773,1.08351,1.30467,1.76248,2.32003
@@ -317,14 +319,14 @@ end
 # println(t1)
 
 function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
-    chi_si_ ,pi_sA_ ,rho_si_,N_firms_  = Any[],Any[],Any[],Any[],Any[]
+    chi_si_ ,rho_si_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[]
     
     for seed = 1:20
         simulation = SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max)
         if simulation != nothing
-            chi_si,pi_sA,rho_si,N_firms = simulation
+            chi_si,rho_si,pi_jA,pi_sA,N_firms = simulation
             push!(chi_si_,chi_si)
-            # push!(pi_jA_,pi_jA)
+            push!(pi_jA_,pi_jA)
             push!(pi_sA_,pi_sA)
             push!(rho_si_,rho_si)
             push!(N_firms_,N_firms)
@@ -332,11 +334,11 @@ function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
     end
     if length(chi_si_) > 1
         chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
-        # pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
-        pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
         rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
+        pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
+        pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
         N_firms = mean(N_firms_)
-        return chi_si_  ,pi_sA_ ,rho_si_,N_firms
+        return chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms
     else
         return nothing 
     end
@@ -358,24 +360,23 @@ end
 ### Keep seed constant through sampling. 
 ### Want to reduce the dimension of the moments such as to keep only values that are set to be non zeros. 
 
-function loss_function(simulated_moments,W = nothing)
+function loss_function(simulated_moments)
     # To Do: Make such that the difference is in percentage change. 
     N = simulated_moments[end]
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-3)]...)
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
     err = (empirical_moments-simulated_moments)
-    #W = isnothing(W) ? I(N) : W 
-    W = I(length(empirical_moments)).*(empirical_moments).^(-1)
-    return err*W*err'
+    # W = isnothing(W) ? I(length(empirical_moments)).*(empirical_moments).^(-1) : W 
+    return err*weight_matrix*err'
 end
 
 
-function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T,W = nothing)
+function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
     simulated_moments = SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T)
     if simulated_moments != nothing
-        return loss_function(simulated_moments,W),simulated_moments
+        return loss_function(simulated_moments),simulated_moments
     else
         simulated_moments = [nothing for i in 1:6]
         return nothing,simulated_moments
@@ -411,7 +412,7 @@ end
 # ## We assume that in each region there is at most N firm alive. For a region R the actual number of firms that are alive is given by self.N_upstream
 # ## Then we sort them for each sector on a single line in the upstream array (of size S x 1 x RN)
 # Random.seed!(seed)
-# T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes
+# T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantages
 # poisson_dist = Poisson.(T .* phi_bar^(-theta))
 # # Used for testing
 # # N_upstream = fill(4, S, R)

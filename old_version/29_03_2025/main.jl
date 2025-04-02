@@ -76,7 +76,7 @@ end
     end
 end
 # Generate the grid and run parallel SMM
-params_list = generate_halton_grid(1000)
+params_list = generate_halton_grid(20000)
 # params_list = [(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
 
 t1 = time()
