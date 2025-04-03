@@ -60,15 +60,10 @@ empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]..
     return full_SMM(theta, phi_bar, alpha, beta, mu_T, sigma_T)
 end
 
-@everywhere function generate_halton_grid(n,reference = nothing,threshold = 0.05)
+@everywhere function generate_halton_grid(n)
     #    theta,phi_bar,alpha,beta,mu_T,sigma_T 
-    if reference == nothing
-        lb = [4, 0.8, 0.9, 0.9, 0.9, 1.5]
-        ub = [6, 0.9, 1.2, 1.2, 1.3, 2]
-    else
-        lb = [i*(1-threshold) for i in reference]
-        ub = [i*(1+threshold) for i in reference]
-    end
+    lb = [4, 0.8, 0.9, 0.9, 0.9, 1.5]
+    ub = [6, 0.9, 1.2, 1.2, 1.3, 2]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -98,6 +93,32 @@ end
 # Generate the grid and run parallel SMM
 params_list = generate_halton_grid(1000)
 # params_list = [(0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
+
+
+best_params = CSV.read("parameters.csv",DataFrame)
+
+center = best_params[1,["theta","phi_bar","alpha","beta","mu_T","sigma_T"]]
+
+
+params_list = Any[]
+
+
+for i in 1:6
+    tmp = range(center[i]*0.95,center[i]*1.05,length = 400)
+    for j in tmp
+        list = Any[]
+        for k in 1:6
+            if k == i
+                push!(list,j)
+            else
+                push!(list,center[k])
+            end
+        end
+        push!(params_list,list)
+    end
+
+end
+
 
 t1 = time()
 results = pmap(parallel_SMM_safe, params_list)
@@ -169,15 +190,32 @@ histogram!(p4, results[best_index][2][4], alpha=0.5, bins=30, label="Simulated",
 
 # Combine into a 2x2 subplot layout
 plot(p1, p2,p3,p4, layout=(2,2), size=(800,800))
-savefig("histograms.pdf")
-CSV.write("parameters.csv",best_params)
+savefig("histograms_2.pdf")
+CSV.write("parameters_2.csv",best_params)
 
 best_params = CSV.read("parameters.csv",DataFrame)
 
-theta,phi_bar,alpha,beta,mu_T,sigma_T = best_params[1,["theta","phi_bar","alpha","beta","mu_T","sigma_T"]]
-theta,phi_bar,alpha,beta,mu_T,sigma_T = best_params[1,["theta","phi_bar","alpha","beta","mu_T","sigma_T"]] 
-params_list = generate_halton_grid(1000,[theta,phi_bar,alpha,beta,mu_T,sigma_T])
+center = best_params[1,["theta","phi_bar","alpha","beta","mu_T","sigma_T"]]
 
+
+params_list = Any[]
+
+
+for i in 1:6
+    tmp = range(center[i]*0.95,center[i]*1.05,length = 400)
+    for j in tmp
+        list = Any[]
+        for k in 1:6
+            if k == i
+                push!(list,j)
+            else
+                push!(list,center[k])
+            end
+        end
+        push!(params_list,list)
+    end
+
+end
 
 # params_list = [(0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
 
