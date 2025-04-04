@@ -37,13 +37,17 @@ end
     return sparse(reshape(permutedims(upstream_dense,(3,2,1)), S,:))
 end
 
- function geq_sparse(df1,df2)
+ function compare_sparse(df1,df2,geq = true)
     """
-    Compare if non-zero values of df1 are greater than non-zero values of df2. 
+    Compare if non-zero values of df1 are greater or equal than non-zero values of df2 if geq equals 2. Otherwise compare if those are lower strictly
     """
     rows, cols, nzvals1 = findnz(df1)
     rows, cols, nzvals2 = findnz(df2)
-    df = sparse(rows, cols, nzvals1.>=nzvals2, size(df1)...)
+    if geq
+        df = sparse(rows, cols, nzvals1.>=nzvals2, size(df1)...)
+    else
+        df = sparse(rows, cols, nzvals1.<nzvals2, size(df1)...)
+    end
     return df
 end
 
@@ -96,14 +100,23 @@ function random_like_sparse(df)
     return uniform
 end
 
+function from_sparse_to_SRN(df,S,N,R)
+    df = reshape(df, S,N,R)
+    # # println("rho: ",Base.summarysize(rho_si))
+    df = permutedims(df,(3,2,1))
+    df = permutedims(reshape(sum(df,dims = 2),(R,S)),(2,1))
+    return df
+end
 
 
-############### Parameters for testing #####################
 
-# Example to generate an Economy object and display its attributes:
+# ############### Parameters for testing #####################
+
+# # Example to generate an Economy object and display its attributes:
 # distances = NPZ.npzread("./distances.npy")  # for `.npz`
 # filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
 # filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
+# filter_out_reference_region = NPZ.npzread("./filter_out_reference_region.npy")
 
 
 
@@ -126,8 +139,8 @@ end
 # distances = nothing
 # mu_T=0.0135*100
 # sigma_T=1.395
-# sigma=2.0
-# g = CES
+# sigma=2.46
+# share_imp_total_cost= 0.35
 
 
 # # Initialise frictions and parameters
@@ -151,9 +164,11 @@ end
 # empirical_moments = vcat([vec(empirical_moments_local),vec([10990])]...)
 
 # omega = emp_pi_sA
-# theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 8.,1.,1.,1.,1.30467,1.76248,2.32003
+# # theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 8.,1.,1.,1.,1.30467,1.76248,2.32003
 # foreign_price = 1
-# share_imp_total_cost = 0.38
+# share_imp_total_cost = 0.35
+# low_high = true
+# reduced = false
 
 
 ############### Model ###############
@@ -215,10 +230,10 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
             lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
     
-            r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+            r = compare_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
             N_trial = 0
             while (prod(sum(r,dims=2)) == 0) & (N_trial < N_trial_max) # Simple check to see if the matching return a potential supplier for each sector 
-                r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+                r = compare_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
                 N_trial = N_trial+1
             end
             if N_trial >= N_trial_max
@@ -280,18 +295,62 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
 
     # Create sparse matrix
     rho_si = sparse(rows, cols, vals, S, R*N)
-    rho_si = reshape(rho_si, S,N,R)
-    # println("rho: ",Base.summarysize(rho_si))
-    rho_si = permutedims(rho_si,(3,2,1))
-    rho_si = permutedims(reshape(sum(rho_si,dims = 2),(R,S)),(2,1))
-    rho_si = rho_si./N_upstream
-    rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
-    rho_si = replace(rho_si, Inf => 0.0)
 
-    chi_si = chi_si[(filter_N_upstream'.*filter_out_reference_region') .!=0.0]
-    rho_si = rho_si[(filter_N_upstream.*filter_out_reference_region) .!=0.0]
-    pi_jA = pi_jA[filter_A_downstream.!=0]
-    pi_sA = reshape(pi_sA,S)
+    if low_high
+        pareto_median = zeros(S, R)  # Assuming S and R are the dimensions
+        # Loop through each s and r
+        for s in 1:S
+            for r in 1:R
+                # Get the relevant portion of pareto_draws
+                pareto_slice = pareto_draws[s, (r-1)*N+1:(r-1)*N+Int(N_upstream[s,r])]
+                
+                # Check if pareto_slice is empty
+                if nnz(pareto_slice) == 0  # nnz gives the number of stored entries in a SparseVector
+                    pareto_sr = 0  # Or some other value to represent an empty slice
+                else
+                    pareto_sr = median(pareto_slice)
+                end
+
+                # Store the result in the matrix
+                pareto_median[s, r] = pareto_sr
+            end
+        end
+        pareto_median = repeat(pareto_median,inner = (1,N)).*upstream
+        low = compare_sparse(pareto_draws,pareto_median,false)
+        high = compare_sparse(pareto_draws,pareto_median,true)
+
+        rho_si_low = rho_si.*low # suppliers under median 
+        rho_si_high = rho_si.*high # suppliers under median 
+
+        low_N = from_sparse_to_SRN(low,S,N,R)
+        high_N = from_sparse_to_SRN(high,S,N,R)
+        rho_si_low = from_sparse_to_SRN(rho_si_low,S,N,R)
+        rho_si_high = from_sparse_to_SRN(rho_si_high,S,N,R)
+
+        rho_si_low = rho_si_low./low_N
+        rho_si_high = rho_si_high./high_N
+
+        rho_si_low,rho_si_high = ifelse.(isnan.(rho_si_low), 0.0, rho_si_low),ifelse.(isnan.(rho_si_high), 0.0, rho_si_high)
+        rho_si_low,rho_si_high = replace(rho_si_low, Inf => 0.0),replace(rho_si_high, Inf => 0.0)
+
+        chi_si = chi_si[(filter_N_upstream'.*filter_out_reference_region') .!=0.0]
+        rho_si_low,rho_si_high = rho_si_low[(filter_N_upstream.*filter_out_reference_region) .!=0.0], rho_si_high[(filter_N_upstream.*filter_out_reference_region) .!=0.0]
+        pi_jA = pi_jA[filter_A_downstream.!=0]
+        pi_sA = reshape(pi_sA,S)
+
+        return chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms
+    else
+        rho_si = from_sparse_to_SRN(rho_si,S,N,R)
+    
+    
+        rho_si = rho_si./N_upstream
+        rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
+        rho_si = replace(rho_si, Inf => 0.0)
+
+        chi_si = chi_si[(filter_N_upstream'.*filter_out_reference_region') .!=0.0]
+        rho_si = rho_si[(filter_N_upstream.*filter_out_reference_region) .!=0.0]
+        pi_jA = pi_jA[filter_A_downstream.!=0]
+        pi_sA = reshape(pi_sA,S)
 
     # t = repeat(lbd_reshaped[:,:,1],inner = (1,N))
     # println("rho: ",Base.summarysize(rho_si)/(1024^3))
@@ -301,15 +360,15 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     # println("upstream: ",Base.summarysize(upstream)/(1024^3))
     # println("N_upstream: ",Base.summarysize(N_upstream)/(1024^3))
     # println("pareto_draws: ",Base.summarysize(prices)/(1024^3))
-    # println("prices: ",Base.summarysize(prices)/(1024^3))
+    # println("prices: ",Base.summarysize(prices)/(1024^3))   
 
-    
-
-    return chi_si,rho_si,pi_jA,pi_sA,N_firms#,Times # dont return pi_jA since we dont calibrate it so far
-
+        return chi_si ,rho_si,pi_jA,pi_sA,N_firms#,Times # dont return pi_jA since we dont calibrate it so far
+    end
 end
 
-# full_SMM(4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
+# # SMM(1,4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
+# chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = SMM(1,4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
+# low_high = true
 
 # t1 = time()
 # eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,0.6932,0.650773,1.08351,1.30467,1.76248,2.32003
@@ -319,26 +378,48 @@ end
 # println(t1)
 
 function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
-    chi_si_ ,rho_si_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[]
-    
+    if low_high
+        chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[],Any[]
+    else 
+        chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[]
+    end
     for seed = 1:20
         simulation = SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max)
         if simulation != nothing
-            chi_si,rho_si,pi_jA,pi_sA,N_firms = simulation
-            push!(chi_si_,chi_si)
-            push!(pi_jA_,pi_jA)
-            push!(pi_sA_,pi_sA)
-            push!(rho_si_,rho_si)
+            if low_high
+                chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = simulation
+                push!(chi_si_,chi_si)
+                push!(pi_jA_,pi_jA)
+                push!(pi_sA_,pi_sA)  
+                push!(rho_si_low_,rho_si_low)
+                push!(rho_si_high_,rho_si_high)
+            else             
+                chi_si,rho_si,pi_jA,pi_sA,N_firms = simulation
+                push!(chi_si_,chi_si)
+                push!(pi_jA_,pi_jA)
+                push!(pi_sA_,pi_sA)   
+                push!(rho_si_,rho_si)
+            end
             push!(N_firms_,N_firms)
         end
     end
     if length(chi_si_) > 1
         chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
-        rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
-        pi_jA_ = mean(hcat(pi_jA_...)',dims = 1)'
-        pi_sA_ = mean(hcat(pi_sA_...)',dims = 1)'
+        
+        if low_high
+            rho_si_low_ = mean(hcat(rho_si_low_...)',dims = 1)'
+            rho_si_high_ = mean(hcat(rho_si_high_...)',dims = 1)'
+        else                
+            rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
+        end
+        pi_jA_  = mean(hcat(pi_jA_...)',dims = 1)'
+        pi_sA_  = mean(hcat(pi_sA_...)',dims = 1)'
         N_firms = mean(N_firms_)
-        return chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms
+        if low_high       
+            return chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms
+        else
+            return chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms
+        end
     else
         return nothing 
     end
@@ -382,113 +463,3 @@ function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
         return nothing,simulated_moments
     end
 end
-
-# simulated_moments = SMM_loop(0.1, 0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5)
-
-# ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
-# seed = 1
-
-# Times = Any[]
-# t1 = time()
-# # For testing
-# #distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
-# S,R = size(filter_N_upstream)
-# # alpha = 1.
-# # beta = 1.
-# alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
-# beta = isa(beta, Float64) ? fill(beta, S) : beta
-# tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
-# lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
-# omega = isnothing(omega) ? ones(1,S)./S : omega
-# seed = isnothing(seed) ? 1 : seed
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise values: ",t1)
-# t1 = time()
-
-
-# # Initialise the firms
-# ## We will use the upstream variable in the rest of the simulation for ease of computation. 
-# ## We assume that in each region there is at most N firm alive. For a region R the actual number of firms that are alive is given by self.N_upstream
-# ## Then we sort them for each sector on a single line in the upstream array (of size S x 1 x RN)
-# Random.seed!(seed)
-# T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantages
-# poisson_dist = Poisson.(T .* phi_bar^(-theta))
-# # Used for testing
-# # N_upstream = fill(4, S, R)
-# # N_upstream[:,end] .= 1
-# # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
-# ## We set manually the regions where there are no firms if filter_N_upstream is given. 
-# N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
-# N = Integer(maximum(N_upstream))
-# upstream = create_sparse_upstream(N_upstream, S, R, N)
-# N_firms = sum(upstream)
-
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise N  firms: ",t1)
-# t1 = time()
-
-# # Generate wages, productivity. Construct firm level prices. 
-# # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
-# # w_extended = repeat(w, inner=(1, N)) # Extension of this wage fro fitting upstream shape. 
-
-# # Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)
-# pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar 
-# rows, cols, _ = findnz(upstream) 
-# pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
-# prices = remove_inf_sparse((pareto_draws).^(-1)) # Competitive equilibrium, prices are wages / productivity. 
-
-
-# # So far tau is a (R,R,S) matrix with (i,j,s) the trade cost for shipping products of sector s from i to j. 
-# # We change it into a (S,R,R) matrix with (s,i,j) the trade cost from shipping products of sectors s from i to j. 
-# lbd_reshaped = permutedims(lbd,(3,1,2))
-# tau_reshaped = permutedims(tau,(3,1,2))
-
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise pareto: ",t1)
-# t1 = time()
-
-
-# rows, cols, _ = findnz(upstream)
-# coords = [(r, c) for (r, c) in zip(rows, cols)]
-# i = div.(cols.-1,N) .+ 1
-
-# price_indices = copy(filter_A_downstream).*1.0 
-# M_sij = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
-# #coords = Any[] # We keep the coordinate of the best price in order to build rho_si
-# j = 1
-# t1 = time()
-# # lbd_1 = repeat(lbd_reshaped[:,:,j],inner = (1,N)).*upstream # Frictions to serve region j
-
-# lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords]
-# lbd_2 = sparse(rows, cols, lbd_, size(upstream)...)
-
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise pareto: ",t1)
-
-
-
-# r = geq_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
-# prices_ = repeat(tau_reshaped[:,:,j],inner = (1,N)).*prices # Prices augmented by trade costs
-
-# # Serching for highest search cost
-# matching = divide_sparse(r,prices_) # Ensure to divide when prices != 0 among selected suppliers. 
-# matching_coord = argmax(matching,dims = 2) # Find the best supplier
-# prices_ = prices_[matching_coord] # Extract best prices (augmented by trade costs)
-# price_index = sum(prices_.^(1-eta).*omega).^(1/(1-eta)) # Build price index. 
-# i = div.(getindex.(matching_coord,2),N) .+ 1# Find the region of the best supplier and update M_sij
-# for s = 1:S
-#     M_sij[i[s],j,s] = prices_[s]
-# end
-# price_indices[j] = price_index  
-# push!(coords,matching_coord) # Store the coordinate of the best suppliers in the flat, upstream like, format
-
-# repeat(lbd_reshaped[:,:,j],inner = (1,N))
-# t1 = time()-t1
-# push!(Times,t1)
-# println("Initialise pareto: ",t1)
-
-# coords
