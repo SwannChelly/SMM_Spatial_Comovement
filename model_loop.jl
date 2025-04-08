@@ -113,14 +113,14 @@ end
 # ############### Parameters for testing #####################
 
 # # Example to generate an Economy object and display its attributes:
-# distances = NPZ.npzread("./distances.npy")  # for `.npz`
-# filter_A_downstream = NPZ.npzread("./filter_A_downstream.npy")  # for `.npz`
-# filter_N_upstream = NPZ.npzread("./filter_N_upstream.npy")  # for `.npz`
-# filter_out_reference_region = NPZ.npzread("./filter_out_reference_region.npy")
+# distances = NPZ.npzread("./baseline/distances.npy")  # for `.npz`
+# filter_A_downstream = NPZ.npzread("./baseline/filter_A_downstream.npy")  # for `.npz`
+# filter_N_upstream = NPZ.npzread("./baseline/filter_N_upstream.npy")  # for `.npz`
+# filter_out_reference_region = NPZ.npzread("./baseline/filter_out_reference_region.npy")
 
 
 
-# t1 = time()
+# # t1 = time()
 # R=size(distances)[1]
 # S=size(filter_N_upstream)[1]
 # eta=0.5
@@ -150,18 +150,18 @@ end
 # end : distances  # use the provided distances matrix if available
 
 
-# emp_chi_si = NPZ.npzread("./emp_chi_si.npy")
-# emp_rho_si = NPZ.npzread("./emp_rho_si.npy")
-# emp_pi_jA = reshape(NPZ.npzread("./emp_pi_jA.npy"), (size(emp_chi_si)[2], 1))  # example R=129
-# emp_pi_sA = reshape(NPZ.npzread("./emp_pi_sA.npy"), (1, size(emp_chi_si)[1]))   # example S=64
+# emp_chi_si = NPZ.npzread("./baseline/emp_chi_si.npy")
+# emp_rho_si = NPZ.npzread("./baseline/emp_rho_si.npy")
+# emp_pi_jA = reshape(NPZ.npzread("./baseline/emp_pi_jA.npy"), (size(emp_chi_si)[2], 1))  # example R=129
+# emp_pi_sA = reshape(NPZ.npzread("./baseline/emp_pi_sA.npy"), (1, size(emp_chi_si)[1]))   # example S=64
 
 # emp_chi_si = emp_chi_si[filter_N_upstream.!=0.0]
 # emp_rho_si = emp_rho_si[filter_N_upstream.!=0.0]
 # emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
 
-# empirical_moments_local = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
-# empirical_moments_local = vcat([vec(item) for item in empirical_moments_local]...)'
-# empirical_moments = vcat([vec(empirical_moments_local),vec([10990])]...)
+# empirical_moments = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
+# empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+# empirical_moments = vcat([vec(empirical_moments),vec([10990])]...)
 
 # omega = emp_pi_sA
 # # theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 8.,1.,1.,1.,1.30467,1.76248,2.32003
@@ -199,8 +199,12 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     ## We set manually the regions where there are no firms if filter_N_upstream is given. 
     N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
     N = Integer(maximum(N_upstream))
+    N_firms = sum(N_upstream)
+
+    if N_firms >= 30000
+        return nothing
+    end
     upstream = create_sparse_upstream(N_upstream, S, R, N)
-    N_firms = sum(upstream)
 
     # Generate wages, productivity. Construct firm level prices. 
     # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
@@ -286,19 +290,19 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     M_j  = sum(M_sj,dims = 2)
     pi_jA = M_j/sum(M_j)
 
-    # rho_si | So far doesn't works. Might want to check why ? 
+    # Using unique kill duplicated suppliers. 
     coords = unique(vcat(coords...))
 
     rows = [c.I[1] for c in coords]
     cols = [c.I[2] for c in coords]
     vals = ones(length(coords))  # values to place at those coordinates
 
-    # Create sparse matrix
+    # Create sparse matrix that contains 1 when firms are suppliers. 
     rho_si = sparse(rows, cols, vals, S, R*N)
 
     if low_high
         pareto_median = zeros(S, R)  # Assuming S and R are the dimensions
-        # Loop through each s and r
+        # Loop through each s and r in order to compute the median of productivity per region 
         for s in 1:S
             for r in 1:R
                 # Get the relevant portion of pareto_draws
@@ -315,6 +319,7 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
                 pareto_median[s, r] = pareto_sr
             end
         end
+        # Identify firms within sector x region that are above of bellow the median productivity
         pareto_median = repeat(pareto_median,inner = (1,N)).*upstream
         low = compare_sparse(pareto_draws,pareto_median,false)
         high = compare_sparse(pareto_draws,pareto_median,true)
@@ -327,22 +332,29 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
         rho_si_low = from_sparse_to_SRN(rho_si_low,S,N,R)
         rho_si_high = from_sparse_to_SRN(rho_si_high,S,N,R)
 
-        rho_si_low = rho_si_low./low_N
-        rho_si_high = rho_si_high./high_N
+        # Compute \rho_si for each productivity bin
+        rho_si_low = rho_si_low./low_N 
+        rho_si_high = rho_si_high./high_N 
 
         rho_si_low,rho_si_high = ifelse.(isnan.(rho_si_low), 0.0, rho_si_low),ifelse.(isnan.(rho_si_high), 0.0, rho_si_high)
         rho_si_low,rho_si_high = replace(rho_si_low, Inf => 0.0),replace(rho_si_high, Inf => 0.0)
 
+        # Filter on upstream regions and filter out reference region. 
         chi_si = chi_si[(filter_N_upstream'.*filter_out_reference_region') .!=0.0]
         rho_si_low,rho_si_high = rho_si_low[(filter_N_upstream.*filter_out_reference_region) .!=0.0], rho_si_high[(filter_N_upstream.*filter_out_reference_region) .!=0.0]
         pi_jA = pi_jA[filter_A_downstream.!=0]
         pi_sA = reshape(pi_sA,S)
-
-        return chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms
+        if reduced 
+            mean_chi_si,var_chi_si = mean(chi_si),var(chi_si)
+            mean_rho_si_low,var_rho_si_low = mean(rho_si_low),var(rho_si_low)
+            mean_rho_si_high,var_rho_si_high = mean(rho_si_high),var(rho_si_high)
+            return chi_si,mean_chi_si,var_chi_si,mean_rho_si_low,var_rho_si_low,mean_rho_si_high,var_rho_si_high,pi_jA,pi_sA,N_firms
+        else 
+            return chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms
+        end
     else
         rho_si = from_sparse_to_SRN(rho_si,S,N,R)
-    
-    
+       
         rho_si = rho_si./N_upstream
         rho_si = ifelse.(isnan.(rho_si), 0.0, rho_si)
         rho_si = replace(rho_si, Inf => 0.0)
@@ -367,8 +379,7 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
 end
 
 # # SMM(1,4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
-# chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = SMM(1,4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
-# low_high = true
+
 
 # t1 = time()
 # eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,0.6932,0.650773,1.08351,1.30467,1.76248,2.32003
@@ -378,52 +389,19 @@ end
 # println(t1)
 
 function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
-    if low_high
-        chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[],Any[]
-    else 
-        chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[]
-    end
-    for seed = 1:20
-        simulation = SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max)
-        if simulation != nothing
-            if low_high
-                chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = simulation
-                push!(chi_si_,chi_si)
-                push!(pi_jA_,pi_jA)
-                push!(pi_sA_,pi_sA)  
-                push!(rho_si_low_,rho_si_low)
-                push!(rho_si_high_,rho_si_high)
-            else             
-                chi_si,rho_si,pi_jA,pi_sA,N_firms = simulation
-                push!(chi_si_,chi_si)
-                push!(pi_jA_,pi_jA)
-                push!(pi_sA_,pi_sA)   
-                push!(rho_si_,rho_si)
-            end
-            push!(N_firms_,N_firms)
+    simulations = [SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max) for seed in 1:20]
+    simulations = filter(!isnothing, simulations)
+    if length(simulations) > 1
+        moments = Any[]
+        for i in 1:length(simulations[1])
+            push!(moments,mean(hcat([simulation[i] for simulation in simulations]...)',dims = 1)')
         end
-    end
-    if length(chi_si_) > 1
-        chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
-        
-        if low_high
-            rho_si_low_ = mean(hcat(rho_si_low_...)',dims = 1)'
-            rho_si_high_ = mean(hcat(rho_si_high_...)',dims = 1)'
-        else                
-            rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
-        end
-        pi_jA_  = mean(hcat(pi_jA_...)',dims = 1)'
-        pi_sA_  = mean(hcat(pi_sA_...)',dims = 1)'
-        N_firms = mean(N_firms_)
-        if low_high       
-            return chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms
-        else
-            return chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms
-        end
+        return moments
     else
-        return nothing 
+        return nothing              
     end
 end
+
 
 
 # Moments 
@@ -463,3 +441,100 @@ function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
         return nothing,simulated_moments
     end
 end
+
+
+# low_high = true
+# if low_high
+#     folder = "./bins"
+# else
+#     folder = "./baseline"
+# end
+
+# distances = NPZ.npzread(joinpath(folder, "distances.npy"))
+# filter_A_downstream = NPZ.npzread(joinpath(folder,"filter_A_downstream.npy"))
+# filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
+# filter_out_reference_region = NPZ.npzread(joinpath(folder,"filter_out_reference_region.npy"))
+
+# emp_chi_si = NPZ.npzread(joinpath(folder,"emp_chi_si.npy"))
+# emp_pi_jA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_jA.npy")), (size(emp_chi_si)[2], 1))  # example R=129
+# emp_pi_sA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_sA.npy")), (1, size(emp_chi_si)[1]))   # example S=64
+# W = NPZ.npzread(joinpath(folder,"inv_cov.npy"))
+# emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+
+# emp_chi_si = emp_chi_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+# if low_high
+#     emp_rho_si_low = NPZ.npzread(joinpath(folder,"emp_rho_si_low.npy"))
+#     emp_rho_si_high = NPZ.npzread(joinpath(folder,"emp_rho_si_high.npy"))
+#     emp_rho_si_low = emp_rho_si_low[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+#     emp_rho_si_high = emp_rho_si_high[(filter_N_upstream.*filter_out_reference_region).!=0.0]    
+#     empirical_moments = [emp_chi_si, emp_rho_si_low,emp_rho_si_high]
+#     empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+# else 
+#     emp_rho_si = NPZ.npzread(joinpath(folder,"emp_rho_si.npy")) 
+#     emp_rho_si = emp_rho_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+    
+#     empirical_moments = [emp_chi_si, emp_rho_si]
+#     empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+# end
+
+# distances = distances_local
+# filter_A_downstream = filter_A_downstream_local
+# filter_N_upstream = filter_N_upstream_local
+# filter_out_reference_region = filter_out_reference_region_local
+# empirical_moments = empirical_moments_local
+# omega = copy(emp_pi_sA)
+# share_imp_total_cost = 0.35
+# foreign_price = 1
+# sigma = 2.46
+# weight_matrix = W_local
+# reduced = false
+# # simulation_1 = full_SMM(4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
+# simulation_2 = full_SMM(4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
+
+#function old_SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
+#     if low_high
+#         chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[],Any[]
+#     else 
+#         chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[]
+#     end
+#     for seed = 1:20
+#         simulation = SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max)
+#         if simulation != nothing
+#             if low_high
+#                 chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = simulation
+#                 push!(chi_si_,chi_si)
+#                 push!(pi_jA_,pi_jA)
+#                 push!(pi_sA_,pi_sA)  
+#                 push!(rho_si_low_,rho_si_low)
+#                 push!(rho_si_high_,rho_si_high)
+#             else             
+#                 chi_si,rho_si,pi_jA,pi_sA,N_firms = simulation
+#                 push!(chi_si_,chi_si)
+#                 push!(pi_jA_,pi_jA)
+#                 push!(pi_sA_,pi_sA)   
+#                 push!(rho_si_,rho_si)
+#             end
+#             push!(N_firms_,N_firms)
+#         end
+#     end
+#     if length(chi_si_) > 1
+#         chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
+        
+#         if low_high
+#             rho_si_low_ = mean(hcat(rho_si_low_...)',dims = 1)'
+#             rho_si_high_ = mean(hcat(rho_si_high_...)',dims = 1)'
+#         else                
+#             rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
+#         end
+#         pi_jA_  = mean(hcat(pi_jA_...)',dims = 1)'
+#         pi_sA_  = mean(hcat(pi_sA_...)',dims = 1)'
+#         N_firms = mean(N_firms_)
+#         if low_high       
+#             return chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms
+#         else
+#             return chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms
+#         end
+#     else
+#         return nothing 
+#     end
+# end

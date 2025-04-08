@@ -5,12 +5,17 @@ using CSV
 
 
 
+low_high = true
+first_loop = false
 
+if low_high
+    folder = "./bins"
+else
+    folder = "./baseline"
+end
 
-
-
-best_params_first_loop = CSV.read("parameters.csv",DataFrame)
-params_second_loop = CSV.read("parameters_2.csv",DataFrame)
+best_params_first_loop = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
+params_second_loop = CSV.read(joinpath(folder,"parameters_2.csv"),DataFrame)
 sort!(params_second_loop, :score_index)
 params_second_loop
 
