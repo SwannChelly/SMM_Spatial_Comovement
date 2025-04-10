@@ -1,13 +1,13 @@
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 
-import Pkg; Pkg.add("QuasiMonteCarlo")
-import Pkg; Pkg.add("StatsPlots")
-import Pkg; Pkg.add("DataFrames")
-import Pkg; Pkg.add("NPZ")
-import Pkg; Pkg.add("Distributions")
-import Pkg; Pkg.add("Plots")
-import Pkg; Pkg.add("CSV")
+#import Pkg; Pkg.add("QuasiMonteCarlo")
+#import Pkg; Pkg.add("StatsPlots")
+#import Pkg; Pkg.add("DataFrames")
+#import Pkg; Pkg.add("NPZ")
+#import Pkg; Pkg.add("Distributions")
+#import Pkg; Pkg.add("Plots")
+#import Pkg; Pkg.add("CSV")
 
 using Distributed
 using NPZ
@@ -23,7 +23,7 @@ Random.seed!(1)
 @everywhere using NPZ
 @everywhere include("model_loop.jl")
 ############## Load Parameters #################
-@everywhere const low_high = $(false)
+@everywhere const low_high = $(true)
 @everywhere const reduced = $(false)
 first_loop = true
 
@@ -80,8 +80,8 @@ end
 end
 @everywhere function generate_halton_grid(n)
     #    theta,phi_bar,alpha,beta,mu_T,sigma_T 
-    lb = [2, 0.1, 0.8, 0.8, 0.9, 1.5]
-    ub = [9, 0.9, 1.4, 1.4, 2, 2]
+    lb = [4, 0.01, 0.8, 0.8, 0.9, 1.5]
+    ub = [100, 5, 5., 5., 2, 5]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -108,7 +108,7 @@ end
 
 # First create parameters
 if first_loop
-    params_list = generate_halton_grid(10000)
+    params_list = generate_halton_grid(30000)
     # params_list = [(0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
 else 
     
@@ -152,8 +152,7 @@ params_matrix = hcat([collect(params) for params in params_list]...)
 param_names = ["theta", "phi_bar", "alpha", "beta", "mu_T", "sigma_T"]  # Column names for the parameters
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
-score = [score[1] !== nothing ? score[1][1] : missing for score in results]
-
+score = [score[1] != nothing ? score[1][1] : missing for score in results]
 
 if low_high
     delta_chi_si = [score[1] !== nothing ? mean((score[2][1] - emp_chi_si) ./ emp_chi_si) : missing for score in results]
@@ -163,7 +162,7 @@ if low_high
     delta_pi_sA = [score[1] !== nothing ? mean((score[2][5] - emp_pi_sA') ./ emp_pi_sA') : missing for score in results]
     N_firms = [score[1] !== nothing ? score[2][6] : missing for score in results]
     df[!,"score_index"] = vec(1:length(score))
-    df[!, "score"] = score[1]
+    df[!, "score"] = score
     df[!, "delta_chi_si"] = delta_chi_si
     df[!, "delta_rho_si_low"] = delta_rho_si_low
     df[!, "delta_rho_si_high"] = delta_rho_si_high
@@ -245,9 +244,5 @@ else
     savefig(joinpath(folder,"dashboard.pdf"))
 end
 
-
-plot(p1,p2,p3,p4, layout=(2,2), size=(800,800))
-
-
-
+plot(p1,p2,p3,p4,p5, layout=(2,3), size=(800,800))
 

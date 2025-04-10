@@ -112,63 +112,7 @@ end
 
 # ############### Parameters for testing #####################
 
-# # Example to generate an Economy object and display its attributes:
-# distances = NPZ.npzread("./baseline/distances.npy")  # for `.npz`
-# filter_A_downstream = NPZ.npzread("./baseline/filter_A_downstream.npy")  # for `.npz`
-# filter_N_upstream = NPZ.npzread("./baseline/filter_N_upstream.npy")  # for `.npz`
-# filter_out_reference_region = NPZ.npzread("./baseline/filter_out_reference_region.npy")
 
-
-
-# # t1 = time()
-# R=size(distances)[1]
-# S=size(filter_N_upstream)[1]
-# eta=0.5
-# omega=nothing
-# theta=1.0
-# phi_bar=0.9
-# w=nothing # As we don't have an outside sector, we dont take into account the wages for now. 
-# # distances=nothing
-# alpha=1.0
-# beta=1.0
-# # R = 3
-# # S = 2
-# # filter_N_upstream=nothing
-# # filter_A_downstream=ones(Bool, R)
-# # filter_A_downstream[1] = 0
-# distances = nothing
-# mu_T=0.0135*100
-# sigma_T=1.395
-# sigma=2.46
-# share_imp_total_cost= 0.35
-
-
-# # Initialise frictions and parameters
-# distances = isnothing(distances) ? begin
-#     D = rand(R,R) .+1   
-#     (D+D')/2         # multiply by its transpose to ensure symmetry
-# end : distances  # use the provided distances matrix if available
-
-
-# emp_chi_si = NPZ.npzread("./baseline/emp_chi_si.npy")
-# emp_rho_si = NPZ.npzread("./baseline/emp_rho_si.npy")
-# emp_pi_jA = reshape(NPZ.npzread("./baseline/emp_pi_jA.npy"), (size(emp_chi_si)[2], 1))  # example R=129
-# emp_pi_sA = reshape(NPZ.npzread("./baseline/emp_pi_sA.npy"), (1, size(emp_chi_si)[1]))   # example S=64
-
-# emp_chi_si = emp_chi_si[filter_N_upstream.!=0.0]
-# emp_rho_si = emp_rho_si[filter_N_upstream.!=0.0]
-# emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
-
-# empirical_moments = [emp_chi_si, emp_pi_jA, emp_pi_sA, emp_rho_si]
-# empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
-# empirical_moments = vcat([vec(empirical_moments),vec([10990])]...)
-
-# omega = emp_pi_sA
-# # theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 8.,1.,1.,1.,1.30467,1.76248,2.32003
-# foreign_price = 1
-# share_imp_total_cost = 0.35
-# low_high = true
-# reduced = false
 
 
 ############### Model ###############
@@ -176,8 +120,7 @@ end
 function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     Times = Any[]
     t1 = time()
-    # For testing
-    # distances = reshape(collect(2:(R*R + 1)), R, R).*1.0
+    # We initialize main variables used in the simulation
     S,R = size(filter_N_upstream)
     alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
     beta = isa(beta, Float64) ? fill(beta, S) : beta
@@ -186,32 +129,41 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     seed = isnothing(seed) ? 1 : seed
 
     # Initialise the firms
-    ## We will use the upstream variable in the rest of the simulation for ease of computation. 
-    ## We assume that in each region there is at most N firm alive. For a region R the actual number of firms that are alive is given by self.N_upstream
-    ## Then we sort them for each sector on a single line in the upstream array (of size S x 1 x RN)
-    Random.seed!(seed)
-    T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes
-    poisson_dist = Poisson.(T .* phi_bar^(-theta))
+    ## Informations related to firms are stored in a sparse matrix of size (S, RN) with N the maximum number of firm in a sector x region
+
+    Random.seed!(seed) # Set seed for reproductibility across simulations. 
+    T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes drawn from a log-normal distribution
+
+    if mean(T)*phi_bar^(-theta) >= 30000
+        return nothing
+    end
+    poisson_dist = Poisson.(T .* phi_bar^(-theta)) # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
+
+
     # Used for testing
     # N_upstream = fill(4, S, R)
     # N_upstream[:,end] .= 1
-    # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
-    ## We set manually the regions where there are no firms if filter_N_upstream is given. 
+    
+    ## filter_N_upstream equals 1 when region sj should be considered in the simulation and 0 otherwise. 
     N_upstream = filter_N_upstream === nothing ? rand.(poisson_dist) : filter_N_upstream .* rand.(poisson_dist)
-    N = Integer(maximum(N_upstream))
-    N_firms = sum(N_upstream)
 
-    if N_firms >= 30000
+    
+    N = Integer(maximum(N_upstream)) # max(N_si)
+    N_firms = sum(N_upstream)        # Number of firms
+
+    if N_firms >= 30000 # This would lead to a very large simulation and therefore we don't consider the parameter set. 
         return nothing
     end
-    upstream = create_sparse_upstream(N_upstream, S, R, N)
 
-    # Generate wages, productivity. Construct firm level prices. 
-    # w = isnothing(w) ? abs.(rand(S, R)) : w # w_sr = wage of sector s in region r
-    # w_extended = repeat(w, inner=(1, N)) # Extension of this wage fro fitting upstream shape. 
+    if N_firms <= 1000 # This would lead to a very large simulation and therefore we don't consider the parameter set. 
+        return nothing
+    end
+    # Upstream (S,RN) sparse matrix: Contains the information of active firm per sector x region. 
+    upstream = create_sparse_upstream(N_upstream, S, R, N) 
 
-    # Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)
-    pareto_draws = rand(Pareto(theta), length(nonzeros(upstream))) .*phi_bar 
+    # Generate, productivity. Construct firm level prices. Wages are equalized to 1. 
+    # Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)    
+    pareto_draws = rand(Pareto(phi_bar, theta), length(nonzeros(upstream)))  
     rows, cols, _ = findnz(upstream) 
     pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
     prices = remove_inf_sparse((pareto_draws).^(-1)) # Competitive equilibrium, prices are wages / productivity. 
@@ -221,16 +173,17 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     lbd_reshaped = permutedims(lbd,(3,1,2))
     tau_reshaped = permutedims(tau,(3,1,2))
 
+    # We keep the coordinates in upstream of active firms. 
     rows, cols, _ = findnz(upstream)
     coords_upstream = [(r, c) for (r, c) in zip(rows, cols)]
 
-    price_indices = copy(filter_A_downstream).*1.0 
+    price_indices = copy(filter_A_downstream).*1.0
     M_sij_ = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
     coords = Any[] # We keep the coordinate of the best price in order to build rho_si
     for j = 1:length(filter_A_downstream) # Iterate on downstream regions. 
         if filter_A_downstream[j] == 1
-            # lbd_ = repeat(lbd_reshaped[:,:,j],inner = (1,N)).*upstream # Frictions to serve region j
             
+            # For each downstream region j, we create a search cost matrix of same shape than upstream. 
             lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
     
@@ -264,7 +217,6 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
             push!(coords,matching_coord) # Store the coordinate of the best suppliers in the flat, upstream like, format
         end
     end
-
     B_A = 1.0
 
     # Build trade flow M_sij. In (i,j,s), so far contains the price of the firm in i that serves j (if selected) and 0 otherwise. 
@@ -289,6 +241,7 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     M_sj = reshape(sum(M_sij,dims = 1),(R,S))
     M_j  = sum(M_sj,dims = 2)
     pi_jA = M_j/sum(M_j)
+    #return M_sij,price_indices,M_j
 
     # Using unique kill duplicated suppliers. 
     coords = unique(vcat(coords...))
@@ -361,7 +314,7 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
 
         chi_si = chi_si[(filter_N_upstream'.*filter_out_reference_region') .!=0.0]
         rho_si = rho_si[(filter_N_upstream.*filter_out_reference_region) .!=0.0]
-        pi_jA = pi_jA[filter_A_downstream.!=0]
+        #pi_jA = pi_jA[filter_A_downstream.!=0]
         pi_sA = reshape(pi_sA,S)
 
     # t = repeat(lbd_reshaped[:,:,1],inner = (1,N))
@@ -378,15 +331,6 @@ function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
     end
 end
 
-# # SMM(1,4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
-
-
-# t1 = time()
-# eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 0.3415,8.75738,0.6932,0.650773,1.08351,1.30467,1.76248,2.32003
-
-# SMM(1,eta,theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma)
-# t1 = time()-t1
-# println(t1)
 
 function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
     simulations = [SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max) for seed in 1:20]
@@ -401,8 +345,6 @@ function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
         return nothing              
     end
 end
-
-
 
 # Moments 
 ## - chi_si: the share of Aerospace industry goods of sector s purchased from region i. 
@@ -443,98 +385,52 @@ function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
 end
 
 
-# low_high = true
-# if low_high
-#     folder = "./bins"
-# else
-#     folder = "./baseline"
-# end
+###### Testing environment #####
 
-# distances = NPZ.npzread(joinpath(folder, "distances.npy"))
-# filter_A_downstream = NPZ.npzread(joinpath(folder,"filter_A_downstream.npy"))
-# filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-# filter_out_reference_region = NPZ.npzread(joinpath(folder,"filter_out_reference_region.npy"))
-
-# emp_chi_si = NPZ.npzread(joinpath(folder,"emp_chi_si.npy"))
-# emp_pi_jA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_jA.npy")), (size(emp_chi_si)[2], 1))  # example R=129
-# emp_pi_sA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_sA.npy")), (1, size(emp_chi_si)[1]))   # example S=64
-# W = NPZ.npzread(joinpath(folder,"inv_cov.npy"))
-# emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
-
-# emp_chi_si = emp_chi_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
-# if low_high
-#     emp_rho_si_low = NPZ.npzread(joinpath(folder,"emp_rho_si_low.npy"))
-#     emp_rho_si_high = NPZ.npzread(joinpath(folder,"emp_rho_si_high.npy"))
-#     emp_rho_si_low = emp_rho_si_low[(filter_N_upstream.*filter_out_reference_region).!=0.0]
-#     emp_rho_si_high = emp_rho_si_high[(filter_N_upstream.*filter_out_reference_region).!=0.0]    
-#     empirical_moments = [emp_chi_si, emp_rho_si_low,emp_rho_si_high]
-#     empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
-# else 
-#     emp_rho_si = NPZ.npzread(joinpath(folder,"emp_rho_si.npy")) 
-#     emp_rho_si = emp_rho_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
-    
-#     empirical_moments = [emp_chi_si, emp_rho_si]
-#     empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
-# end
-
-# distances = distances_local
-# filter_A_downstream = filter_A_downstream_local
-# filter_N_upstream = filter_N_upstream_local
-# filter_out_reference_region = filter_out_reference_region_local
-# empirical_moments = empirical_moments_local
-# omega = copy(emp_pi_sA)
-# share_imp_total_cost = 0.35
-# foreign_price = 1
-# sigma = 2.46
-# weight_matrix = W_local
-# reduced = false
-# # simulation_1 = full_SMM(4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
-# simulation_2 = full_SMM(4.5, 0.8250000000000001, 0.975, 0.975, 1.0, 1.625)
-
-#function old_SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
-#     if low_high
-#         chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[],Any[]
-#     else 
-#         chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms_  = Any[],Any[],Any[],Any[],Any[],Any[],Any[]
-#     end
-#     for seed = 1:20
-#         simulation = SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max)
-#         if simulation != nothing
-#             if low_high
-#                 chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = simulation
-#                 push!(chi_si_,chi_si)
-#                 push!(pi_jA_,pi_jA)
-#                 push!(pi_sA_,pi_sA)  
-#                 push!(rho_si_low_,rho_si_low)
-#                 push!(rho_si_high_,rho_si_high)
-#             else             
-#                 chi_si,rho_si,pi_jA,pi_sA,N_firms = simulation
-#                 push!(chi_si_,chi_si)
-#                 push!(pi_jA_,pi_jA)
-#                 push!(pi_sA_,pi_sA)   
-#                 push!(rho_si_,rho_si)
-#             end
-#             push!(N_firms_,N_firms)
-#         end
-#     end
-#     if length(chi_si_) > 1
-#         chi_si_ = mean(hcat(chi_si_...)',dims = 1)'
+test = false
+if test
+    low_high = true
+    reduced = false
+    if low_high
+        folder = "./bins"
+    else
+        folder = "./baseline"
+    end
+    distances = NPZ.npzread(joinpath(folder, "distances.npy"))
+    filter_A_downstream = NPZ.npzread(joinpath(folder,"filter_A_downstream.npy"))
+    filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
+    filter_out_reference_region = NPZ.npzread(joinpath(folder,"filter_out_reference_region.npy"))
+    emp_chi_si = NPZ.npzread(joinpath(folder,"emp_chi_si.npy"))
+    emp_pi_jA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_jA.npy")), (size(emp_chi_si)[2], 1))  # example R=129
+    emp_pi_sA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_sA.npy")), (1, size(emp_chi_si)[1]))   # example S=64
+    weight_matrix = NPZ.npzread(joinpath(folder,"inv_cov.npy"))
+    emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+    emp_chi_si = emp_chi_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+    if low_high
+        emp_rho_si_low = NPZ.npzread(joinpath(folder,"emp_rho_si_low.npy"))
+        emp_rho_si_high = NPZ.npzread(joinpath(folder,"emp_rho_si_high.npy"))
+        emp_rho_si_low = emp_rho_si_low[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+        emp_rho_si_high = emp_rho_si_high[(filter_N_upstream.*filter_out_reference_region).!=0.0]    
+        empirical_moments = [emp_chi_si, emp_rho_si_low,emp_rho_si_high]
+        empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+    else 
+        emp_rho_si = NPZ.npzread(joinpath(folder,"emp_rho_si.npy")) 
+        emp_rho_si = emp_rho_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
         
-#         if low_high
-#             rho_si_low_ = mean(hcat(rho_si_low_...)',dims = 1)'
-#             rho_si_high_ = mean(hcat(rho_si_high_...)',dims = 1)'
-#         else                
-#             rho_si_ = mean(hcat(rho_si_...)',dims = 1)'
-#         end
-#         pi_jA_  = mean(hcat(pi_jA_...)',dims = 1)'
-#         pi_sA_  = mean(hcat(pi_sA_...)',dims = 1)'
-#         N_firms = mean(N_firms_)
-#         if low_high       
-#             return chi_si_,rho_si_low_,rho_si_high_,pi_jA_,pi_sA_,N_firms
-#         else
-#             return chi_si_,rho_si_,pi_jA_,pi_sA_,N_firms
-#         end
-#     else
-#         return nothing 
-#     end
-# end
+        empirical_moments = [emp_chi_si, emp_rho_si]
+        empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+    end
+
+
+    omega = copy(emp_pi_sA)
+    share_imp_total_cost = 0.35
+    foreign_price = 1
+    sigma = 2.46
+
+    
+end
+#theta,phi_bar,alpha,beta,mu_T,sigma_T  = (76.0048, 0.5646939444444444, 1.16003, 1.0571728571428571, 1.200055, 1.6154096153846154)
+#theta,phi_bar,alpha,beta,mu_T,sigma_T,sigma = 8.,1.,1.,1.,1.30467,1.76248,2.32003
+#chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
+
+
