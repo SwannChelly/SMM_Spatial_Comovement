@@ -1,16 +1,8 @@
 ##### SMM for Spatial Comovement #####
 # Author: Swann Chelly 
-# Latest update: Build model and trade flow 24/03/2025
-# List of concerns
-## How to add the outside sector ? 
-## Choisir un nombre d'entreprises et les tirer selon Gaubert 2021 ? 
-## Trouver les distributions dans lesquels tirer (grille. )
-
-# To Do: 
-# Add the rho_si moment. 
-# Import data for testing. 
 
 
+##################### Packages ###################
 
 using Distributed
 using SparseArrays
@@ -19,7 +11,7 @@ using Random
 using NPZ
 using LinearAlgebra
 
-############### Define functions to use ###############
+############### Tools ###############
 
  function CES(price_indices,sigma = 2)
     """
@@ -79,6 +71,9 @@ function from_flat_to_structured(flat,S,R,N)
 end
 
 function remove_inf_sparse(df)
+    """
+    From a sparse matrix that contains inf, return a new sparse matrix removing those. 
+    """
     rows, cols, vals = findnz(df)
     # Identify the positions of `Inf` values
     inf_indices = isinf.(vals)
@@ -101,6 +96,9 @@ function random_like_sparse(df)
 end
 
 function from_sparse_to_SRN(df,S,N,R)
+    """
+    Change the shape of a sparse matrix (S, RN) to a full matrix (S,R,N)
+    """
     df = reshape(df, S,N,R)
     # # println("rho: ",Base.summarysize(rho_si))
     df = permutedims(df,(3,2,1))
@@ -110,14 +108,42 @@ end
 
 
 
-# ############### Parameters for testing #####################
 
 
 
 
-############### Model ###############
+############### Main function ###############
 
 function SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
+    """
+    Simulated method of moments for Spatial Comovement structural model. 
+
+    All the simulated will be done using matrices of size (S,R) with S being the number of sectors and R the number of regions. 
+    Regions can host downstream manufacturers (identified by filter_A_downstream), or suppliers (identified by filter_N_upstream). 
+
+    Since the moments we are using sums to one in the sector dimension, we define reference regions (it is important in order to inverte the variance covariance matrix of moments).
+
+        Global parameters: 
+            low_high (Bool): If true then we split the firms in region i and sector s between low and high productive firms when computing rho_si
+            distances (Matrix of size (R,R)): Contains the distance between regions. 
+            filter_A_downstream (Binary vector of size R): Equals 1 if the region contains a downstream manufacturer. 
+            filter_N_upstream (Binary matrix of size (S,R)): Equals 1 if the region contains suppliers. 
+            filter_out_reference_region (Binary matrix of size (S,R)): Equals 1 if the region contains suppliers and is not the region of reference for sector s and 0 otherwise.
+            omega (Matrix of size (S,1)): Contains the share of sector s in the aerospace total purchase. 
+            sigma (Float): Estimated elasticity of substitution of downstream manufacturers to final demand. 
+            foreign_price (Float, default 1): Foreign price
+            share_imp_total_cost (Float): Share of foreign import in total costs
+        
+        Function parameters: 
+            seed (Float): Seed for the simulation 
+            theta (Float): Pareto's shape
+            phi_bar (Float): Pareto's scale
+            alpha (Float): Trade exponent
+            beta (Float): Search cost exponent 
+            mu_T,sigma_T (Float,Float): Parameter of the log normal comparative advantage
+            N_trial_max (Integer, default = 10): Number of search a firm can do in order to find suppliers in all sectors.             
+
+    """
     Times = Any[]
     t1 = time()
     # We initialize main variables used in the simulation
@@ -333,6 +359,14 @@ end
 
 
 function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
+    """
+    Take a set of parameters and run 20 times the estimation with different seeds. Collect the results and returns the average of the simulated moments. 
+    If SMM return nothing for all simulations (because the set of parameters generates to much firms for instance), return nothing. 
+
+        (theta,phi_bar,alpha,beta,mu_T,sigma_T) : Parameters for the simulation 
+        N_trial_max (default: 10), Number of trials to find a supplier. 
+    
+    """
     simulations = [SMM(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max) for seed in 1:20]
     simulations = filter(!isnothing, simulations)
     if length(simulations) > 1
@@ -346,23 +380,13 @@ function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
     end
 end
 
-# Moments 
-## - chi_si: the share of Aerospace industry goods of sector s purchased from region i. 
-## - pi_jA: the importance of region j in the total purchase of the aerospace industry
-## - pi_sA: the share of purchase of goods from sector s in the total purchase of the aerospace industry 
-## - rho_si: the extensive margin | # of suppliers / # of potential suppliers
-##      - For foreign, potentiel suppliers are taken from the set of firms of the same sector exporting to France. 
 
 
-# Estimation procedure. 
-## Guide: https://opensourceecon.github.io/CompMethods/struct_est/SMM.html
-
-## Put more simply, you want the random draws for all the simulations to be held constant so that the only thing changing in the minimization problem is the value of the vector of parameters
-### Keep seed constant through sampling. 
-### Want to reduce the dimension of the moments such as to keep only values that are set to be non zeros. 
 
 function loss_function(simulated_moments)
-    # To Do: Make such that the difference is in percentage change. 
+    """
+    Compute the loss function between empirical and simulated moments. Weight_matrix is the inverse of the variance covariance matrix of simulated moments. 
+    """
     N = simulated_moments[end]
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-3)]...)
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
@@ -375,6 +399,9 @@ end
 
 
 function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
+    """
+    From the parameters, return the loss and the simulated moments (targeted and untargeted)
+    """
     simulated_moments = SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T)
     if simulated_moments != nothing
         return loss_function(simulated_moments),simulated_moments

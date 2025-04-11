@@ -25,8 +25,8 @@ Random.seed!(1)
 ############## Load Parameters #################
 @everywhere const low_high = $(true)
 @everywhere const reduced = $(false)
-first_loop = true
-
+first_loop = false
+n = 30000
 
 if low_high
     folder = "./bins"
@@ -81,7 +81,7 @@ end
 @everywhere function generate_halton_grid(n)
     #    theta,phi_bar,alpha,beta,mu_T,sigma_T 
     lb = [4, 0.01, 0.8, 0.8, 0.9, 1.5]
-    ub = [100, 5, 5., 5., 2, 5]
+    ub = [100, 5, 5., 5., 2, 10]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -108,30 +108,36 @@ end
 
 # First create parameters
 if first_loop
-    params_list = generate_halton_grid(30000)
-    # params_list = [(0.5, 0.8, 0.5, 0.5, 1.2, 1.0, 0.5) for _ in 1:2]
+    params_list = generate_halton_grid(n)
 else 
-    
+
+    #best_params = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
+    #reference = best_params[1,["theta","phi_bar","alpha","beta","mu_T","sigma_T"]]
+    #params_list = Any[]
+    #for i in 1:6
+    #    tmp = range(reference[i]*0.8,reference[i]*1.20,length = 1000)
+    #    for j in tmp
+    #        list = Any[]
+    #        for k in 1:6
+    #            if k == i
+    #                push!(list,j)
+    #            else
+    #                push!(list,reference[k])
+    #            end
+    #        end
+    #        push!(params_list,list)
+    #    end
+    #end
     best_params = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
-
-    reference = best_params[1,["theta","phi_bar","alpha","beta","mu_T","sigma_T"]]
-    params_list = Any[]
-    for i in 1:6
-        tmp = range(reference[i]*0.8,reference[i]*1.20,length = 400)
-        for j in tmp
-            list = Any[]
-            for k in 1:6
-                if k == i
-                    push!(list,j)
-                else
-                    push!(list,reference[k])
-                end
-            end
-            push!(params_list,list)
-        end
-
-    end
+    theta,phi_bar,alpha,beta,mu_T,sigma_T = best_params[1, 1:6]
+    best_params = theta,phi_bar,alpha,beta,mu_T,sigma_T
+    lb = best_params.*0.9
+    ub = best_params.*1.1
+    halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+    params_list = [Tuple(halton_samples[:,i]) for i in 1:(n-1)]
 end
+
+
 
 # Then compute scores. 
 t1 = time()
@@ -199,7 +205,7 @@ end
 ###### Histograms #######
 
 # Display the updated DataFrame
-best_params = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
+best_params = CSV.read(joinpath(folder,"parameters_2.csv"),DataFrame)
 min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
@@ -245,4 +251,5 @@ else
 end
 
 plot(p1,p2,p3,p4,p5, layout=(2,3), size=(800,800))
+
 

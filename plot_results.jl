@@ -24,10 +24,12 @@ columns = names(params_second_loop)[1:6]
 plots = Any[]
 for i in 1:6
     tmp = Symbol(columns[i])
-    param = params_second_loop[(400*(i-1)+1):(400*(i)), [tmp, :score]]
+    param = params_second_loop[(1000*(i-1)+1):(1000*(i)), [tmp, :score]]
     param[:,tmp] = (best_params_first_loop[:1,tmp].-param[:,tmp])./best_params_first_loop[:1,tmp]
     p1 = plot(param[:,tmp],param[:,:score],title = columns[i])
     push!(plots,p1)
 end
 plot(plots..., layout=(2,3), size=(800,800))
 
+
+params_second_loop
