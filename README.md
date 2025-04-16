@@ -16,3 +16,5 @@ Run the model from main.jl.
     - plot_results.jl: plot results after local search
 
     
+pip3 freeze > requirements_py.txt
+pip3 install -r requirements.txt

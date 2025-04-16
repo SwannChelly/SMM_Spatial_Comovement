@@ -25,7 +25,7 @@ Random.seed!(1)
 ############## Load Parameters #################
 @everywhere const low_high = $(true)
 @everywhere const reduced = $(false)
-first_loop = false
+first_loop = true
 n = 30000
 
 if low_high
@@ -80,8 +80,8 @@ end
 end
 @everywhere function generate_halton_grid(n)
     #    theta,phi_bar,alpha,beta,mu_T,sigma_T 
-    lb = [4, 0.01, 0.8, 0.8, 0.9, 1.5]
-    ub = [100, 5, 5., 5., 2, 10]
+    lb = [2, 0.01, 0.8, 0.8, 0.9, 1.5]
+    ub = [20, 5, 5., 5., 5., 10]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
