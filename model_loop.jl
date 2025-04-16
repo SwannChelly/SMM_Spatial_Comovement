@@ -106,12 +106,6 @@ function from_sparse_to_SRN(df,S,N,R)
     return df
 end
 
-
-
-
-
-
-
 ############### Main function ###############
 
 function SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max  = 10)
@@ -150,7 +144,7 @@ function SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max 
     S,R = size(filter_N_upstream)
     alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
     beta = isa(beta, Float64) ? fill(beta, S) : beta
-    tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
+    tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(alpha, 1, 1, :)
     lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
     seed = isnothing(seed) ? 1 : seed
 
@@ -161,7 +155,7 @@ function SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max 
     T = exp.(randn(S, R) .* sigma_T .+ mu_T) # T_sj: Region level comparative advantes drawn from a log-normal distribution
 
     if mean(T)*phi_bar^(-theta) >= 30000
-        print("TO much firms")
+        # print("TO much firms")
         return nothing
     end
     poisson_dist = Poisson.(T .* phi_bar^(-theta)) # N_si: Number of firms drawn from a Poisson distribution according to region-level comparative advantages. 
@@ -179,12 +173,12 @@ function SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max 
     N_firms = sum(N_upstream)        # Number of firms
 
     if N_firms >= 30000 # This would lead to a very large simulation and therefore we don't consider the parameter set. 
-        print("TO much firms")
+        # print("TO much firms")
         return nothing
     end
 
     if N_firms <= 1000 # This would lead to a very large simulation and therefore we don't consider the parameter set. 
-        print("Not enough  firms")
+        # print("Not enough  firms")
         return nothing
     end
     # Upstream (S,RN) sparse matrix: Contains the information of active firm per sector x region. 
@@ -216,10 +210,10 @@ function SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max 
             lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
     
-            r = compare_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+            r = compare_sparse(random_like_sparse(prices),lbd_,false) # Sparse random matching <= Search frictions | Selected set of suppliers for each sector
             N_trial = 0
             while (prod(sum(r,dims=2)) == 0) & (N_trial < N_trial_max) # Simple check to see if the matching return a potential supplier for each sector 
-                r = compare_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+                r = compare_sparse(random_like_sparse(prices),lbd_,false) # Sparse random matching <= Search frictions | Selected set of suppliers for each sector
                 N_trial = N_trial+1
             end
             if N_trial >= N_trial_max
@@ -360,7 +354,7 @@ function SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max 
 end
 
 
-function SMM_simulation(seed,params,N_trial_max  = 10)
+function SMM_simulation(seed,params,N_trial_max  = 20)
     """
     Simulated method of moments for Spatial Comovement structural model. 
 
@@ -390,14 +384,14 @@ function SMM_simulation(seed,params,N_trial_max  = 10)
             N_trial_max (Integer, default = 10): Number of search a firm can do in order to find suppliers in all sectors.             
 
     """
-    theta,phi_bar,alpha,beta,mu_T,sigma_T = params
+    theta,phi_bar,alpha,beta = params
     Times = Any[]
     t1 = time()
     # We initialize main variables used in the simulation
     S,R = size(N_si)
     alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
     beta = isa(beta, Float64) ? fill(beta, S) : beta
-    tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
+    tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(alpha, 1, 1, :)
     lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
     seed = isnothing(seed) ? 1 : seed
 
@@ -444,7 +438,6 @@ function SMM_simulation(seed,params,N_trial_max  = 10)
     coords_upstream = [(r, c) for (r, c) in zip(rows, cols)]
 
     price_indices = copy(extended_filter_A_downstream).*1.0
-    println(size(price_indices))
     M_sij_ = zeros((R,R,S)) # We create a blank matrix (Upstream, Downstream, Sector). For a tuple (i,j,s), it will be best serving price of region j for sector s if i is selected. Otherwise 0 
     coords = Any[] # We keep the coordinates of the best price in order to build rho_si
     for j = 1:length(extended_filter_A_downstream) # Iterate on downstream regions. 
@@ -454,10 +447,10 @@ function SMM_simulation(seed,params,N_trial_max  = 10)
             lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
     
-            r = compare_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+            r = compare_sparse(random_like_sparse(prices),lbd_,false) # Sparse random matching <= Search frictions | Selected set of suppliers for each sector
             N_trial = 0
             while (prod(sum(r,dims=2)) == 0) & (N_trial < N_trial_max) # Simple check to see if the matching return a potential supplier for each sector 
-                r = compare_sparse(random_like_sparse(prices),lbd_) # Sparse random matching >= Search frictions | Selected set of suppliers for each sector
+                r = compare_sparse(random_like_sparse(prices),lbd_,false) # Sparse random matching <= Search frictions | Selected set of suppliers for each sector
                 N_trial = N_trial+1
             end
             if N_trial >= N_trial_max
@@ -465,7 +458,7 @@ function SMM_simulation(seed,params,N_trial_max  = 10)
             end 
             # tau_ = repeat(tau_reshaped[:,:,j],inner = (1,N)) # Prices augmented by trade costs
     
-            tau_ = [tau_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
+            tau_ = [tau_reshaped[s,div.(i-1,N) +1,j] for (s,i) in coords_upstream]
             tau_ = sparse(rows, cols, tau_, size(upstream)...)
             prices_ = tau_.*prices # Prices augmented by trade costs
     
@@ -493,8 +486,8 @@ function SMM_simulation(seed,params,N_trial_max  = 10)
     print(size(M_sij_))
     M_sij = M_sij_.*reshape(omega,(1,1,S)).*(price_indices_).*B_A
     M_sij = ifelse.(isnan.(M_sij), 0.0, M_sij)
-    
-    return price_indices,M_sij
+    M_ij = reshape(sum(M_sij,dims = 3),(R,R))
+    return M_ij
 
     # Build moments
     # M_sj 
@@ -600,10 +593,32 @@ function SMM_simulation(seed,params,N_trial_max  = 10)
         return chi_si ,rho_si,pi_jA,pi_sA,N_firms#,Times # dont return pi_jA since we dont calibrate it so far
     end
 end
-price_indices,M_sij = SMM_simulation(10,[theta,phi_bar,alpha,beta,mu_T,sigma_T])
 
+# tau,lbd = SMM_simulation(1,[theta,phi_bar,alpha,beta],N_trial_max) 
 
 function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
+    """
+    Take a set of parameters and run 20 times the estimation with different seeds. Collect the results and returns the average of the simulated moments. 
+    If SMM return nothing for all simulations (because the set of parameters generates to much firms for instance), return nothing. 
+
+        (theta,phi_bar,alpha,beta,mu_T,sigma_T) : Parameters for the simulation 
+        N_trial_max (default: 10), Number of trials to find a supplier. 
+    
+    """
+    simulations = [SMM_calibration(seed,theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max) for seed in 1:20]
+    simulations = filter(!isnothing, simulations)
+    if length(simulations) > 1
+        moments = Any[]
+        for i in 1:length(simulations[1])
+            push!(moments,mean(hcat([simulation[i] for simulation in simulations]...)',dims = 1)')
+        end
+        return moments
+    else
+        return nothing              
+    end
+end
+
+function SMM_loop_calibration(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
     """
     Take a set of parameters and run 20 times the estimation with different seeds. Collect the results and returns the average of the simulated moments. 
     If SMM return nothing for all simulations (because the set of parameters generates to much firms for instance), return nothing. 
@@ -625,7 +640,6 @@ function SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T,N_trial_max = 10)
     end
 end
 
-
 function loss_function(simulated_moments)
     """
     Compute the loss function between empirical and simulated moments. Weight_matrix is the inverse of the variance covariance matrix of simulated moments. 
@@ -639,7 +653,6 @@ function loss_function(simulated_moments)
     # W = isnothing(W) ? I(length(empirical_moments)).*(empirical_moments).^(-1) : W 
     return err*weight_matrix*err'
 end
-
 
 function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
     """
@@ -655,9 +668,12 @@ function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
 end
 
 
+
+
+
 ###### Testing environment #####
 
-test = true
+test = false
 if test
     low_high = true
     reduced = false
@@ -698,23 +714,33 @@ if test
     share_imp_total_cost = 0.35
     foreign_price = 1
     sigma = 2.46
+    
+    theta,phi_bar,alpha,beta = 6.,2.5,1.,1.
+    N_trial_max = 20
 
+
+
+    # simulations = [SMM_simulation(seed,[theta,phi_bar,alpha,beta],N_trial_max) for seed in 1:1]
+    # simulations = filter(!isnothing, simulations)
+    # simulations = mean(simulations)
+
+    # npzwrite(joinpath(folder, "M_ij.npy"), simulations)
     
 end
 #theta,phi_bar,alpha,beta,mu_T,sigma_T  = (76.0048, 0.5646939444444444, 1.16003, 1.0571728571428571, 1.200055, 1.6154096153846154)
-# chi_si,rho_si_low,rho_si_high,pi_jA,pi_sA,N_firms = full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
-
-theta,phi_bar,alpha,beta,mu_T,sigma_T = 5.94933564453125,2.5679134432166504,2.70080856,1.1292185690486107,3.1070536982177486,4.40837317116581
-price_indices,M_sij = SMM_simulation(10,theta,phi_bar,alpha,beta,mu_T,sigma_T)
+# simulations = SMM_simulation(1,[theta,phi_bar,alpha,beta],N_trial_max) 
 
 
-M_ij = reshape(sum(M_sij,dims = 3),(297,297))
 
-using Plots
+# simulations = full_SMM(76.0048, 0.5646939444444444, 1.16003, 1.0571728571428571, 1.200055, 1.6154096153846154)
 
-# Define a square matrix
-A = [1 2 3; 4 5 6; 7 8 9]
+# alpha = 1.
 
-# Create a heatmap of the matrix
-heatmap(M_ij, title="Matrix Heatmap", xlabel="Columns", ylabel="Rows")
-npzwrite(joinpath(folder, "M_ij.npy"), M_ij)
+# S,R = size(N_si)
+# alpha = isa(alpha, Float64) ? fill(alpha, S) : alpha
+# beta = isa(beta, Float64) ? fill(beta, S) : beta
+# tau = isnothing(alpha) ? rand(S, R, R) : distances .^ reshape(-alpha, 1, 1, :)
+# lbd = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(-beta, 1, 1, :)
+
+
+

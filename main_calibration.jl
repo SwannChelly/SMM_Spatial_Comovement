@@ -26,7 +26,7 @@ Random.seed!(1)
 @everywhere const low_high = $(true)
 @everywhere const reduced = $(false)
 first_loop = true
-n = 30000
+n = 2000
 
 if low_high
     folder = "./bins"
@@ -80,8 +80,8 @@ end
 end
 @everywhere function generate_halton_grid(n)
     #    theta,phi_bar,alpha,beta,mu_T,sigma_T 
-    lb = [2, 0.01, 0.8, 0.8, 0.9, 1.5]
-    ub = [20, 5, 5., 5., 5., 10]
+    lb = [2, 0.01, .5, 0.1, 0.5, 1.5]
+    ub = [10, 5, 2., 1., 3, 10]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     
@@ -205,7 +205,7 @@ end
 ###### Histograms #######
 
 # Display the updated DataFrame
-best_params = CSV.read(joinpath(folder,"parameters_2.csv"),DataFrame)
+best_params = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
 min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
