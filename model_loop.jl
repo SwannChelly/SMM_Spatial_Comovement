@@ -422,7 +422,8 @@ function SMM_simulation(seed,params,N_trial_max  = 20)
     upstream = create_sparse_upstream(N_upstream, S, R, N) 
 
     # Generate, productivity. Construct firm level prices. Wages are equalized to 1. 
-    # Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)    
+    # Draw pareto for firms and shape it as upstream (sparse (S,RN) matrix)   
+    Random.seed!(seed)  
     pareto_draws = rand(Pareto(phi_bar, theta), length(nonzeros(upstream)))  
     rows, cols, _ = findnz(upstream) 
     pareto_draws = sparse(rows, cols, pareto_draws, size(upstream)...)
@@ -446,10 +447,11 @@ function SMM_simulation(seed,params,N_trial_max  = 20)
             # For each downstream region j, we create a search cost matrix of same shape than upstream. 
             lbd_ = [lbd_reshaped[s,div.(i-1,N) +1 ,j] for (s,i) in coords_upstream]
             lbd_ = sparse(rows, cols, lbd_, size(upstream)...)
-    
+            Random.seed!(seed) 
             r = compare_sparse(random_like_sparse(prices),lbd_,false) # Sparse random matching <= Search frictions | Selected set of suppliers for each sector
             N_trial = 0
             while (prod(sum(r,dims=2)) == 0) & (N_trial < N_trial_max) # Simple check to see if the matching return a potential supplier for each sector 
+                Random.seed!(seed) 
                 r = compare_sparse(random_like_sparse(prices),lbd_,false) # Sparse random matching <= Search frictions | Selected set of suppliers for each sector
                 N_trial = N_trial+1
             end
@@ -483,7 +485,6 @@ function SMM_simulation(seed,params,N_trial_max  = 20)
     # Trade flows are w_sj * q_j p_j = w_sj * p_j^(1-\omega)* B_A
     price_indices_ = copy(price_indices)
     price_indices_[price_indices_.!=0] = price_indices_[price_indices_.!=0].^(1-sigma)
-    print(size(M_sij_))
     M_sij = M_sij_.*reshape(omega,(1,1,S)).*(price_indices_).*B_A
     M_sij = ifelse.(isnan.(M_sij), 0.0, M_sij)
     M_ij = reshape(sum(M_sij,dims = 3),(R,R))

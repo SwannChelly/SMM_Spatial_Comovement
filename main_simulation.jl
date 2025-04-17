@@ -1,13 +1,13 @@
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 
-#import Pkg; Pkg.add("QuasiMonteCarlo")
-#import Pkg; Pkg.add("StatsPlots")
-#import Pkg; Pkg.add("DataFrames")
-#import Pkg; Pkg.add("NPZ")
-#import Pkg; Pkg.add("Distributions")
-#import Pkg; Pkg.add("Plots")
-#import Pkg; Pkg.add("CSV")
+# import Pkg; Pkg.add("QuasiMonteCarlo")
+# import Pkg; Pkg.add("StatsPlots")
+# import Pkg; Pkg.add("DataFrames")
+# import Pkg; Pkg.add("NPZ")
+# import Pkg; Pkg.add("Distributions")
+# import Pkg; Pkg.add("Plots")
+# import Pkg; Pkg.add("CSV")
 
 using Distributed
 using NPZ
@@ -78,7 +78,7 @@ end
 @everywhere const weight_matrix = $(W_local)
 
 @everywhere function parallel_SMM(seed)
-    theta,phi_bar,alpha,beta = 6.,1,0.9,0.364115
+    theta,phi_bar,alpha,beta = 6,1,0.5,0
     return SMM_simulation(seed,[theta, phi_bar, alpha, beta])
 end
 
@@ -114,11 +114,10 @@ print(t1)
 simulations = filter(!isnothing, simulations)
 simulations = mean(simulations)
 
-npzwrite(joinpath(folder, "M_ij.npy"), simulations)
+npzwrite(joinpath(folder, "M_ij_no_search_frictions.npy"), simulations)
 
+if !isempty(workers())
+    rmprocs(workers())
+end
+GC.gc()
 
-
-# if !isempty(workers())
-#     rmprocs(workers())
-# end
-# GC.gc()
