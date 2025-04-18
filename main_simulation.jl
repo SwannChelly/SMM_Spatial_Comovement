@@ -78,7 +78,7 @@ end
 @everywhere const weight_matrix = $(W_local)
 
 @everywhere function parallel_SMM(seed)
-    theta,phi_bar,alpha,beta = 6,1,0.5,0
+    theta,phi_bar,alpha,beta = 6,1,0.5,0.1
     return SMM_simulation(seed,[theta, phi_bar, alpha, beta])
 end
 
@@ -114,7 +114,7 @@ print(t1)
 simulations = filter(!isnothing, simulations)
 simulations = mean(simulations)
 
-npzwrite(joinpath(folder, "M_ij_no_search_frictions.npy"), simulations)
+npzwrite(joinpath(folder, "M_ij.npy"), simulations)
 
 if !isempty(workers())
     rmprocs(workers())

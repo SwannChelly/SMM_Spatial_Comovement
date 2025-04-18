@@ -32,4 +32,6 @@ end
 plot(plots..., layout=(2,3), size=(800,800))
 
 
-params_second_loop
+sort!(params_second_loop, :score)
+
+best_params_first_loop
