@@ -16,31 +16,10 @@ using LinearAlgebra
 
 # Hyperparameters
 
-distances = [1.0  2.0  3.0;
-     2.0  4.0  5.0;
-     3.0  5.0  6.0]
-regional_wages = ones(R)
-labor_share = 0.5 # Share of labor in variable costs
-input_share = reshape([0.2,0.8],1,S)
-S,R = 2,3
-seed = 1
-N_rho = 10
-B = 1
-
-# Parameters
-beta = 1.
-theta = 2.
-nu_s = ones(S).*2.0 # Variety elasticity of subsitution
-nu = 2. # Input elasticity of substitution across sectors
-lambda = 2. # Labor / CI elasticity of substitution
-sigma = 2. # Demand elasticity of substitution
-productivity = ones(R)
-Random.seed!(seed) # Set seed for reproductibility across simulations. 
-T = exp.(randn(S, R)) # T_sj: Region level comparative advantages drawn from a log-normal distribution
 
 
 function SMM_calibration(beta,theta,nu_s,nu,lambda,sigma,productivity,T):
-    
+
     # We initialize main variables used in the simulation
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
@@ -64,7 +43,7 @@ function SMM_calibration(beta,theta,nu_s,nu,lambda,sigma,productivity,T):
     M_jis = zeros(R,R,S) 
     c_i_ = zeros(R)
     for i in 1:R
-
+        
         # We compute prices faced by downstream firms in region i
         tau_ = reshape(tau_reshaped[:,: ,i]',1,R,S)
         prices_ = inv_upstream_variety_productivity .* tau_
@@ -141,17 +120,37 @@ end
 
 ###### Testing environment #####
 
-test = false
+
+
+distances = [1.0  2.0  3.0;
+     2.0  4.0  5.0;
+     3.0  5.0  6.0]
+regional_wages = ones(R)
+labor_share = 0.5 # Share of labor in variable costs
+input_share = reshape([0.2,0.8],1,S)
+S,R = 2,3
+seed = 1
+N_rho = 10
+B = 1
+
+# Parameters
+beta = 1.
+theta = 2.
+nu_s = ones(S).*2.0 # Variety elasticity of subsitution
+nu = 2. # Input elasticity of substitution across sectors
+lambda = 2. # Labor / CI elasticity of substitution
+sigma = 2. # Demand elasticity of substitution
+productivity = ones(R)
+Random.seed!(seed) # Set seed for reproductibility across simulations. 
+T = exp.(randn(S, R)) # T_sj: Region level comparative advantages drawn from a log-normal distribution
+
+
+
+test = true
 if test
-    low_high = true
-    reduced = false
-    if low_high
-        folder = "./bins"
-    else
-        folder = "./baseline"
-    end
+    folder = "./baseline"
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
-    filter_A_downstream = NPZ.npzread(joinpath(folder,"filter_A_downstream.npy"))
+    filter_A_downstream = NPZ.npzread(joinpath(folder,"filter_A_downstream.npy")) # Should now contain the number of downstream firm per region. 
     extended_filter_A_downstream = NPZ.npzread(joinpath(folder,"extended_filter_A_downstream.npy"))
     N_si = NPZ.npzread(joinpath(folder,"N_si.npy"))
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
