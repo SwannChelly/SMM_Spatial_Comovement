@@ -18,8 +18,47 @@ using LinearAlgebra
 
 
 
-function SMM_calibration(beta,theta,nu_s,nu,lambda,sigma,productivity,T):
+###### Testing environment #####
+test = false 
+if test
 
+
+    folder = "./baseline"
+    distances = NPZ.npzread(joinpath(folder, "distances.npy"))
+    N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
+    filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
+
+
+
+    labor_share = 0.5 # Share of labor in variable costs
+    input_share = reshape([0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1],1,S)
+    seed = 1
+    N_rho = 100
+    regional_wages = ones(R)
+
+    # Parameters
+    beta = 1.
+    theta = 2.
+    nu_s = ones(S).*2.0 # Variety elasticity of subsitution
+    nu = 2. # Input elasticity of substitution across sectors
+    lambda = 2. # Labor / CI elasticity of substitution
+    sigma = 2. # Demand elasticity of substitution
+    productivity = ones(R)
+    Random.seed!(seed) # Set seed for reproductibility across simulations. 
+    T = ones(S, R) # T_sj: Region level comparative advantages drawn from a log-normal distribution
+    T = T.*filter_N_upstream
+end
+
+function SMM(params,simulation = false)
+
+    beta,productivity_,T_ = params
+
+    # Set the parameters
+    T = ones(S,R)
+    T[filter_N_upstream.!=0] = T_
+    productivity = ones(R)
+    productivity[N_downstream_per_region.!=0] = productivity_
+    
     # We initialize main variables used in the simulation
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
@@ -28,11 +67,12 @@ function SMM_calibration(beta,theta,nu_s,nu,lambda,sigma,productivity,T):
     frechet_rand = Frechet.(theta, T.^theta)
 
     # Allocate the output
-    upstream_variety_productivity = Array{Float64}(undef, S, R, N_rho)
-
+    upstream_variety_productivity = zeros(S, R, N_rho)
     # Fill z with Frechet draws
     for s in 1:S, r in 1:R
-        upstream_variety_productivity[s, r, :] = rand(frechet_rand[s, r], N_rho)
+        if filter_N_upstream[s,r] == 1 # Verify the indexing. 
+            upstream_variety_productivity[s, r, :] = rand(frechet_rand[s, r], N_rho)
+        end
     end
 
     upstream_variety_productivity = permutedims(upstream_variety_productivity, (3, 2, 1))
@@ -42,33 +82,36 @@ function SMM_calibration(beta,theta,nu_s,nu,lambda,sigma,productivity,T):
 
     M_jis = zeros(R,R,S) 
     c_i_ = zeros(R)
-    for i in 1:R
-        
-        # We compute prices faced by downstream firms in region i
-        tau_ = reshape(tau_reshaped[:,: ,i]',1,R,S)
-        prices_ = inv_upstream_variety_productivity .* tau_
+    for i = 1:length(N_downstream_per_region) # Iterate on downstream regions. 
+        if N_downstream_per_region[i] >= 1
 
-        # We select the lowest prices per variety and build all nests' price indices
-        min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
-        p_si_rho = prices_[min_coord_rho]
-        p_is = sum(1/N_rho .* p_si_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
-        p_i = sum((p_is .* input_share) .^ (1 - nu)).^(1 ./ (1 - nu))
-        c_i = productivity[i]*(labor_share*regional_wages[i]^(1-lambda)  + (1-labor_share)*p_i^(1-lambda))^(1/(1-lambda))
-        c_i_[i] = c_i
+            # We compute prices faced by downstream firms in region i
+            tau_ = reshape(tau_reshaped[:,: ,i]',1,R,S)
+            prices_ = inv_upstream_variety_productivity .* tau_
 
-        # Fill the flows
-        for j in 1:R
-            tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho) # On récupère l'ensemble des points 
-            tmp = sum(tmp.* 1/N_rho .* input_share .* (1-labor_share) .* p_si_rho.^(1 .- reshape(nu_s,1,S)) .* p_is .^ nu .* (p_is/p_i).^(-nu)* (p_i/c_i).^(-lambda)*c_i^(-sigma),dims = 1)
-            M_jis[j,i,:] = tmp
+            # We select the lowest prices per variety and build all nests' price indices
+            min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
+            p_si_rho = prices_[min_coord_rho]
+            p_is = sum(1/N_rho .* p_si_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
+            p_i = sum((p_is .* input_share) .^ (1 - nu)).^(1 ./ (1 - nu))
+            c_i = productivity[i]*(labor_share*regional_wages[i]^(1-lambda)  + (1-labor_share)*p_i^(1-lambda))^(1/(1-lambda))
+            c_i_[i] = c_i
+
+            # Fill the flows
+            for j in 1:R
+                tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho) # On récupère l'ensemble des points 
+                tmp = sum(tmp.* 1/N_rho .* input_share .* (1-labor_share) .* (p_si_rho./p_is).^(1 .- reshape(nu_s,1,S)) .* (p_is./p_i).^(1-nu)*(p_i/c_i).^(1-lambda)*c_i^(1-sigma),dims = 1)
+                M_jis[j,i,:] = tmp
+            end
         end
     end
 
 
-    price_index = sum(c_i_.^(1-sigma)).^(1/(1-sigma))
-    M_jis = M_jis*B/(price_index.^(1-sigma)) # Since the moments are only shares it is useless.
-
-
+    price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
+    M_jis = M_jis/(price_index.^(1-sigma)).*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
+    if simulation
+        return reshape(sum(M_jis,dims = 3),R,R)
+    end
     # Build moments
     # M_sj 
     # chi_js = M_{js}/M_{sA}
@@ -80,86 +123,56 @@ function SMM_calibration(beta,theta,nu_s,nu,lambda,sigma,productivity,T):
     pi_sA = M_sA/sum(M_sA)
 
     # pi_jA: Share of region $i$ in the total purchase of the aerospace industry. 
-    M_si = reshape(sum(M_jis,dims = 1),(R,S))
+    M_is = reshape(sum(M_jis,dims = 1),(R,S))
     M_i  = sum(M_is,dims = 2)
-    pi_jA = M_j/sum(M_j)
-    return chi_js,pi_sA,pi_jA
+    pi_jA = M_i/sum(M_i)
+    return chi_js,pi_jA,pi_sA
 
 end
 
 
+# Then compute scores. 
 
 function loss_function(simulated_moments)
     """
     Compute the loss function between empirical and simulated moments. Weight_matrix is the inverse of the variance covariance matrix of simulated moments. 
     """
-    N = simulated_moments[end]
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-3)]...)
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
     err = (empirical_moments-simulated_moments)
     # W = isnothing(W) ? I(length(empirical_moments)).*(empirical_moments).^(-1) : W 
-    return err*weight_matrix*err'
+    return err*err'
 end
 
-function full_SMM(theta,phi_bar,alpha,beta,mu_T,sigma_T)
+
+function full_SMM(params,simulation = false)
     """
     From the parameters, return the loss and the simulated moments (targeted and untargeted)
     """
-    simulated_moments = SMM_loop(theta,phi_bar,alpha,beta,mu_T,sigma_T)
-    if simulated_moments != nothing
-        return loss_function(simulated_moments),simulated_moments
+    simulated_moments = SMM(params,simulation)
+    if simulation 
+        return simulated_moments
     else
-        simulated_moments = [nothing for i in 1:6]
-        return nothing,simulated_moments
+        return loss_function(simulated_moments),simulated_moments
     end
 end
 
 
 
-###### Testing environment #####
-
-
-
-distances = [1.0  2.0  3.0;
-     2.0  4.0  5.0;
-     3.0  5.0  6.0]
-regional_wages = ones(R)
-labor_share = 0.5 # Share of labor in variable costs
-input_share = reshape([0.2,0.8],1,S)
-S,R = 2,3
-seed = 1
-N_rho = 10
-B = 1
-
-# Parameters
-beta = 1.
-theta = 2.
-nu_s = ones(S).*2.0 # Variety elasticity of subsitution
-nu = 2. # Input elasticity of substitution across sectors
-lambda = 2. # Labor / CI elasticity of substitution
-sigma = 2. # Demand elasticity of substitution
-productivity = ones(R)
-Random.seed!(seed) # Set seed for reproductibility across simulations. 
-T = exp.(randn(S, R)) # T_sj: Region level comparative advantages drawn from a log-normal distribution
-
-
-
-test = true
+test = false
 if test
     folder = "./baseline"
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
-    filter_A_downstream = NPZ.npzread(joinpath(folder,"filter_A_downstream.npy")) # Should now contain the number of downstream firm per region. 
-    extended_filter_A_downstream = NPZ.npzread(joinpath(folder,"extended_filter_A_downstream.npy"))
-    N_si = NPZ.npzread(joinpath(folder,"N_si.npy"))
+    N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
     filter_out_reference_region = NPZ.npzread(joinpath(folder,"filter_out_reference_region.npy"))
     emp_chi_si = NPZ.npzread(joinpath(folder,"emp_chi_si.npy"))
     emp_pi_jA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_jA.npy")), (size(emp_chi_si)[2], 1))  # example R=129
     emp_pi_sA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_sA.npy")), (1, size(emp_chi_si)[1]))   # example S=64
     weight_matrix = NPZ.npzread(joinpath(folder,"inv_cov.npy"))
-    emp_pi_jA = emp_pi_jA[filter_A_downstream.!=0]
+    emp_pi_jA = emp_pi_jA[N_downstream_per_region.!=0]
     emp_chi_si = emp_chi_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
     if low_high
         emp_rho_si_low = NPZ.npzread(joinpath(folder,"emp_rho_si_low.npy"))

@@ -66,7 +66,10 @@ def plot_trade_flow(name,ze_shocked,ax,normalize = True,zero_one_norm = False):
 
 
 ################## Imports and constants #################
-folder = "../baseline/"
+
+low_high = True
+if low_high: 
+    folder = "../bins/"
 
 idf_ze = ['1101', '1111', '1102', '1104', '1118', '1115', '1116', '1105',
        '1117', '1110', '1119', '1112', '1103', '1109', '1106', '1114',
@@ -74,35 +77,25 @@ idf_ze = ['1101', '1111', '1102', '1104', '1118', '1115', '1116', '1105',
        
 ze_to_shock = {"1101":"Paris","0061":"Toulouse","9310":"Marseille - Aubagne","5203":"Nantes","8301":"Montluçon","1115":"Évry-Courcouronnes"}
 
-# emp_chi_si = np.load(os.path.join(folder,"emp_chi_si.npy"))
+emp_chi_si = np.load(os.path.join(folder,"emp_chi_si.npy"))
 N_si = np.load(os.path.join(folder,"N_si.npy"))
-distances = np.load(os.path.join(folder,"full_distances.npy"))
-N_downstream_per_region = np.load(os.path.join(folder,"N_downstream_per_region.npy"))
+filter_A_downstream = np.load(os.path.join(folder,"filter_A_downstream.npy"))
 filter_N_upstream = np.load(os.path.join(folder,"filter_N_upstream.npy"))
-filter_N_upstream_df = pd.read_csv(os.path.join(folder,"filter_N_upstream.csv"))
-filter_regions = N_downstream_per_region*filter_N_upstream
+filter_regions = filter_A_downstream*filter_N_upstream
 
 france = gpd.read_file(os.path.join(folder,"france.shp")).sort_values(by = 'ze2010')
-
-ref = pd.DataFrame(distances[:297,:297], index=france["ze2010"].values, columns=france["ze2010"].values)
-ref.reset_index(inplace=True)
-ref.rename(columns={'index': 'ze2010_i'}, inplace=True)
-ref = ref.melt(id_vars='ze2010_i', var_name='ze2010_j', value_name='M_ij')
-
 
 
 def load_M_ij(name):
     M_ij = np.load(os.path.join(folder,f"{name}.npy"))
-    M_ij = pd.DataFrame(M_ij, index=list(filter_N_upstream_df.columns), columns=list(filter_N_upstream_df.columns))
+    M_ij = pd.DataFrame(M_ij, index=france["ze2010"].values, columns=france["ze2010"].values)
     M_ij.reset_index(inplace=True)
     M_ij.rename(columns={'index': 'ze2010_i'}, inplace=True)
     M_ij = M_ij.melt(id_vars='ze2010_i', var_name='ze2010_j', value_name='M_ij')
-    M_ij = ref.merge(M_ij,on = ["ze2010_i","ze2010_j"],how = "left",suffixes = ['_','']).fillna(0)
-    M_ij.drop('M_ij_',axis = 1,inplace = True)
-
     return M_ij
 
 
+# M_ij = 
 
 
 ########### Plot potential suppliers vs simulation ########
@@ -130,11 +123,11 @@ add_colorbar(ax,norm)
 ax.set_title(r'# Potential suppliers (Data)')
 
 ax = axs[1]
-plot_trade_flow("M_ij",ze_shocked,ax,zero_one_norm = True)
+plot_trade_flow("M_ij_no_search_frictions",ze_shocked,ax,zero_one_norm = True)
 ax.set_title(r'No search frictions')
 
 ax = axs[2]
-plot_trade_flow("M_ij",ze_shocked,ax,zero_one_norm = True)
+plot_trade_flow("M_ij_high_search_frictions",ze_shocked,ax,zero_one_norm = True)
 ax.set_title(r'High search frictions')
 
 for i in range(3):    
