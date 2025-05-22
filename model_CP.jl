@@ -10,7 +10,10 @@ using Distributions
 using Random
 using NPZ
 using LinearAlgebra
+using QuasiMonteCarlo
+using DataFrames
 
+using FixedEffectModels,RDatasets
 
 
 
@@ -21,44 +24,60 @@ using LinearAlgebra
 ###### Testing environment #####
 test = false 
 if test
-
-
     folder = "./baseline"
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
     N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
+    #empirical_moments = NPZ.npzread(joinpath(folder,"empirical_moments.npy"))
 
-
-
-    labor_share = 0.5 # Share of labor in variable costs
-    input_share = reshape([0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1],1,S)
-    seed = 1
-    N_rho = 100
+    S,R = size(filter_N_upstream)
+    input_share = reshape(ones(S)/S,1,S)#NPZ.npzread(joinpath(folder,"input_share.npy"))
     regional_wages = ones(R)
 
-    # Parameters
-    beta = 1.
-    theta = 2.
-    nu_s = ones(S).*2.0 # Variety elasticity of subsitution
-    nu = 2. # Input elasticity of substitution across sectors
-    lambda = 2. # Labor / CI elasticity of substitution
-    sigma = 2. # Demand elasticity of substitution
-    productivity = ones(R)
-    Random.seed!(seed) # Set seed for reproductibility across simulations. 
-    T = ones(S, R) # T_sj: Region level comparative advantages drawn from a log-normal distribution
-    T = T.*filter_N_upstream
+    # Then broadcast those large fixed arrays to all workers:
+
+    N_rho = 100
+    labor_share = 0.5
+    sigma = 2.46
+    lambda = 0.5
+    nu = 0.001
+    nu_s = ones(S).*1.1 
+    theta = 1.768 
+
+    function generate_halton_grid(n)
+    # beta,theta,nu_s,nu,lambda,sigma,productivity,T
+        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0,zeros(S),0.5*ones(R),0.5*ones(S*R)
+        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1,ones(S),1.5*ones(R),1.5*ones(S*R)
+
+        lb_prod = lb_prod[N_downstream_per_region.!=0]
+        ub_prod = ub_prod[N_downstream_per_region.!=0]
+
+        lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
+        ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+
+        halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+    
+        # This will create a vector of 100 tuples, each with 8 parameters
+        return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
+    end
+
+    params = generate_halton_grid(10000)[1000]
+
 end
 
-function SMM(params,simulation = false)
 
-    beta,productivity_,T_ = params
+
+
+function SMM(params,simulation = false)
+    beta,labor_share_tech,input_share_tech,productivity_,T_ = params
+    closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
 
     # Set the parameters
-    T = ones(S,R)
-    T[filter_N_upstream.!=0] = T_
+    T = reshape(T_,S,R)
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
-    
+    input_share_tech = reshape(input_share_tech,1,9)
+
     # We initialize main variables used in the simulation
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
@@ -70,9 +89,7 @@ function SMM(params,simulation = false)
     upstream_variety_productivity = zeros(S, R, N_rho)
     # Fill z with Frechet draws
     for s in 1:S, r in 1:R
-        if filter_N_upstream[s,r] == 1 # Verify the indexing. 
-            upstream_variety_productivity[s, r, :] = rand(frechet_rand[s, r], N_rho)
-        end
+        upstream_variety_productivity[s, r, :] = rand(frechet_rand[s, r], N_rho)  
     end
 
     upstream_variety_productivity = permutedims(upstream_variety_productivity, (3, 2, 1))
@@ -82,6 +99,17 @@ function SMM(params,simulation = false)
 
     M_jis = zeros(R,R,S) 
     c_i_ = zeros(R)
+    linkages = zeros(N_rho,S,R)
+
+    # Prepare containers
+    sirens = [ i for i in  1:(S*R*N_rho) ]
+    sectors = Int[]
+    regions = Int[]
+    suppliers = Float64[]
+    distance = Float64[]
+    size_i = Float64[]
+
+
     for i = 1:length(N_downstream_per_region) # Iterate on downstream regions. 
         if N_downstream_per_region[i] >= 1
 
@@ -93,25 +121,52 @@ function SMM(params,simulation = false)
             min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
             p_si_rho = prices_[min_coord_rho]
             p_is = sum(1/N_rho .* p_si_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
-            p_i = sum((p_is .* input_share) .^ (1 - nu)).^(1 ./ (1 - nu))
-            c_i = productivity[i]*(labor_share*regional_wages[i]^(1-lambda)  + (1-labor_share)*p_i^(1-lambda))^(1/(1-lambda))
+            p_i = sum((p_is .* input_share_tech) .^ (1 - nu)).^(1 ./ (1 - nu))
+            c_i = productivity[i]*(labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
             c_i_[i] = c_i
 
             # Fill the flows
             for j in 1:R
                 tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho) # On récupère l'ensemble des points 
-                tmp = sum(tmp.* 1/N_rho .* input_share .* (1-labor_share) .* (p_si_rho./p_is).^(1 .- reshape(nu_s,1,S)) .* (p_is./p_i).^(1-nu)*(p_i/c_i).^(1-lambda)*c_i^(1-sigma),dims = 1)
+                linkages[:,:,j] += tmp
+                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_si_rho./p_is).^(1 .- reshape(nu_s,1,S)) .* (p_is./p_i).^(1-nu)*(p_i/c_i).^(1-lambda)*c_i^(1-sigma),dims = 1)
                 M_jis[j,i,:] = tmp
             end
         end
     end
 
+    id = 1
+    for r in 1:R
+        for s in 1:S
+            for i in 1:N_rho
+                push!(sectors, s)
+                push!(regions, r)
+                push!(suppliers, linkages[i, s, r]>0)
+                push!(size_i, inv_upstream_variety_productivity[i, r, s])
+                push!(distance, closest_plant[r])
+                id += 1
+            end
+        end
+    end
+
+    df = DataFrame(
+        SIREN = sirens,
+        A129 = sectors,
+        ze2010 = regions,
+        supplier = suppliers,
+        size = size_i,
+        min_distance = distance/100
+    )
+
+
 
     price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
-    M_jis = M_jis/(price_index.^(1-sigma)).*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
+    C_D = (sigma/(sigma-1))^(-sigma)/(price_index.^(1-sigma))
+    M_jis = M_jis*C_D.*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
     if simulation
         return reshape(sum(M_jis,dims = 3),R,R)
     end
+
     # Build moments
     # M_sj 
     # chi_js = M_{js}/M_{sA}
@@ -119,20 +174,27 @@ function SMM(params,simulation = false)
     M_sA = sum(M_js,dims = 1)
     chi_js = M_js./M_sA
 
-    # pi_sA
-    pi_sA = M_sA/sum(M_sA)
-
     # pi_jA: Share of region $i$ in the total purchase of the aerospace industry. 
     M_is = reshape(sum(M_jis,dims = 1),(R,S))
     M_i  = sum(M_is,dims = 2)
     pi_jA = M_i/sum(M_i)
-    return chi_js,pi_jA,pi_sA
+
+
+    fixest = reg(df, @formula(supplier ~ min_distance + fe(A129)))
+    reg_coef = fixest.coef[1]
+
+    # Labor: l_i = N_i^D x Labor share x C_D x c_i^{1-σ + 1-λ}
+    L = sum((N_downstream_per_region.*c_i_.^(1-sigma + 1-lambda))[N_downstream_per_region.!=0])
+    M = sum(M_jis)
+    labor_share = L/(L+M)
+    input_share = M_sA/M
+    
+    return chi_js,pi_jA,[reg_coef],input_share,[labor_share]
+
 
 end
 
-
 # Then compute scores. 
-
 function loss_function(simulated_moments)
     """
     Compute the loss function between empirical and simulated moments. Weight_matrix is the inverse of the variance covariance matrix of simulated moments. 
