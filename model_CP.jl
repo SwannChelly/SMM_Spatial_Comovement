@@ -46,8 +46,8 @@ if test
 
     function generate_halton_grid(n)
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
-        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0,zeros(S),0.5*ones(R),0.5*ones(S*R)
-        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1,ones(S),1.5*ones(R),1.5*ones(S*R)
+        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
+        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,ones(S),1.5*ones(R),1.5*ones(S*R)
 
         lb_prod = lb_prod[N_downstream_per_region.!=0]
         ub_prod = ub_prod[N_downstream_per_region.!=0]
@@ -178,7 +178,8 @@ function SMM(params,simulation = false)
     M_is = reshape(sum(M_jis,dims = 1),(R,S))
     M_i  = sum(M_is,dims = 2)
     pi_jA = M_i/sum(M_i)
-
+    pi_jA = pi_jA[pi_jA .!= 0]
+    print(sum(pi_jA))
 
     fixest = reg(df, @formula(supplier ~ min_distance + fe(A129)))
     reg_coef = fixest.coef[1]
@@ -189,10 +190,11 @@ function SMM(params,simulation = false)
     labor_share = L/(L+M)
     input_share = M_sA/M
     
-    return chi_js,pi_jA,[reg_coef],input_share,[labor_share]
+    return chi_js[2:end,:],pi_jA[2:end],[reg_coef],input_share[2:end],[labor_share]
 
 
 end
+
 
 # Then compute scores. 
 function loss_function(simulated_moments)
