@@ -76,7 +76,7 @@ function SMM(params,simulation = false)
     T = reshape(T_,S,R)
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
-    input_share_tech = reshape(input_share_tech,1,9)
+    input_share_tech = reshape(input_share_tech,1,S)
 
     # We initialize main variables used in the simulation
     beta = isa(beta, Float64) ? fill(beta, S) : beta
@@ -179,7 +179,6 @@ function SMM(params,simulation = false)
     M_i  = sum(M_is,dims = 2)
     pi_jA = M_i/sum(M_i)
     pi_jA = pi_jA[pi_jA .!= 0]
-    print(sum(pi_jA))
 
     fixest = reg(df, @formula(supplier ~ min_distance + fe(A129)))
     reg_coef = fixest.coef[1]

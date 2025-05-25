@@ -18,7 +18,9 @@ using Distributed
 @everywhere using Plots
 @everywhere using CSV
 @everywhere using Random
-addprocs(100)
+
+addprocs(1)
+
 Random.seed!(1)
 @everywhere include("model_CP.jl")
 ############## Load Parameters #################
@@ -51,8 +53,10 @@ else
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
     reg_coef = [0.036]
-    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share,[labor_share]]
-    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)    
+    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
+    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
+    empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
+ 
 end
 @everywhere const empirical_moments = $(empirical_moments_local) # Ajout
 
@@ -66,7 +70,7 @@ end
 
 @everywhere const sigma = $(2.46)
 @everywhere const lambda = $(0.5)
-@everywhere const nu = $(0.001)
+@everywhere const nu = $(0.9)
 @everywhere const nu_s = $(ones(S).*3) 
 @everywhere const theta = $(1.768) 
 
@@ -134,12 +138,13 @@ else
 end    
 
 
-
+beta,labor_share_tech,input_share_tech,productivity_,T_ = params_list
+SMM(params_list[1])
 
 # Format scores
 params_matrix = hcat([collect(params) for params in params_list]...)
 # Create a DataFrame
-param_names = ["theta", "phi_bar", "alpha", "beta", "mu_T", "sigma_T"]  # Column names for the parameters
+param_names = ["beta", "first_nest_tech", "second_nest_tech", "prod", "T"]  # Column names for the parameters
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
@@ -149,4 +154,50 @@ if !isempty(workers())
     rmprocs(workers())
 end
 GC.gc()
+
+
+##### Plot output ########
+
+df[!,"score_index"] = vec(1:length(score))
+df[!, "score"] = score
+
+
+# Add the new columns to the DataFrame
+df[!, :score] .= map(x -> x === missing ? Inf : x, df[!, :score])
+
+# Now sort by 'score' column
+sort!(df, :score)
+first_loop = true
+if first_loop
+    CSV.write(joinpath(folder,"parameters.csv"),df)
+else
+    CSV.write(joinpath(folder,"parameters_2.csv"),df)
+end
+
+###### Histograms #######
+
+# Display the updated DataFrame
+best_params = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
+min_vec = [minimum(best_params[!, col]) for col in param_names]
+max_vec = [maximum(best_params[!, col]) for col in param_names]
+best_index = best_params[1,:score_index]
+
+
+# Create individual histograms with LaTeX titles
+p1 = histogram(vec(emp_chi_js), alpha=0.5, bins=30, label="Empirical", color=:blue, title="chi_{js}")
+histogram!(p1, vec(results[best_index][2][1]), alpha=0.5, bins=30, label="Simulated", color=:red)
+
+p2 = histogram(vec(emp_pi_jA), alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{jA}")
+histogram!(p2, vec(results[best_index][2][2]), alpha=0.5, bins=30, label="Simulated", color=:red)
+
+p3 = histogram(input_share[2:end], alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{sA}")
+histogram!(p3, results[best_index][2][4], alpha=0.5, bins=30, label="Simulated", color=:red)
+
+# Combine into a 2x2 subplot layout
+plot(p1,p2,p3, layout=(2,2), size=(800,800))
+savefig(joinpath(folder,"dashboard.pdf"))
+
+
+npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
+
 
