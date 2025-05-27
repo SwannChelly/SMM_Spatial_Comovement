@@ -19,7 +19,7 @@ using Distributed
 @everywhere using CSV
 @everywhere using Random
 
-addprocs(1)
+addprocs(100)
 
 Random.seed!(1)
 @everywhere include("model_CP.jl")
@@ -117,7 +117,7 @@ end
 
 
 simulation = false
-n = 100
+n = 10000
 if simulation
 
     t1 = time()
@@ -199,5 +199,15 @@ savefig(joinpath(folder,"dashboard.pdf"))
 
 
 npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
+npzwrite(joinpath(folder, "productivity.npy"), params_list[best_index][4])
+
+beta,labor_share_tech,input_share_tech,productivity_,T_ = params_list[best_index]
+
+
+low = SMM([beta*0.5,labor_share_tech,input_share_tech,productivity_,T_],true)
+npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
+high = SMM([beta,labor_share_tech,input_share_tech,productivity_,T_],true)
+npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
+
 
 

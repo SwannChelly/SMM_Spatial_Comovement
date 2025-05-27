@@ -163,6 +163,7 @@ function SMM(params,simulation = false)
     price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
     C_D = (sigma/(sigma-1))^(-sigma)/(price_index.^(1-sigma))
     M_jis = M_jis*C_D.*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
+    
     if simulation
         return reshape(sum(M_jis,dims = 3),R,R)
     end

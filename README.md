@@ -16,5 +16,5 @@ Run the model from main.jl.
     - plot_results.py : Plot the distribution of downstream activities in France.  
 
     
-pip3 freeze > requirements_py.txt
-pip3 install -r requirements.txt
+pip freeze > requirements_py.txt
+pip install -r requirements_py.txt
