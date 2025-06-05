@@ -12,7 +12,6 @@ using NPZ
 using LinearAlgebra
 using QuasiMonteCarlo
 using DataFrames
-using Optim
 
 using FixedEffectModels,RDatasets
 
@@ -29,73 +28,58 @@ if test
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
     N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-    N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
-    S,R = size(filter_N_upstream)
-    R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
     #empirical_moments = NPZ.npzread(joinpath(folder,"empirical_moments.npy"))
 
-    N_rho = 100
-    labor_share = 0.12
-    sigma = 2.46
-    lambda = 0.5
-    nu = 0.9
-    nu_s = ones(S).*3.
-    theta = 1.768 
-
+    S,R = size(filter_N_upstream)
+    input_share = reshape(ones(S)/S,1,S)#NPZ.npzread(joinpath(folder,"input_share.npy"))
     regional_wages = ones(R)
-    input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
-    emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
-    emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [0.036]
-    empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
-    empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
-    empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
+
     # Then broadcast those large fixed arrays to all workers:
 
-    
+    N_rho = 100
+    labor_share = 0.5
+    sigma = 2.46
+    lambda = 0.5
+    nu = 0.001
+    nu_s = ones(S).*1.1 
+    theta = 1.768 
 
     function generate_halton_grid(n)
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
         lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
-        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
+        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,ones(S),1.5*ones(R),1.5*ones(S*R)
 
         lb_prod = lb_prod[N_downstream_per_region.!=0]
         ub_prod = ub_prod[N_downstream_per_region.!=0]
 
         lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
         ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
-        
+
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-        return halton_samples
+    
         # This will create a vector of 100 tuples, each with 8 parameters
-        #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
+        return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
     end
 
-    params_list = generate_halton_grid(2)
-    params = params_list[:,1]
+    params = generate_halton_grid(10000)[1000]
 
 end
-
-
 
 function unpack_params(params)
     
     beta = params[1]
     labor_share_tech = params[2]
     input_share_tech = params[3:2+(S)]/sum(params[3:2+(S)])
-    productivity_ = params[(S+3):(R_downstream+S+2)]
-    T_ = params[(R_downstream+(S+3)):end]
+    productivity_ = params[(S+3):(R_+S+2)]
+    T_ = params[(R_+(S+3)):end]
     return beta,labor_share_tech,input_share_tech,productivity_,T_
 end
-
-
 
 
 function SMM(params,simulation = false)
 
 
     beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params)
-
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
 
     # Set the parameters
@@ -122,7 +106,7 @@ function SMM(params,simulation = false)
     inv_upstream_variety_productivity = upstream_variety_productivity.^(-1)
 
     tau_reshaped = permutedims(tau,(3,1,2))
-    
+
     M_jis = zeros(R,R,S) 
     c_i_ = zeros(R)
     linkages = zeros(N_rho,S,R)
@@ -134,6 +118,7 @@ function SMM(params,simulation = false)
     suppliers = Float64[]
     distance = Float64[]
     size_i = Float64[]
+
 
     for i = 1:length(N_downstream_per_region) # Iterate on downstream regions. 
         if N_downstream_per_region[i] >= 1
@@ -160,16 +145,6 @@ function SMM(params,simulation = false)
         end
     end
 
-
-
-    price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
-    C_D = (sigma/(sigma-1))^(-sigma)/(price_index.^(1-sigma))
-    M_jis = M_jis*C_D.*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
-
-    if simulation
-        return reshape(sum(M_jis,dims = 3),R,R)
-    end
-
     id = 1
     for r in 1:R
         for s in 1:S
@@ -193,6 +168,15 @@ function SMM(params,simulation = false)
         min_distance = distance/100
     )
 
+
+
+    price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
+    C_D = (sigma/(sigma-1))^(-sigma)/(price_index.^(1-sigma))
+    M_jis = M_jis*C_D.*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
+    
+    if simulation
+        return reshape(sum(M_jis,dims = 3),R,R)
+    end
 
     # Build moments
     # M_sj 
@@ -249,3 +233,53 @@ function full_SMM(params,simulation = false)
     end
 end
 
+
+
+test = false
+if test
+    folder = "./baseline"
+    distances = NPZ.npzread(joinpath(folder, "distances.npy"))
+    N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
+    filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
+    filter_out_reference_region = NPZ.npzread(joinpath(folder,"filter_out_reference_region.npy"))
+    emp_chi_si = NPZ.npzread(joinpath(folder,"emp_chi_si.npy"))
+    emp_pi_jA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_jA.npy")), (size(emp_chi_si)[2], 1))  # example R=129
+    emp_pi_sA = reshape(NPZ.npzread(joinpath(folder,"emp_pi_sA.npy")), (1, size(emp_chi_si)[1]))   # example S=64
+    weight_matrix = NPZ.npzread(joinpath(folder,"inv_cov.npy"))
+    emp_pi_jA = emp_pi_jA[N_downstream_per_region.!=0]
+    emp_chi_si = emp_chi_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+    if low_high
+        emp_rho_si_low = NPZ.npzread(joinpath(folder,"emp_rho_si_low.npy"))
+        emp_rho_si_high = NPZ.npzread(joinpath(folder,"emp_rho_si_high.npy"))
+        emp_rho_si_low = emp_rho_si_low[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+        emp_rho_si_high = emp_rho_si_high[(filter_N_upstream.*filter_out_reference_region).!=0.0]    
+        empirical_moments = [emp_chi_si, emp_rho_si_low,emp_rho_si_high]
+        empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+    else 
+        emp_rho_si = NPZ.npzread(joinpath(folder,"emp_rho_si.npy")) 
+        emp_rho_si = emp_rho_si[(filter_N_upstream.*filter_out_reference_region).!=0.0]
+        
+        empirical_moments = [emp_chi_si, emp_rho_si]
+        empirical_moments = vcat([vec(item) for item in empirical_moments]...)'
+    end
+
+
+    omega = copy(emp_pi_sA)
+    share_imp_total_cost = 0.35
+    foreign_price = 1
+    sigma = 2.46
+    
+    theta,phi_bar,alpha,beta = 6.,2.5,1.,1.
+    N_trial_max = 20
+
+
+
+    # simulations = [SMM_simulation(seed,[theta,phi_bar,alpha,beta],N_trial_max) for seed in 1:1]
+    # simulations = filter(!isnothing, simulations)
+    # simulations = mean(simulations)
+
+    # npzwrite(joinpath(folder, "M_ij.npy"), simulations)
+    
+end
+#theta,phi_bar,alpha,beta,mu_T,sigma_T  = (76.0048, 0.5646939444444444, 1.16003, 1.0571728571428571, 1.200055, 1.6154096153846154)
+# simulations = SMM_simulation(1,[theta,phi_bar,alpha,beta],N_trial_max) 

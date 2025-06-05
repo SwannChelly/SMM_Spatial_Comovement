@@ -58,7 +58,15 @@ def plot_downstream(df,col_name,ax):
 
     tmp = france.merge(df,on = "ze2010",how = "left")
     tmp[col_name].fillna(0,inplace = True)
-    norm = mcolors.LogNorm(vmin=10**(-4), vmax=1)
+    if col_name != "productivity":
+        vmin = min(df.query('pi_jA >0')["pi_jA"].to_list()+df.query('sim_pi_jA >0')["sim_pi_jA"].to_list())
+        vmax = max(df["pi_jA"].to_list()+df["sim_pi_jA"].to_list())
+        norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
+    else: 
+        vmin,vmax = min(df.query('productivity >0').productivity),max(df['productivity'])
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+        print(df.productivity.describe())
+
     tmp.query(col_name+' == 0').plot(color = "gray",ax=ax)
     tmp.query(col_name+' > 0').plot(column = col_name,ax=ax,norm = norm, cmap = "viridis",edgecolor ="black")
 
@@ -82,12 +90,14 @@ def plot_downstream(df,col_name,ax):
 def plot_trade_flow(name,ze_shocked,ax,normalize = True,zero_one_norm = False):
 
     tmp = load_M_ij(name).query(f'ze2010_j == "{ze_shocked}"')
+    print(tmp.query('M_ij > 0'))
     if normalize:    tmp['M_ij'] /= tmp["M_ij"].sum()
     tmp = france.merge(tmp,right_on = "ze2010_i",left_on = "ze2010")
     if zero_one_norm :
-        norm = mcolors.LogNorm(vmin=10**(-4), vmax=1)
+        norm = mcolors.LogNorm(vmin=10**(-4), vmax=tmp.M_ij.max())
     else: 
         norm = mcolors.LogNorm(vmin=tmp.query('M_ij > 0').M_ij.min(), vmax=tmp.query('M_ij > 0').M_ij.max())
+    
     tmp.query('M_ij == 0').plot(color = "gray",ax=ax)
     tmp.query('M_ij > 0').plot(column = "M_ij",ax=ax,norm = norm, cmap = "viridis",edgecolor ="black")
     tmp.query(f'ze2010_i == "{ze_shocked}"').plot(facecolor="none",ax=ax, edgecolor="red",hatch ="//")
@@ -95,7 +105,8 @@ def plot_trade_flow(name,ze_shocked,ax,normalize = True,zero_one_norm = False):
     ax_inset = inset_axes(ax, width="65%", height="65%", loc="upper right",bbox_to_anchor=(0.745, 0.775, 0.25, 0.25), bbox_transform=ax.transAxes, borderpad=1)  
     data_idf = tmp[tmp['ze2010_i'].isin(idf_ze)]
     data_idf.query('M_ij == 0').plot(color = "gray",ax=ax_inset)
-    data_idf.query('M_ij > 0').plot(column = "M_ij",ax=ax_inset,norm = norm, cmap = "viridis",edgecolor ="black")
+    if data_idf.query('M_ij > 0').shape[0]>0:
+        data_idf.query('M_ij > 0').plot(column = "M_ij",ax=ax_inset,norm = norm, cmap = "viridis",edgecolor ="black")
     if ze_shocked in idf_ze:
         data_idf.query(f'ze2010_i == "{ze_shocked}"').plot(facecolor="none",ax=ax_inset, edgecolor="red",hatch ="//")
     ax_inset.set_xticks([])
@@ -143,6 +154,7 @@ def load_M_ij(name):
 pi_jA = load_pi_jA("pi_jA")
 productivity = load_productivity("productivity")
 
+
 ########### Plot pi_jA ########
 
 
@@ -157,7 +169,7 @@ axs[1].set_title(r'Simulated $\pi_{jA}$')
 axs[2].set_title(r'Simulated $A_i$')
 
 fig.tight_layout()
-fig.savefig(os.path.join(folder,'pi_jA_productivity.png'),bbox_inches='tight')
+fig.savefig(os.path.join("../reporting",'pi_jA_productivity.png'),bbox_inches='tight')
 
 
 ############ Plot trade flow ##############
@@ -174,7 +186,7 @@ plot_trade_flow("M_ij_high_trade_cost",ze_shocked,ax,zero_one_norm = True)
 ax.set_title(r'High trade cost')
 
 fig.tight_layout()
-fig.savefig(os.path.join(folder,'M_ij_low_high_trade_cost.png'),bbox_inches='tight')
+fig.savefig(os.path.join("../reporting",'M_ij_low_high_trade_cost.png'),bbox_inches='tight')
 
 ################ Plot Toulouse vs Evry ###################
 # ze_shocked = "0061"

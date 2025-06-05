@@ -7,3 +7,8 @@ import Pkg; Pkg.add("Plots")
 import Pkg; Pkg.add("CSV")
 import Pkg; Pkg.add("FixedEffectModels")
 import Pkg; Pkg.add("RDatasets")
+import Pkg; Pkg.add("Optim")
+import Pkg; Pkg.add("ProgressMeter")
+import Pkg; Pkg.add("SharedArrays")
+
+
