@@ -59,7 +59,7 @@ if test
 else
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [0.036]
+    reg_coef = [-0.036]
     empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
     empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
@@ -109,9 +109,9 @@ end
 # beta,theta,nu_s,nu,lambda,sigma,productivity,T
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
-    A = ones(size(A)[1])
-    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*A,0.5*ones(S*R)
-    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*A,1.5*ones(S*R)
+    # A = ones(size(A)[1])
+    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.8*A,0.5*ones(S*R)
+    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.2*A,1.5*ones(S*R)
 
 
     lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
@@ -124,7 +124,8 @@ end
 end
 
 simulation = false
-n = 10000
+n = 100
+print("Starting simulation")
 if simulation
 
     t1 = time()
@@ -146,6 +147,7 @@ end
 
 
 
+
 # Format scores
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
 # Create a DataFrame
@@ -153,9 +155,6 @@ param_names = ["beta", "first_nest_tech", "second_nest_tech", "prod", "T"]  # Co
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
-
-
-
 
 
 ##### Plot output ########

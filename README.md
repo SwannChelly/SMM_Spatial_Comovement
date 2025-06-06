@@ -5,16 +5,16 @@
 
 Run the model from main.jl. 
 
-**Parameters**:
-    - low_high (bool): if set to true, split rho_si between high and low productive firms. 
-    - reduced  (bool): if set to true, moments are average and variance of rho_si and chi_si
-    - first_loop (bool): if set to true run the first optimisation of halton grid. Otherwise, run local search. 
+Output of the model are: 
+    - report.txt: A file comparing the empirical and simulated moments. 
+    - M_ij_high_trade_cost/M_ij_low_trade_cost.npy: M_ij matrix simulated from the best parameter set with 50% lower beta (low) and 50% higher beta (high). 
+    - pi_jA / productivity : Simulated pi_jA and best productivity parameters. 
 
 
-**Files**:
-    - model_CP.jl  : SMM code for the CP version of the model
-    - plot_results.py : Plot the distribution of downstream activities in France.  
+Build reporting using plot_pi_jA.py
 
-    
+The code for the model is stored in model_CP.jl
+
+
 pip freeze > requirements_py.txt
 pip install -r requirements_py.txt

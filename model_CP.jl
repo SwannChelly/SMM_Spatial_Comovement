@@ -1,5 +1,6 @@
 ##### SMM for Spatial Comovement #####
 # Author: Swann Chelly 
+# Code of the model, model_CP in the overleaf. 
 
 
 ##################### Packages ###################
@@ -17,12 +18,8 @@ using Optim
 using FixedEffectModels,RDatasets
 
 
-
-# Hyperparameters
-
-
-
 ###### Testing environment #####
+## If test is set to true, we can test the model directly from this code. 
 test = false 
 if test
     folder = "./baseline"
@@ -46,7 +43,7 @@ if test
     input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [0.036]
+    reg_coef = [-0.036]
     empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
@@ -79,6 +76,9 @@ end
 
 
 function unpack_params(params)
+    """
+    This function takes a vector of parameters and return the parameters separated. 
+    """
     
     beta = params[1]
     labor_share_tech = params[2]
@@ -93,25 +93,38 @@ end
 
 function SMM(params,simulation = false)
 
+    """
+    Main function. Given a set of parameters run the SMM. 
+    Input: 
+        params (vector): Vector of parameters. Those are: 
+            - beta: The exponent of the distance to compute trade cost. 
+            - labor_share_tech: Technological coefficient on labor \Omega^L
+            - input_share_tech: Input technological coefficients \Omega^s
+            - productivity: The A_i parameters in the production function of each region. 
+            - T: The Ricardian comparative advantage T_{sj}. 
+        simulation (bool): 
+            - If set to true, the function return the matrix of trade flow. 
+            - Else, return the number simulated moments. 
+    """
 
+    # Unpack parameters
     beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params)
 
+    # Create the matrix giving for each region the closest region with a downstream industry
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
 
     # Set the parameters
-    T = reshape(T_,S,R)
+
+    beta = isa(beta, Float64) ? fill(beta, S) : beta
+    tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
     input_share_tech = reshape(input_share_tech,1,S)
 
-    # We initialize main variables used in the simulation
-    beta = isa(beta, Float64) ? fill(beta, S) : beta
-    tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
+    T = reshape(T_,S,R)
 
     # Initialise the upstream firms: Draw productivities 
     frechet_rand = Frechet.(theta, T.^theta)
-
-    # Allocate the output
     upstream_variety_productivity = zeros(S, R, N_rho)
     # Fill z with Frechet draws
     for s in 1:S, r in 1:R
@@ -120,14 +133,13 @@ function SMM(params,simulation = false)
 
     upstream_variety_productivity = permutedims(upstream_variety_productivity, (3, 2, 1))
     inv_upstream_variety_productivity = upstream_variety_productivity.^(-1)
-
     tau_reshaped = permutedims(tau,(3,1,2))
     
-    M_jis = zeros(R,R,S) 
-    c_i_ = zeros(R)
-    linkages = zeros(N_rho,S,R)
+    M_jis = zeros(R,R,S)  # To store trade flow per sector
+    c_i_ = zeros(R)       # To store marginal cost of production of region i
+    linkages = zeros(N_rho,S,R) # To store firm level linkage to downstream region
 
-    # Prepare containers
+    # Prepare containers for the regression
     sirens = [ i for i in  1:(S*R*N_rho) ]
     sectors = Int[]
     regions = Int[]
@@ -136,7 +148,7 @@ function SMM(params,simulation = false)
     size_i = Float64[]
 
     for i = 1:length(N_downstream_per_region) # Iterate on downstream regions. 
-        if N_downstream_per_region[i] >= 1
+        if N_downstream_per_region[i] >= 1    # If there is an downstream industry in region i
 
             # We compute prices faced by downstream firms in region i
             tau_ = reshape(tau_reshaped[:,: ,i]',1,R,S)
@@ -147,12 +159,12 @@ function SMM(params,simulation = false)
             p_si_rho = prices_[min_coord_rho]
             p_is = sum(1/N_rho .* p_si_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
             p_i = sum((p_is .* input_share_tech) .^ (1 - nu)).^(1 ./ (1 - nu))
-            c_i = productivity[i]*(labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
+            c_i = productivity[i]^(-1)*(labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
             c_i_[i] = c_i
 
             # Fill the flows
             for j in 1:R
-                tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho) # On récupère l'ensemble des points 
+                tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho) 
                 linkages[:,:,j] += tmp
                 tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_si_rho./p_is).^(1 .- reshape(nu_s,1,S)) .* (p_is./p_i).^(1-nu)*(p_i/c_i).^(1-lambda)*c_i^(1-sigma),dims = 1)
                 M_jis[j,i,:] = tmp
@@ -160,7 +172,7 @@ function SMM(params,simulation = false)
         end
     end
 
-
+    # Having all prices at all nest, we build the trade flows.
 
     price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
     C_D = (sigma/(sigma-1))^(-sigma)/(price_index.^(1-sigma))
@@ -170,6 +182,7 @@ function SMM(params,simulation = false)
         return reshape(sum(M_jis,dims = 3),R,R)
     end
 
+    # Prepare dataframe for regression
     id = 1
     for r in 1:R
         for s in 1:S
@@ -207,6 +220,7 @@ function SMM(params,simulation = false)
     pi_jA = M_i/sum(M_i)
     pi_jA = pi_jA[pi_jA .!= 0]
 
+    # Perform the regression
     fixest = reg(df, @formula(supplier ~ min_distance + fe(A129)))
     reg_coef = fixest.coef[1]
 
@@ -225,7 +239,7 @@ end
 # Then compute scores. 
 function loss_function(simulated_moments)
     """
-    Compute the loss function between empirical and simulated moments. Weight_matrix is the inverse of the variance covariance matrix of simulated moments. 
+    Compute the loss function between empirical and simulated moments. Weight_matrix is the identity matrix (so far). 
     """
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
