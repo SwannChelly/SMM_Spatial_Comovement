@@ -59,8 +59,8 @@ if test
 else
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [-0.036]
-    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
+    reg_coef = [-0.009]
+    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
     empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
  
@@ -109,13 +109,13 @@ end
 # beta,theta,nu_s,nu,lambda,sigma,productivity,T
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
-    # A = ones(size(A)[1])
-    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.8*A,0.5*ones(S*R)
-    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.2*A,1.5*ones(S*R)
+    A = ones(size(A)[1])
+    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.3,0.8.*input_share,0.8*A,0.1*ones(S*R)
+    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 0.45,1.2.*input_share,1.2*A,20*ones(S*R)
 
 
-    lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-    ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+    lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
+    ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     return [halton_samples[:,i] for i in range(1,n)]
@@ -124,7 +124,7 @@ end
 end
 
 simulation = false
-n = 100
+n = 100000
 print("Starting simulation")
 if simulation
 
@@ -146,12 +146,10 @@ else
 end    
 
 
-
-
 # Format scores
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
 # Create a DataFrame
-param_names = ["beta", "first_nest_tech", "second_nest_tech", "prod", "T"]  # Column names for the parameters
+param_names = ["beta", "second_nest_tech", "prod", "T"]  # Column names for the parameters
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
@@ -201,17 +199,20 @@ plot(p1,p2,p3, layout=(2,2), size=(800,800))
 savefig(joinpath("./reporting","dashboard.png"))
 
 
+npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
+
+
 npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
-npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[4])
+npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[3])
 
 
-beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
-data = beta,labor_share_tech,input_share_tech,productivity_,T_
+beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
+data = beta,input_share_tech,productivity_,T_
 
 @everywhere include("model_CP.jl")
-low = SMM(vcat([beta*0.5,labor_share_tech]..., data[3]..., data[4]..., data[5]...),true)
+low = SMM(vcat([beta*0.5]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
-high = SMM(vcat([beta*1.5,labor_share_tech]..., data[3]..., data[4]..., data[5]...),true)
+high = SMM(vcat([beta*1.5]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
 
 
@@ -253,9 +254,10 @@ end
 
 
 function generate_dashboard_report(
-    chi_js,pi_jA,reg_,input_share_,labor_share_,
+    chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
     output_file::String = "./reporting/report.txt"
-)
+)   
+
     # Chi_js summary table
     chi_emp,chi_sim = chi_js
     pi_jA_emp,pi_jA_sim = pi_jA
@@ -305,6 +307,7 @@ function generate_dashboard_report(
 
 
     open(output_file, "w") do io
+        println(io, "Score: $best_score\n") # Ajoutez cette ligne pour inclure le score
         println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")
 
         println(io, ">> Chi_js (quartile are for the distribution without zeros):\n")
@@ -326,8 +329,8 @@ function generate_dashboard_report(
         end
 
         
-        println(io, "\n>> Labor share:\n")
-        println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", labor_share_emp, labor_share_sim))
+        #println(io, "\n>> Labor share:\n")
+        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", labor_share_emp, labor_share_sim))
 
         println(io, "\n>> Regression Coefficient:\n")
         println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", reg_emp, reg_sim))
@@ -350,9 +353,42 @@ reg_ = [reg_emp,reg_sim]
 
 
 input_share_ = [input_share,add_first_element(results[best_index][2][4])]
-labor_share_ = [labor_share,results[best_index][2][5][1]]
+labor_share_ = [labor_share,labor_share]
+best_score = results[best_index][1][1]
 
 
+generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_,best_score)
 
-generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_)
+
+beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
+range_beta = range(0.01, stop = beta * 1.5, length = 1000)
+expanding_beta = [vcat(i, params_list[best_index][2:end]) for i in range_beta]
+
+
+results = pmap(parallel_SMM_safe, expanding_beta)
+score = [score[1] != nothing ? score[1][1] : missing for score in results]
+reg_coef = [score[2][3][1] for score in results]
+percentage_difference = [(b - beta) / beta * 100 for b in range_beta]
+
+
+# Create the plot
+plot(percentage_difference, score,
+     xlabel = "Percentage Difference from Original Beta (%)",
+     ylabel = "Score Beta",
+     title = "Score Beta vs Percentage Difference from Original Beta",
+     label = "Score Beta",
+     linewidth = 2)
+
+plot(percentage_difference, reg_coef,
+     xlabel = "Percentage Difference from Original Beta (%)",
+     ylabel = "Score Beta",
+     title = "Score Beta vs Percentage Difference from Original Beta",
+     label = "Score Beta",
+     linewidth = 2)
+
+score_max = -0.005
+score_min = -0.01
+
+filtered_betas = range_beta[(score_min .<= reg_coef) .& (reg_coef .<= score_max)]
+filtered_betas
 

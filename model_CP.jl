@@ -43,8 +43,8 @@ if test
     input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [-0.036]
-    empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
+    reg_coef = [-0.009]
+    empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
     # Then broadcast those large fixed arrays to all workers:
@@ -53,14 +53,14 @@ if test
 
     function generate_halton_grid(n)
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
-        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
-        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
+        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
+        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
 
         lb_prod = lb_prod[N_downstream_per_region.!=0]
         ub_prod = ub_prod[N_downstream_per_region.!=0]
 
-        lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-        ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+        lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
+        ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
         
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
         return halton_samples
@@ -81,11 +81,17 @@ function unpack_params(params)
     """
     
     beta = params[1]
-    labor_share_tech = params[2]
-    input_share_tech = params[3:2+(S)]/sum(params[3:2+(S)])
-    productivity_ = params[(S+3):(R_downstream+S+2)]
-    T_ = params[(R_downstream+(S+3)):end]
-    return beta,labor_share_tech,input_share_tech,productivity_,T_
+
+    # labor_share_tech = params[2]
+    # input_share_tech = params[3:2+(S)]/sum(params[3:2+(S)])
+    # productivity_ = params[(S+3):(R_downstream+S+2)]
+    # T_ = params[(R_downstream+(S+3)):end]
+
+    input_share_tech = params[2:1+(S)]/sum(params[2:1+(S)])
+    productivity_ = params[(S+2):(R_downstream+S+1)]
+    T_ = params[(R_downstream+(S+2)):end]
+
+    return beta,input_share_tech,productivity_,T_
 end
 
 
@@ -98,8 +104,8 @@ function SMM(params,simulation = false)
     Input: 
         params (vector): Vector of parameters. Those are: 
             - beta: The exponent of the distance to compute trade cost. 
-            - labor_share_tech: Technological coefficient on labor \Omega^L
-            - input_share_tech: Input technological coefficients \Omega^s
+            - labor_share_tech: Technological coefficient on labor Omega^L
+            - input_share_tech: Input technological coefficients Omega^s
             - productivity: The A_i parameters in the production function of each region. 
             - T: The Ricardian comparative advantage T_{sj}. 
         simulation (bool): 
@@ -108,11 +114,10 @@ function SMM(params,simulation = false)
     """
 
     # Unpack parameters
-    beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params)
-
+    beta,input_share_tech,productivity_,T_ = unpack_params(params)
     # Create the matrix giving for each region the closest region with a downstream industry
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
-
+    labor_share_tech = labor_share
     # Set the parameters
 
     beta = isa(beta, Float64) ? fill(beta, S) : beta
@@ -191,7 +196,7 @@ function SMM(params,simulation = false)
                 push!(regions, r)
                 push!(suppliers, linkages[i, s, r]>0)
                 push!(size_i, inv_upstream_variety_productivity[i, r, s])
-                push!(distance, closest_plant[r])
+                push!(distance, log(closest_plant[r]))
                 id += 1
             end
         end
@@ -203,7 +208,7 @@ function SMM(params,simulation = false)
         ze2010 = regions,
         supplier = suppliers,
         size = size_i,
-        min_distance = distance/100
+        min_distance = distance
     )
 
 
@@ -227,10 +232,10 @@ function SMM(params,simulation = false)
     # Labor: l_i = N_i^D x Labor share x C_D x c_i^{1-σ + 1-λ}
     L = sum((N_downstream_per_region.*c_i_.^(1-sigma + 1-lambda))[N_downstream_per_region.!=0])
     M = sum(M_jis)
-    labor_share = L/(L+M)
+    # labor_share = L/(L+M)
     input_share = M_sA/M
     
-    return chi_js[2:end,:],pi_jA[2:end],[reg_coef],input_share[2:end],[labor_share]
+    return chi_js[2:end,:],pi_jA[2:end],[reg_coef],input_share[2:end]
 
 
 end
