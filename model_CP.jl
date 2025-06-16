@@ -54,14 +54,14 @@ if test
 
     function generate_halton_grid(n)
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
-        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
-        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
+        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
+        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
 
         lb_prod = lb_prod[N_downstream_per_region.!=0]
         ub_prod = ub_prod[N_downstream_per_region.!=0]
 
-        lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-        ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+        lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
+        ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
         
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
         return halton_samples
