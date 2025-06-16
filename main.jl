@@ -38,7 +38,7 @@ folder = "./baseline"
 distances_local = NPZ.npzread(joinpath(folder, "distances.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
 filter_N_upstream_local = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-#N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
+N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
 S_,R_ = size(filter_N_upstream_local)
 
 @everywhere const S = $(S_)
@@ -59,8 +59,8 @@ if test
 else
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [-0.036]
-    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
+    reg_coef = [-0.009]
+    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
     empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
  
@@ -109,13 +109,16 @@ end
 # beta,theta,nu_s,nu,lambda,sigma,productivity,T
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
-    # A = ones(size(A)[1])
-    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.8*A,0.5*ones(S*R)
-    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.2*A,1.5*ones(S*R)
+    #A = ones(size(A)[1])
+    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*A,0.5*ones(S*R)
+    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*A,1.5*ones(S*R)
 
 
-    lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-    ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+    #lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
+    #ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+
+    lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
+    ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     return [halton_samples[:,i] for i in range(1,n)]
@@ -123,8 +126,10 @@ end
     #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
 end
 
+
+
 simulation = false
-n = 100
+n = 50000
 print("Starting simulation")
 if simulation
 
@@ -147,11 +152,10 @@ end
 
 
 
-
 # Format scores
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
 # Create a DataFrame
-param_names = ["beta", "first_nest_tech", "second_nest_tech", "prod", "T"]  # Column names for the parameters
+param_names = ["beta", "second_nest_tech", "prod", "T"]  # Column names for the parameters
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
@@ -185,6 +189,7 @@ best_index = best_params[1,:score_index]
 
 
 
+npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
 
 # Create individual histograms with LaTeX titles
 p1 = histogram(vec(emp_chi_js), alpha=0.5, bins=30, label="Empirical", color=:blue, title="chi_{js}")
@@ -205,13 +210,13 @@ npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
 npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[4])
 
 
-beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
-data = beta,labor_share_tech,input_share_tech,productivity_,T_
+beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
+data = beta,input_share_tech,productivity_,T_
 
 @everywhere include("model_CP.jl")
-low = SMM(vcat([beta*0.5,labor_share_tech]..., data[3]..., data[4]..., data[5]...),true)
+low = SMM(vcat([beta*0.5]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
-high = SMM(vcat([beta*1.5,labor_share_tech]..., data[3]..., data[4]..., data[5]...),true)
+high = SMM(vcat([beta*1.5]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
 
 
@@ -326,8 +331,8 @@ function generate_dashboard_report(
         end
 
         
-        println(io, "\n>> Labor share:\n")
-        println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", labor_share_emp, labor_share_sim))
+        #println(io, "\n>> Labor share:\n")
+        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", labor_share_emp, labor_share_sim))
 
         println(io, "\n>> Regression Coefficient:\n")
         println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", reg_emp, reg_sim))
@@ -350,9 +355,10 @@ reg_ = [reg_emp,reg_sim]
 
 
 input_share_ = [input_share,add_first_element(results[best_index][2][4])]
-labor_share_ = [labor_share,results[best_index][2][5][1]]
+labor_share_ = [labor_share,labor_share]
 
 
 
 generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_)
+
 
