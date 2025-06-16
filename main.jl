@@ -109,13 +109,13 @@ end
 # beta,theta,nu_s,nu,lambda,sigma,productivity,T
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
-    # A = ones(size(A)[1])
-    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.8*A,0.5*ones(S*R)
-    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.2*A,1.5*ones(S*R)
+    A = ones(size(A)[1])
+    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.3,0.8.*input_share,0.8*A,0.1*ones(S*R)
+    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 0.45,1.2.*input_share,1.2*A,20*ones(S*R)
 
 
-    lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-    ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+    lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
+    ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     return [halton_samples[:,i] for i in range(1,n)]
@@ -126,7 +126,7 @@ end
 
 
 simulation = false
-n = 100
+n = 100000
 print("Starting simulation")
 if simulation
 
@@ -146,8 +146,6 @@ else
     t1 = time()-t1
     print(t1)
 end    
-
-
 
 
 # Format scores
@@ -358,9 +356,43 @@ reg_ = [reg_emp,reg_sim]
 
 
 input_share_ = [input_share,add_first_element(results[best_index][2][4])]
-labor_share_ = [labor_share,results[best_index][2][5][1]]
+labor_share_ = [labor_share,labor_share]
+best_score = results[best_index][1][1]
 
 
+generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_,best_score)
 
-generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_)
+
+beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
+range_beta = range(0.01, stop = beta * 1.5, length = 1000)
+expanding_beta = [vcat(i, params_list[best_index][2:end]) for i in range_beta]
+
+
+results = pmap(parallel_SMM_safe, expanding_beta)
+score = [score[1] != nothing ? score[1][1] : missing for score in results]
+reg_coef = [score[2][3][1] for score in results]
+percentage_difference = [(b - beta) / beta * 100 for b in range_beta]
+
+
+# Create the plot
+plot(percentage_difference, score,
+     xlabel = "Percentage Difference from Original Beta (%)",
+     ylabel = "Score Beta",
+     title = "Score Beta vs Percentage Difference from Original Beta",
+     label = "Score Beta",
+     linewidth = 2)
+
+plot(percentage_difference, reg_coef,
+     xlabel = "Percentage Difference from Original Beta (%)",
+     ylabel = "Score Beta",
+     title = "Score Beta vs Percentage Difference from Original Beta",
+     label = "Score Beta",
+     linewidth = 2)
+
+score_max = -0.005
+score_min = -0.01
+
+filtered_betas = range_beta[(score_min .<= reg_coef) .& (reg_coef .<= score_max)]
+filtered_betas
+
 
