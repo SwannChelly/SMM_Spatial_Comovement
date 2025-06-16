@@ -45,7 +45,7 @@ if test
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
     reg_coef = [-0.009]
-    empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end],[labor_share]]
+    empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
     # Then broadcast those large fixed arrays to all workers:
@@ -54,23 +54,19 @@ if test
 
     function generate_halton_grid(n)
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
-    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-    A ./= sum(A)
-    #A = ones(size(A)[1])
-    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*A,0.5*ones(S*R)
-    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*A,1.5*ones(S*R)
+        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
+        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
 
+        lb_prod = lb_prod[N_downstream_per_region.!=0]
+        ub_prod = ub_prod[N_downstream_per_region.!=0]
 
-    #lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-    #ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
-
-    #lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
-    #ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
-    
-    halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-    return [halton_samples[:,i] for i in range(1,n)]
-    # This will create a vector of 100 tuples, each with 8 parameters
-    #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
+        lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
+        ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
+        
+        halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+        return halton_samples
+        # This will create a vector of 100 tuples, each with 8 parameters
+        #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
     end
 
     params_list = generate_halton_grid(2)
@@ -86,13 +82,16 @@ function unpack_params(params)
     """
     
     beta = params[1]
-    #labor_share_tech = params[2]
+
+    # labor_share_tech = params[2]
     # input_share_tech = params[3:2+(S)]/sum(params[3:2+(S)])
     # productivity_ = params[(S+3):(R_downstream+S+2)]
-    # T_ = params[(R_downstream+(S+3)):end]    
-    input_share_tech = params[2:(1+S)]/sum(params[2:(1+S)])
+    # T_ = params[(R_downstream+(S+3)):end]
+
+    input_share_tech = params[2:1+(S)]/sum(params[2:1+(S)])
     productivity_ = params[(S+2):(R_downstream+S+1)]
     T_ = params[(R_downstream+(S+2)):end]
+
     return beta,input_share_tech,productivity_,T_
 end
 
@@ -117,12 +116,10 @@ function SMM(params,simulation = false)
 
     # Unpack parameters
     beta,input_share_tech,productivity_,T_ = unpack_params(params)
-    labor_share_tech = labor_share
-
     # Create the matrix giving for each region the closest region with a downstream industry
     # Used for the regression
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
-
+    labor_share_tech = labor_share
     # Set the parameters
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
@@ -234,10 +231,11 @@ function SMM(params,simulation = false)
     # Labor: l_i = N_i^D x Labor share x C_D x c_i^{1-σ + 1-λ}
     L = sum((N_downstream_per_region.*c_i_.^(1-sigma + 1-lambda))[N_downstream_per_region.!=0])
     M = sum(M_jis)
-    labor_share_ = L/(L+M)
+    # labor_share = L/(L+M)
     input_share = M_sA/M
     
-    return chi_js[2:end,:],pi_jA[2:end],[reg_coef],input_share[2:end]#,[labor_share_]
+    return chi_js[2:end,:],pi_jA[2:end],[reg_coef],input_share[2:end]
+
 
 end
 

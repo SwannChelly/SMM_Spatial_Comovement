@@ -49,6 +49,7 @@ def load_pi_jA(file_name):
 def load_productivity(file_name):
     prod = np.load(os.path.join(folder,f"{file_name}.npy"))
     df = filter_N_upstream_df[["ze2010","pi_jA"]].drop_duplicates()
+    print(len(prod))
     df.loc[~df.pi_jA.isna(),"productivity"] = prod
     df.productivity.fillna(0,inplace = True)
     return df

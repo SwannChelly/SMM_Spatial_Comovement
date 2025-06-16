@@ -109,16 +109,13 @@ end
 # beta,theta,nu_s,nu,lambda,sigma,productivity,T
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
-    #A = ones(size(A)[1])
-    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.5*A,0.5*ones(S*R)
-    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.5*A,1.5*ones(S*R)
+    # A = ones(size(A)[1])
+    lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8*labor_share,0.8.*input_share,0.8*A,0.5*ones(S*R)
+    ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2*labor_share,1.2.*input_share,1.2*A,1.5*ones(S*R)
 
 
-    #lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
-    #ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
-
-    lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
-    ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
+    lb = Any[vcat(lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T)...]
+    ub = Any[vcat(ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T)...]
     
     halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
     return [halton_samples[:,i] for i in range(1,n)]
@@ -129,7 +126,7 @@ end
 
 
 simulation = false
-n = 50000
+n = 100
 print("Starting simulation")
 if simulation
 
@@ -149,6 +146,7 @@ else
     t1 = time()-t1
     print(t1)
 end    
+
 
 
 
@@ -206,8 +204,11 @@ plot(p1,p2,p3, layout=(2,2), size=(800,800))
 savefig(joinpath("./reporting","dashboard.png"))
 
 
+npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
+
+
 npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
-npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[4])
+npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[3])
 
 
 beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
@@ -258,9 +259,10 @@ end
 
 
 function generate_dashboard_report(
-    chi_js,pi_jA,reg_,input_share_,labor_share_,
+    chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
     output_file::String = "./reporting/report.txt"
-)
+)   
+
     # Chi_js summary table
     chi_emp,chi_sim = chi_js
     pi_jA_emp,pi_jA_sim = pi_jA
@@ -310,6 +312,7 @@ function generate_dashboard_report(
 
 
     open(output_file, "w") do io
+        println(io, "Score: $best_score\n") # Ajoutez cette ligne pour inclure le score
         println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")
 
         println(io, ">> Chi_js (quartile are for the distribution without zeros):\n")
@@ -355,10 +358,9 @@ reg_ = [reg_emp,reg_sim]
 
 
 input_share_ = [input_share,add_first_element(results[best_index][2][4])]
-labor_share_ = [labor_share,labor_share]
+labor_share_ = [labor_share,results[best_index][2][5][1]]
 
 
 
 generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_)
-
 
