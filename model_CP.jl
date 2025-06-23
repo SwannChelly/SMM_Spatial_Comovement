@@ -163,15 +163,15 @@ function SMM(params,simulation = false)
             min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
             p_si_rho = prices_[min_coord_rho]
             p_is = sum(1/N_rho .* p_si_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
-            p_i = sum((p_is .* input_share_tech) .^ (1 - nu)).^(1 ./ (1 - nu))
-            c_i = productivity[i]^(-1)*(labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
-            c_i_[i] = c_i
+            p_i = sum((p_is) .^ (1 - nu).*input_share_tech).^(1 ./ (1 - nu))
+            c_i_tilde = (labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
+            c_i_[i] = c_i*productivity[i]^(-1)
 
             # Fill the flows
             for j in 1:R
-                tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho) 
-                linkages[:,:,j] += tmp
-                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_si_rho./p_is).^(1 .- reshape(nu_s,1,S)) .* (p_is./p_i).^(1-nu)*(p_i/c_i).^(1-lambda)*c_i^(1-sigma),dims = 1)
+                tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho)  # Here tmp is a dummy variable
+                linkages[:,:,j] += tmp # Here linkages is an integer variable. 
+                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_si_rho./p_is).^(1 .- reshape(nu_s,1,S)) .* (p_is./p_i).^(1-nu)*(p_i/c_i_tilde).^(1-lambda)*c_i_[i]^(1-sigma)*productivity[i],dims = 1)
                 M_jis[j,i,:] = tmp
             end
         end

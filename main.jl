@@ -19,6 +19,7 @@ using Distributed
 @everywhere using CSV
 @everywhere using Random
 @everywhere using Optim
+@everywhere using Statistics
 
 @everywhere using ProgressMeter  # Ensure availability on all workers
 @everywhere using SharedArrays
@@ -124,7 +125,7 @@ end
 end
 
 simulation = false
-n = 100000
+n = 500000
 print("Starting simulation")
 if simulation
 
@@ -182,21 +183,57 @@ max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 
 
-
-
+best_params = NPZ.npzread(joinpath("./reporting", "best_params.npy"))
+results = [full_SMM(best_params)]
+best_index = 1
 # Create individual histograms with LaTeX titles
-p1 = histogram(vec(emp_chi_js), alpha=0.5, bins=30, label="Empirical", color=:blue, title="chi_{js}")
-histogram!(p1, vec(results[best_index][2][1]), alpha=0.5, bins=30, label="Simulated", color=:red)
 
-p2 = histogram(vec(emp_pi_jA), alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{jA}")
-histogram!(p2, vec(results[best_index][2][2]), alpha=0.5, bins=30, label="Simulated", color=:red)
+using Plots
 
-p3 = histogram(input_share[2:end], alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{sA}")
-histogram!(p3, results[best_index][2][4], alpha=0.5, bins=30, label="Simulated", color=:red)
+# Vectorize and filter
+emp_chi = vec(emp_chi_js)
+sim_chi = vec(results[best_index][2][1])
 
-# Combine into a 2x2 subplot layout
-plot(p1,p2,p3, layout=(2,2), size=(800,800))
-savefig(joinpath("./reporting","dashboard.png"))
+emp_pi_jA = vec(emp_pi_jA)
+sim_pi_jA = vec(results[best_index][2][2])
+
+emp_pi_sA = input_share[2:end]
+sim_pi_sA = results[best_index][2][4]
+
+# Define thresholds
+x_chi = quantile(emp_chi[emp_chi.!=0],0.9)
+x_pi_jA = 0.0
+x_pi_sA = 0.0
+
+# Histogram 1: chi_{js}
+p1 = histogram(emp_chi[emp_chi .> x_chi],
+    alpha=0.5, bins=30, label="Empirical", color=:blue, title="chi_{js}",
+    xlims=(x_chi, maximum([maximum(emp_chi), maximum(sim_chi)])))
+
+histogram!(p1, sim_chi[sim_chi .> x_chi],
+    alpha=0.5, bins=30, label="Simulated", color=:red)
+
+# Histogram 2: pi_{jA}
+p2 = histogram(emp_pi_jA[emp_pi_jA .> x_pi_jA],
+    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{jA}",
+    xlims=(x_pi_jA, maximum([maximum(emp_pi_jA), maximum(sim_pi_jA)])))
+
+histogram!(p2, sim_pi_jA[sim_pi_jA .> x_pi_jA],
+    alpha=0.5, bins=30, label="Simulated", color=:red)
+
+# Histogram 3: pi_{sA}
+p3 = histogram(emp_pi_sA[emp_pi_sA .> x_pi_sA],
+    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{sA}",
+    xlims=(x_pi_sA, maximum([maximum(emp_pi_sA), maximum(sim_pi_sA)])))
+
+histogram!(p3, sim_pi_sA[sim_pi_sA .> x_pi_sA],
+    alpha=0.5, bins=30, label="Simulated", color=:red)
+
+# Combine into a 2x2 subplot layout (fourth plot left blank)
+plot(p1, p2, p3, layout=(2,2), size=(800,800))
+
+savefig(joinpath("./reporting", "dashboard.png"))
+
 
 
 npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
@@ -205,14 +242,14 @@ npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
 npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
 npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[3])
 
-
-beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
+#best_params = params_list[best_index]
+beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
 data = beta,input_share_tech,productivity_,T_
 
 @everywhere include("model_CP.jl")
-low = SMM(vcat([beta*0.5]..., data[2]..., data[3]..., data[4]...),true)
+low = SMM(vcat([beta/10]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
-high = SMM(vcat([beta*1.5]..., data[2]..., data[3]..., data[4]...),true)
+high = SMM(vcat([beta*5]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
 
 
@@ -359,10 +396,15 @@ best_score = results[best_index][1][1]
 
 generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_,best_score)
 
+#################### End of the code #####################
 
-beta,input_share_tech,productivity_,T_ = unpack_params(params_list[best_index])
+### Bellow we test the sensitivity of the loss function with respect to beta
+### We also search for the sensitivity of the regression coefficient with respect to beta
+
+
+beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
 range_beta = range(0.01, stop = beta * 1.5, length = 1000)
-expanding_beta = [vcat(i, params_list[best_index][2:end]) for i in range_beta]
+expanding_beta = [vcat(i, best_params[2:end]) for i in range_beta]
 
 
 results = pmap(parallel_SMM_safe, expanding_beta)
