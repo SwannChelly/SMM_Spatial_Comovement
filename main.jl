@@ -39,7 +39,7 @@ folder = "./baseline"
 distances_local = NPZ.npzread(joinpath(folder, "distances.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
 filter_N_upstream_local = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-#N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
+N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
 S_,R_ = size(filter_N_upstream_local)
 
 @everywhere const S = $(S_)
@@ -123,6 +123,8 @@ end
     # This will create a vector of 100 tuples, each with 8 parameters
     #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
 end
+
+
 
 simulation = false
 n = 500000
@@ -433,4 +435,5 @@ score_min = -0.01
 
 filtered_betas = range_beta[(score_min .<= reg_coef) .& (reg_coef .<= score_max)]
 filtered_betas
+
 

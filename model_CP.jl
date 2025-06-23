@@ -1,6 +1,7 @@
 ##### SMM for Spatial Comovement #####
 # Author: Swann Chelly 
 # Code of the model, model_CP in the overleaf. 
+# The function for the simulation is "SMM"
 
 
 ##################### Packages ###################
@@ -110,22 +111,21 @@ function SMM(params,simulation = false)
             - T: The Ricardian comparative advantage T_{sj}. 
         simulation (bool): 
             - If set to true, the function return the matrix of trade flow. 
-            - Else, return the number simulated moments. 
+            - Else, return the simulated moments. 
     """
 
     # Unpack parameters
     beta,input_share_tech,productivity_,T_ = unpack_params(params)
     # Create the matrix giving for each region the closest region with a downstream industry
+    # Used for the regression
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
     labor_share_tech = labor_share
     # Set the parameters
-
     beta = isa(beta, Float64) ? fill(beta, S) : beta
     tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
     input_share_tech = reshape(input_share_tech,1,S)
-
     T = reshape(T_,S,R)
 
     # Initialise the upstream firms: Draw productivities 
@@ -178,7 +178,6 @@ function SMM(params,simulation = false)
     end
 
     # Having all prices at all nest, we build the trade flows.
-
     price_index = sum(c_i_[N_downstream_per_region.!=0].^(1-sigma)).^(1/(1-sigma))
     C_D = (sigma/(sigma-1))^(-sigma)/(price_index.^(1-sigma))
     M_jis = M_jis*C_D.*reshape(N_downstream_per_region,1,R) # Since the moments are only shares it is useless.
@@ -267,4 +266,3 @@ function full_SMM(params,simulation = false)
         return loss_function(simulated_moments),simulated_moments
     end
 end
-
