@@ -39,7 +39,7 @@ folder = "./baseline"
 distances_local = NPZ.npzread(joinpath(folder, "distances.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
 filter_N_upstream_local = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
+#N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
 S_,R_ = size(filter_N_upstream_local)
 
 @everywhere const S = $(S_)
@@ -127,7 +127,7 @@ end
 
 
 simulation = false
-n = 500000
+n = 1000000
 print("Starting simulation")
 if simulation
 

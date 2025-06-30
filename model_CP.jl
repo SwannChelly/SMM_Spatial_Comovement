@@ -165,7 +165,7 @@ function SMM(params,simulation = false)
             p_is = sum(1/N_rho .* p_si_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
             p_i = sum((p_is) .^ (1 - nu).*input_share_tech).^(1 ./ (1 - nu))
             c_i_tilde = (labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
-            c_i_[i] = c_i*productivity[i]^(-1)
+            c_i_[i] = c_i_tilde*productivity[i]^(-1)
 
             # Fill the flows
             for j in 1:R
