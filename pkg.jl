@@ -10,6 +10,8 @@ import Pkg; Pkg.add("RDatasets")
 import Pkg; Pkg.add("Optim")
 import Pkg; Pkg.add("ProgressMeter")
 import Pkg; Pkg.add("SharedArrays")
+import Pkg; Pkg.add("StatsBase")
+
 
 
 

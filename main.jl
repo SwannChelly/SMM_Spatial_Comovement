@@ -1,5 +1,6 @@
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
+# nohup julia main.jl &
 
 # import Pkg; Pkg.add("QuasiMonteCarlo")
 # import Pkg; Pkg.add("StatsPlots")
@@ -29,7 +30,6 @@ using Statistics, Printf
 
 addprocs(100)
 
-Random.seed!(1)
 @everywhere include("model_CP.jl")
 ############## Load Parameters #################
 
@@ -74,7 +74,7 @@ end
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const distances = $(distances_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
-@everywhere const N_rho = $(100)
+@everywhere const N_rho = $(50)
 
 @everywhere const sigma = $(2.46)
 @everywhere const lambda = $(0.5)
@@ -111,8 +111,8 @@ end
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
     A = ones(size(A)[1])
-    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.3,0.8.*input_share,0.8*A,0.1*ones(S*R)
-    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 0.45,1.2.*input_share,1.2*A,20*ones(S*R)
+    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.25,0.8.*input_share,0.8*A,0.1*ones(S*R)
+    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 1,1.2.*input_share,1.2*A,20*ones(S*R)
 
 
     lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
@@ -127,7 +127,7 @@ end
 
 
 simulation = false
-n = 1000000
+n = 500000
 print("Starting simulation")
 if simulation
 
@@ -185,16 +185,23 @@ max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 
 
+npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
+#npzwrite(joinpath("./reporting", "best_params.npy"), vcat(beta_new, best_params[2:end]))
+
 best_params = NPZ.npzread(joinpath("./reporting", "best_params.npy"))
 results = [full_SMM(best_params)]
 best_index = 1
 # Create individual histograms with LaTeX titles
 
 using Plots
-
+using StatsBase
 # Vectorize and filter
 emp_chi = vec(emp_chi_js)
 sim_chi = vec(results[best_index][2][1])
+
+# Filter non-zero values
+emp_chi_nz = emp_chi[emp_chi .>= 0.01]
+sim_chi_nz = sim_chi[sim_chi .>= 0.01]
 
 emp_pi_jA = vec(emp_pi_jA)
 sim_pi_jA = vec(results[best_index][2][2])
@@ -207,42 +214,74 @@ x_chi = quantile(emp_chi[emp_chi.!=0],0.9)
 x_pi_jA = 0.0
 x_pi_sA = 0.0
 
-# Histogram 1: chi_{js}
-p1 = histogram(emp_chi[emp_chi .> x_chi],
-    alpha=0.5, bins=30, label="Empirical", color=:blue, title="chi_{js}",
-    xlims=(x_chi, maximum([maximum(emp_chi), maximum(sim_chi)])))
+# Define x_vals only for strictly positive values
+xmin = minimum([minimum(emp_chi_nz), minimum(sim_chi_nz)])
+xmax = maximum([maximum(emp_chi_nz), maximum(sim_chi_nz)])
+x_vals = range(xmin, xmax, length=300)
+x_vals = x_vals[x_vals .> 0]  # avoid x=0
 
-histogram!(p1, sim_chi[sim_chi .> x_chi],
-    alpha=0.5, bins=30, label="Simulated", color=:red)
+
+F_emp = ecdf(emp_chi_nz)
+F_sim = ecdf(sim_chi_nz)
+# Compute complementary CDFs
+ccdf_emp = F_emp.(x_vals)
+ccdf_sim = F_sim.(x_vals)
+
+# Filter to avoid log(0)
+keep = (ccdf_emp .> 0) .& (ccdf_sim .> 0) .& (x_vals .> 0)
+
+# Plot only where both x and y values are > 0
+p1 = plot(x_vals[keep], ccdf_emp[keep], label="Empirical", lw=2, color=:blue,
+     xscale=:log10, yscale=:log10, xlabel="chi_{js}", ylabel="CDF",
+     title="Log-Log Complementary CDF of chi_{js}")
+plot!(p1,x_vals[keep], ccdf_sim[keep], label="Simulated", lw=2, color=:red)
+
+# Define common bin edges
+
+
+emp_vals = emp_chi[emp_chi .> x_chi]
+sim_vals = sim_chi[sim_chi .> x_chi]
+xmin = x_chi
+xmax = maximum([maximum(emp_vals), maximum(sim_vals)])
+nbins = 30
+bin_edges = range(xmin, xmax; length=nbins+1)
+
+# Histogram with fixed bins
+p2 = histogram(emp_vals,
+    alpha=0.5, bins=bin_edges, label="Empirical", color=:blue, title="chi_{js}",
+    xlims=(xmin, xmax))
+
+histogram!(p2, sim_vals,
+    alpha=0.5, bins=bin_edges, label="Simulated", color=:red)
+
 
 # Histogram 2: pi_{jA}
-p2 = histogram(emp_pi_jA[emp_pi_jA .> x_pi_jA],
+p3 = histogram(emp_pi_jA[emp_pi_jA .> x_pi_jA],
     alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{jA}",
     xlims=(x_pi_jA, maximum([maximum(emp_pi_jA), maximum(sim_pi_jA)])))
 
-histogram!(p2, sim_pi_jA[sim_pi_jA .> x_pi_jA],
+histogram!(p3, sim_pi_jA[sim_pi_jA .> x_pi_jA],
     alpha=0.5, bins=30, label="Simulated", color=:red)
 
-# Histogram 3: pi_{sA}
-p3 = histogram(emp_pi_sA[emp_pi_sA .> x_pi_sA],
+# Histogram 4: pi_{sA}
+p4 = histogram(emp_pi_sA[emp_pi_sA .> x_pi_sA],
     alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{sA}",
     xlims=(x_pi_sA, maximum([maximum(emp_pi_sA), maximum(sim_pi_sA)])))
 
-histogram!(p3, sim_pi_sA[sim_pi_sA .> x_pi_sA],
+histogram!(p4, sim_pi_sA[sim_pi_sA .> x_pi_sA],
     alpha=0.5, bins=30, label="Simulated", color=:red)
 
 # Combine into a 2x2 subplot layout (fourth plot left blank)
-plot(p1, p2, p3, layout=(2,2), size=(800,800))
+plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
 
 savefig(joinpath("./reporting", "dashboard.png"))
 
 
 
-npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
 
 
 npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
-npzwrite(joinpath(folder, "productivity.npy"), unpack_params(params_list[best_index])[3])
+npzwrite(joinpath(folder, "productivity.npy"), unpack_params(best_params)[3])
 
 #best_params = params_list[best_index]
 beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
@@ -293,7 +332,7 @@ end
 
 
 function generate_dashboard_report(
-    chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
+    n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
     output_file::String = "./reporting/report.txt"
 )   
 
@@ -347,6 +386,7 @@ function generate_dashboard_report(
 
     open(output_file, "w") do io
         println(io, "Score: $best_score\n") # Ajoutez cette ligne pour inclure le score
+        println(io, "Size of the grid: $n\n") 
         println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")
 
         println(io, ">> Chi_js (quartile are for the distribution without zeros):\n")
@@ -396,7 +436,7 @@ labor_share_ = [labor_share,labor_share]
 best_score = results[best_index][1][1]
 
 
-generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_,best_score)
+generate_dashboard_report(n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_score)
 
 #################### End of the code #####################
 
@@ -405,7 +445,7 @@ generate_dashboard_report(chi_js,pi_jA,reg_,input_share_,labor_share_,best_score
 
 
 beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = range(0.01, stop = beta * 1.5, length = 1000)
+range_beta = range(0.01, stop = beta * 10, length = 1000)
 expanding_beta = [vcat(i, best_params[2:end]) for i in range_beta]
 
 
@@ -413,7 +453,8 @@ results = pmap(parallel_SMM_safe, expanding_beta)
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
 reg_coef = [score[2][3][1] for score in results]
 percentage_difference = [(b - beta) / beta * 100 for b in range_beta]
-
+beta_new = 1.0792825
+parallel_SMM_safe(vcat(beta_new, best_params[2:end]))
 
 # Create the plot
 plot(percentage_difference, score,
@@ -430,8 +471,8 @@ plot(percentage_difference, reg_coef,
      label = "Score Beta",
      linewidth = 2)
 
-score_max = -0.005
-score_min = -0.01
+score_max = -0.0899
+score_min = -0.0901
 
 filtered_betas = range_beta[(score_min .<= reg_coef) .& (reg_coef .<= score_max)]
 filtered_betas

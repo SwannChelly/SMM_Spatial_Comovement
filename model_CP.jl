@@ -113,7 +113,8 @@ function SMM(params,simulation = false)
             - If set to true, the function return the matrix of trade flow. 
             - Else, return the simulated moments. 
     """
-
+    
+    Random.seed!(50)
     # Unpack parameters
     beta,input_share_tech,productivity_,T_ = unpack_params(params)
     # Create the matrix giving for each region the closest region with a downstream industry
