@@ -128,7 +128,6 @@ end
 
 simulation = false
 n = 500000
-print("Starting simulation")
 if simulation
 
     t1 = time()
@@ -141,9 +140,10 @@ if simulation
 
     npzwrite(joinpath(folder, "M_ij.npy"), simulations)
 else
+    print("Starting simulation")
     params_list = generate_halton_grid(n)
     t1 = time()
-    results = pmap(parallel_SMM_safe, params_list)
+    #results = pmap(parallel_SMM_safe, params_list)
     t1 = time()-t1
     print(t1)
 end    
@@ -186,6 +186,7 @@ best_index = best_params[1,:score_index]
 
 
 npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
+
 #npzwrite(joinpath("./reporting", "best_params.npy"), vcat(beta_new, best_params[2:end]))
 
 best_params = NPZ.npzread(joinpath("./reporting", "best_params.npy"))
@@ -451,10 +452,11 @@ expanding_beta = [vcat(i, best_params[2:end]) for i in range_beta]
 
 results = pmap(parallel_SMM_safe, expanding_beta)
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
-reg_coef = [score[2][3][1] for score in results]
+reg_coef_ = [score[2][3][1] for score in results]
 percentage_difference = [(b - beta) / beta * 100 for b in range_beta]
-beta_new = 1.0792825
+beta_new = 0.3430410675213788
 parallel_SMM_safe(vcat(beta_new, best_params[2:end]))
+
 
 # Create the plot
 plot(percentage_difference, score,
@@ -464,17 +466,17 @@ plot(percentage_difference, score,
      label = "Score Beta",
      linewidth = 2)
 
-plot(percentage_difference, reg_coef,
+plot(percentage_difference, reg_coef_,
      xlabel = "Percentage Difference from Original Beta (%)",
      ylabel = "Score Beta",
      title = "Score Beta vs Percentage Difference from Original Beta",
      label = "Score Beta",
      linewidth = 2)
 
-score_max = -0.0899
-score_min = -0.0901
+score_max = -0.008
+score_min = -0.009
 
-filtered_betas = range_beta[(score_min .<= reg_coef) .& (reg_coef .<= score_max)]
+filtered_betas = range_beta[(score_min .<= reg_coef_) .& (reg_coef_ .<= score_max)]
 filtered_betas
 
 
