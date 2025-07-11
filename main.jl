@@ -33,10 +33,13 @@ addprocs(100)
 @everywhere include("model_CP.jl")
 ############## Load Parameters #################
 
+industry = "aero"
+folder = "./baseline_"*industry
+reporting_folder = "./reporting_"*industry
 
-folder = "./baseline"
-
+coefs = CSV.read(joinpath(folder,"stats.csv"), DataFrame)
 distances_local = NPZ.npzread(joinpath(folder, "distances.npy"))
+
 N_downstream_per_region_local = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
 filter_N_upstream_local = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
 #N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
@@ -51,7 +54,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 input_share_local = NPZ.npzread(joinpath(folder,"input_share.npy"))
 
 @everywhere const input_share = $(input_share_local)
-@everywhere const labor_share = $(0.12)
+@everywhere const labor_share = $(coefs[2,"value"])
 
 # Build empirical moments
 test = false
@@ -60,7 +63,7 @@ if test
 else
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [-0.009]
+    reg_coef = [coefs[3,"value"]]
     empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
     empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
@@ -76,7 +79,7 @@ end
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
 
-@everywhere const sigma = $(2.46)
+@everywhere const sigma = $(coefs[1,"value"])
 @everywhere const lambda = $(0.5)
 @everywhere const nu = $(0.9)
 @everywhere const nu_s = $(ones(S).*3) 
@@ -111,8 +114,8 @@ end
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
     A ./= sum(A)
     A = ones(size(A)[1])
-    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.25,0.8.*input_share,0.8*A,0.1*ones(S*R)
-    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 1,1.2.*input_share,1.2*A,20*ones(S*R)
+    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.2,0.8.*input_share,0.8*A,0.1*ones(S*R)
+    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 0.5,1.2.*input_share,1.2*A,20*ones(S*R)
 
 
     lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
@@ -143,12 +146,12 @@ else
     print("Starting simulation")
     params_list = generate_halton_grid(n)
     t1 = time()
-    #results = pmap(parallel_SMM_safe, params_list)
+    results = pmap(parallel_SMM_safe, params_list)
     t1 = time()-t1
     print(t1)
 end    
 
-
+SMM(params_list[1])
 # Format scores
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
 # Create a DataFrame
@@ -185,11 +188,11 @@ max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 
 
-npzwrite(joinpath("./reporting", "best_params.npy"), params_list[best_index])
+npzwrite(joinpath(reporting_folder, "best_params.npy"), params_list[best_index])
 
-#npzwrite(joinpath("./reporting", "best_params.npy"), vcat(beta_new, best_params[2:end]))
+#npzwrite(joinpath(reporting_folder, "best_params.npy"), vcat(beta_new, best_params[2:end]))
 
-best_params = NPZ.npzread(joinpath("./reporting", "best_params.npy"))
+best_params = NPZ.npzread(joinpath(reporting_folder, "best_params.npy"))
 results = [full_SMM(best_params)]
 best_index = 1
 # Create individual histograms with LaTeX titles
@@ -275,7 +278,7 @@ histogram!(p4, sim_pi_sA[sim_pi_sA .> x_pi_sA],
 # Combine into a 2x2 subplot layout (fourth plot left blank)
 plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
 
-savefig(joinpath("./reporting", "dashboard.png"))
+savefig(joinpath(reporting_folder, "dashboard.png"))
 
 
 
@@ -291,12 +294,13 @@ data = beta,input_share_tech,productivity_,T_
 @everywhere include("model_CP.jl")
 low = SMM(vcat([beta/10]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
+current = SMM(vcat([beta]..., data[2]..., data[3]..., data[4]...),true)
+npzwrite(joinpath(folder, "M_ij_trade_cost.npy"), current)
 high = SMM(vcat([beta*5]..., data[2]..., data[3]..., data[4]...),true)
 npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
 
 
 # Report
-
 
 
 function matrix_report(mat,include_n_zero = true)
@@ -334,7 +338,7 @@ end
 
 function generate_dashboard_report(
     n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
-    output_file::String = "./reporting/report.txt"
+    output_file::String = reporting_folder*"/report.txt"
 )   
 
     # Chi_js summary table
@@ -454,7 +458,7 @@ results = pmap(parallel_SMM_safe, expanding_beta)
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
 reg_coef_ = [score[2][3][1] for score in results]
 percentage_difference = [(b - beta) / beta * 100 for b in range_beta]
-beta_new = 0.3430410675213788
+beta_new = 0.37635029254041574
 parallel_SMM_safe(vcat(beta_new, best_params[2:end]))
 
 
@@ -473,8 +477,8 @@ plot(percentage_difference, reg_coef_,
      label = "Score Beta",
      linewidth = 2)
 
-score_max = -0.008
-score_min = -0.009
+score_max = reg_coef*0.99
+score_min = reg_coef*1.01
 
 filtered_betas = range_beta[(score_min .<= reg_coef_) .& (reg_coef_ .<= score_max)]
 filtered_betas

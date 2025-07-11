@@ -15,7 +15,7 @@ using LinearAlgebra
 using QuasiMonteCarlo
 using DataFrames
 using Optim
-
+using CSV
 using FixedEffectModels,RDatasets
 
 
@@ -23,18 +23,21 @@ using FixedEffectModels,RDatasets
 ## If test is set to true, we can test the model directly from this code. 
 test = false 
 if test
-    folder = "./baseline"
+    industry = "auto_24"
+    folder = "./baseline_"*industry
+    
+    coefs = CSV.read(joinpath(folder,"stats.csv"), DataFrame)
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
     N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-    N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
+    #N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
     S,R = size(filter_N_upstream)
     R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
     #empirical_moments = NPZ.npzread(joinpath(folder,"empirical_moments.npy"))
 
-    N_rho = 100
+    N_rho = 50
     labor_share = 0.12
-    sigma = 2.46
+    sigma = coefs[1,"value"]
     lambda = 0.5
     nu = 0.9
     nu_s = ones(S).*3.
@@ -44,7 +47,7 @@ if test
     input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
     emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
     emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [-0.009]
+    reg_coef = [coefs[3,"value"]]
     empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
@@ -54,23 +57,25 @@ if test
 
     function generate_halton_grid(n)
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
-        lb_beta,lb_first_nest_tech,lb_second_nest_tech,lb_prod,lb_T, = 0.5,0.8.*input_share,0.5*ones(R),0.5*ones(S*R)
-        ub_beta,ub_first_nest_tech,ub_second_nest_tech,ub_prod,ub_T, = 1.5,1.2.*input_share,1.5*ones(R),1.5*ones(S*R)
+        A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+        A ./= sum(A)
+        A = ones(size(A)[1])
+        lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.25,0.8.*input_share,0.8*A,0.1*ones(S*R)
+        ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 1,1.2.*input_share,1.2*A,20*ones(S*R)
 
-        lb_prod = lb_prod[N_downstream_per_region.!=0]
-        ub_prod = ub_prod[N_downstream_per_region.!=0]
 
         lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
         ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
         
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-        return halton_samples
+        return [halton_samples[:,i] for i in range(1,n)]
         # This will create a vector of 100 tuples, each with 8 parameters
         #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
     end
 
+
     params_list = generate_halton_grid(2)
-    params = params_list[:,1]
+    params = params_list[1]
 
 end
 
@@ -267,3 +272,4 @@ function full_SMM(params,simulation = false)
         return loss_function(simulated_moments),simulated_moments
     end
 end
+

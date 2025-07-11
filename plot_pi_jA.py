@@ -6,7 +6,17 @@ import geopandas as gpd
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.colors as mcolors
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import argparse
 
+parser = argparse.ArgumentParser(description="Give the industry")
+parser.add_argument('--i', type=str, required=True, help="Name of the industry in ['aero','auto_24']",default="auto_24")
+parser.add_argument('--ze', type=str, required=True, help="Name of ze to shock",default="1102")
+args = parser.parse_args()
+
+
+ze_to_shock = {"1101":"Paris","0061":"Toulouse","9310":"Marseille - Aubagne","5203":"Nantes","8301":"Montluçon","1115":"Évry-Courcouronnes","1102":"Aulnay"}
+industry = args.i
+ze_shocked = args.ze
 
 ################## Parameters and functions #################
 plt.style.use('default')
@@ -116,14 +126,12 @@ def plot_trade_flow(name,ze_shocked,ax,normalize = True,zero_one_norm = False):
 
 
 ################## Imports and constants #################
-folder = "../baseline/"
+folder = f"../baseline_{industry}/"
 
 idf_ze = ['1101', '1111', '1102', '1104', '1118', '1115', '1116', '1105',
        '1117', '1110', '1119', '1112', '1103', '1109', '1106', '1114',
        '1113', '1108', '1107']
 
-
-ze_to_shock = {"1101":"Paris","0061":"Toulouse","9310":"Marseille - Aubagne","5203":"Nantes","8301":"Montluçon","1115":"Évry-Courcouronnes"}
        
 filter_N_upstream_df = pd.read_csv(os.path.join(folder,"filter_N_upstream.csv"))
 filter_N_upstream_df.ze2010 = filter_N_upstream_df.ze2010.astype(str).str.zfill(4)
@@ -168,24 +176,28 @@ axs[1].set_title(r'Simulated $\pi_{jA}$')
 axs[2].set_title(r'Simulated $A_i$')
 
 fig.tight_layout()
-fig.savefig(os.path.join("../reporting",'pi_jA_productivity.png'),bbox_inches='tight')
+fig.savefig(os.path.join(f"../reporting_{industry}",'pi_jA_productivity.png'),bbox_inches='tight')
 
 
 ############ Plot trade flow ##############
 
-fig,axs = plt.subplots(1,2,figsize = (15,10))
-ze_shocked = "0061"
+fig,axs = plt.subplots(1,3,figsize = (15,10))
+
 
 ax = axs[0]
 plot_trade_flow("M_ij_low_trade_cost",ze_shocked,ax,zero_one_norm = True)
 ax.set_title(r'Low trade cost')
 
 ax = axs[1]
+plot_trade_flow("M_ij_trade_cost",ze_shocked,ax,zero_one_norm = True)
+ax.set_title(r'Model')
+
+ax = axs[2]
 plot_trade_flow("M_ij_high_trade_cost",ze_shocked,ax,zero_one_norm = True)
 ax.set_title(r'High trade cost')
 
 fig.tight_layout()
-fig.savefig(os.path.join("../reporting",'M_ij_low_high_trade_cost.png'),bbox_inches='tight')
+fig.savefig(os.path.join(f"../reporting_{industry}",'M_ij_low_high_trade_cost.png'),bbox_inches='tight')
 
 ################ Plot Toulouse vs Evry ###################
 # ze_shocked = "0061"
