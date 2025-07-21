@@ -1,3 +1,6 @@
+##### Main #####
+# Author: Swann Chelly 
+# This code can run the SMM over an Halton grid to calibrate the parameters and then compare simulated and empirical moments.
 
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 # nohup julia main.jl &
@@ -26,65 +29,11 @@ using Distributed
 @everywhere using SharedArrays
 
 using Statistics, Printf
+using StatsBase
 
 
-addprocs(100)
-
-@everywhere include("model_CP.jl")
-############## Load Parameters #################
-
-industry = "aero"
-folder = "./baseline_"*industry
-reporting_folder = "./reporting_"*industry
-
-coefs = CSV.read(joinpath(folder,"stats.csv"), DataFrame)
-distances_local = NPZ.npzread(joinpath(folder, "distances.npy"))
-
-N_downstream_per_region_local = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
-filter_N_upstream_local = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
-#N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
-S_,R_ = size(filter_N_upstream_local)
-
-@everywhere const S = $(S_)
-@everywhere const R = $(R_)
-
-R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
-@everywhere const R_downstream = $(R_)
-
-input_share_local = NPZ.npzread(joinpath(folder,"input_share.npy"))
-
-@everywhere const input_share = $(input_share_local)
-@everywhere const labor_share = $(coefs[2,"value"])
-
-# Build empirical moments
-test = false
-if test
-    empirical_moments_local = NPZ.npzread(joinpath(folder,"empirical_moments.npy"))
-else
-    emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
-    emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [coefs[3,"value"]]
-    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
-    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
-    empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
- 
-end
-@everywhere const empirical_moments = $(empirical_moments_local) # Ajout
-
-@everywhere regional_wages = $(ones(R))
-
-# Then broadcast those large fixed arrays to all workers:
-@everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
-@everywhere const distances = $(distances_local)
-@everywhere const filter_N_upstream = $(filter_N_upstream_local)
-@everywhere const N_rho = $(50)
-
-@everywhere const sigma = $(coefs[1,"value"])
-@everywhere const lambda = $(0.5)
-@everywhere const nu = $(0.9)
-@everywhere const nu_s = $(ones(S).*3) 
-@everywhere const theta = $(1.768) 
-
+addprocs(100) # Number of parallel cores.
+@everywhere include("model_CP.jl") # Import the model
 
 ###### Functions #######
 @everywhere function parallel_SMM(params,simulation)
@@ -94,8 +43,7 @@ end
 
 @everywhere function parallel_SMM_safe(params,simulation = false,show_err = true)
     try
-        # Perform the actual computation (replace with your actual logic)
-        result = parallel_SMM(params,simulation)
+        result = parallel_SMM(params,simulation) # Run the SMM in parallel. 
 
         return result
     catch e
@@ -127,7 +75,62 @@ end
     #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
 end
 
+############## Load Parameters #################
 
+industry = "aero" # Name of the industry in [aero,auto_24]
+input_folder = "./baseline_"*industry # Input input_folder are stored
+output_folder = "./reporting_"*industry # Output folder
+
+coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
+distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
+
+N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
+filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
+#N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
+S_,R_ = size(filter_N_upstream_local)
+
+@everywhere const S = $(S_)
+@everywhere const R = $(R_)
+
+R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
+@everywhere const R_downstream = $(R_)
+
+input_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
+
+@everywhere const input_share = $(input_share_local)
+@everywhere const labor_share = $(coefs[2,"value"])
+
+# Load empirical moments and reshape them.
+test = false
+if test
+    empirical_moments_local = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
+else
+    emp_chi_js = (NPZ.npzread(joinpath(input_folder,"emp_chi_js.npy"))')[2:end,:]
+    emp_pi_jA = NPZ.npzread(joinpath(input_folder,"emp_pi_jA.npy"))[2:end]
+    reg_coef = [coefs[3,"value"]]
+    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
+    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
+    empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
+end
+@everywhere const empirical_moments = $(empirical_moments_local) # Ajout
+
+@everywhere regional_wages = $(ones(R))
+
+# Then broadcast those large fixed arrays to all workers:
+@everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
+@everywhere const distances = $(distances_local)
+@everywhere const filter_N_upstream = $(filter_N_upstream_local)
+@everywhere const N_rho = $(50)
+
+@everywhere const sigma = $(coefs[1,"value"])
+@everywhere const lambda = $(0.5)
+@everywhere const nu = $(0.9)
+@everywhere const nu_s = $(ones(S).*3) 
+@everywhere const theta = $(1.768) 
+
+#### Bellow, the model is computed over a Halton grid of size n. 
+# If simulation = false, we compute the simulated moments and compare them the the empirical moments. 
+# If simulation = true, we only compute the trade flows.
 
 simulation = false
 n = 500000
@@ -141,7 +144,7 @@ if simulation
     simulations = filter(!isnothing, simulations)
     simulations = mean(simulations)
 
-    npzwrite(joinpath(folder, "M_ij.npy"), simulations)
+    npzwrite(joinpath(input_folder, "M_ij.npy"), simulations)
 else
     print("Starting simulation")
     params_list = generate_halton_grid(n)
@@ -151,8 +154,7 @@ else
     print(t1)
 end    
 
-SMM(params_list[1])
-# Format scores
+# Collect the results of the calibration and store them. 
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
 # Create a DataFrame
 param_names = ["beta", "second_nest_tech", "prod", "T"]  # Column names for the parameters
@@ -160,45 +162,27 @@ df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
 
-
-##### Plot output ########
-
 df[!,"score_index"] = vec(1:length(score))
 df[!, "score"] = score
-
-
-# Add the new columns to the DataFrame
 df[!, :score] .= map(x -> x === missing ? Inf : x, df[!, :score])
+CSV.write(joinpath(input_folder,"parameters.csv"),df)
 
-# Now sort by 'score' column
-sort!(df, :score)
-first_loop = true
-if first_loop
-    CSV.write(joinpath(folder,"parameters.csv"),df)
-else
-    CSV.write(joinpath(folder,"parameters_2.csv"),df)
-end
-
-###### Histograms #######
-
-# Display the updated DataFrame
-best_params = CSV.read(joinpath(folder,"parameters.csv"),DataFrame)
+# Get best params and best index. Store them
+best_params = CSV.read(joinpath(input_folder,"parameters.csv"),DataFrame)
 min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
+npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
 
+#npzwrite(joinpath(output_folder, "best_params.npy"), vcat(beta_new, best_params[2:end]))
 
-npzwrite(joinpath(reporting_folder, "best_params.npy"), params_list[best_index])
+##### Build histograms and reporting #####
 
-#npzwrite(joinpath(reporting_folder, "best_params.npy"), vcat(beta_new, best_params[2:end]))
-
-best_params = NPZ.npzread(joinpath(reporting_folder, "best_params.npy"))
-results = [full_SMM(best_params)]
+best_params = NPZ.npzread(joinpath(output_folder, "best_params.npy")) # Load best params.
+results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
 best_index = 1
-# Create individual histograms with LaTeX titles
 
-using Plots
-using StatsBase
+# Prepare vectors.
 # Vectorize and filter
 emp_chi = vec(emp_chi_js)
 sim_chi = vec(results[best_index][2][1])
@@ -240,9 +224,6 @@ p1 = plot(x_vals[keep], ccdf_emp[keep], label="Empirical", lw=2, color=:blue,
      title="Log-Log Complementary CDF of chi_{js}")
 plot!(p1,x_vals[keep], ccdf_sim[keep], label="Simulated", lw=2, color=:red)
 
-# Define common bin edges
-
-
 emp_vals = emp_chi[emp_chi .> x_chi]
 sim_vals = sim_chi[sim_chi .> x_chi]
 xmin = x_chi
@@ -278,14 +259,11 @@ histogram!(p4, sim_pi_sA[sim_pi_sA .> x_pi_sA],
 # Combine into a 2x2 subplot layout (fourth plot left blank)
 plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
 
-savefig(joinpath(reporting_folder, "dashboard.png"))
+savefig(joinpath(output_folder, "dashboard.png"))
 
-
-
-
-
-npzwrite(joinpath(folder, "pi_jA.npy"), results[best_index][2][2])
-npzwrite(joinpath(folder, "productivity.npy"), unpack_params(best_params)[3])
+# Bellow we store pi_jA, the productivity, and trade flows in numpy to plot them with python. 
+npzwrite(joinpath(input_folder, "pi_jA.npy"), results[best_index][2][2])
+npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[3])
 
 #best_params = params_list[best_index]
 beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
@@ -293,11 +271,11 @@ data = beta,input_share_tech,productivity_,T_
 
 @everywhere include("model_CP.jl")
 low = SMM(vcat([beta/10]..., data[2]..., data[3]..., data[4]...),true)
-npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
+npzwrite(joinpath(input_folder, "M_ij_low_trade_cost.npy"), low)
 current = SMM(vcat([beta]..., data[2]..., data[3]..., data[4]...),true)
-npzwrite(joinpath(folder, "M_ij_trade_cost.npy"), current)
+npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
 high = SMM(vcat([beta*5]..., data[2]..., data[3]..., data[4]...),true)
-npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
+npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
 
 # Report
@@ -338,7 +316,7 @@ end
 
 function generate_dashboard_report(
     n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
-    output_file::String = reporting_folder*"/report.txt"
+    output_file::String = output_folder*"/report.txt"
 )   
 
     # Chi_js summary table
@@ -381,7 +359,7 @@ function generate_dashboard_report(
         ]
     )
 
-    sectors = sort(unique(CSV.read(joinpath(folder, "filter_N_upstream.csv"), DataFrame)[!, "A129"]))
+    sectors = sort(unique(CSV.read(joinpath(input_folder, "filter_N_upstream.csv"), DataFrame)[!, "A129"]))
     input_share_df = DataFrame(
         metric = sectors,
         empirical =input_share_emp,
