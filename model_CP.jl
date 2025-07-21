@@ -1,6 +1,5 @@
 ##### SMM for Spatial Comovement #####
 # Author: Swann Chelly 
-# Code of the model, model_CP in the overleaf. 
 # The function for the simulation is "SMM"
 
 
@@ -28,7 +27,7 @@ if test
     
     coefs = CSV.read(joinpath(folder,"stats.csv"), DataFrame)
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
-    N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream firm per region. 
+    N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream workers per region. 
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
     #N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
     S,R = size(filter_N_upstream)
@@ -56,6 +55,11 @@ if test
     
 
     function generate_halton_grid(n)
+        """
+
+        Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
+
+        """
     # beta,theta,nu_s,nu,lambda,sigma,productivity,T
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
@@ -83,7 +87,7 @@ end
 
 function unpack_params(params)
     """
-    This function takes a vector of parameters and return the parameters separated. 
+    This function takes a vector of parameters and returns the parameters as separated variables. 
     """
     
     beta = params[1]
@@ -106,28 +110,42 @@ end
 function SMM(params,simulation = false)
 
     """
-    Main function. Given a set of parameters run the SMM. 
-    Input: 
-        params (vector): Vector of parameters. Those are: 
-            - beta: The exponent of the distance to compute trade cost. 
-            - labor_share_tech: Technological coefficient on labor Omega^L
-            - input_share_tech: Input technological coefficients Omega^s
-            - productivity: The A_i parameters in the production function of each region. 
-            - T: The Ricardian comparative advantage T_{sj}. 
-        simulation (bool): 
-            - If set to true, the function return the matrix of trade flow. 
-            - Else, return the simulated moments. 
+    Main function to perform the Simulated Method of Moments (SMM) calibration or simulation.
+
+    # Arguments
+    - `params::Vector`: A vector containing the model parameters. These include:
+        - `beta`: Exponent on distance in the trade cost, capturing the elasticity of trade with respect to distance.
+        - `labor_share_tech`: Technological coefficient on labor (Ωᴸ), typically approximated by the labor share.
+        - `input_share_tech`: Vector of input-specific technological coefficients (Ωˢ), usually proxied by sectoral input shares.
+        - `productivity`: Region-specific productivity parameters of downstream firms.
+        - `T`: Matrix (Tₛⱼ) capturing the fundamental Ricardian advantage of region j in producing good s.
+
+    - `simulation::Bool=false`: Optional. If set to `true`, the function returns the full matrix of simulated trade flows. 
+    If `false`, the function returns a set of simulated moments.
+
+    # Returns
+    - If `simulation == true`: 
+        - `trade_flows::Matrix`: Simulated bilateral trade flows between regions and sectors.
+
+    - If `simulation == false`: 
+        A named tuple with the following simulated moments:
+        - `chi_js`: Share of sector-s inputs sourced from region j.
+        - `pi_jA`: Importance of downstream region j in the total sales of the downstream industry.
+        - `reg_coef`: Estimated elasticity of supply with respect to distance (i.e., a gravity regression coefficient).
+        - `input_share`: Share of purchases from sector s in the total intermediate input use of downstream industries.
+
     """
-    
-    Random.seed!(50)
-    # Unpack parameters
-    beta,input_share_tech,productivity_,T_ = unpack_params(params)
     # Create the matrix giving for each region the closest region with a downstream industry
-    # Used for the regression
+    # this matrix will be used for the regression. 
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
-    labor_share_tech = labor_share
-    # Set the parameters
-    beta = isa(beta, Float64) ? fill(beta, S) : beta
+    
+
+    # Set the parameters to the right format
+    Random.seed!(50) # For reproducibility 
+    beta,input_share_tech,productivity_,T_ = unpack_params(params) # Unpack parameters
+    labor_share_tech = labor_share # We approximate the labor technological coefficient by the labor share.
+    
+    beta = isa(beta, Float64) ? fill(beta, S) : beta 
     tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
@@ -146,11 +164,15 @@ function SMM(params,simulation = false)
     inv_upstream_variety_productivity = upstream_variety_productivity.^(-1)
     tau_reshaped = permutedims(tau,(3,1,2))
     
-    M_jis = zeros(R,R,S)  # To store trade flow per sector
-    c_i_ = zeros(R)       # To store marginal cost of production of region i
-    linkages = zeros(N_rho,S,R) # To store firm level linkage to downstream region
 
-    # Prepare containers for the regression
+    # Bellow, we will compute the matching for each downstream region with each sector. First we create 
+    # containers in order to store the results of this matching. 
+
+    M_jis = zeros(R,R,S)  # Trade flows
+    c_i_ = zeros(R)       # Marginal cost of production of region i
+    linkages = zeros(N_rho,S,R) # Firm level linkages to downstream regions
+
+    # Other containers used for the regression
     sirens = [ i for i in  1:(S*R*N_rho) ]
     sectors = Int[]
     regions = Int[]
@@ -158,10 +180,10 @@ function SMM(params,simulation = false)
     distance = Float64[]
     size_i = Float64[]
 
-    for i = 1:length(N_downstream_per_region) # Iterate on downstream regions. 
+    for i = 1:length(N_downstream_per_region) # Per downstream regions. 
         if N_downstream_per_region[i] >= 1    # If there is an downstream industry in region i
 
-            # We compute prices faced by downstream firms in region i
+            # Compute prices faced by downstream firms in region i
             tau_ = reshape(tau_reshaped[:,: ,i]',1,R,S)
             prices_ = inv_upstream_variety_productivity .* tau_
 
@@ -173,7 +195,7 @@ function SMM(params,simulation = false)
             c_i_tilde = (labor_share_tech*regional_wages[i]^(1-lambda)  + (1-labor_share_tech)*p_i^(1-lambda))^(1/(1-lambda))
             c_i_[i] = c_i_tilde*productivity[i]^(-1)
 
-            # Fill the flows
+            # We create the trade flows and store the linkages.
             for j in 1:R
                 tmp = map(x -> x[2] == j ? 1 : 0, min_coord_rho)  # Here tmp is a dummy variable
                 linkages[:,:,j] += tmp # Here linkages is an integer variable. 
@@ -224,7 +246,7 @@ function SMM(params,simulation = false)
     M_sA = sum(M_js,dims = 1)
     chi_js = M_js./M_sA
 
-    # pi_jA: Share of region $i$ in the total purchase of the aerospace industry. 
+    # pi_jA: Share of region $i$ in the total purchase of the downstream industry. 
     M_is = reshape(sum(M_jis,dims = 1),(R,S))
     M_i  = sum(M_is,dims = 2)
     pi_jA = M_i/sum(M_i)
@@ -249,7 +271,7 @@ end
 # Then compute scores. 
 function loss_function(simulated_moments)
     """
-    Compute the loss function between empirical and simulated moments. Weight_matrix is the identity matrix (so far). 
+    Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
     """
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
