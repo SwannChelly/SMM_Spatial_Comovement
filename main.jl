@@ -57,6 +57,21 @@ end
 end
 
 
+@everywhere function distance_bin(d)
+    if 50 < d ≤ 100
+        return 1
+    elseif 100 < d ≤ 150
+        return 2
+    elseif 150 < d ≤ 200
+        return 3
+    elseif d > 200
+        return 4
+    else
+        return 0   # for ≤ 50, outside bins
+    end
+end
+
+
 @everywhere function generate_halton_grid(n)
 # beta,theta,nu_s,nu,lambda,sigma,productivity,T
     A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
@@ -83,6 +98,11 @@ output_folder = "./reporting_"*industry # Output folder
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
+
+DistBin_local = Array{Int}(undef, R, R)
+for i in 1:R, j in 1:R
+    DistBin_local[i,j] = distance_bin(distances[i,j])
+end
 
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
@@ -119,6 +139,7 @@ end
 # Then broadcast those large fixed arrays to all workers:
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const distances = $(distances_local)
+@everywhere const DistBin = &(DistBin_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
 
