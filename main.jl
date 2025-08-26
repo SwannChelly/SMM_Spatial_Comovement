@@ -73,22 +73,30 @@ end
 
 
 @everywhere function generate_halton_grid(n)
-# beta,theta,nu_s,nu,lambda,sigma,productivity,T
-    A = copy(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])
-    A ./= sum(A)
-    A = ones(size(A)[1])
-    lb_beta,lb_second_nest_tech,lb_prod,lb_T, = 0.2,0.8.*input_share,0.8*A,0.1*ones(S*R)
-    ub_beta,ub_second_nest_tech,ub_prod,ub_T, = 0.5,1.2.*input_share,1.2*A,20*ones(S*R)
+        """
+
+        Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
+
+        """
+        # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
+        A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+        A ./= sum(A)
+        A = ones(size(A)[1])
+        #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
+        #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
+
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(4)*0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(4)*1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
 
 
-    lb = Any[vcat(lb_beta,lb_second_nest_tech,lb_prod,lb_T)...]
-    ub = Any[vcat(ub_beta,ub_second_nest_tech,ub_prod,ub_T)...]
-    
-    halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-    return [halton_samples[:,i] for i in range(1,n)]
-    # This will create a vector of 100 tuples, each with 8 parameters
-    #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
-end
+        lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
+        ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
+        
+        halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+        return [halton_samples[:,i] for i in range(1,n)]
+        # This will create a vector of 100 tuples, each with 8 parameters
+        #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
+    end
 
 ############## Load Parameters #################
 
@@ -99,10 +107,7 @@ output_folder = "./reporting_"*industry # Output folder
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
 
-DistBin_local = Array{Int}(undef, R, R)
-for i in 1:R, j in 1:R
-    DistBin_local[i,j] = distance_bin(distances[i,j])
-end
+
 
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
@@ -115,35 +120,38 @@ S_,R_ = size(filter_N_upstream_local)
 R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const R_downstream = $(R_)
 
-input_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
+agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
 
-@everywhere const input_share = $(input_share_local)
-@everywhere const labor_share = $(coefs[2,"value"])
-
+@everywhere const agg_industry_share = $(agg_industry_share_local)
+@everywhere const agg_labor_share = $(coefs[2,"value"])
 # Load empirical moments and reshape them.
 test = false
 if test
     empirical_moments_local = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
 else
-    emp_chi_js = (NPZ.npzread(joinpath(input_folder,"emp_chi_js.npy"))')[2:end,:]
-    emp_pi_jA = NPZ.npzread(joinpath(input_folder,"emp_pi_jA.npy"))[2:end]
-    reg_coef = [coefs[3,"value"]]
-    empirical_moments_local = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
+    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')[2:end,:]
+    emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
+    reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
+    empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,emp_pi_r,reg_coef]
     empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
 end
 @everywhere const empirical_moments = $(empirical_moments_local) # Ajout
 
 @everywhere regional_wages = $(ones(R))
-
+@everywhere const distances = $(distances_local)
+DistBin_local = zeros(R,R)
+for i in 1:R, j in 1:R
+    DistBin_local[i,j] = distance_bin(distances[i,j])
+end
 # Then broadcast those large fixed arrays to all workers:
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
-@everywhere const distances = $(distances_local)
-@everywhere const DistBin = &(DistBin_local)
+
+@everywhere const DistBin = $(DistBin_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
 
-@everywhere const sigma = $(coefs[1,"value"])
+@everywhere const epsilon = $(coefs[1,"value"])
 @everywhere const lambda = $(0.5)
 @everywhere const nu = $(0.9)
 @everywhere const nu_s = $(ones(S).*3) 
@@ -205,22 +213,22 @@ best_index = 1
 
 # Prepare vectors.
 # Vectorize and filter
-emp_chi = vec(emp_chi_js)
+emp_chi = vec(emp_gamma_ls)
 sim_chi = vec(results[best_index][2][1])
 
 # Filter non-zero values
 emp_chi_nz = emp_chi[emp_chi .>= 0.01]
 sim_chi_nz = sim_chi[sim_chi .>= 0.01]
 
-emp_pi_jA = vec(emp_pi_jA)
-sim_pi_jA = vec(results[best_index][2][2])
+emp_pi_r = vec(emp_pi_r)
+sim_pi_r = vec(results[best_index][2][2])
 
-emp_pi_sA = input_share[2:end]
+emp_pi_sA = agg_industry_share[2:end]
 sim_pi_sA = results[best_index][2][4]
 
 # Define thresholds
 x_chi = quantile(emp_chi[emp_chi.!=0],0.9)
-x_pi_jA = 0.0
+x_pi_r = 0.0
 x_pi_sA = 0.0
 
 # Define x_vals only for strictly positive values
@@ -262,11 +270,11 @@ histogram!(p2, sim_vals,
 
 
 # Histogram 2: pi_{jA}
-p3 = histogram(emp_pi_jA[emp_pi_jA .> x_pi_jA],
+p3 = histogram(emp_pi_r[emp_pi_r .> x_pi_r],
     alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{jA}",
-    xlims=(x_pi_jA, maximum([maximum(emp_pi_jA), maximum(sim_pi_jA)])))
+    xlims=(x_pi_r, maximum([maximum(emp_pi_r), maximum(sim_pi_r)])))
 
-histogram!(p3, sim_pi_jA[sim_pi_jA .> x_pi_jA],
+histogram!(p3, sim_pi_r[sim_pi_r .> x_pi_r],
     alpha=0.5, bins=30, label="Simulated", color=:red)
 
 # Histogram 4: pi_{sA}
@@ -282,13 +290,13 @@ plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
 
 savefig(joinpath(output_folder, "dashboard.png"))
 
-# Bellow we store pi_jA, the productivity, and trade flows in numpy to plot them with python. 
-npzwrite(joinpath(input_folder, "pi_jA.npy"), results[best_index][2][2])
+# Bellow we store pi_r, the productivity, and trade flows in numpy to plot them with python. 
+npzwrite(joinpath(input_folder, "pi_r.npy"), results[best_index][2][2])
 npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[3])
 
 #best_params = params_list[best_index]
-beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
-data = beta,input_share_tech,productivity_,T_
+beta,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+data = beta,agg_industry_share_tech,productivity_,T_
 
 @everywhere include("model_CP.jl")
 low = SMM(vcat([beta/10]..., data[2]..., data[3]..., data[4]...),true)
@@ -336,16 +344,16 @@ end
 
 
 function generate_dashboard_report(
-    n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_score,
+    n,gamma_ls,pi_r,reg_,agg_industry_share_,agg_labor_share_,best_score,
     output_file::String = output_folder*"/report.txt"
 )   
 
-    # Chi_js summary table
-    chi_emp,chi_sim = chi_js
-    pi_jA_emp,pi_jA_sim = pi_jA
+    # gamma_ls summary table
+    chi_emp,chi_sim = gamma_ls
+    pi_r_emp,pi_r_sim = pi_r
     reg_emp,reg_sim = reg_
-    input_share_emp,input_share_sim=input_share_
-    labor_share_emp,labor_share_sim=labor_share_
+    agg_industry_share_emp,agg_industry_share_sim=agg_industry_share_
+    agg_labor_share_emp,agg_labor_share_sim=agg_labor_share_
 
     chi_df = DataFrame(
         metric = ["Number of zeros", "Q1", "Median", "Q3", "Max value"],
@@ -364,27 +372,27 @@ function generate_dashboard_report(
             chi_sim.max_val
         ]
     )
-    pi_jA_df = DataFrame(
+    pi_r_df = DataFrame(
         metric = [ "Q1", "Median", "Q3", "Max value"],
         empirical = [
-            pi_jA_emp.q1,
-            pi_jA_emp.median,
-            pi_jA_emp.q3,
-            pi_jA_emp.max_val
+            pi_r_emp.q1,
+            pi_r_emp.median,
+            pi_r_emp.q3,
+            pi_r_emp.max_val
         ],
         simulated = [
-            pi_jA_sim.q1,
-            pi_jA_sim.median,
-            pi_jA_sim.q3,
-            pi_jA_sim.max_val
+            pi_r_sim.q1,
+            pi_r_sim.median,
+            pi_r_sim.q3,
+            pi_r_sim.max_val
         ]
     )
 
     sectors = sort(unique(CSV.read(joinpath(input_folder, "filter_N_upstream.csv"), DataFrame)[!, "A129"]))
-    input_share_df = DataFrame(
+    agg_industry_share_df = DataFrame(
         metric = sectors,
-        empirical =input_share_emp,
-        simulated = input_share_sim
+        empirical =agg_industry_share_emp,
+        simulated = agg_industry_share_sim
     )
 
 
@@ -393,27 +401,27 @@ function generate_dashboard_report(
         println(io, "Size of the grid: $n\n") 
         println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")
 
-        println(io, ">> Chi_js (quartile are for the distribution without zeros):\n")
+        println(io, ">> gamma_ls (quartile are for the distribution without zeros):\n")
         for row in eachrow(chi_df)
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.metric, row.empirical, row.simulated))
         end
 
-        println(io, "\n>> pi_jA :\n")
-        for row in eachrow(pi_jA_df)
+        println(io, "\n>> pi_r :\n")
+        for row in eachrow(pi_r_df)
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.metric, row.empirical, row.simulated))
         end
 
         println(io, "\n>> Input share: \n")
-        for row in eachrow(input_share_df)
+        for row in eachrow(agg_industry_share_df)
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.metric, row.empirical, row.simulated))
         end
 
         
         #println(io, "\n>> Labor share:\n")
-        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", labor_share_emp, labor_share_sim))
+        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", agg_labor_share_emp, agg_labor_share_sim))
 
         println(io, "\n>> Regression Coefficient:\n")
         println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", reg_emp, reg_sim))
@@ -422,25 +430,25 @@ function generate_dashboard_report(
     end
 end
 
-chi_emp_result = matrix_report(emp_chi_js)
+chi_emp_result = matrix_report(emp_gamma_ls)
 chi_sim_result = matrix_report(results[best_index][2][1])
-chi_js = [chi_emp_result,chi_sim_result]
+gamma_ls = [chi_emp_result,chi_sim_result]
 
-pi_jA_emp_result = matrix_report(emp_pi_jA,false)
-pi_jA_sim_result = matrix_report(results[best_index][2][2])
-pi_jA = [pi_jA_emp_result,pi_jA_sim_result]
+pi_r_emp_result = matrix_report(emp_pi_r,false)
+pi_r_sim_result = matrix_report(results[best_index][2][2])
+pi_r = [pi_r_emp_result,pi_r_sim_result]
 
 reg_emp = reg_coef[1]
 reg_sim = results[best_index][2][3][1]
 reg_ = [reg_emp,reg_sim]
 
 
-input_share_ = [input_share,add_first_element(results[best_index][2][4])]
-labor_share_ = [labor_share,labor_share]
+agg_industry_share_ = [agg_industry_share,add_first_element(results[best_index][2][4])]
+agg_labor_share_ = [agg_labor_share,agg_labor_share]
 best_score = results[best_index][1][1]
 
 
-generate_dashboard_report(n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_score)
+generate_dashboard_report(n,gamma_ls,pi_r,reg_,agg_industry_share_,agg_labor_share_,best_score)
 
 #################### End of the code #####################
 
@@ -448,7 +456,7 @@ generate_dashboard_report(n,chi_js,pi_jA,reg_,input_share_,labor_share_,best_sco
 ### We also search for the sensitivity of the regression coefficient with respect to beta
 
 
-beta,input_share_tech,productivity_,T_ = unpack_params(best_params)
+beta,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
 range_beta = range(0.01, stop = beta * 10, length = 1000)
 expanding_beta = [vcat(i, best_params[2:end]) for i in range_beta]
 

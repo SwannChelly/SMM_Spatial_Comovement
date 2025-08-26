@@ -23,7 +23,7 @@ using FixedEffectModels,RDatasets,CategoricalArrays
 
 ###### Testing environment #####
 ## If test is set to true, we can test the model directly from this code. 
-test = true 
+test = false 
 if test
     industry = "aero"
     folder = "./baseline_"*industry
@@ -40,7 +40,7 @@ if test
 
     N_rho = 50
     labor_share = 0.12
-    epsilon = coefs[1,"value"]-1
+    epsilon = coefs[1,"value"]
     lambda = 0.5
     nu = 0.9
     nu_s = ones(S).*3.
@@ -48,10 +48,10 @@ if test
 
     regional_wages = ones(R)
     input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
-    emp_chi_js = (NPZ.npzread(joinpath(folder,"emp_chi_js.npy"))')[2:end,:]
-    emp_pi_jA = NPZ.npzread(joinpath(folder,"emp_pi_jA.npy"))[2:end]
+    emp_gamma_ls = (NPZ.npzread(joinpath(folder,"emp_gamma_ls.npy"))')[2:end,:]
+    emp_pi_r = NPZ.npzread(joinpath(folder,"emp_pi_r.npy"))[2:end]
     reg_coef = [coefs[3,"value"]]
-    empirical_moments = [emp_chi_js,emp_pi_jA,reg_coef,input_share[2:end]]
+    empirical_moments = [emp_gamma_ls,emp_pi_r,reg_coef,input_share[2:end]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
     # Then broadcast those large fixed arrays to all workers:
@@ -161,8 +161,8 @@ function SMM(params,simulation = false)
 
     - If `simulation == false`: 
         A named tuple with the following simulated moments:
-        - `chi_js`: Share of sector-s inputs sourced from region j.
-        - `pi_jA`: Importance of downstream region j in the total sales of the downstream industry.
+        - `gamma_ls`: Share of sector-s inputs sourced from region j.
+        - `pi_r`: Importance of downstream region j in the total sales of the downstream industry.
         - `reg_coef`: Estimated elasticity of supply with respect to distance (i.e., a gravity regression coefficient).
         - `input_share`: Share of purchases from sector s in the total intermediate input use of downstream industries.
 
