@@ -132,7 +132,7 @@ else
     emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')[2:end,:]
     emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
     reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
-    empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,emp_pi_r,reg_coef]
+    empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
     empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
 end
@@ -140,7 +140,8 @@ end
 
 @everywhere regional_wages = $(ones(R))
 @everywhere const distances = $(distances_local)
-DistBin_local = zeros(R,R)
+
+DistBin_local = Array{Int}(undef, R,R)
 for i in 1:R, j in 1:R
     DistBin_local[i,j] = distance_bin(distances[i,j])
 end
@@ -156,13 +157,15 @@ end
 @everywhere const nu = $(0.9)
 @everywhere const nu_s = $(ones(S).*3) 
 @everywhere const theta = $(1.768) 
+@everywhere const delta_r = $(ones(R))
 
 #### Bellow, the model is computed over a Halton grid of size n. 
 # If simulation = false, we compute the simulated moments and compare them the the empirical moments. 
 # If simulation = true, we only compute the trade flows.
 
+
 simulation = false
-n = 500000
+n = 100000
 if simulation
 
     t1 = time()
@@ -182,6 +185,7 @@ else
     t1 = time()-t1
     print(t1)
 end    
+
 
 # Collect the results of the calibration and store them. 
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
@@ -308,7 +312,6 @@ npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
 
 # Report
-
 
 function matrix_report(mat,include_n_zero = true)
     vals = vec(mat)

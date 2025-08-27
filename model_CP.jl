@@ -129,11 +129,13 @@ function unpack_params(params)
 end
 
 function build_tau(beta)
-    tau = ones(R, R)  # start with 1 everywhere
+    tau = ones(R,R,S)  # start with 1 everywhere
     for i in 1:R, j in 1:R
         b = DistBin[i,j]
         if b > 0
-            tau[i,j] += beta[b]
+            for s in 1:S
+                tau[i,j,s] += beta[b]
+            end
         end
     end
     return tau
@@ -181,7 +183,7 @@ function SMM(params,simulation = false)
     # Old version of beta
     #beta = isa(beta, Float64) ? fill(beta, S) : beta 
     #tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
-    
+    tau = build_tau(beta)
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
     input_share_tech = reshape(input_share_tech,1,S)
@@ -305,7 +307,7 @@ function SMM(params,simulation = false)
     # 5. The share of each region the total employment. 
     pi_r = labor_r[N_downstream_per_region.!=0]./sum(labor_r[N_downstream_per_region.!=0])    
     
-    return agg_labor_share, agg_industry_share[2:end],gamma_ls[2:end,:],reg_coef,pi_r[2:end]
+    return [agg_labor_share], agg_industry_share[2:end],gamma_ls[2:end,:],reg_coef,pi_r[2:end]
 
 
 end
@@ -315,7 +317,7 @@ function loss_function(simulated_moments)
     """
     Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
     """
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments)-1)]...)
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
