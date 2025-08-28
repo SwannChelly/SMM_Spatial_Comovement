@@ -81,12 +81,12 @@ end
         # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
-        A = ones(size(A)[1])
+        #A = ones(size(A)[1])
         #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
         #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
 
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(4)*0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(4)*1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(4),0.8*agg_labor_share,0.8.*agg_industry_share,0.5.*A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(4).*1.15,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
 
 
         lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
@@ -106,8 +106,6 @@ output_folder = "./reporting_"*industry # Output folder
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
-
-
 
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
@@ -133,7 +131,7 @@ else
     emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
     reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
     empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
-    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local)-1)]...)   
+    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
     empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
 end
 @everywhere const empirical_moments = $(empirical_moments_local) # Ajout
@@ -165,7 +163,7 @@ end
 
 
 simulation = false
-n = 100000
+n = 500000
 if simulation
 
     t1 = time()
@@ -190,7 +188,7 @@ end
 # Collect the results of the calibration and store them. 
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
 # Create a DataFrame
-param_names = ["beta", "second_nest_tech", "prod", "T"]  # Column names for the parameters
+param_names = ["beta", "agg_labor_share_tech","agg_industry_share_tech", "prod", "T"]  # Column names for the parameters
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
 score = [score[1] != nothing ? score[1][1] : missing for score in results]
@@ -207,7 +205,7 @@ max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
 
-#npzwrite(joinpath(output_folder, "best_params.npy"), vcat(beta_new, best_params[2:end]))
+#npzwrite(joinpath(output_folder, "best_params.npy"), vcat(beta_new, best_params[5:end]))
 
 ##### Build histograms and reporting #####
 
@@ -217,33 +215,33 @@ best_index = 1
 
 # Prepare vectors.
 # Vectorize and filter
-emp_chi = vec(emp_gamma_ls)
-sim_chi = vec(results[best_index][2][1])
+emp_gamma = vec(emp_gamma_ls)
+sim_gamma = vec(results[best_index][2][3])
 
 # Filter non-zero values
-emp_chi_nz = emp_chi[emp_chi .>= 0.01]
-sim_chi_nz = sim_chi[sim_chi .>= 0.01]
+emp_gamma_nz = emp_gamma[emp_gamma .>= 0.01]
+sim_gamma_nz = sim_gamma[sim_gamma .>= 0.01]
 
 emp_pi_r = vec(emp_pi_r)
-sim_pi_r = vec(results[best_index][2][2])
+sim_pi_r = vec(results[best_index][2][5])
 
 emp_pi_sA = agg_industry_share[2:end]
-sim_pi_sA = results[best_index][2][4]
+sim_pi_sA = results[best_index][2][2]
 
 # Define thresholds
-x_chi = quantile(emp_chi[emp_chi.!=0],0.9)
+x_chi = quantile(emp_gamma[emp_gamma.!=0],0.9)
 x_pi_r = 0.0
 x_pi_sA = 0.0
 
 # Define x_vals only for strictly positive values
-xmin = minimum([minimum(emp_chi_nz), minimum(sim_chi_nz)])
-xmax = maximum([maximum(emp_chi_nz), maximum(sim_chi_nz)])
+xmin = minimum([minimum(emp_gamma_nz), minimum(sim_gamma_nz)])
+xmax = maximum([maximum(emp_gamma_nz), maximum(sim_gamma_nz)])
 x_vals = range(xmin, xmax, length=300)
 x_vals = x_vals[x_vals .> 0]  # avoid x=0
 
 
-F_emp = ecdf(emp_chi_nz)
-F_sim = ecdf(sim_chi_nz)
+F_emp = ecdf(emp_gamma_nz)
+F_sim = ecdf(sim_gamma_nz)
 # Compute complementary CDFs
 ccdf_emp = F_emp.(x_vals)
 ccdf_sim = F_sim.(x_vals)
@@ -253,12 +251,12 @@ keep = (ccdf_emp .> 0) .& (ccdf_sim .> 0) .& (x_vals .> 0)
 
 # Plot only where both x and y values are > 0
 p1 = plot(x_vals[keep], ccdf_emp[keep], label="Empirical", lw=2, color=:blue,
-     xscale=:log10, yscale=:log10, xlabel="chi_{js}", ylabel="CDF",
-     title="Log-Log Complementary CDF of chi_{js}")
+     xscale=:log10, yscale=:log10, xlabel="gamma_{ls}", ylabel="CDF",
+     title="Log-Log Complementary CDF of gamma_{ls}")
 plot!(p1,x_vals[keep], ccdf_sim[keep], label="Simulated", lw=2, color=:red)
 
-emp_vals = emp_chi[emp_chi .> x_chi]
-sim_vals = sim_chi[sim_chi .> x_chi]
+emp_vals = emp_gamma[emp_gamma .> x_chi]
+sim_vals = sim_gamma[sim_gamma .> x_chi]
 xmin = x_chi
 xmax = maximum([maximum(emp_vals), maximum(sim_vals)])
 nbins = 30
@@ -266,24 +264,24 @@ bin_edges = range(xmin, xmax; length=nbins+1)
 
 # Histogram with fixed bins
 p2 = histogram(emp_vals,
-    alpha=0.5, bins=bin_edges, label="Empirical", color=:blue, title="chi_{js}",
+    alpha=0.5, bins=bin_edges, label="Empirical", color=:blue, title="gamma_{ls}",
     xlims=(xmin, xmax))
 
 histogram!(p2, sim_vals,
     alpha=0.5, bins=bin_edges, label="Simulated", color=:red)
 
 
-# Histogram 2: pi_{jA}
+# Histogram 2: pi_r
 p3 = histogram(emp_pi_r[emp_pi_r .> x_pi_r],
-    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{jA}",
+    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_r",
     xlims=(x_pi_r, maximum([maximum(emp_pi_r), maximum(sim_pi_r)])))
 
 histogram!(p3, sim_pi_r[sim_pi_r .> x_pi_r],
     alpha=0.5, bins=30, label="Simulated", color=:red)
 
-# Histogram 4: pi_{sA}
+# Histogram 4: pi_s
 p4 = histogram(emp_pi_sA[emp_pi_sA .> x_pi_sA],
-    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_{sA}",
+    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_s",
     xlims=(x_pi_sA, maximum([maximum(emp_pi_sA), maximum(sim_pi_sA)])))
 
 histogram!(p4, sim_pi_sA[sim_pi_sA .> x_pi_sA],
@@ -295,19 +293,18 @@ plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
 savefig(joinpath(output_folder, "dashboard.png"))
 
 # Bellow we store pi_r, the productivity, and trade flows in numpy to plot them with python. 
-npzwrite(joinpath(input_folder, "pi_r.npy"), results[best_index][2][2])
-npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[3])
+npzwrite(joinpath(input_folder, "pi_r.npy"), results[best_index][2][5])
+npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[4])
 
 #best_params = params_list[best_index]
-beta,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-data = beta,agg_industry_share_tech,productivity_,T_
+beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
 
-@everywhere include("model_CP.jl")
-low = SMM(vcat([beta/10]..., data[2]..., data[3]..., data[4]...),true)
+low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_low_trade_cost.npy"), low)
-current = SMM(vcat([beta]..., data[2]..., data[3]..., data[4]...),true)
+current = SMM(vcat(beta..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
-high = SMM(vcat([beta*5]..., data[2]..., data[3]..., data[4]...),true)
+high = SMM(vcat(beta*5..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
 
@@ -347,32 +344,32 @@ end
 
 
 function generate_dashboard_report(
-    n,gamma_ls,pi_r,reg_,agg_industry_share_,agg_labor_share_,best_score,
+    n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,
     output_file::String = output_folder*"/report.txt"
 )   
 
     # gamma_ls summary table
-    chi_emp,chi_sim = gamma_ls
-    pi_r_emp,pi_r_sim = pi_r
-    reg_emp,reg_sim = reg_
-    agg_industry_share_emp,agg_industry_share_sim=agg_industry_share_
     agg_labor_share_emp,agg_labor_share_sim=agg_labor_share_
+    agg_industry_share_emp,agg_industry_share_sim=agg_industry_share_
+    gamma_emp,gamma_sim = gamma_ls_
+    reg_emp,reg_sim = reg_
+    pi_r_emp,pi_r_sim = pi_r
 
-    chi_df = DataFrame(
+    gamma_df = DataFrame(
         metric = ["Number of zeros", "Q1", "Median", "Q3", "Max value"],
         empirical = [
-            chi_emp.n_zeros,
-            chi_emp.q1,
-            chi_emp.median,
-            chi_emp.q3,
-            chi_emp.max_val
+            gamma_emp.n_zeros,
+            gamma_emp.q1,
+            gamma_emp.median,
+            gamma_emp.q3,
+            gamma_emp.max_val
         ],
         simulated = [
-            chi_sim.n_zeros,
-            chi_sim.q1,
-            chi_sim.median,
-            chi_sim.q3,
-            chi_sim.max_val
+            gamma_sim.n_zeros,
+            gamma_sim.q1,
+            gamma_sim.median,
+            gamma_sim.q3,
+            gamma_sim.max_val
         ]
     )
     pi_r_df = DataFrame(
@@ -394,8 +391,14 @@ function generate_dashboard_report(
     sectors = sort(unique(CSV.read(joinpath(input_folder, "filter_N_upstream.csv"), DataFrame)[!, "A129"]))
     agg_industry_share_df = DataFrame(
         metric = sectors,
-        empirical =agg_industry_share_emp,
+        empirical = agg_industry_share_emp,
         simulated = agg_industry_share_sim
+    )
+
+    reg_df = DataFrame(
+        bins = ["]50,100]", "]100,150]", "]150,200]", ">200"],
+        empirical = reg_emp,
+        simulated = reg_sim
     )
 
 
@@ -403,9 +406,10 @@ function generate_dashboard_report(
         println(io, "Score: $best_score\n") # Ajoutez cette ligne pour inclure le score
         println(io, "Size of the grid: $n\n") 
         println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")
-
+        println(io, "\n>> Aggregate labor share:\n")
+        println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", agg_labor_share_emp, agg_labor_share_sim))
         println(io, ">> gamma_ls (quartile are for the distribution without zeros):\n")
-        for row in eachrow(chi_df)
+        for row in eachrow(gamma_df)
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.metric, row.empirical, row.simulated))
         end
@@ -422,36 +426,47 @@ function generate_dashboard_report(
                 row.metric, row.empirical, row.simulated))
         end
 
+        println(io, "\n>> Regression coefficients: \n")
+        for row in eachrow(reg_df)
+            println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
+                row.bins, row.empirical, row.simulated))
+        end
+
         
         #println(io, "\n>> Labor share:\n")
         #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", agg_labor_share_emp, agg_labor_share_sim))
 
-        println(io, "\n>> Regression Coefficient:\n")
-        println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", reg_emp, reg_sim))
+        #println(io, "\n>> Regression Coefficient:\n")
+        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", reg_emp, reg_sim))
 
 
     end
 end
 
-chi_emp_result = matrix_report(emp_gamma_ls)
-chi_sim_result = matrix_report(results[best_index][2][1])
-gamma_ls = [chi_emp_result,chi_sim_result]
 
-pi_r_emp_result = matrix_report(emp_pi_r,false)
-pi_r_sim_result = matrix_report(results[best_index][2][2])
-pi_r = [pi_r_emp_result,pi_r_sim_result]
+agg_labor_share_emp = agg_labor_share
+agg_labor_share_sim = results[best_index][2][1][1]
+agg_labor_share_ = [agg_labor_share_emp,agg_labor_share_sim]
 
-reg_emp = reg_coef[1]
-reg_sim = results[best_index][2][3][1]
+agg_industry_share_ = [agg_industry_share,add_first_element(results[best_index][2][2])]
+
+gamma_emp_result = matrix_report(emp_gamma_ls)
+gamma_sim_result = matrix_report(results[best_index][2][3])
+gamma_ls_ = [gamma_emp_result,gamma_sim_result]
+
+reg_emp = reg_coef
+reg_sim = results[best_index][2][4]
 reg_ = [reg_emp,reg_sim]
 
+pi_r_emp_result = matrix_report(emp_pi_r,false)
+pi_r_sim_result = matrix_report(results[best_index][2][5])
+pi_r = [pi_r_emp_result,pi_r_sim_result]
 
-agg_industry_share_ = [agg_industry_share,add_first_element(results[best_index][2][4])]
-agg_labor_share_ = [agg_labor_share,agg_labor_share]
+
 best_score = results[best_index][1][1]
 
 
-generate_dashboard_report(n,gamma_ls,pi_r,reg_,agg_industry_share_,agg_labor_share_,best_score)
+generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score)
 
 #################### End of the code #####################
 
@@ -459,17 +474,18 @@ generate_dashboard_report(n,gamma_ls,pi_r,reg_,agg_industry_share_,agg_labor_sha
 ### We also search for the sensitivity of the regression coefficient with respect to beta
 
 
-beta,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = range(0.01, stop = beta * 10, length = 1000)
-expanding_beta = [vcat(i, best_params[2:end]) for i in range_beta]
+beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+range_beta = range(beta[1], stop = beta[1] * 1.2, length = 5)
+expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
+expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
 
 
-results = pmap(parallel_SMM_safe, expanding_beta)
-score = [score[1] != nothing ? score[1][1] : missing for score in results]
-reg_coef_ = [score[2][3][1] for score in results]
-percentage_difference = [(b - beta) / beta * 100 for b in range_beta]
-beta_new = 0.37635029254041574
-parallel_SMM_safe(vcat(beta_new, best_params[2:end]))
+results_ = pmap(parallel_SMM_safe, expanding_beta)
+score = [score[1] != nothing ? score[1][1] : missing for score in results_]
+reg_coef_ = [score[2][4] for score in results_]
+percentage_difference = [(b - beta[1]) / beta[1] * 100 for b in range_beta]
+beta_new = [1,1,1,1]
+parallel_SMM_safe(vcat(beta_new, best_params[5:end]))
 
 
 # Create the plot
@@ -487,10 +503,13 @@ plot(percentage_difference, reg_coef_,
      label = "Score Beta",
      linewidth = 2)
 
-score_max = reg_coef*0.99
-score_min = reg_coef*1.01
+score_max = reg_coef[1]*0.9
+score_min = reg_coef[1]*1.1
 
 filtered_betas = range_beta[(score_min .<= reg_coef_) .& (reg_coef_ .<= score_max)]
 filtered_betas
 
+
+reg_coef_[argmin(score)]
+score[argmin(score)]
 

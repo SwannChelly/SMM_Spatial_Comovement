@@ -9,8 +9,8 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import argparse
 
 parser = argparse.ArgumentParser(description="Give the industry")
-parser.add_argument('--i', type=str, required=True, help="Name of the industry in ['aero','auto_24']",default="auto_24")
-parser.add_argument('--ze', type=str, required=True, help="Name of ze to shock",default="1102")
+parser.add_argument('--i', type=str, required=True, help="Name of the industry in ['aero','auto_24']",default="aero")
+parser.add_argument('--ze', type=str, required=True, help="Name of ze to shock",default="0061")
 args = parser.parse_args()
 
 
@@ -47,20 +47,21 @@ def add_colorbar(ax,norm):
     sm._A = []
     fig.colorbar(sm, cax=cax, orientation='horizontal')
 
-def load_pi_jA(file_name):
-    pi_jA = np.load(os.path.join(folder,f"{file_name}.npy"))
-    pi_jA = np.array([1-sum(pi_jA)] + list(pi_jA))
-    df = filter_N_upstream_df[["ze2010","pi_jA"]].drop_duplicates()
-    df.loc[~df.pi_jA.isna(),"sim_pi_jA"] = pi_jA
-    df.pi_jA.fillna(0,inplace = True)
-    df.sim_pi_jA.fillna(0,inplace = True)
+def load_pi_r(file_name):
+    pi_r = np.load(os.path.join(folder,f"{file_name}.npy"))
+    pi_r = np.array([1-sum(pi_r)] + list(pi_r))
+    df = filter_N_upstream_df[["ze2010","pi_r"]].drop_duplicates()
+    print(df.shape,pi_r)
+    df.loc[~df.pi_r.isna(),"sim_pi_r"] = pi_r
+    df.pi_r.fillna(0,inplace = True)
+    df.sim_pi_r.fillna(0,inplace = True)
     return df
 
 def load_productivity(file_name):
     prod = np.load(os.path.join(folder,f"{file_name}.npy"))
-    df = filter_N_upstream_df[["ze2010","pi_jA"]].drop_duplicates()
+    df = filter_N_upstream_df[["ze2010","pi_r"]].drop_duplicates()
     print(len(prod))
-    df.loc[~df.pi_jA.isna(),"productivity"] = prod
+    df.loc[~df.pi_r.isna(),"productivity"] = prod
     df.productivity.fillna(0,inplace = True)
     return df
 
@@ -70,8 +71,8 @@ def plot_downstream(df,col_name,ax):
     tmp = france.merge(df,on = "ze2010",how = "left")
     tmp[col_name].fillna(0,inplace = True)
     if col_name != "productivity":
-        vmin = min(df.query('pi_jA >0')["pi_jA"].to_list()+df.query('sim_pi_jA >0')["sim_pi_jA"].to_list())
-        vmax = max(df["pi_jA"].to_list()+df["sim_pi_jA"].to_list())
+        vmin = min(df.query('pi_r >0')["pi_r"].to_list()+df.query('sim_pi_r >0')["sim_pi_r"].to_list())
+        vmax = max(df["pi_r"].to_list()+df["sim_pi_r"].to_list())
         norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
     else: 
         vmin,vmax = min(df.query('productivity >0').productivity),max(df['productivity'])
@@ -158,17 +159,17 @@ def load_M_ij(name):
 
     return M_ij
 
-pi_jA = load_pi_jA("pi_jA")
+pi_r = load_pi_r("pi_r")
 productivity = load_productivity("productivity")
 
 
-########### Plot pi_jA ########
+########### Plot pi_r ########
 
 
 fig,axs = plt.subplots(1,3,figsize = (15,10))
 
-plot_downstream(pi_jA,"pi_jA",axs[0])
-plot_downstream(pi_jA,"sim_pi_jA",axs[1])
+plot_downstream(pi_r,"pi_r",axs[0])
+plot_downstream(pi_r,"sim_pi_r",axs[1])
 plot_downstream(productivity,"productivity",axs[2])
 
 axs[0].set_title(r'Empirical $\pi_{jA}$')
@@ -176,7 +177,7 @@ axs[1].set_title(r'Simulated $\pi_{jA}$')
 axs[2].set_title(r'Simulated $A_i$')
 
 fig.tight_layout()
-fig.savefig(os.path.join(f"../reporting_{industry}",'pi_jA_productivity.png'),bbox_inches='tight')
+fig.savefig(os.path.join(f"../reporting_{industry}",'pi_r_productivity.png'),bbox_inches='tight')
 
 
 ############ Plot trade flow ##############
