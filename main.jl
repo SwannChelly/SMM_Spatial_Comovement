@@ -14,6 +14,7 @@
 # import Pkg; Pkg.add("CSV")
 
 using Distributed
+using Dates
 @everywhere using NPZ
 @everywhere using QuasiMonteCarlo
 @everywhere using StatsPlots
@@ -401,8 +402,9 @@ function generate_dashboard_report(
         simulated = reg_sim
     )
 
-
+    date = now()
     open(output_file, "w") do io
+        println(io,"Date: $date\n")
         println(io, "Score: $best_score\n") # Ajoutez cette ligne pour inclure le score
         println(io, "Size of the grid: $n\n") 
         println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")

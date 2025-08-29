@@ -243,8 +243,8 @@ function SMM(params,simulation = false)
     end
     markup = (epsilon-1)/epsilon
     # Having all prices at all nest, we build the trade flows.
-    price_index = sum((c_r[N_downstream_per_region.!=0]*markup).^(-epsilon).*delta_r[N_downstream_per_region.!=0]).^(-1/epsilon)
-    B = ((epsilon-1)/(epsilon*price_index))^(-(1+epsilon))/price_index
+    price_index = sum((c_r[N_downstream_per_region.!=0]*markup).^(epsilon).*delta_r[N_downstream_per_region.!=0]).^(1/epsilon)
+    B = (markup/price_index)^(epsilon-1)/price_index
     X_lrs = X_lrs.*reshape(N_downstream_per_region.*delta_r,1,R)*B # Since the moments are only shares it is useless.
     y_r = zeros(R)
     y_r[N_downstream_per_region.!=0] = c_r[N_downstream_per_region.!=0].^(-(1+epsilon)).*delta_r[N_downstream_per_region.!=0]*B
