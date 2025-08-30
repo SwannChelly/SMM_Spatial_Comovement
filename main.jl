@@ -107,7 +107,7 @@ output_folder = "./reporting_"*industry # Output folder
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
-
+w_rs_local = NPZ.npzread(joinpath(folder, "w_rs.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
 #N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
@@ -146,7 +146,7 @@ for i in 1:R, j in 1:R
 end
 # Then broadcast those large fixed arrays to all workers:
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
-
+@everywhere const w_rs = $(w_rs_local)
 @everywhere const DistBin = $(DistBin_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)

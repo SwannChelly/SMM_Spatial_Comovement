@@ -30,6 +30,7 @@ if test
     
     coefs = CSV.read(joinpath(folder,"stats.csv"), DataFrame)
     distances = NPZ.npzread(joinpath(folder, "distances.npy"))
+    w_rs = NPZ.npzread(joinpath(folder, "w_rs.npy"))
     N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream workers per region. 
     filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
     #N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
@@ -50,7 +51,7 @@ if test
     input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
     emp_gamma_ls = (NPZ.npzread(joinpath(folder,"emp_gamma_ls.npy"))')[2:end,:]
     emp_pi_r = NPZ.npzread(joinpath(folder,"emp_pi_r.npy"))[2:end]
-    reg_coef = [coefs[3,"value"]]
+    reg_coef = NPZ.npzread(joinpath(folder,"reg_coef.npy"))
     empirical_moments = [emp_gamma_ls,emp_pi_r,reg_coef,input_share[2:end]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
@@ -222,7 +223,8 @@ function SMM(params,simulation = false)
 
             # Compute prices faced by downstream firms in region i
             tau_ = reshape(tau_reshaped[:,: ,r]',1,R,S)
-            prices_ = inv_upstream_variety_productivity .* tau_
+            prices_ = inv_upstream_variety_productivity .* tau_.*reshape(w_rs,(1,R,1))
+            return prices_
 
             # We select the lowest prices per variety and build all nests' price indices
             min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
@@ -254,7 +256,7 @@ function SMM(params,simulation = false)
     end
     # Prepare dataframe for regression
     id = 1
-    for r in 1:R
+    for r in 1:(R) 
         for s in 1:S
             for i in 1:N_rho
                 push!(sectors, s)
@@ -278,7 +280,7 @@ function SMM(params,simulation = false)
         log_distance = log_distance
     )
     # Build moments
-
+    df = filter(row -> row.ze2010 != R, df) # We don't do the regression on foreign firms.
 
 
     # 1. Aggregate labor share at the level of the industry \Gamma
