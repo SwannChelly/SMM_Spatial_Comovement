@@ -107,7 +107,9 @@ output_folder = "./reporting_"*industry # Output folder
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
-w_rs_local = NPZ.npzread(joinpath(folder, "w_rs.npy"))
+w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
+w_rs_local[end] = mean(w_rs_local[1:end-1])
+regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
 #N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
@@ -137,7 +139,7 @@ else
 end
 @everywhere const empirical_moments = $(empirical_moments_local) # Ajout
 
-@everywhere regional_wages = $(ones(R))
+@everywhere regional_wages = $(regional_wages_local)
 @everywhere const distances = $(distances_local)
 
 DistBin_local = Array{Int}(undef, R,R)
@@ -164,7 +166,8 @@ end
 
 
 simulation = false
-n = 500000
+n = 2
+
 if simulation
 
     t1 = time()
@@ -184,7 +187,6 @@ else
     t1 = time()-t1
     print(t1)
 end    
-
 
 # Collect the results of the calibration and store them. 
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
@@ -477,7 +479,7 @@ generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,
 
 
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = range(beta[1], stop = beta[1] * 1.2, length = 5)
+range_beta = range(beta[1]*0.8, stop = beta[1] * 1.2, length = 5)
 expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
 expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
 
@@ -508,10 +510,20 @@ plot(percentage_difference, reg_coef_,
 score_max = reg_coef[1]*0.9
 score_min = reg_coef[1]*1.1
 
+
 filtered_betas = range_beta[(score_min .<= reg_coef_) .& (reg_coef_ .<= score_max)]
 filtered_betas
 
 
 reg_coef_[argmin(score)]
-score[argmin(score)]
+range_beta[argmin(diff_reg_coef)]
+
+diff_reg_coef = [sum((reg_coef.-m).^2) for m in reg_coef_]
+expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
+expanding_beta[argmin(diff_reg_coef)]
+
+
+reg_coef_[argmin(diff_reg_coef)]
+
+reg_coef_
 

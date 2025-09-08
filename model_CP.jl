@@ -26,18 +26,18 @@ using FixedEffectModels,RDatasets,CategoricalArrays
 test = false 
 if test
     industry = "aero"
-    folder = "./baseline_"*industry
+    input_folder = "./baseline_"*industry
     
-    coefs = CSV.read(joinpath(folder,"stats.csv"), DataFrame)
-    distances = NPZ.npzread(joinpath(folder, "distances.npy"))
-    w_rs = NPZ.npzread(joinpath(folder, "w_rs.npy"))
-    N_downstream_per_region = NPZ.npzread(joinpath(folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream workers per region. 
-    filter_N_upstream = NPZ.npzread(joinpath(folder,"filter_N_upstream.npy"))
+    coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
+    distances = NPZ.npzread(joinpath(input_folder, "distances.npy"))
+    w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
+    N_downstream_per_region = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream workers per region. 
+    filter_N_upstream = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
     #N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
     S,R = size(filter_N_upstream)
     R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
     delta_r = ones(R)
-    #empirical_moments = NPZ.npzread(joinpath(folder,"empirical_moments.npy"))
+    #empirical_moments = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
 
     N_rho = 50
     labor_share = 0.12
@@ -47,22 +47,25 @@ if test
     nu_s = ones(S).*3.
     theta = 1.768
 
-    regional_wages = ones(R)
-    input_share = NPZ.npzread(joinpath(folder,"input_share.npy"))
-    emp_gamma_ls = (NPZ.npzread(joinpath(folder,"emp_gamma_ls.npy"))')[2:end,:]
-    emp_pi_r = NPZ.npzread(joinpath(folder,"emp_pi_r.npy"))[2:end]
-    reg_coef = NPZ.npzread(joinpath(folder,"reg_coef.npy"))
+    w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
+    w_rs[end] = mean(w_rs[1:end-1])
+    regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
+
+    input_share = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
+    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')[2:end,:]
+    emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
+    reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
     empirical_moments = [emp_gamma_ls,emp_pi_r,reg_coef,input_share[2:end]]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
     # Then broadcast those large fixed arrays to all workers:
 
     function distance_bin(d)
-        if 50 < d ≤ 100
+        if 50 < d <= 100
             return 1
-        elseif 100 < d ≤ 150
+        elseif 100 < d <= 150
             return 2
-        elseif 150 < d ≤ 200
+        elseif 150 < d <= 200
             return 3
         elseif d > 200
             return 4
@@ -224,7 +227,6 @@ function SMM(params,simulation = false)
             # Compute prices faced by downstream firms in region i
             tau_ = reshape(tau_reshaped[:,: ,r]',1,R,S)
             prices_ = inv_upstream_variety_productivity .* tau_.*reshape(w_rs,(1,R,1))
-            return prices_
 
             # We select the lowest prices per variety and build all nests' price indices
             min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
@@ -232,6 +234,10 @@ function SMM(params,simulation = false)
             p_rs = sum(1/N_rho .* p_rs_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
             p_r = sum((p_rs) .^ (1 - nu).*input_share_tech).^(1 ./ (1 - nu))
             c_r_tilde = (labor_share_tech*regional_wages[r]^(1-lambda)  + (1-labor_share_tech)*p_r^(1-lambda))^(1/(1-lambda))
+            if isinf(c_r_tilde)
+                return p_r
+            end
+
             c_r[r] = c_r_tilde*(productivity[r]^(-1))
 
             # We create the trade flows and store the linkages.
@@ -250,6 +256,8 @@ function SMM(params,simulation = false)
     X_lrs = X_lrs.*reshape(N_downstream_per_region.*delta_r,1,R)*B # Since the moments are only shares it is useless.
     y_r = zeros(R)
     y_r[N_downstream_per_region.!=0] = c_r[N_downstream_per_region.!=0].^(-(1+epsilon)).*delta_r[N_downstream_per_region.!=0]*B
+    
+    
 
     if simulation
         return reshape(sum(X_lrs,dims = 3),R,R)
@@ -279,9 +287,9 @@ function SMM(params,simulation = false)
         distance = distance,
         log_distance = log_distance
     )
+
     # Build moments
     df = filter(row -> row.ze2010 != R, df) # We don't do the regression on foreign firms.
-
 
     # 1. Aggregate labor share at the level of the industry \Gamma
     # labor_r : total employement of the downstream industry in region $r$.
@@ -310,6 +318,7 @@ function SMM(params,simulation = false)
     pi_r = labor_r[N_downstream_per_region.!=0]./sum(labor_r[N_downstream_per_region.!=0])    
     
     return [agg_labor_share], agg_industry_share[2:end],gamma_ls[2:end,:],reg_coef,pi_r[2:end]
+    
 
 
 end
@@ -340,4 +349,3 @@ function full_SMM(params,simulation = false)
         return loss_function(simulated_moments),simulated_moments
     end
 end
-

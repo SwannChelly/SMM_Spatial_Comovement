@@ -169,6 +169,7 @@ productivity = load_productivity("productivity")
 fig,axs = plt.subplots(1,3,figsize = (15,10))
 
 plot_downstream(pi_r,"pi_r",axs[0])
+print(pi_r.query('sim_pi_r > 0'))
 plot_downstream(pi_r,"sim_pi_r",axs[1])
 plot_downstream(productivity,"productivity",axs[2])
 
