@@ -59,16 +59,18 @@ end
 
 
 @everywhere function distance_bin(d)
-    if 50 < d ≤ 100
+    if 20 < d <= 50
         return 1
-    elseif 100 < d ≤ 150
+    elseif 50 < d <= 100
         return 2
-    elseif 150 < d ≤ 200
+    elseif 100 < d <= 150
         return 3
-    elseif d > 200
+    elseif 150 < d <= 200
         return 4
+    elseif d > 200
+        return 5
     else
-        return 0   # for ≤ 50, outside bins
+        return 0   # for ≤ 20, outside bins
     end
 end
 
@@ -82,12 +84,12 @@ end
         # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
-        #A = ones(size(A)[1])
+        A = ones(size(A)[1])
         #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
         #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
 
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(4),0.8*agg_labor_share,0.8.*agg_industry_share,0.5.*A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(4).*1.15,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5),0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*2,1.2*agg_labor_share,1.2.*agg_industry_share,1.1*A,100*ones(S*R)
 
 
         lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
@@ -114,7 +116,6 @@ N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
 #N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
 S_,R_ = size(filter_N_upstream_local)
-
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
@@ -122,15 +123,17 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const R_downstream = $(R_)
 
 agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
+domestic_share_local = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
 
 @everywhere const agg_industry_share = $(agg_industry_share_local)
 @everywhere const agg_labor_share = $(coefs[2,"value"])
-# Load empirical moments and reshape them.
+@everywhere const domestic_share = $(domestic_share_local)
+# Load empiricCal moments and reshape them.
 test = false
 if test
     empirical_moments_local = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
 else
-    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')[2:end,:]
+    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
     emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
     reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
     empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
@@ -155,8 +158,8 @@ end
 
 @everywhere const epsilon = $(coefs[1,"value"])
 @everywhere const lambda = $(0.5)
-@everywhere const nu = $(0.9)
-@everywhere const nu_s = $(ones(S).*3) 
+@everywhere const nu = $(0.2)
+@everywhere const nu_s = $(ones(S).*2.5) 
 @everywhere const theta = $(1.768) 
 @everywhere const delta_r = $(ones(R))
 
@@ -166,7 +169,7 @@ end
 
 
 simulation = false
-n = 2
+n = 100000
 
 if simulation
 
@@ -307,7 +310,7 @@ low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_low_trade_cost.npy"), low)
 current = SMM(vcat(beta..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
-high = SMM(vcat(beta*5..., data[2]..., data[3]..., data[4]...,data[5]...),true)
+high = SMM(vcat(beta*20..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
 
@@ -399,7 +402,7 @@ function generate_dashboard_report(
     )
 
     reg_df = DataFrame(
-        bins = ["]50,100]", "]100,150]", "]150,200]", ">200"],
+        bins = ["]20,50]","]50,100]", "]100,150]", "]150,200]", ">200"],
         empirical = reg_emp,
         simulated = reg_sim
     )
@@ -479,17 +482,17 @@ generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,
 
 
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = range(beta[1]*0.8, stop = beta[1] * 1.2, length = 5)
+range_beta = range(beta[1]*0.8, stop = beta[1] * 100, length = 5)
 expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
 expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
 
 
 results_ = pmap(parallel_SMM_safe, expanding_beta)
-score = [score[1] != nothing ? score[1][1] : missing for score in results_]
-reg_coef_ = [score[2][4] for score in results_]
+score = [score != nothing ? score[1][1] : missing for score in results_]
+reg_coef_ = [score != nothing ? score[2][4] for score in results_]
 percentage_difference = [(b - beta[1]) / beta[1] * 100 for b in range_beta]
 beta_new = [1,1,1,1]
-parallel_SMM_safe(vcat(beta_new, best_params[5:end]))
+parallel_SMM_safe(vcat([1000,1000,1000,1000], best_params[5:end]))[2][4]
 
 
 # Create the plot
@@ -520,10 +523,7 @@ range_beta[argmin(diff_reg_coef)]
 
 diff_reg_coef = [sum((reg_coef.-m).^2) for m in reg_coef_]
 expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
-expanding_beta[argmin(diff_reg_coef)]
+println(expanding_beta[argmin(diff_reg_coef)])
 
 
-reg_coef_[argmin(diff_reg_coef)]
-
-reg_coef_
 

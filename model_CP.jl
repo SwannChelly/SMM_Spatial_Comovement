@@ -52,7 +52,8 @@ if test
     regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
 
     input_share = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
-    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')[2:end,:]
+    domestic_share = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
+    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
     emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
     reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
     empirical_moments = [emp_gamma_ls,emp_pi_r,reg_coef,input_share[2:end]]
@@ -61,16 +62,18 @@ if test
     # Then broadcast those large fixed arrays to all workers:
 
     function distance_bin(d)
-        if 50 < d <= 100
+        if 20 < d <= 50
             return 1
-        elseif 100 < d <= 150
+        elseif 50 < d <= 100
             return 2
-        elseif 150 < d <= 200
+        elseif 100 < d <= 150
             return 3
-        elseif d > 200
+        elseif 150 < d <= 200
             return 4
+        elseif d > 200
+            return 5
         else
-            return 0   # for ≤ 50, outside bins
+            return 0   # for ≤ 20, outside bins
         end
     end
 
@@ -93,8 +96,8 @@ if test
         #lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*input_share,0.8*A,0.1*ones(S*R)
         #ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T, = 1,1,1.2.*input_share,1.2*A,20*ones(S*R)
 
-        lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T, = ones(4)*0.25,0.5,0.8.*input_share,0.8*A,0.1*ones(S*R)
-        ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T, = ones(4)*1,1,1.2.*input_share,1.2*A,20*ones(S*R)
+        lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T, = ones(5)*0.25,0.5,0.8.*input_share,0.8*A,0.1*ones(S*R)
+        ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T, = ones(5)*1,1,1.2.*input_share,1.2*A,20*ones(S*R)
 
 
         lb = Any[vcat(lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T)...]
@@ -119,11 +122,11 @@ function unpack_params(params)
     This function takes a vector of parameters and returns the parameters as separated variables. 
     """
     
-    beta = params[1:4]
-    labor_share_tech = params[5]
-    input_share_tech = params[6:5+(S)]/sum(params[6:5+(S)])
-    productivity_ = params[(S+6):(R_downstream+S+5)]
-    T_ = params[(R_downstream+(S+6)):end]
+    beta = params[1:5]
+    labor_share_tech = params[6]
+    input_share_tech = params[7:6+(S)]/sum(params[7:6+(S)])
+    productivity_ = params[(S+7):(R_downstream+S+6)]
+    T_ = params[(R_downstream+(S+7)):end]
 
     #input_share_tech = params[2:1+(S)]/sum(params[2:1+(S)])
     #productivity_ = params[(S+2):(R_downstream+S+1)]
@@ -177,12 +180,13 @@ function SMM(params,simulation = false)
     # this matrix will be used for the regression. 
     closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
     
+    
 
     # Set the parameters to the right format
     Random.seed!(50) # For reproducibility 
     beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params) # Unpack parameters
     #labor_share_tech = labor_share # We approximate the labor technological coefficient by the labor share.
-    
+    print(R)
 
     # Old version of beta
     #beta = isa(beta, Float64) ? fill(beta, S) : beta 
@@ -256,8 +260,6 @@ function SMM(params,simulation = false)
     X_lrs = X_lrs.*reshape(N_downstream_per_region.*delta_r,1,R)*B # Since the moments are only shares it is useless.
     y_r = zeros(R)
     y_r[N_downstream_per_region.!=0] = c_r[N_downstream_per_region.!=0].^(-(1+epsilon)).*delta_r[N_downstream_per_region.!=0]*B
-    
-    
 
     if simulation
         return reshape(sum(X_lrs,dims = 3),R,R)
@@ -289,8 +291,7 @@ function SMM(params,simulation = false)
     )
 
     # Build moments
-    df = filter(row -> row.ze2010 != R, df) # We don't do the regression on foreign firms.
-
+    #df = filter(row -> row.ze2010 != R, df) # We don't do the regression on foreign firms.
     # 1. Aggregate labor share at the level of the industry \Gamma
     # labor_r : total employement of the downstream industry in region $r$.
     labor_r = zeros(R) 
@@ -306,18 +307,18 @@ function SMM(params,simulation = false)
     agg_industry_share = X_s./X
 
     # 3. Share of the downstream input purchases of sector s sourced from region l.
-    gamma_ls = X_ls./X_s
+    gamma_ls = X_ls./X_s.*(reshape(domestic_share,1,S))
 
     # 4. Probability that a supplier serves the downstream industry.
-    bins = [50, 100, 150, 200, Inf]   # bin edges
+    bins = [20,50, 100, 150, 200, Inf]   # bin edges
     df.distance_bin = cut(df.distance, bins, extend=true)
     fixest = reg(df, @formula(supplier ~ distance_bin + size + fe(A129)))
-    reg_coef = fixest.coef[1:4] # Change to have the binarised version
+    reg_coef = fixest.coef[1:5] # Change to have the binarised version
 
     # 5. The share of each region the total employment. 
     pi_r = labor_r[N_downstream_per_region.!=0]./sum(labor_r[N_downstream_per_region.!=0])    
     
-    return [agg_labor_share], agg_industry_share[2:end],gamma_ls[2:end,:],reg_coef,pi_r[2:end]
+    return [agg_labor_share], agg_industry_share[2:end],gamma_ls,reg_coef,pi_r[2:end]
     
 
 
