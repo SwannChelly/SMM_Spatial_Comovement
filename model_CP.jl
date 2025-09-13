@@ -40,23 +40,22 @@ if test
     #empirical_moments = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
 
     N_rho = 50
-    labor_share = 0.12
+    agg_labor_share = coefs[2,"value"]
+    agg_industry_share = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
     epsilon = coefs[1,"value"]
     lambda = 0.5
-    nu = 0.9
-    nu_s = ones(S).*3.
+    nu = 0.2
+    nu_s = ones(S).*2.5
     theta = 1.768
 
     w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-    w_rs[end] = mean(w_rs[1:end-1])
     regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
 
-    input_share = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
     domestic_share = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
     emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
     emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
     reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
-    empirical_moments = [emp_gamma_ls,emp_pi_r,reg_coef,input_share[2:end]]
+    empirical_moments = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
     # Then broadcast those large fixed arrays to all workers:
@@ -96,12 +95,12 @@ if test
         #lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*input_share,0.8*A,0.1*ones(S*R)
         #ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T, = 1,1,1.2.*input_share,1.2*A,20*ones(S*R)
 
-        lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T, = ones(5)*0.25,0.5,0.8.*input_share,0.8*A,0.1*ones(S*R)
-        ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T, = ones(5)*1,1,1.2.*input_share,1.2*A,20*ones(S*R)
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5),0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*2,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
 
 
-        lb = Any[vcat(lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T)...]
-        ub = Any[vcat(ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T)...]
+        lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
+        ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
         
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
         return [halton_samples[:,i] for i in range(1,n)]
@@ -186,7 +185,7 @@ function SMM(params,simulation = false)
     Random.seed!(50) # For reproducibility 
     beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params) # Unpack parameters
     #labor_share_tech = labor_share # We approximate the labor technological coefficient by the labor share.
-    print(R)
+
 
     # Old version of beta
     #beta = isa(beta, Float64) ? fill(beta, S) : beta 
@@ -231,7 +230,6 @@ function SMM(params,simulation = false)
             # Compute prices faced by downstream firms in region i
             tau_ = reshape(tau_reshaped[:,: ,r]',1,R,S)
             prices_ = inv_upstream_variety_productivity .* tau_.*reshape(w_rs,(1,R,1))
-
             # We select the lowest prices per variety and build all nests' price indices
             min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
             p_rs_rho = prices_[min_coord_rho]
@@ -350,3 +348,4 @@ function full_SMM(params,simulation = false)
         return loss_function(simulated_moments),simulated_moments
     end
 end
+

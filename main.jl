@@ -25,7 +25,7 @@ using Dates
 @everywhere using Random
 @everywhere using Optim
 @everywhere using Statistics
-
+@everywhere using HaltonSequences
 @everywhere using ProgressMeter  # Ensure availability on all workers
 @everywhere using SharedArrays
 
@@ -75,7 +75,7 @@ end
 end
 
 
-@everywhere function generate_halton_grid(n)
+@everywhere function old_generate_halton_grid(n)
         """
 
         Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
@@ -84,22 +84,70 @@ end
         # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
-        A = ones(size(A)[1])
+        #A = ones(size(A)[1])
         #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
         #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
 
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5),0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*2,1.2*agg_labor_share,1.2.*agg_industry_share,1.1*A,100*ones(S*R)
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
 
 
         lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
         ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
         
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-        return [halton_samples[:,i] for i in range(1,n)]
+        halton_samples =  [halton_samples[:,i] for i in range(1,n)]
+        halton_samples = [h for h in params_list if (h[1] < h[2]) && (h[1] < h[3]) && (h[1] < h[4]) && (h[1] < h[5])]
+
+        return halton_samples
         # This will create a vector of 100 tuples, each with 8 parameters
         #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
     end
+
+@everywhere function generate_halton_grid_batched(n_needed::Int, lb::Vector{Float64}, ub::Vector{Float64}; batchsize::Int=1024)
+    d = length(lb)
+    accepted = Vector{Vector{Float64}}(undef, 0)
+
+    # Create a Halton point generator in dimension d
+    hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
+
+    idx = 1
+    while length(accepted) < n_needed
+        # get a batch of raw Halton points
+        batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
+        # Each point is in [0,1]^d
+
+        for raw in batch_raw
+            # scale each component
+            scaled = lb .+ (ub .- lb) .* raw
+
+            # apply your condition
+            if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
+                push!(accepted, scaled)
+                if length(accepted) >= n_needed
+                    break
+                end
+            end
+        end
+
+        idx += batchsize
+    end
+
+    return accepted
+end
+
+
+@everywhere function generate_halton_grid(n)
+    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+    A ./= sum(A)
+    lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
+    ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
+
+    lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
+    ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
+    samples = generate_halton_grid_batched(n, lb, ub; batchsize=2000)
+    return samples
+end
 
 ############## Load Parameters #################
 
@@ -110,7 +158,6 @@ output_folder = "./reporting_"*industry # Output folder
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
 w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-w_rs_local[end] = mean(w_rs_local[1:end-1])
 regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
@@ -167,9 +214,8 @@ end
 # If simulation = false, we compute the simulated moments and compare them the the empirical moments. 
 # If simulation = true, we only compute the trade flows.
 
-
 simulation = false
-n = 100000
+n = 500000
 
 if simulation
 
@@ -184,7 +230,10 @@ if simulation
     npzwrite(joinpath(input_folder, "M_ij.npy"), simulations)
 else
     print("Starting simulation")
+    t1 = time()
     params_list = generate_halton_grid(n)
+    print(t1)
+    print("Halton created !")
     t1 = time()
     results = pmap(parallel_SMM_safe, params_list)
     t1 = time()-t1
@@ -305,16 +354,14 @@ npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[
 #best_params = params_list[best_index]
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
 data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
-
+beta = [1,10,10,10,10]
 low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_low_trade_cost.npy"), low)
-current = SMM(vcat(beta..., data[2]..., data[3]..., data[4]...,data[5]...),true)
+current = SMM(vcat([1,1,1,1,1]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
-high = SMM(vcat(beta*20..., data[2]..., data[3]..., data[4]...,data[5]...),true)
+high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
-
-# Report
 
 function matrix_report(mat,include_n_zero = true)
     vals = vec(mat)
@@ -492,7 +539,7 @@ score = [score != nothing ? score[1][1] : missing for score in results_]
 reg_coef_ = [score != nothing ? score[2][4] for score in results_]
 percentage_difference = [(b - beta[1]) / beta[1] * 100 for b in range_beta]
 beta_new = [1,1,1,1]
-parallel_SMM_safe(vcat([1000,1000,1000,1000], best_params[5:end]))[2][4]
+SMM(vcat([1,2,3,4], best_params[5:end]))[2][4]
 
 
 # Create the plot

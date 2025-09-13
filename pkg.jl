@@ -12,7 +12,7 @@ import Pkg; Pkg.add("ProgressMeter")
 import Pkg; Pkg.add("SharedArrays")
 import Pkg; Pkg.add("StatsBase")
 import Pkg; Pkg.add("CategoricalArrays")
-
+import Pkg; Pkg.add("HaltonSequences")
 
 
 
