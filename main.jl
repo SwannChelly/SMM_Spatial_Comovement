@@ -76,9 +76,12 @@ end
 
 
 @everywhere function old_generate_halton_grid(n)
+
+
         """
 
         Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
+        This Halton grid function doesn't allow for conditions on the parameters. 
 
         """
         # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
@@ -104,7 +107,23 @@ end
         #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
     end
 
-@everywhere function generate_halton_grid_batched(n_needed::Int, lb::Vector{Float64}, ub::Vector{Float64}; batchsize::Int=1024)
+
+@everywhere function generate_halton_grid(n_needed::Int, batchsize::Int=1024)
+    """
+
+    Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
+    This Halton grid function allows condition on the parameters and is much faster than the previous one. 
+
+    """
+    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+    A ./= sum(A)
+    lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
+    ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
+
+    lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
+    ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
+
+
     d = length(lb)
     accepted = Vector{Vector{Float64}}(undef, 0)
 
@@ -122,7 +141,8 @@ end
             scaled = lb .+ (ub .- lb) .* raw
 
             # apply your condition
-            if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
+            #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
+            if (scaled[1] < scaled[2]) & (scaled[1] < scaled[3]) & (scaled[1] < scaled[4]) & (scaled[1] < scaled[5])  # Condition
                 push!(accepted, scaled)
                 if length(accepted) >= n_needed
                     break
@@ -136,73 +156,44 @@ end
     return accepted
 end
 
-
-@everywhere function generate_halton_grid(n)
-    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-    A ./= sum(A)
-    lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-    ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
-
-    lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
-    ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
-    samples = generate_halton_grid_batched(n, lb, ub; batchsize=2000)
-    return samples
-end
-
 ############## Load Parameters #################
 
 industry = "aero" # Name of the industry in [aero,auto_24]
 input_folder = "./baseline_"*industry # Input input_folder are stored
 output_folder = "./reporting_"*industry # Output folder
 
-coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Contains regression coefficients, sigma and the labor share.
-distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Contains the distance matrix.
-w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
+coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame) # Sales elasticities epsilon and aggregate labor share. 
+distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy")) # Distance matrix: no longer used in this version
+w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy")) # Upstream wages 
+regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy")) # Downstream wages. Equal to 0 if no downstream firms
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Vector of size R that contains the number of workers per downstream region 
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy")) # Matrix of size S x R that equals to 0 if there is no supplier in region r and sector s.
-#N_downstream_per_region_local[N_downstream_per_region_local.!=0] = N_downstream_per_region_local[N_downstream_per_region_local.!=0]./N_downstream_per_region_local[N_downstream_per_region_local.!=0]
+
+agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy")) # Industry share in total inputs (from IO tables)
+domestic_share_local = NPZ.npzread(joinpath(input_folder,"domestic_share.npy")) # Domestic share per sector in total inputs (from IO tables)
+
 S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
-R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
+# We create the distance matrix by bins
+DistBin_local = Array{Int}(undef, R,R)
+for i in 1:R, j in 1:R
+    DistBin_local[i,j] = distance_bin(distances_local[i,j])
+end
+
+R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1] # Number of downstream region hosting the downstream industry
 @everywhere const R_downstream = $(R_)
-
-agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
-domestic_share_local = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
-
 @everywhere const agg_industry_share = $(agg_industry_share_local)
 @everywhere const agg_labor_share = $(coefs[2,"value"])
 @everywhere const domestic_share = $(domestic_share_local)
-# Load empiricCal moments and reshape them.
-test = false
-if test
-    empirical_moments_local = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
-else
-    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
-    emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
-    reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
-    empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
-    empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
-    empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
-end
-@everywhere const empirical_moments = $(empirical_moments_local) # Ajout
-
 @everywhere regional_wages = $(regional_wages_local)
 @everywhere const distances = $(distances_local)
-
-DistBin_local = Array{Int}(undef, R,R)
-for i in 1:R, j in 1:R
-    DistBin_local[i,j] = distance_bin(distances[i,j])
-end
-# Then broadcast those large fixed arrays to all workers:
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const w_rs = $(w_rs_local)
 @everywhere const DistBin = $(DistBin_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
-
 @everywhere const epsilon = $(coefs[1,"value"])
 @everywhere const lambda = $(0.5)
 @everywhere const nu = $(0.2)
@@ -210,12 +201,20 @@ end
 @everywhere const theta = $(1.768) 
 @everywhere const delta_r = $(ones(R))
 
+# Load empirical moments and reshape them.
+emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
+emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
+reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
+empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
+empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
+empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
+@everywhere const empirical_moments = $(empirical_moments_local)
 #### Bellow, the model is computed over a Halton grid of size n. 
 # If simulation = false, we compute the simulated moments and compare them the the empirical moments. 
 # If simulation = true, we only compute the trade flows.
 
 simulation = false
-n = 500000
+n = 200000
 
 if simulation
 
@@ -231,7 +230,7 @@ if simulation
 else
     print("Starting simulation")
     t1 = time()
-    params_list = generate_halton_grid(n)
+    params_list = generate_halton_grid(n,2000)
     print(t1)
     print("Halton created !")
     t1 = time()
@@ -242,7 +241,6 @@ end
 
 # Collect the results of the calibration and store them. 
 params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
-# Create a DataFrame
 param_names = ["beta", "agg_labor_share_tech","agg_industry_share_tech", "prod", "T"]  # Column names for the parameters
 df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
 rename!(df, param_names)  # Rename columns to match parameter names
@@ -250,7 +248,7 @@ score = [score[1] != nothing ? score[1][1] : missing for score in results]
 
 df[!,"score_index"] = vec(1:length(score))
 df[!, "score"] = score
-df[!, :score] .= map(x -> x === missing ? Inf : x, df[!, :score])
+df[!, :score] .= map(x -> x === missing ? Inf : x, df[!, :score]) # Treat missing scores
 CSV.write(joinpath(input_folder,"parameters.csv"),df)
 
 # Get best params and best index. Store them
@@ -259,7 +257,6 @@ min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
-
 #npzwrite(joinpath(output_folder, "best_params.npy"), vcat(beta_new, best_params[5:end]))
 
 ##### Build histograms and reporting #####
@@ -276,10 +273,8 @@ sim_gamma = vec(results[best_index][2][3])
 # Filter non-zero values
 emp_gamma_nz = emp_gamma[emp_gamma .>= 0.01]
 sim_gamma_nz = sim_gamma[sim_gamma .>= 0.01]
-
 emp_pi_r = vec(emp_pi_r)
 sim_pi_r = vec(results[best_index][2][5])
-
 emp_pi_sA = agg_industry_share[2:end]
 sim_pi_sA = results[best_index][2][2]
 
@@ -293,16 +288,12 @@ xmin = minimum([minimum(emp_gamma_nz), minimum(sim_gamma_nz)])
 xmax = maximum([maximum(emp_gamma_nz), maximum(sim_gamma_nz)])
 x_vals = range(xmin, xmax, length=300)
 x_vals = x_vals[x_vals .> 0]  # avoid x=0
-
-
+# Compute cdf and survival
 F_emp = ecdf(emp_gamma_nz)
 F_sim = ecdf(sim_gamma_nz)
-# Compute complementary CDFs
 ccdf_emp = F_emp.(x_vals)
 ccdf_sim = F_sim.(x_vals)
-
-# Filter to avoid log(0)
-keep = (ccdf_emp .> 0) .& (ccdf_sim .> 0) .& (x_vals .> 0)
+keep = (ccdf_emp .> 0) .& (ccdf_sim .> 0) .& (x_vals .> 0) # Filter to avoid log(0)
 
 # Plot only where both x and y values are > 0
 p1 = plot(x_vals[keep], ccdf_emp[keep], label="Empirical", lw=2, color=:blue,
@@ -351,10 +342,10 @@ savefig(joinpath(output_folder, "dashboard.png"))
 npzwrite(joinpath(input_folder, "pi_r.npy"), results[best_index][2][5])
 npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[4])
 
-#best_params = params_list[best_index]
+
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
 data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
-beta = [1,10,10,10,10]
+beta = [2,9,18,5,17]
 low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_low_trade_cost.npy"), low)
 current = SMM(vcat([1,1,1,1,1]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
@@ -362,7 +353,9 @@ npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
 high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
-
+beta = [1,4,9,2.5,8]
+data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
+SMM(vcat(data...))[4]
 function matrix_report(mat,include_n_zero = true)
     vals = vec(mat)
     n_zeros = count(==(0), vals)
@@ -529,48 +522,20 @@ generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,
 
 
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = range(beta[1]*0.8, stop = beta[1] * 100, length = 5)
-expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
+range_beta = [range(beta[i]/4, stop = beta[i]*10, length = 25) for i in range(1,5)]
+expanding_beta = [[i,j,k,l] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4]]
 expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
 
 
 results_ = pmap(parallel_SMM_safe, expanding_beta)
-score = [score != nothing ? score[1][1] : missing for score in results_]
-reg_coef_ = [score != nothing ? score[2][4] for score in results_]
-percentage_difference = [(b - beta[1]) / beta[1] * 100 for b in range_beta]
-beta_new = [1,1,1,1]
-SMM(vcat([1,2,3,4], best_params[5:end]))[2][4]
+scores = [score != nothing ? score[1][1] : missing for score in results_]
+reg_coef_ = [score != nothing ? score[2][4] : missing for score in results_]
 
 
-# Create the plot
-plot(percentage_difference, score,
-     xlabel = "Percentage Difference from Original Beta (%)",
-     ylabel = "Score Beta",
-     title = "Score Beta vs Percentage Difference from Original Beta",
-     label = "Score Beta",
-     linewidth = 2)
-
-plot(percentage_difference, reg_coef_,
-     xlabel = "Percentage Difference from Original Beta (%)",
-     ylabel = "Score Beta",
-     title = "Score Beta vs Percentage Difference from Original Beta",
-     label = "Score Beta",
-     linewidth = 2)
-
-score_max = reg_coef[1]*0.9
-score_min = reg_coef[1]*1.1
-
-
-filtered_betas = range_beta[(score_min .<= reg_coef_) .& (reg_coef_ .<= score_max)]
-filtered_betas
-
-
-reg_coef_[argmin(score)]
+reg_coef_[argmin(scores)]
 range_beta[argmin(diff_reg_coef)]
 
 diff_reg_coef = [sum((reg_coef.-m).^2) for m in reg_coef_]
-expanding_beta = [[i,j,k,l] for i in range_beta for j in range_beta for k in range_beta for l in range_beta]
-println(expanding_beta[argmin(diff_reg_coef)])
 
-
-
+reg_coef_[argmin(diff_reg_coef)]
+score

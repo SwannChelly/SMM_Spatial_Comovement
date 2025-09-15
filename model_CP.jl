@@ -5,6 +5,20 @@
 # Notations: In the paper, we use X_{r'rs} in order to describe the trade flow of goods manufactured by firms from sector s in region r' to downstream firms in region r. 
 # In this code, r' is replaced by l for clarity. 
 
+# This code simulate the SMM from the function 'SMM' and compare the simulated moments with the empirical one with 'loss_function'. 
+# 'full_SMM' takes a set of parameters and returns the score of the loss function along with simulated moments. 
+
+
+# The moments to be identified are: 
+# - The aggregate labor share
+# - The aggregate share of sector s in the industry’s input purchases
+# - The share of the downstream input purchases of sector s sourced from region r′
+# - The extensive regression's parameters. 
+# - The share of each region in downstream sales
+
+# R is the number of domestic regions.  
+# S is the number of upstream sectors. 
+
 
 ##################### Packages ###################
 
@@ -31,10 +45,9 @@ if test
     coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
     distances = NPZ.npzread(joinpath(input_folder, "distances.npy"))
     w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-    N_downstream_per_region = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy")) # Should now contain the number of downstream workers per region. 
+    N_downstream_per_region = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy"))
     filter_N_upstream = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
-    #N_downstream_per_region[N_downstream_per_region.!=0] = N_downstream_per_region[N_downstream_per_region.!=0]./N_downstream_per_region[N_downstream_per_region.!=0]
-    S,R = size(filter_N_upstream)
+    S,R = size(filter_N_upstream) # Number of upstream sectors and domestic regions. 
     R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
     delta_r = ones(R)
     #empirical_moments = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
@@ -184,13 +197,12 @@ function SMM(params,simulation = false)
     # Set the parameters to the right format
     Random.seed!(50) # For reproducibility 
     beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params) # Unpack parameters
-    #labor_share_tech = labor_share # We approximate the labor technological coefficient by the labor share.
-
 
     # Old version of beta
     #beta = isa(beta, Float64) ? fill(beta, S) : beta 
     #tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
-    tau = build_tau(beta)
+
+    tau = build_tau(beta) # Now tau is built based on bins of distance and the beta coefficients. 
     productivity = ones(R)
     productivity[N_downstream_per_region.!=0] = productivity_
     input_share_tech = reshape(input_share_tech,1,S)
@@ -230,34 +242,40 @@ function SMM(params,simulation = false)
             # Compute prices faced by downstream firms in region i
             tau_ = reshape(tau_reshaped[:,: ,r]',1,R,S)
             prices_ = inv_upstream_variety_productivity .* tau_.*reshape(w_rs,(1,R,1))
+
             # We select the lowest prices per variety and build all nests' price indices
             min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
             p_rs_rho = prices_[min_coord_rho]
             p_rs = sum(1/N_rho .* p_rs_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
             p_r = sum((p_rs) .^ (1 - nu).*input_share_tech).^(1 ./ (1 - nu))
-            c_r_tilde = (labor_share_tech*regional_wages[r]^(1-lambda)  + (1-labor_share_tech)*p_r^(1-lambda))^(1/(1-lambda))
-            if isinf(c_r_tilde)
-                return p_r
-            end
+            c_r = (labor_share_tech*regional_wages[r]^(1-lambda)  + (1-labor_share_tech)*p_r^(1-lambda))^(1/(1-lambda)) # Here regional_wages != 0 since N_downstream_per_region[r] >= 1  
 
-            c_r[r] = c_r_tilde*(productivity[r]^(-1))
+            #if isinf(c_r)
+            #    return p_r
+            #end
+
+            c_r[r] = c_r*(productivity[r]^(-1))
 
             # We create the trade flows and store the linkages.
             for l in 1:R
                 tmp = map(x -> x[2] == l ? 1 : 0, min_coord_rho)  # Here tmp is a dummy variable
                 linkages[:,:,l] += tmp # Here linkages is a matrix of size (N_rho,S,R) that contains an integer variable indicating if firm rho in s l suppliers the aerospace industry in region R
-                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_rs_rho./p_rs).^(1 .- reshape(nu_s,1,S)) .* (p_rs./p_r).^(1-nu)*(p_r/c_r_tilde).^(1-lambda)*c_r[r].^epsilon,dims = 1)
+                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_rs_rho./p_rs).^(1 .- reshape(nu_s,1,S)) .* (p_rs./p_r).^(1-nu)*(p_r/c_r).^(1-lambda)*c_r[r].^epsilon,dims = 1)
                 X_lrs[l,r,:] = tmp
             end
         end
     end
-    markup = (epsilon-1)/epsilon
+    
     # Having all prices at all nest, we build the trade flows.
+    markup = (epsilon-1)/epsilon
     price_index = sum((c_r[N_downstream_per_region.!=0]*markup).^(epsilon).*delta_r[N_downstream_per_region.!=0]).^(1/epsilon)
-    B = (markup/price_index)^(epsilon-1)/price_index
+    E = 1
+    B = (markup/price_index)^(epsilon-1)*E/price_index
     X_lrs = X_lrs.*reshape(N_downstream_per_region.*delta_r,1,R)*B # Since the moments are only shares it is useless.
+
+    # We compute region level quantities
     y_r = zeros(R)
-    y_r[N_downstream_per_region.!=0] = c_r[N_downstream_per_region.!=0].^(-(1+epsilon)).*delta_r[N_downstream_per_region.!=0]*B
+    y_r[N_downstream_per_region.!=0] = c_r[N_downstream_per_region.!=0].^(epsilon-1).*delta_r[N_downstream_per_region.!=0]*B
 
     if simulation
         return reshape(sum(X_lrs,dims = 3),R,R)
@@ -293,7 +311,7 @@ function SMM(params,simulation = false)
     # 1. Aggregate labor share at the level of the industry \Gamma
     # labor_r : total employement of the downstream industry in region $r$.
     labor_r = zeros(R) 
-    labor_r[N_downstream_per_region.!=0]= (c_r[N_downstream_per_region.!=0]).^(-(1+epsilon)+lambda).*delta_r[N_downstream_per_region.!=0].*labor_share_tech.*regional_wages[N_downstream_per_region.!=0].^(-lambda)*B
+    labor_r[N_downstream_per_region.!=0]= agg_labor_share.*y_r[N_downstream_per_region.!=0].*(regional_wages[N_downstream_per_region.!=0]/c_r[N_downstream_per_region.!=0]).^(-lambda)
     
     agg_labor_share = sum(regional_wages.*labor_r)/(sum(c_r.*y_r))
 
