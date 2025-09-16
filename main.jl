@@ -92,7 +92,6 @@ end
         
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
         halton_samples =  [halton_samples[:,i] for i in range(1,n)]
-        halton_samples = [h for h in params_list if (h[1] < h[2]) && (h[1] < h[3]) && (h[1] < h[4]) && (h[1] < h[5])]
 
         return halton_samples
         # This will create a vector of 100 tuples, each with 8 parameters
@@ -201,12 +200,13 @@ empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
 empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
 @everywhere const empirical_moments = $(empirical_moments_local)
+
 #### Bellow, the model is computed over a Halton grid of size n. 
 # If simulation = false, we compute the simulated moments and compare them the the empirical moments. 
 # If simulation = true, we only compute the trade flows.
 
 simulation = false
-n = 200000
+n = 500000
 
 if simulation
 
@@ -220,14 +220,15 @@ if simulation
 
     npzwrite(joinpath(input_folder, "M_ij.npy"), simulations)
 else
-    print("Starting simulation")
+    print("Starting simulation: ")
     t1 = time()
     params_list = generate_halton_grid(n,2000)
-    print(t1)
-    print("Halton created !")
+    print(time()-t1)
+    print("\n Halton created !")
     t1 = time()
     results = pmap(parallel_SMM_safe, params_list)
     t1 = time()-t1
+    print("\n Simulation ended: ")
     print(t1)
 end    
 
@@ -249,7 +250,7 @@ min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
-#npzwrite(joinpath(output_folder, "best_params.npy"), vcat(beta_new, best_params[5:end]))
+npzwrite(joinpath(output_folder, "best_params.npy"), data)
 
 ##### Build histograms and reporting #####
 
@@ -470,15 +471,6 @@ function generate_dashboard_report(
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.bins, row.empirical, row.simulated))
         end
-
-        
-        #println(io, "\n>> Labor share:\n")
-        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", agg_labor_share_emp, agg_labor_share_sim))
-
-        #println(io, "\n>> Regression Coefficient:\n")
-        #println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", reg_emp, reg_sim))
-
-
     end
 end
 
@@ -504,7 +496,6 @@ pi_r = [pi_r_emp_result,pi_r_sim_result]
 
 best_score = results[best_index][1][1]
 
-
 generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score)
 
 #################### End of the code #####################
@@ -512,9 +503,9 @@ generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,
 ### Bellow we test the sensitivity of the loss function with respect to beta
 ### We also search for the sensitivity of the regression coefficient with respect to beta
 
-
+print("Gen expanding beta")
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = [range(beta[i]/4, stop = beta[i]*10, length = 25) for i in range(1,5)]
+range_beta = [range(beta[i]/4, stop = beta[i]*100, length = 20) for i in range(1,5)]
 expanding_beta = [[i,j,k,l] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4]]
 expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
 
@@ -525,9 +516,42 @@ reg_coef_ = [score != nothing ? score[2][4] : missing for score in results_]
 
 
 reg_coef_[argmin(scores)]
-range_beta[argmin(diff_reg_coef)]
+expanding_beta[argmin(scores)]
 
-diff_reg_coef = [sum((reg_coef.-m).^2) for m in reg_coef_]
 
-reg_coef_[argmin(diff_reg_coef)]
-score
+print("Gen expanding productivity")
+
+beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+
+A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+A ./= sum(A)
+n = 100000
+lb_prod = A*0.1
+ub_prod = 100*A
+lb = Any[vcat(lb_prod)...]
+ub = Any[vcat(ub_prod)...]
+halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+halton_samples =  [halton_samples[:,i] for i in range(1,n)]
+
+
+expanding_beta = [[i,j,k,l] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4]]
+expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
+
+
+results_ = pmap(parallel_SMM_safe, expanding_beta)
+scores = [score != nothing ? score[1][1] : missing for score in results_]
+reg_coef_ = [score != nothing ? score[2][4] : missing for score in results_]
+
+
+reg_coef_[argmin(scores)]
+expanding_beta[argmin(scores)]
+
+A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+A ./= sum(A)
+n = 100000
+lb_prod = A*0.1
+ub_prod = 100*A
+lb = Any[vcat(lb_prod)...]
+ub = Any[vcat(ub_prod)...]
+halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
+halton_samples =  [halton_samples[:,i] for i in range(1,n)]

@@ -6,7 +6,7 @@
 # In this code, r' is replaced by l for clarity. 
 
 # This code simulate the SMM from the function 'SMM' and compare the simulated moments with the empirical one with 'loss_function'. 
-# 'full_SMM' takes a set of parameters and returns the score of the loss function along with simulated moments. 
+# 'full_SMM' takes a set of parameters and returns the score of the loss function along with simulated moments. Weight matrix is identity. 
 
 
 # The moments to be identified are: 
@@ -95,36 +95,52 @@ if test
         DistBin[i,j] = distance_bin(distances[i,j])
     end
 
-    function generate_halton_grid(n)
+    function generate_halton_grid(n_needed::Int, batchsize::Int=1024)
         """
 
         Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
+        This Halton grid function allows condition on the parameters and is much faster than the previous one. 
 
         """
-        # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
-        A = ones(size(A)[1])
-        #lb_beta,lb_labor_share_tech,lb_input_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*input_share,0.8*A,0.1*ones(S*R)
-        #ub_beta,ub_labor_share_tech,ub_input_share_tech,ub_prod,ub_T, = 1,1,1.2.*input_share,1.2*A,20*ones(S*R)
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
 
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5),0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*2,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
+        lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
+        ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
 
+        d = length(lb)
+        accepted = Vector{Vector{Float64}}(undef, 0)
 
-        lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
-        ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
-        
-        halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-        return [halton_samples[:,i] for i in range(1,n)]
-        # This will create a vector of 100 tuples, each with 8 parameters
-        #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
+        # Create a Halton point generator in dimension d
+        hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
+
+        idx = 1
+        while length(accepted) < n_needed
+            # get a batch of raw Halton points
+            batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
+            # Each point is in [0,1]^d
+
+            for raw in batch_raw
+                # scale each component
+                scaled = lb .+ (ub .- lb) .* raw
+
+                # apply your condition
+                #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
+                if (scaled[1] < scaled[2]) & (scaled[1] < scaled[3]) & (scaled[1] < scaled[4]) & (scaled[1] < scaled[5])  # Condition
+                    push!(accepted, scaled)
+                    if length(accepted) >= n_needed
+                        break
+                    end
+                end
+            end
+            idx += batchsize
+        end
+        return accepted
     end
-
-
     params_list = generate_halton_grid(2)
     params = params_list[1]
-
 end
 
 
