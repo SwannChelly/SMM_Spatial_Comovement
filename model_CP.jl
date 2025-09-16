@@ -248,21 +248,22 @@ function SMM(params,simulation = false)
             p_rs_rho = prices_[min_coord_rho]
             p_rs = sum(1/N_rho .* p_rs_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
             p_r = sum((p_rs) .^ (1 - nu).*input_share_tech).^(1 ./ (1 - nu))
-            c_r = (labor_share_tech*regional_wages[r]^(1-lambda)  + (1-labor_share_tech)*p_r^(1-lambda))^(1/(1-lambda)) # Here regional_wages != 0 since N_downstream_per_region[r] >= 1  
+            c_r_ = (labor_share_tech*regional_wages[r]^(1-lambda)  + (1-labor_share_tech)*p_r^(1-lambda))^(1/(1-lambda)) # Here regional_wages != 0 since N_downstream_per_region[r] >= 1  
 
             #if isinf(c_r)
             #    return p_r
             #end
 
-            c_r[r] = c_r*(productivity[r]^(-1))
 
+            c_r[r] = c_r_*(productivity[r]^(-1))
             # We create the trade flows and store the linkages.
             for l in 1:R
                 tmp = map(x -> x[2] == l ? 1 : 0, min_coord_rho)  # Here tmp is a dummy variable
                 linkages[:,:,l] += tmp # Here linkages is a matrix of size (N_rho,S,R) that contains an integer variable indicating if firm rho in s l suppliers the aerospace industry in region R
-                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_rs_rho./p_rs).^(1 .- reshape(nu_s,1,S)) .* (p_rs./p_r).^(1-nu)*(p_r/c_r).^(1-lambda)*c_r[r].^epsilon,dims = 1)
+                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_rs_rho./p_rs).^(1 .- reshape(nu_s,1,S)) .* (p_rs./p_r).^(1-nu)*(p_r/c_r_).^(1-lambda)*c_r[r].^epsilon,dims = 1)
                 X_lrs[l,r,:] = tmp
             end
+            
         end
     end
     
@@ -311,7 +312,7 @@ function SMM(params,simulation = false)
     # 1. Aggregate labor share at the level of the industry \Gamma
     # labor_r : total employement of the downstream industry in region $r$.
     labor_r = zeros(R) 
-    labor_r[N_downstream_per_region.!=0]= agg_labor_share.*y_r[N_downstream_per_region.!=0].*(regional_wages[N_downstream_per_region.!=0]/c_r[N_downstream_per_region.!=0]).^(-lambda)
+    labor_r[N_downstream_per_region.!=0]= labor_share_tech.*y_r[N_downstream_per_region.!=0].*(regional_wages[N_downstream_per_region.!=0]./c_r[N_downstream_per_region.!=0]).^(-lambda)
     
     agg_labor_share = sum(regional_wages.*labor_r)/(sum(c_r.*y_r))
 

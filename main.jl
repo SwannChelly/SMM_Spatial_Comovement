@@ -5,14 +5,6 @@
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 # nohup julia main.jl &
 
-# import Pkg; Pkg.add("QuasiMonteCarlo")
-# import Pkg; Pkg.add("StatsPlots")
-# import Pkg; Pkg.add("DataFrames")
-# import Pkg; Pkg.add("NPZ")
-# import Pkg; Pkg.add("Distributions")
-# import Pkg; Pkg.add("Plots")
-# import Pkg; Pkg.add("CSV")
-
 using Distributed
 using Dates
 @everywhere using NPZ
