@@ -108,8 +108,9 @@ end
     """
     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
     A ./= sum(A)
-    lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-    ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
+    #A ./= A
+    lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*0.1,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
+    ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*5,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
 
     lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
     ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
@@ -250,7 +251,9 @@ min_vec = [minimum(best_params[!, col]) for col in param_names]
 max_vec = [maximum(best_params[!, col]) for col in param_names]
 best_index = best_params[1,:score_index]
 npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
-npzwrite(joinpath(output_folder, "best_params.npy"), data)
+#npzwrite(joinpath(output_folder, "best_params.npy"), vcat([0.36,2,2,3,3], best_params[6:end]))
+npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
+
 
 ##### Build histograms and reporting #####
 
@@ -346,7 +349,7 @@ npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
 high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
 npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
 
-beta = [1,4,9,2.5,8]
+beta = [0.36,2,2,3,3]
 data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
 SMM(vcat(data...))[4]
 function matrix_report(mat,include_n_zero = true)
@@ -505,9 +508,9 @@ generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,
 
 print("Gen expanding beta")
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = [range(beta[i]/4, stop = beta[i]*100, length = 20) for i in range(1,5)]
-expanding_beta = [[i,j,k,l] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4]]
-expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
+range_beta = [range(beta[i]/10, stop = beta[i]*100, length = 10) for i in range(1,5)]
+expanding_beta = [[i,j,k,l,m] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4] for m in range_beta[5]]
+expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
 
 
 results_ = pmap(parallel_SMM_safe, expanding_beta)
@@ -517,9 +520,12 @@ reg_coef_ = [score != nothing ? score[2][4] : missing for score in results_]
 
 reg_coef_[argmin(scores)]
 expanding_beta[argmin(scores)]
+minimum(scores)
 
-
+full_SMM(vcat([0.36,2,2,3,3], best_params[6:end]))[2][4]
 print("Gen expanding productivity")
+
+
 
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
 
@@ -534,8 +540,7 @@ halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 
 halton_samples =  [halton_samples[:,i] for i in range(1,n)]
 
 
-expanding_beta = [[i,j,k,l] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4]]
-expanding_beta = [vcat(i, best_params[5:end]) for i in expanding_beta]
+expanding_beta = [vcat(beta,agg_labor_share_tech,agg_industry_share_tech,prod,T_) for prod in halton_samples]
 
 
 results_ = pmap(parallel_SMM_safe, expanding_beta)
