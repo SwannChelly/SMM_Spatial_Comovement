@@ -27,126 +27,7 @@ using StatsBase
 
 addprocs(100) # Number of parallel cores.
 @everywhere include("model_CP.jl") # Import the model
-
-###### Functions #######
-@everywhere function parallel_SMM(params,simulation)
-    return full_SMM(params,simulation)
-end
-
-
-@everywhere function parallel_SMM_safe(params,simulation = false,show_err = true)
-    try
-        result = parallel_SMM(params,simulation) # Run the SMM in parallel. 
-
-        return result
-    catch e
-        # If an error occurs, return a message or a placeholder result
-        if show_err
-            println("ERROR!!")
-            println(e)
-        end
-        return nothing  # You can also return an error message or a custom value
-    end
-end
-
-
-@everywhere function distance_bin(d)
-    if 20 < d <= 50
-        return 1
-    elseif 50 < d <= 100
-        return 2
-    elseif 100 < d <= 150
-        return 3
-    elseif 150 < d <= 200
-        return 4
-    elseif d > 200
-        return 5
-    else
-        return 0   # for ≤ 20, outside bins
-    end
-end
-
-
-@everywhere function old_generate_halton_grid(n)
-
-
-        """
-
-        Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
-        This Halton grid function doesn't allow for conditions on the parameters. 
-
-        """
-        # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
-        A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-        A ./= sum(A)
-        #A = ones(size(A)[1])
-        #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
-        #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
-
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
-
-
-        lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
-        ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
-        
-        halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-        halton_samples =  [halton_samples[:,i] for i in range(1,n)]
-
-        return halton_samples
-        # This will create a vector of 100 tuples, each with 8 parameters
-        #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
-    end
-
-
-@everywhere function generate_halton_grid(n_needed::Int, batchsize::Int=1024)
-    """
-
-    Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
-    This Halton grid function allows condition on the parameters and is much faster than the previous one. 
-
-    """
-    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-    A ./= sum(A)
-    #A ./= A
-    lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*0.1,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
-    ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*5,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
-
-    lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
-    ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
-
-
-    d = length(lb)
-    accepted = Vector{Vector{Float64}}(undef, 0)
-
-    # Create a Halton point generator in dimension d
-    hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
-
-    idx = 1
-    while length(accepted) < n_needed
-        # get a batch of raw Halton points
-        batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
-        # Each point is in [0,1]^d
-
-        for raw in batch_raw
-            # scale each component
-            scaled = lb .+ (ub .- lb) .* raw
-
-            # apply your condition
-            #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
-            if (scaled[1] < scaled[2]) & (scaled[1] < scaled[3]) & (scaled[1] < scaled[4]) & (scaled[1] < scaled[5])  # Condition
-                push!(accepted, scaled)
-                if length(accepted) >= n_needed
-                    break
-                end
-            end
-        end
-
-        idx += batchsize
-    end
-
-    return accepted
-end
+@everywhere include("tools.jl") # Import the model
 
 ############## Load Parameters #################
 
@@ -194,314 +75,39 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1] #
 @everywhere const delta_r = $(ones(R))
 
 # Load empirical moments and reshape them.
-emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
-emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
-reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
+@everywhere const emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
+@everywhere const emp_pi_r = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end])
+@everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef.npy")))
 empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
 empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
 @everywhere const empirical_moments = $(empirical_moments_local)
 
 #### Bellow, the model is computed over a Halton grid of size n. 
-# If simulation = false, we compute the simulated moments and compare them the the empirical moments. 
-# If simulation = true, we only compute the trade flows.
-
-simulation = false
-n = 500000
-
-if simulation
-
-    t1 = time()
-    simulations = pmap(parallel_SMM_safe, 1:2)
-    t1 = time()-t1
-    print(t1)
-
-    simulations = filter(!isnothing, simulations)
-    simulations = mean(simulations)
-
-    npzwrite(joinpath(input_folder, "M_ij.npy"), simulations)
-else
-    print("Starting simulation: ")
-    t1 = time()
-    params_list = generate_halton_grid(n,2000)
-    print(time()-t1)
-    print("\n Halton created !")
-    t1 = time()
-    results = pmap(parallel_SMM_safe, params_list)
-    t1 = time()-t1
-    print("\n Simulation ended: ")
-    print(t1)
-end    
-
-# Collect the results of the calibration and store them. 
-params_matrix = hcat([collect(unpack_params(params)) for params in params_list]...)
-param_names = ["beta", "agg_labor_share_tech","agg_industry_share_tech", "prod", "T"]  # Column names for the parameters
-df = DataFrame(params_matrix', :auto)  # Transpose to get parameters as rows
-rename!(df, param_names)  # Rename columns to match parameter names
-score = [score[1] != nothing ? score[1][1] : missing for score in results]
-
-df[!,"score_index"] = vec(1:length(score))
-df[!, "score"] = score
-df[!, :score] .= map(x -> x === missing ? Inf : x, df[!, :score]) # Treat missing scores
-CSV.write(joinpath(input_folder,"parameters.csv"),df)
-
-# Get best params and best index. Store them
-best_params = CSV.read(joinpath(input_folder,"parameters.csv"),DataFrame)
-min_vec = [minimum(best_params[!, col]) for col in param_names]
-max_vec = [maximum(best_params[!, col]) for col in param_names]
-best_index = best_params[1,:score_index]
-npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
-#npzwrite(joinpath(output_folder, "best_params.npy"), vcat([0.36,2,2,3,3], best_params[6:end]))
-npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
 
 
-##### Build histograms and reporting #####
+n = 100000
+@everywhere include("tools.jl") # Import the model
+params_list,results = train_stage_one(n)
+save_stage_best_params(params_list,results,"0")
+generate_report("0")
 
-best_params = NPZ.npzread(joinpath(output_folder, "best_params.npy")) # Load best params.
-results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
-best_index = 1
-
-# Prepare vectors.
-# Vectorize and filter
-emp_gamma = vec(emp_gamma_ls)
-sim_gamma = vec(results[best_index][2][3])
-
-# Filter non-zero values
-emp_gamma_nz = emp_gamma[emp_gamma .>= 0.01]
-sim_gamma_nz = sim_gamma[sim_gamma .>= 0.01]
-emp_pi_r = vec(emp_pi_r)
-sim_pi_r = vec(results[best_index][2][5])
-emp_pi_sA = agg_industry_share[2:end]
-sim_pi_sA = results[best_index][2][2]
-
-# Define thresholds
-x_chi = quantile(emp_gamma[emp_gamma.!=0],0.9)
-x_pi_r = 0.0
-x_pi_sA = 0.0
-
-# Define x_vals only for strictly positive values
-xmin = minimum([minimum(emp_gamma_nz), minimum(sim_gamma_nz)])
-xmax = maximum([maximum(emp_gamma_nz), maximum(sim_gamma_nz)])
-x_vals = range(xmin, xmax, length=300)
-x_vals = x_vals[x_vals .> 0]  # avoid x=0
-# Compute cdf and survival
-F_emp = ecdf(emp_gamma_nz)
-F_sim = ecdf(sim_gamma_nz)
-ccdf_emp = F_emp.(x_vals)
-ccdf_sim = F_sim.(x_vals)
-keep = (ccdf_emp .> 0) .& (ccdf_sim .> 0) .& (x_vals .> 0) # Filter to avoid log(0)
-
-# Plot only where both x and y values are > 0
-p1 = plot(x_vals[keep], ccdf_emp[keep], label="Empirical", lw=2, color=:blue,
-     xscale=:log10, yscale=:log10, xlabel="gamma_{ls}", ylabel="CDF",
-     title="Log-Log Complementary CDF of gamma_{ls}")
-plot!(p1,x_vals[keep], ccdf_sim[keep], label="Simulated", lw=2, color=:red)
-
-emp_vals = emp_gamma[emp_gamma .> x_chi]
-sim_vals = sim_gamma[sim_gamma .> x_chi]
-xmin = x_chi
-xmax = maximum([maximum(emp_vals), maximum(sim_vals)])
-nbins = 30
-bin_edges = range(xmin, xmax; length=nbins+1)
-
-# Histogram with fixed bins
-p2 = histogram(emp_vals,
-    alpha=0.5, bins=bin_edges, label="Empirical", color=:blue, title="gamma_{ls}",
-    xlims=(xmin, xmax))
-
-histogram!(p2, sim_vals,
-    alpha=0.5, bins=bin_edges, label="Simulated", color=:red)
+alpha = 0.1
+variable = "productivity"
+params_list = generate_halton_grid(n,2000,joinpath(output_folder,"0"),variable,alpha)
+params_list,results = train_stage_one(n,params_list)
+save_stage_best_params(params_list,results,"1")
+generate_report("1",variable,alpha)
 
 
-# Histogram 2: pi_r
-p3 = histogram(emp_pi_r[emp_pi_r .> x_pi_r],
-    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_r",
-    xlims=(x_pi_r, maximum([maximum(emp_pi_r), maximum(sim_pi_r)])))
-
-histogram!(p3, sim_pi_r[sim_pi_r .> x_pi_r],
-    alpha=0.5, bins=30, label="Simulated", color=:red)
-
-# Histogram 4: pi_s
-p4 = histogram(emp_pi_sA[emp_pi_sA .> x_pi_sA],
-    alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_s",
-    xlims=(x_pi_sA, maximum([maximum(emp_pi_sA), maximum(sim_pi_sA)])))
-
-histogram!(p4, sim_pi_sA[sim_pi_sA .> x_pi_sA],
-    alpha=0.5, bins=30, label="Simulated", color=:red)
-
-# Combine into a 2x2 subplot layout (fourth plot left blank)
-plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
-
-savefig(joinpath(output_folder, "dashboard.png"))
-
-# Bellow we store pi_r, the productivity, and trade flows in numpy to plot them with python. 
-npzwrite(joinpath(input_folder, "pi_r.npy"), results[best_index][2][5])
-npzwrite(joinpath(input_folder, "productivity.npy"), unpack_params(best_params)[4])
 
 
-beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
-beta = [2,9,18,5,17]
-low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-npzwrite(joinpath(input_folder, "M_ij_low_trade_cost.npy"), low)
-current = SMM(vcat([1,1,1,1,1]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-npzwrite(joinpath(input_folder, "M_ij_trade_cost.npy"), current)
-high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-npzwrite(joinpath(input_folder, "M_ij_high_trade_cost.npy"), high)
-
-beta = [0.36,2,2,3,3]
-data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
-SMM(vcat(data...))[4]
-function matrix_report(mat,include_n_zero = true)
-    vals = vec(mat)
-    n_zeros = count(==(0), vals)
-    nonzero_vals = filter(!=(0), vals)
-
-    if isempty(nonzero_vals)
-        error("Matrix contains only zeros; cannot compute statistics on non-zero values.")
-    end
-    if include_n_zero
-        return (
-        n_zeros = n_zeros,
-        q1 = quantile(nonzero_vals, 0.25),
-        median = quantile(nonzero_vals, 0.50),
-        q3 = quantile(nonzero_vals, 0.75),
-        max_val = maximum(nonzero_vals),
-    )
-    else
-        return (
-            q1 = quantile(nonzero_vals, 0.25),
-            median = quantile(nonzero_vals, 0.50),
-            q3 = quantile(nonzero_vals, 0.75),
-            max_val = maximum(nonzero_vals),
-        )
-    end
-end
-
-
-function add_first_element(v::Vector{Float64})
-    first_element = 1.0 - sum(v)
-    return [first_element; v]
-end
-
-
-function generate_dashboard_report(
-    n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,
-    output_file::String = output_folder*"/report.txt"
-)   
-
-    # gamma_ls summary table
-    agg_labor_share_emp,agg_labor_share_sim=agg_labor_share_
-    agg_industry_share_emp,agg_industry_share_sim=agg_industry_share_
-    gamma_emp,gamma_sim = gamma_ls_
-    reg_emp,reg_sim = reg_
-    pi_r_emp,pi_r_sim = pi_r
-
-    gamma_df = DataFrame(
-        metric = ["Number of zeros", "Q1", "Median", "Q3", "Max value"],
-        empirical = [
-            gamma_emp.n_zeros,
-            gamma_emp.q1,
-            gamma_emp.median,
-            gamma_emp.q3,
-            gamma_emp.max_val
-        ],
-        simulated = [
-            gamma_sim.n_zeros,
-            gamma_sim.q1,
-            gamma_sim.median,
-            gamma_sim.q3,
-            gamma_sim.max_val
-        ]
-    )
-    pi_r_df = DataFrame(
-        metric = [ "Q1", "Median", "Q3", "Max value"],
-        empirical = [
-            pi_r_emp.q1,
-            pi_r_emp.median,
-            pi_r_emp.q3,
-            pi_r_emp.max_val
-        ],
-        simulated = [
-            pi_r_sim.q1,
-            pi_r_sim.median,
-            pi_r_sim.q3,
-            pi_r_sim.max_val
-        ]
-    )
-
-    sectors = sort(unique(CSV.read(joinpath(input_folder, "filter_N_upstream.csv"), DataFrame)[!, "A129"]))
-    agg_industry_share_df = DataFrame(
-        metric = sectors,
-        empirical = agg_industry_share_emp,
-        simulated = agg_industry_share_sim
-    )
-
-    reg_df = DataFrame(
-        bins = ["]20,50]","]50,100]", "]100,150]", "]150,200]", ">200"],
-        empirical = reg_emp,
-        simulated = reg_sim
-    )
-
-    date = now()
-    open(output_file, "w") do io
-        println(io,"Date: $date\n")
-        println(io, "Score: $best_score\n") # Ajoutez cette ligne pour inclure le score
-        println(io, "Size of the grid: $n\n") 
-        println(io, "===========================\n     MODEL DIAGNOSTICS REPORT\n===========================\n")
-        println(io, "\n>> Aggregate labor share:\n")
-        println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f", "Coefficient", agg_labor_share_emp, agg_labor_share_sim))
-        println(io, ">> gamma_ls (quartile are for the distribution without zeros):\n")
-        for row in eachrow(gamma_df)
-            println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
-                row.metric, row.empirical, row.simulated))
-        end
-
-        println(io, "\n>> pi_r :\n")
-        for row in eachrow(pi_r_df)
-            println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
-                row.metric, row.empirical, row.simulated))
-        end
-
-        println(io, "\n>> Input share: \n")
-        for row in eachrow(agg_industry_share_df)
-            println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
-                row.metric, row.empirical, row.simulated))
-        end
-
-        println(io, "\n>> Regression coefficients: \n")
-        for row in eachrow(reg_df)
-            println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
-                row.bins, row.empirical, row.simulated))
-        end
-    end
-end
-
-
-agg_labor_share_emp = agg_labor_share
-agg_labor_share_sim = results[best_index][2][1][1]
-agg_labor_share_ = [agg_labor_share_emp,agg_labor_share_sim]
-
-agg_industry_share_ = [agg_industry_share,add_first_element(results[best_index][2][2])]
-
-gamma_emp_result = matrix_report(emp_gamma_ls)
-gamma_sim_result = matrix_report(results[best_index][2][3])
-gamma_ls_ = [gamma_emp_result,gamma_sim_result]
-
-reg_emp = reg_coef
-reg_sim = results[best_index][2][4]
-reg_ = [reg_emp,reg_sim]
-
-pi_r_emp_result = matrix_report(emp_pi_r,false)
-pi_r_sim_result = matrix_report(results[best_index][2][5])
-pi_r = [pi_r_emp_result,pi_r_sim_result]
-
-
-best_score = results[best_index][1][1]
-
-generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score)
 
 #################### End of the code #####################
+
+
+#npzwrite(joinpath(output_folder, "best_params.npy"), vcat([0.36,2,2,3,3], best_params[6:end]))
+npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
 
 ### Bellow we test the sensitivity of the loss function with respect to beta
 ### We also search for the sensitivity of the regression coefficient with respect to beta
@@ -511,6 +117,7 @@ beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_para
 range_beta = [range(beta[i]/10, stop = beta[i]*100, length = 10) for i in range(1,5)]
 expanding_beta = [[i,j,k,l,m] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4] for m in range_beta[5]]
 expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
+
 
 
 results_ = pmap(parallel_SMM_safe, expanding_beta)
