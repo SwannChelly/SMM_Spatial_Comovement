@@ -86,19 +86,28 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 #### Bellow, the model is computed over a Halton grid of size n. 
 
 
-n = 100000
+n = 300000
 @everywhere include("tools.jl") # Import the model
 params_list,results = train_stage_one(n)
 save_stage_best_params(params_list,results,"0")
 generate_report("0")
 
-alpha = 0.1
+alpha = 0.5
 variable = "productivity"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"0"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"1")
 generate_report("1",variable,alpha)
 
+alpha = 0.5
+variable = "beta"
+params_list = generate_halton_grid(n,2000,joinpath(output_folder,"1"),variable,alpha)
+params_list,results = train_stage_one(n,params_list)
+save_stage_best_params(params_list,results,"2")
+generate_report("2",variable,alpha)
+
+
+params_dict = load_parameters_dict(joinpath(output_folder,"1"))
 
 
 

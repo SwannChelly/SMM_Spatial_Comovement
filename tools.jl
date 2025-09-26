@@ -23,8 +23,8 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
         vals = unpack_params(best_params)
         params_dict = Dict(names .=> vals)
-        lb = (1-alpha).*params_dict[Symbol(variable)]
-        ub = (1+alpha).*params_dict[Symbol(variable)]
+        lb = (alpha).*params_dict[Symbol(variable)]
+        ub = (1/alpha).*params_dict[Symbol(variable)]
         if variable == "beta"
             condition = true
         else 
@@ -275,6 +275,13 @@ function save_stage_best_params(params_list,results,stage)
 
 end
 
+function load_parameters_dict(folder)
+    best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) 
+    names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
+    vals = unpack_params(best_params)
+    params_dict = Dict(names .=> vals)
+    return params_dict
+end
 
 function generate_report(stage,variable = nothing,alpha = "")
 
