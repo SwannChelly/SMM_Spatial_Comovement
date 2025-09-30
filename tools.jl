@@ -27,13 +27,17 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
         ub = (1/alpha).*params_dict[Symbol(variable)]
         if variable == "beta"
             condition = true
+        elseif variable == "agg_labor_share_tech"
+            lb = 0.001
+            ub = 1
+            condition = false
         else 
             condition = false
         end
     end
     
 
-
+    
     d = length(lb)
     accepted = Vector{Vector{Float64}}(undef, 0)
 
@@ -53,7 +57,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
             # apply your condition
             #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
             if condition
-                if (scaled[1] < scaled[2]) & (scaled[1] < scaled[3]) & (scaled[1] < scaled[4]) & (scaled[1] < scaled[5])  # Condition
+                if (scaled[1] < 1+scaled[2]) & (scaled[1] < 1+scaled[3]) & (scaled[1] < 1+scaled[4]) & (scaled[1] < 1+scaled[5])  # Condition
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -265,13 +269,16 @@ function generate_dashboard_report(
     end
 end
 
-function save_stage_best_params(params_list,results,stage)
+function save_stage_best_params(params_list,results,stage,best_params = nothing)
     # Collect the results of the calibration and store them. 
     folder = joinpath(output_folder, stage)
     mkpath(folder) 
-    score = [score[1] != nothing ? score[1][1] : missing for score in results]
-    best_index = argmin(score)
-    npzwrite(joinpath(folder, "best_params.npy"), params_list[best_index])
+    if best_params == nothing
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        best_index = argmin(score)
+        best_params = params_list[best_index]
+    end
+    npzwrite(joinpath(folder, "best_params.npy"), best_params)
 
 end
 
@@ -283,12 +290,13 @@ function load_parameters_dict(folder)
     return params_dict
 end
 
-function generate_report(stage,variable = nothing,alpha = "")
+function generate_report(stage,variable = nothing,best_params= nothing,alpha = "")
 
     folder = joinpath(output_folder, stage)
     mkpath(folder) 
-
-    best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+    if best_params == nothing
+        best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+    end
     results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
     best_index = 1
 

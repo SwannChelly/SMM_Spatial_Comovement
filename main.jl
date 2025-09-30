@@ -92,24 +92,41 @@ params_list,results = train_stage_one(n)
 save_stage_best_params(params_list,results,"0")
 generate_report("0")
 
+
+n = 20000
+generate_report(stage = "1",variable = variable,alpha = alpha)
 alpha = 0.5
-variable = "productivity"
+variable = "agg_labor_share_tech"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"0"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"1")
-generate_report("1",variable,alpha)
+generate_report(stage = "1",variable = variable,alpha = alpha)
 
 alpha = 0.5
-variable = "beta"
+variable = "agg_labor_share_tech"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"1"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"2")
-generate_report("2",variable,alpha)
+generate_report("2",variable = variable,alpha = alpha)
+
+alpha = 0.5
+variable = "beta"
+params_list = generate_halton_grid(n,2000,joinpath(output_folder,"2"),variable,alpha)
+params_list,results = train_stage_one(n,params_list)
+save_stage_best_params(params_list,results,"3")
+generate_report("3",variable,alpha)
+
+
 
 
 params_dict = load_parameters_dict(joinpath(output_folder,"1"))
 
 
+folder = joinpath(output_folder, "0")
+best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+full_SMM(vcat([0.7,3,3,3,3], best_params[6:end]))[2][4]
+generate_report("0",vcat([0.7,3,3,3,3], best_params[6:end]))
+save_stage_best_params(stage = "0",best_params = vcat([0.7,3,3,3,3], best_params[6:end]))
 
 
 #################### End of the code #####################
