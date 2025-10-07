@@ -86,7 +86,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 #### Bellow, the model is computed over a Halton grid of size n. 
 
 
-n = 300000
+n = 500000
 @everywhere include("tools.jl") # Import the model
 params_list,results = train_stage_one(n)
 save_stage_best_params(params_list,results,"0")
@@ -94,38 +94,39 @@ generate_report("0")
 
 
 n = 20000
-generate_report(stage = "1",variable = variable,alpha = alpha)
+
 alpha = 0.5
 variable = "agg_labor_share_tech"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"0"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"1")
-generate_report(stage = "1",variable = variable,alpha = alpha)
+generate_report("1",variable,nothing,alpha)
 
-alpha = 0.5
-variable = "agg_labor_share_tech"
+
+n = 300000
+alpha = 2
+variable = "productivity"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"1"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"2")
-generate_report("2",variable = variable,alpha = alpha)
+generate_report("2",variable,nothing,alpha)
 
-alpha = 0.5
+
+n = 300000
+alpha = 2
 variable = "beta"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"2"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"3")
-generate_report("3",variable,alpha)
+generate_report("3",variable,nothing,alpha)
 
 
 
 
-params_dict = load_parameters_dict(joinpath(output_folder,"1"))
-
-
-folder = joinpath(output_folder, "0")
+folder = joinpath(output_folder, "1")
 best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
 full_SMM(vcat([0.7,3,3,3,3], best_params[6:end]))[2][4]
-generate_report("0",vcat([0.7,3,3,3,3], best_params[6:end]))
+generate_report("1","beta",vcat([0.7,3,3,3,3], best_params[6:end]),alpha)
 save_stage_best_params(stage = "0",best_params = vcat([0.7,3,3,3,3], best_params[6:end]))
 
 

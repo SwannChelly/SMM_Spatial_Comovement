@@ -23,8 +23,8 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
         vals = unpack_params(best_params)
         params_dict = Dict(names .=> vals)
-        lb = (alpha).*params_dict[Symbol(variable)]
-        ub = (1/alpha).*params_dict[Symbol(variable)]
+        lb = (1/alpha).*params_dict[Symbol(variable)]
+        ub = (alpha).*params_dict[Symbol(variable)]
         if variable == "beta"
             condition = true
         elseif variable == "agg_labor_share_tech"
@@ -57,7 +57,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
             # apply your condition
             #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
             if condition
-                if (scaled[1] < 1+scaled[2]) & (scaled[1] < 1+scaled[3]) & (scaled[1] < 1+scaled[4]) & (scaled[1] < 1+scaled[5])  # Condition
+                if (scaled[1] + 2 < scaled[2]) & (scaled[1] + 2< scaled[3]) & (scaled[1] + 2< scaled[4]) & (scaled[1] + 2< scaled[5])  # Condition
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -282,10 +282,12 @@ function save_stage_best_params(params_list,results,stage,best_params = nothing)
 
 end
 
-function load_parameters_dict(folder)
-    best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) 
+function load_parameters_dict(folder = nothing,params = nothing)
+    if params == nothing
+        params = NPZ.npzread(joinpath(folder, "best_params.npy")) 
+    end
     names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
-    vals = unpack_params(best_params)
+    vals = unpack_params(params)
     params_dict = Dict(names .=> vals)
     return params_dict
 end
@@ -294,9 +296,11 @@ function generate_report(stage,variable = nothing,best_params= nothing,alpha = "
 
     folder = joinpath(output_folder, stage)
     mkpath(folder) 
+
     if best_params == nothing
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
     end
+    
     results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
     best_index = 1
 
