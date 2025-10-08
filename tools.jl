@@ -3,7 +3,7 @@
 using Printf
 
 
-function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_folder = nothing ,variable = nothing,alpha = 0.1)
+function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing ,variable = nothing,alpha = 0.1)
     """
 
     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
@@ -12,9 +12,13 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
     """
     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
     A ./= sum(A)
+    if init
+        return vcat([ones(5),[agg_labor_share],agg_industry_share,A,ones(S*R)]...)
+    end
     if last_stage_folder == nothing
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*0.1,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*5,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
+        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = init_beta.*0.5,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
+        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = init_beta.*2,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
+        
         lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
         ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
         condition = true
@@ -57,7 +61,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,last_stage_fold
             # apply your condition
             #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
             if condition
-                if (scaled[1] + 2 < scaled[2]) & (scaled[1] + 2< scaled[3]) & (scaled[1] + 2< scaled[4]) & (scaled[1] + 2< scaled[5])  # Condition
+                if (scaled[1]  < scaled[2]) & (scaled[1]  < scaled[3]) & (scaled[1]  < scaled[4]) & (scaled[1]  < scaled[5])  # Condition
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -122,12 +126,12 @@ function distance_bin(d)
     end
 end
 
-function train_stage_one(n,params_list = nothing)
+function train_stage_one(n,init_beta,params_list = nothing)
 
     print("Starting simulation: ")
     t1 = time()
     if params_list == nothing
-        params_list = generate_halton_grid(n,2000)
+        params_list = generate_halton_grid(n,2000,false,init_beta)
     end
     print(time()-t1)
     print("\n Halton created !")

@@ -85,16 +85,30 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 
 #### Bellow, the model is computed over a Halton grid of size n. 
 
+#### We first look at the best beta considering identical productivity
+params_list = [generate_halton_grid(2,1024,true)]
+best_params = params_list[1]
+beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+range_beta = range(0.01, stop = 5, length = 50) 
+expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
+expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
+results_ = pmap(parallel_SMM_safe, expanding_beta)
+scores = [score != nothing ? score[1][1] : missing for score in results_]
+k = 1
+y0 = reg_coef[k]
+y1 = reg_coef[k+1]
+reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
+y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+init_beta = expanding_beta[argmin(y_flat)][1:5]
 
 n = 500000
 @everywhere include("tools.jl") # Import the model
-params_list,results = train_stage_one(n)
+params_list,results = train_stage_one(n,init_beta)
 save_stage_best_params(params_list,results,"0")
 generate_report("0")
 
 
 n = 20000
-
 alpha = 0.5
 variable = "agg_labor_share_tech"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"0"),variable,alpha)
@@ -103,9 +117,9 @@ save_stage_best_params(params_list,results,"1")
 generate_report("1",variable,nothing,alpha)
 
 
-n = 300000
+n = 500000
 alpha = 2
-variable = "productivity"
+variable = "beta"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"1"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"2")
@@ -114,18 +128,16 @@ generate_report("2",variable,nothing,alpha)
 
 n = 300000
 alpha = 2
-variable = "beta"
+variable = "productivity"
 params_list = generate_halton_grid(n,2000,joinpath(output_folder,"2"),variable,alpha)
 params_list,results = train_stage_one(n,params_list)
 save_stage_best_params(params_list,results,"3")
 generate_report("3",variable,nothing,alpha)
 
 
-
-
-folder = joinpath(output_folder, "1")
+folder = joinpath(output_folder, "0")
 best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
-full_SMM(vcat([0.7,3,3,3,3], best_params[6:end]))[2][4]
+full_SMM(vcat([0.7,1,1,1,], best_params[6:end]))[2][4]
 generate_report("1","beta",vcat([0.7,3,3,3,3], best_params[6:end]),alpha)
 save_stage_best_params(stage = "0",best_params = vcat([0.7,3,3,3,3], best_params[6:end]))
 
@@ -139,58 +151,27 @@ npzwrite(joinpath(output_folder, "best_params.npy"), params_list[best_index])
 ### Bellow we test the sensitivity of the loss function with respect to beta
 ### We also search for the sensitivity of the regression coefficient with respect to beta
 
-print("Gen expanding beta")
+params_list = [generate_halton_grid(2,1024,true)]
+best_params = params_list[1]
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = [range(beta[i]/10, stop = beta[i]*100, length = 10) for i in range(1,5)]
-expanding_beta = [[i,j,k,l,m] for i in range_beta[1] for j in range_beta[2] for k in range_beta[3] for l in range_beta[4] for m in range_beta[5]]
+range_beta = range(0.01, stop = 5, length = 50) 
+expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
 expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
-
-
-
 results_ = pmap(parallel_SMM_safe, expanding_beta)
 scores = [score != nothing ? score[1][1] : missing for score in results_]
-reg_coef_ = [score != nothing ? score[2][4] : missing for score in results_]
+reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
+y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+init_beta = expanding_beta[argmin(y_flat)][1:5]
 
 
-reg_coef_[argmin(scores)]
-expanding_beta[argmin(scores)]
-minimum(scores)
+k = 1
+y0 = reg_coef[k]
+y1 = reg_coef[k+1]
+reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
+x_flat = vcat([collect(xi) for xi in range_beta]...)   # careful: ... to expand the list
+y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
 
-full_SMM(vcat([0.36,2,2,3,3], best_params[6:end]))[2][4]
-print("Gen expanding productivity")
+plot(x_flat, y_flat, label=false)
+hline!([y0], label="y = $y0", ls=:dash, color=:red)
 
-
-
-beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-
-A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-A ./= sum(A)
-n = 100000
-lb_prod = A*0.1
-ub_prod = 100*A
-lb = Any[vcat(lb_prod)...]
-ub = Any[vcat(ub_prod)...]
-halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-halton_samples =  [halton_samples[:,i] for i in range(1,n)]
-
-
-expanding_beta = [vcat(beta,agg_labor_share_tech,agg_industry_share_tech,prod,T_) for prod in halton_samples]
-
-
-results_ = pmap(parallel_SMM_safe, expanding_beta)
-scores = [score != nothing ? score[1][1] : missing for score in results_]
-reg_coef_ = [score != nothing ? score[2][4] : missing for score in results_]
-
-
-reg_coef_[argmin(scores)]
-expanding_beta[argmin(scores)]
-
-A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-A ./= sum(A)
-n = 100000
-lb_prod = A*0.1
-ub_prod = 100*A
-lb = Any[vcat(lb_prod)...]
-ub = Any[vcat(ub_prod)...]
-halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-halton_samples =  [halton_samples[:,i] for i in range(1,n)]
+x_flat[argmin([abs(y-y0) for y in y_flat])]
