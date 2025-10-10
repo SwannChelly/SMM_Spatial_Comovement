@@ -61,7 +61,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
             # apply your condition
             #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
             if condition
-                if (scaled[1]  < scaled[2]) & (scaled[1]  < scaled[3]) & (scaled[1]  < scaled[4]) & (scaled[1]  < scaled[5])  # Condition
+                if (scaled[1]  < scaled[2]) & (scaled[2]  < scaled[3]) & (scaled[3]  < scaled[4]) & (scaled[4]  < scaled[5])  # Condition
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -273,14 +273,16 @@ function generate_dashboard_report(
     end
 end
 
-function save_stage_best_params(params_list,results,stage,best_params = nothing)
+function save_stage_best_params(params_list,results,stage,K = 1,best_params = nothing)
     # Collect the results of the calibration and store them. 
     folder = joinpath(output_folder, stage)
     mkpath(folder) 
     if best_params == nothing
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        best_index = argmin(score)
-        best_params = params_list[best_index]
+        valid_indices = findall(!ismissing, score)
+        sorted_indices = sort(valid_indices, by = i -> score[i])
+        top_indices = sorted_indices[1:min(K, length(sorted_indices))]
+        best_params = reduce(hcat,params_list[top_indices])
     end
     npzwrite(joinpath(folder, "best_params.npy"), best_params)
 

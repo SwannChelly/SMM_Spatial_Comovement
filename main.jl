@@ -101,38 +101,62 @@ reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for 
 y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
 init_beta = expanding_beta[argmin(y_flat)][1:5]
 
-n = 500000
+n = 100000
 @everywhere include("tools.jl") # Import the model
 params_list,results = train_stage_one(n,init_beta)
-save_stage_best_params(params_list,results,"0")
+save_stage_best_params(params_list,results,"0",50)
 generate_report("0")
+
+
 
 
 n = 20000
 alpha = 0.5
 variable = "agg_labor_share_tech"
-params_list = generate_halton_grid(n,2000,joinpath(output_folder,"0"),variable,alpha)
-params_list,results = train_stage_one(n,params_list)
+params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"0"),variable,alpha)
+params_list,results = train_stage_one(n,nothing,params_list)
 save_stage_best_params(params_list,results,"1")
 generate_report("1",variable,nothing,alpha)
-
-
-n = 500000
-alpha = 2
-variable = "beta"
-params_list = generate_halton_grid(n,2000,joinpath(output_folder,"1"),variable,alpha)
-params_list,results = train_stage_one(n,params_list)
-save_stage_best_params(params_list,results,"2")
-generate_report("2",variable,nothing,alpha)
 
 
 n = 300000
 alpha = 2
 variable = "productivity"
-params_list = generate_halton_grid(n,2000,joinpath(output_folder,"2"),variable,alpha)
-params_list,results = train_stage_one(n,params_list)
+params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"1"),variable,alpha)
+params_list,results = train_stage_one(n,nothing,params_list)
+save_stage_best_params(params_list,results,"2")
+generate_report("2",variable,nothing,alpha)
+
+
+n = 500000
+alpha = 2
+variable = "beta"
+params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"2"),variable,alpha)
+params_list,results = train_stage_one(n,nothing,params_list)
 save_stage_best_params(params_list,results,"3")
 generate_report("3",variable,nothing,alpha)
+
+
+
+
+folder = joinpath(output_folder, "2")
+best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+range_beta = range(0.01, stop = 5, length = 50) 
+expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
+expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
+results_ = pmap(parallel_SMM_safe, expanding_beta)
+scores = [score != nothing ? score[1][1] : missing for score in results_]
+k = 1
+y0 = reg_coef[k]
+y1 = reg_coef[k+1]
+reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
+y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+
+
+save_stage_best_params(expanding_beta[argmin(y_flat)],results_[argmin(y_flat)],"test")
+generate_report("test",variable,expanding_beta[argmin(y_flat)],alpha)
+
 
 
 folder = joinpath(output_folder, "0")
@@ -140,7 +164,6 @@ best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best param
 full_SMM(vcat([0.7,1,1,1,], best_params[6:end]))[2][4]
 generate_report("1","beta",vcat([0.7,3,3,3,3], best_params[6:end]),alpha)
 save_stage_best_params(stage = "0",best_params = vcat([0.7,3,3,3,3], best_params[6:end]))
-
 
 #################### End of the code #####################
 
