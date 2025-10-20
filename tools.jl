@@ -3,7 +3,7 @@
 using Printf
 
 
-function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing ,variable = nothing,alpha = 0.1)
+function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing,K = 1 ,variable = nothing,alpha = 0.1)
     """
 
     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
@@ -23,7 +23,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
         ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
         condition = true
     else
-        best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy")) # Load best params.
+        best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
         vals = unpack_params(best_params)
         params_dict = Dict(names .=> vals)
@@ -128,18 +128,18 @@ end
 
 function train_stage_one(n,init_beta,params_list = nothing)
 
-    print("Starting simulation: ")
+    #print("Starting simulation: ")
     t1 = time()
     if params_list == nothing
         params_list = generate_halton_grid(n,2000,false,init_beta)
     end
-    print(time()-t1)
-    print("\n Halton created !")
+    #print(time()-t1)
+    #print("\n Halton created !")
     t1 = time()
     results = pmap(parallel_SMM_safe, params_list)
     t1 = time()-t1
-    print("\n Simulation ended: ")
-    print(t1)
+    #print("\n Simulation ended: ")
+    #print(t1)
     return params_list,results
 end
 
@@ -298,13 +298,13 @@ function load_parameters_dict(folder = nothing,params = nothing)
     return params_dict
 end
 
-function generate_report(stage,variable = nothing,best_params= nothing,alpha = "")
+function generate_report(stage,K=1,variable = nothing,best_params= nothing,alpha = "")
 
     folder = joinpath(output_folder, stage)
     mkpath(folder) 
 
     if best_params == nothing
-        best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+        best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))[:,K] # Load best params.
     end
     
     results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.

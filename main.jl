@@ -108,35 +108,90 @@ save_stage_best_params(params_list,results,"0",50)
 generate_report("0")
 
 
+params_list  = [best_params[:,i] for i in 1:50]
+results = pmap(parallel_SMM_safe,params_list)
+scores = [score != nothing ? score[1][1] : missing for score in results]
 
 
-n = 20000
+
+n = 100
 alpha = 0.5
 variable = "agg_labor_share_tech"
-params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"0"),variable,alpha)
-params_list,results = train_stage_one(n,nothing,params_list)
-save_stage_best_params(params_list,results,"1")
-generate_report("1",variable,nothing,alpha)
+best_params = Any[]
+for i in 1:50
+    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"0"),i,variable,alpha)
+    params_list,results = train_stage_one(n,nothing,params_list)
+    score = [score[1] != nothing ? score[1][1] : missing for score in results]
+    push!(best_params,params_list[argmin(score)])
+end
+folder = joinpath(output_folder, "1")
+mkpath(folder) 
+npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
 
 
-n = 300000
+
+best_params = NPZ.npzread(joinpath(output_folder,"1", "best_params.npy")) # Load best params.
+#save_stage_best_params(params_list,results,"1")
+#generate_report("1",variable,nothing,alpha)
+
+
+n = 3000
 alpha = 2
 variable = "productivity"
-params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"1"),variable,alpha)
-params_list,results = train_stage_one(n,nothing,params_list)
-save_stage_best_params(params_list,results,"2")
-generate_report("2",variable,nothing,alpha)
+best_params = Any[]
+for i in 1:50
+    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"1"),i,variable,alpha)
+    params_list,results = train_stage_one(n,nothing,params_list)
+    score = [score[1] != nothing ? score[1][1] : missing for score in results]
+    push!(best_params,params_list[argmin(score)])
+end
+folder = joinpath(output_folder, "2")
+mkpath(folder) 
+npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
 
 
-n = 500000
+
+n = 10000
 alpha = 2
 variable = "beta"
-params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"2"),variable,alpha)
-params_list,results = train_stage_one(n,nothing,params_list)
-save_stage_best_params(params_list,results,"3")
-generate_report("3",variable,nothing,alpha)
+best_params = Any[]
+for i in 1:50
+    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"2"),i,variable,alpha)
+    params_list,results = train_stage_one(n,nothing,params_list)
+    score = [score[1] != nothing ? score[1][1] : missing for score in results]
+    push!(best_params,params_list[argmin(score)])
+end
+folder = joinpath(output_folder, "3")
+mkpath(folder) 
+npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
 
 
+
+
+### STO
+folder = joinpath(output_folder, "3")
+best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+best_params = [best_params[:,i] for i in 1:50]
+results = [full_SMM(best_params[i]) for i in 1:50]
+scores = [score != nothing ? score[1][1] : missing for score in results]
+
+k = 1
+y0 = reg_coef[k]
+y1 = reg_coef[k+1]
+reg_coef_ = [score != nothing ? score[2][4] : missing for score in results]
+y_flat = vcat([sum((reg_coef-yi).^2) for yi in reg_coef_]...)
+init_beta = best_params[argmin(y_flat)][1:5]
+reg_coef_[argmin(y_flat)]
+
+
+dict_1 = load_parameters_dict(nothing,best_params[argmin(scores)])
+dict_2 = load_parameters_dict(nothing,best_params[argmin(y_flat)])
+
+dict_2[:T] = dict_1[:T]
+tmp = full_SMM(vcat(collect(values(dict_2))...))
+
+generate_report("dict_1",1,nothing,best_params[argmin(scores)])
+generate_report("dict_2",1,nothing,best_params[argmin(y_flat)])
 
 
 folder = joinpath(output_folder, "2")
@@ -161,6 +216,9 @@ generate_report("test",variable,expanding_beta[argmin(y_flat)],alpha)
 
 folder = joinpath(output_folder, "0")
 best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+
+
+
 full_SMM(vcat([0.7,1,1,1,], best_params[6:end]))[2][4]
 generate_report("1","beta",vcat([0.7,3,3,3,3], best_params[6:end]),alpha)
 save_stage_best_params(stage = "0",best_params = vcat([0.7,3,3,3,3], best_params[6:end]))
@@ -198,3 +256,41 @@ plot(x_flat, y_flat, label=false)
 hline!([y0], label="y = $y0", ls=:dash, color=:red)
 
 x_flat[argmin([abs(y-y0) for y in y_flat])]
+
+
+
+
+##### Old
+
+
+
+
+params_list  = [best_params[:,i] for i in 1:50]
+results = pmap(parallel_SMM_safe,params_list)
+scores = [score != nothing ? score[1][1] : missing for score in results]
+
+
+
+n = 100
+alpha = 0.5
+variable = "agg_labor_share_tech"
+save_stage_best_params(params_list,results,"1")
+generate_report("1",variable,nothing,alpha)
+
+n = 3000
+alpha = 2
+variable = "productivity"
+params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"1"),variable,alpha)
+params_list,results = train_stage_one(n,nothing,params_list)
+save_stage_best_params(params_list,results,"2")
+generate_report("2",variable,nothing,alpha)
+
+
+n = 500000
+alpha = 2
+variable = "beta"
+params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"2"),variable,alpha)
+params_list,results = train_stage_one(n,nothing,params_list)
+save_stage_best_params(params_list,results,"3")
+generate_report("3",variable,nothing,alpha)
+
