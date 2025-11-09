@@ -350,7 +350,6 @@ function SMM(params,simulation = false)
 
     # 5. The share of each region the total employment. 
     pi_r = labor_r[N_downstream_per_region.!=0]./sum(labor_r[N_downstream_per_region.!=0])    
-    
     return [agg_labor_share], agg_industry_share[2:end],gamma_ls,reg_coef,pi_r[2:end]
     
 
@@ -358,29 +357,40 @@ function SMM(params,simulation = false)
 end
 
 # Then compute scores. 
-function loss_function(simulated_moments)
+function loss_function(simulated_moments,emp,W)
     """
     Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
     """
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
+    
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)        
     #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
-    err = (empirical_moments-simulated_moments)
-    # W = isnothing(W) ? I(length(empirical_moments)).*(empirical_moments).^(-1) : W 
-    return err*err'
+    err = (emp-simulated_moments)
+    W = isnothing(W) ? I(N) : W 
+    return err*W*err'
 end
 
 
-function full_SMM(params,simulation = false)
+function full_SMM(params,simulation = false,second_stage = false)
     """
     From the parameters, return the loss and the simulated moments (targeted and untargeted)
     """
     simulated_moments = SMM(params,simulation)
+
+    if second_stage
+        emp = empirical_moments_reduced
+        W = Weight_matrix
+        moments = [simulated_moments[3][mask_emp_gamma_ls.!=0]]
+    else
+        emp = empirical_moments
+        W = nothing
+        moments = simulated_moments
+    end
     if simulation 
         return simulated_moments
     else
-        return loss_function(simulated_moments),simulated_moments
+        return loss_function(moments,emp,W),simulated_moments
     end
 end
 

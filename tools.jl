@@ -3,7 +3,7 @@
 using Printf
 
 
-function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing,K = 1 ,variable = nothing,alpha = 0.1)
+function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing,K = 1 ,variable = nothing,alpha = 0.1,second_stage = false)
     """
 
     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
@@ -37,6 +37,11 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
             condition = false
         else 
             condition = false
+        end
+        if variable == "T" && second_stage
+            mask = vec(mask_emp_gamma_ls)
+            lb = lb[mask.==1]
+            ub = ub[mask.==1]
         end
     end
     
@@ -80,6 +85,10 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
     if last_stage_folder != nothing
         names = ["beta", "agg_labor_share_tech", "agg_industry_share_tech", "productivity", "T"]
         # make sure keys match the dict type
+        #return accepted,params_dict[:T]
+        if variable == "T" && second_stage
+            accepted = [assign_T_with_mask(params_dict[:T],sample) for sample in accepted ]
+        end
         keyfun(x) = isa(first(keys(params_dict)), Symbol) ? Symbol(x) : x
         accepted = [ vcat([ (p != variable ? params_dict[keyfun(p)] : k) for p in names ]...) for k in accepted ]
         return accepted
@@ -87,16 +96,21 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
     return accepted
 end
 
+function assign_T_with_mask(true_T,sample)    
+    mask = vec(mask_emp_gamma_ls)
+    accept = copy(true_T)
+    accept[mask.== 1] = sample
+    return accept 
+end
 
-
-function parallel_SMM(params,simulation)
-    return full_SMM(params,simulation)
+function parallel_SMM(params,simulation,second_stage)
+    return full_SMM(params,simulation,second_stage)
 end
 
 
-function parallel_SMM_safe(params,simulation = false,show_err = true)
+function parallel_SMM_safe(params,simulation = false,second_stage=false,show_err = true)
     try
-        result = parallel_SMM(params,simulation) # Run the SMM in parallel. 
+        result = parallel_SMM(params,simulation,second_stage) # Run the SMM in parallel. 
 
         return result
     catch e
@@ -126,7 +140,7 @@ function distance_bin(d)
     end
 end
 
-function train_stage_one(n,init_beta,params_list = nothing)
+function train_stage_one(n,init_beta,params_list = nothing,second_stage = false)
 
     #print("Starting simulation: ")
     t1 = time()
@@ -136,7 +150,9 @@ function train_stage_one(n,init_beta,params_list = nothing)
     #print(time()-t1)
     #print("\n Halton created !")
     t1 = time()
-    results = pmap(parallel_SMM_safe, params_list)
+    f = params -> parallel_SMM_safe(params, false, second_stage, true)
+
+    results = pmap(f, params_list)
     t1 = time()-t1
     #print("\n Simulation ended: ")
     #print(t1)

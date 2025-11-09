@@ -73,6 +73,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1] #
 @everywhere const nu_s = $(ones(S).*2.5) 
 @everywhere const theta = $(1.768) 
 @everywhere const delta_r = $(ones(R))
+@everywhere const Weight_matrix = $(nothing)
 
 # Load empirical moments and reshape them.
 @everywhere const emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
@@ -81,7 +82,11 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1] #
 empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
 empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
+@everywhere const mask_emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"mask_gamma_ls.npy"))')
 @everywhere const empirical_moments = $(empirical_moments_local)
+@everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
+
+
 
 #### Bellow, the model is computed over a Halton grid of size n. 
 
@@ -127,7 +132,7 @@ end
 folder = joinpath(output_folder, "1")
 mkpath(folder) 
 npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-
+generate_report("1")
 
 
 best_params = NPZ.npzread(joinpath(output_folder,"1", "best_params.npy")) # Load best params.
@@ -148,7 +153,24 @@ end
 folder = joinpath(output_folder, "2")
 mkpath(folder) 
 npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+generate_report("2")
 
+
+
+n = 1000
+alpha = 2
+variable = "T"
+best_params = Any[]
+for i in 1:50
+    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"3"),i,variable,alpha,true)
+    params_list,results = train_stage_one(n,nothing,params_list,true)
+    score = [score[1] != nothing ? score[1][1] : missing for score in results]
+    push!(best_params,params_list[argmin(score)])
+end
+folder = joinpath(output_folder, "4")
+mkpath(folder) 
+npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+generate_report("4")
 
 
 n = 10000
@@ -156,25 +178,30 @@ alpha = 2
 variable = "beta"
 best_params = Any[]
 for i in 1:50
-    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"2"),i,variable,alpha)
+    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"4"),i,variable,alpha)
     params_list,results = train_stage_one(n,nothing,params_list)
     score = [score[1] != nothing ? score[1][1] : missing for score in results]
     push!(best_params,params_list[argmin(score)])
 end
-folder = joinpath(output_folder, "3")
+folder = joinpath(output_folder, "5")
 mkpath(folder) 
 npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
 
 
 
-
 ### STO
-folder = joinpath(output_folder, "3")
-best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
-best_params = [best_params[:,i] for i in 1:50]
-results = [full_SMM(best_params[i]) for i in 1:50]
-scores = [score != nothing ? score[1][1] : missing for score in results]
-
+for i in 1:5
+    folder = joinpath(output_folder, string(i))
+    best_params = NPZ.npzread(joinpath(folder, "best_params.npy")) # Load best params.
+    best_params = [best_params[:,i] for i in 1:50]
+    results = [full_SMM(best_params[i]) for i in 1:50]
+    scores = [score != nothing ? score[1][1] : missing for score in results]
+    println(i)
+    println(minimum(scores))
+    results = [full_SMM(best_params[i],false,true) for i in 1:50]
+    scores = [score != nothing ? score[1][1] : missing for score in results]
+    println(minimum(scores))
+end
 k = 1
 y0 = reg_coef[k]
 y1 = reg_coef[k+1]
