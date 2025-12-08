@@ -106,88 +106,111 @@ reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for 
 y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
 init_beta = expanding_beta[argmin(y_flat)][1:5]
 
-n = 100000
+n = 500000
 @everywhere include("tools.jl") # Import the model
 params_list,results = train_stage_one(n,init_beta)
-save_stage_best_params(params_list,results,"0",50)
+save_stage_best_params(params_list,results,output_folder,"0",50)
 generate_report("0")
 
 
-params_list  = [best_params[:,i] for i in 1:50]
-results = pmap(parallel_SMM_safe,params_list)
-scores = [score != nothing ? score[1][1] : missing for score in results]
+for loop in 1:2
+    if loop == 1
+        stage = 0
+    end
+    print(loop)
+    past_loop_folder =  "./reporting_"*industry*"/epoch_"*string(loop-1) # Output folder
+    loop_folder =  "./reporting_"*industry*"/epoch_"*string(loop) # Output folder
+    mkpath(loop_folder)
+    n = 1000
+    alpha = 0.5
+    variable = "agg_labor_share_tech"
+    print(variable)
+    best_params = Any[]
+    for K in 1:50
+        if loop == 1
+            params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,string(stage)),K,variable,alpha)
+        else
+            params_list = generate_halton_grid(n,2000,false,nothing,joinpath(past_loop_folder,string(stage)),K,variable,alpha)
+        end
+        params_list,results = train_stage_one(n,nothing,params_list)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(best_params,params_list[argmin(score)])
+    end
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder) 
+    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+    generate_report(loop_folder,string(stage),n)
+
+    n = 10000
+    alpha = 2
+    variable = "productivity"
+    print(variable)
+    best_params = Any[]
+    for K in 1:50
+        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
+        params_list,results = train_stage_one(n,nothing,params_list)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(best_params,params_list[argmin(score)])
+    end
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder) 
+    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+    generate_report(loop_folder,string(stage),n)    
+
+    n = 10000
+    alpha = 2
+    variable = "agg_industry_share_tech"
+    print(variable)
+    best_params = Any[]
+    for K in 1:50
+        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha,true)
+        params_list,results = train_stage_one(n,nothing,params_list,true)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(best_params,params_list[argmin(score)])
+    end
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder) 
+    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+    generate_report(loop_folder,string(stage),n)
+
+    n = 10000
+    alpha = 2
+    variable = "T"
+    print(variable)
+    best_params = Any[]
+    for K in 1:50
+        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha,true)
+        params_list,results = train_stage_one(n,nothing,params_list,true)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(best_params,params_list[argmin(score)])
+    end
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder) 
+    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+    generate_report(loop_folder,string(stage),n)
 
 
-
-n = 100
-alpha = 0.5
-variable = "agg_labor_share_tech"
-best_params = Any[]
-for i in 1:50
-    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"0"),i,variable,alpha)
-    params_list,results = train_stage_one(n,nothing,params_list)
-    score = [score[1] != nothing ? score[1][1] : missing for score in results]
-    push!(best_params,params_list[argmin(score)])
+    n = 10000
+    alpha = 2
+    variable = "beta"
+    print(variable)
+    best_params = Any[]
+    for K in 1:50
+        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
+        params_list,results = train_stage_one(n,nothing,params_list)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(best_params,params_list[argmin(score)])
+    end
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder) 
+    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+    generate_report(loop_folder,string(stage),n)                                                                                
 end
-folder = joinpath(output_folder, "1")
-mkpath(folder) 
-npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-generate_report("1")
-
-
-best_params = NPZ.npzread(joinpath(output_folder,"1", "best_params.npy")) # Load best params.
-#save_stage_best_params(params_list,results,"1")
-#generate_report("1",variable,nothing,alpha)
-
-
-n = 3000
-alpha = 2
-variable = "productivity"
-best_params = Any[]
-for i in 1:50
-    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"1"),i,variable,alpha)
-    params_list,results = train_stage_one(n,nothing,params_list)
-    score = [score[1] != nothing ? score[1][1] : missing for score in results]
-    push!(best_params,params_list[argmin(score)])
-end
-folder = joinpath(output_folder, "2")
-mkpath(folder) 
-npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-generate_report("2")
-
-
-
-n = 1000
-alpha = 2
-variable = "T"
-best_params = Any[]
-for i in 1:50
-    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"3"),i,variable,alpha,true)
-    params_list,results = train_stage_one(n,nothing,params_list,true)
-    score = [score[1] != nothing ? score[1][1] : missing for score in results]
-    push!(best_params,params_list[argmin(score)])
-end
-folder = joinpath(output_folder, "4")
-mkpath(folder) 
-npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-generate_report("4")
-
-
-n = 10000
-alpha = 2
-variable = "beta"
-best_params = Any[]
-for i in 1:50
-    params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"4"),i,variable,alpha)
-    params_list,results = train_stage_one(n,nothing,params_list)
-    score = [score[1] != nothing ? score[1][1] : missing for score in results]
-    push!(best_params,params_list[argmin(score)])
-end
-folder = joinpath(output_folder, "5")
-mkpath(folder) 
-npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-
-
 
 ### STO
 for i in 1:5
@@ -202,6 +225,8 @@ for i in 1:5
     scores = [score != nothing ? score[1][1] : missing for score in results]
     println(minimum(scores))
 end
+
+
 k = 1
 y0 = reg_coef[k]
 y1 = reg_coef[k+1]
@@ -301,7 +326,7 @@ scores = [score != nothing ? score[1][1] : missing for score in results]
 n = 100
 alpha = 0.5
 variable = "agg_labor_share_tech"
-save_stage_best_params(params_list,results,"1")
+save_stage_best_params(params_list,results,loop_folder,"1")
 generate_report("1",variable,nothing,alpha)
 
 n = 3000
@@ -309,7 +334,7 @@ alpha = 2
 variable = "productivity"
 params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"1"),variable,alpha)
 params_list,results = train_stage_one(n,nothing,params_list)
-save_stage_best_params(params_list,results,"2")
+save_stage_best_params(params_list,results,loop_folder,"2")
 generate_report("2",variable,nothing,alpha)
 
 
@@ -318,6 +343,6 @@ alpha = 2
 variable = "beta"
 params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,"2"),variable,alpha)
 params_list,results = train_stage_one(n,nothing,params_list)
-save_stage_best_params(params_list,results,"3")
+save_stage_best_params(params_list,results,loop_folder,"3")
 generate_report("3",variable,nothing,alpha)
 

@@ -91,6 +91,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
         end
         keyfun(x) = isa(first(keys(params_dict)), Symbol) ? Symbol(x) : x
         accepted = [ vcat([ (p != variable ? params_dict[keyfun(p)] : k) for p in names ]...) for k in accepted ]
+        push!(accepted,best_params) # We add the last best parameter. 
         return accepted
     end
     return accepted
@@ -183,6 +184,10 @@ function matrix_report(mat,include_n_zero = true)
             max_val = maximum(nonzero_vals),
         )
     end
+end
+
+function print_(x)
+    return x
 end
 
 
@@ -289,9 +294,9 @@ function generate_dashboard_report(
     end
 end
 
-function save_stage_best_params(params_list,results,stage,K = 1,best_params = nothing)
+function save_stage_best_params(params_list,results,loop_folder,stage,K = 1,best_params = nothing)
     # Collect the results of the calibration and store them. 
-    folder = joinpath(output_folder, stage)
+    folder = joinpath(loop_folder, stage)
     mkpath(folder) 
     if best_params == nothing
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
@@ -314,18 +319,23 @@ function load_parameters_dict(folder = nothing,params = nothing)
     return params_dict
 end
 
-function generate_report(stage,K=1,variable = nothing,best_params= nothing,alpha = "")
+function generate_report(loop_folder,stage,n,K=1,variable = nothing,best_params= nothing,alpha = "")
 
-    folder = joinpath(output_folder, stage)
+    folder = joinpath(loop_folder, stage)
     mkpath(folder) 
 
     if best_params == nothing
-        best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))[:,K] # Load best params.
+        best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
+        params_list = [best_params[:,K] for K in 1:2]
+        params_list,results = train_stage_one(n,nothing,params_list,true)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        best_index = argmin(score)
+        best_params = best_params[:,best_index]
+    else 
+        results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
+        best_index = 1
     end
-    
-    results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
-    best_index = 1
-
+    # print(best_index,score[best_index])
     # Prepare vectors.
     # Vectorize and filter
     emp_gamma = vec(emp_gamma_ls)
