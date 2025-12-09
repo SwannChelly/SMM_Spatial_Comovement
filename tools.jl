@@ -105,6 +105,7 @@ function assign_T_with_mask(true_T,sample)
 end
 
 function parallel_SMM(params,simulation,second_stage)
+    print(simulation,second_stage)
     return full_SMM(params,simulation,second_stage)
 end
 
@@ -143,20 +144,12 @@ end
 
 function train_stage_one(n,init_beta,params_list = nothing,second_stage = false)
 
-    #print("Starting simulation: ")
     t1 = time()
     if params_list == nothing
         params_list = generate_halton_grid(n,2000,false,init_beta)
     end
-    #print(time()-t1)
-    #print("\n Halton created !")
-    t1 = time()
     f = params -> parallel_SMM_safe(params, false, second_stage, true)
-
     results = pmap(f, params_list)
-    t1 = time()-t1
-    #print("\n Simulation ended: ")
-    #print(t1)
     return params_list,results
 end
 
@@ -326,8 +319,8 @@ function generate_report(loop_folder,stage,n,K=1,variable = nothing,best_params=
 
     if best_params == nothing
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-        params_list = [best_params[:,K] for K in 1:2]
-        params_list,results = train_stage_one(n,nothing,params_list,true)
+        params_list = [best_params[:,K] for K in 1:50]
+        params_list,results = train_stage_one(n,nothing,params_list,false)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
         best_params = best_params[:,best_index]

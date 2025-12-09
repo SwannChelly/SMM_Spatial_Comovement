@@ -110,21 +110,22 @@ n = 500000
 @everywhere include("tools.jl") # Import the model
 params_list,results = train_stage_one(n,init_beta)
 save_stage_best_params(params_list,results,output_folder,"0",50)
-generate_report("0")
+generate_report(output_folder,"0",n)
 
 
 for loop in 1:2
     if loop == 1
         stage = 0
     end
-    print(loop)
+    print(loop*"\n")
     past_loop_folder =  "./reporting_"*industry*"/epoch_"*string(loop-1) # Output folder
     loop_folder =  "./reporting_"*industry*"/epoch_"*string(loop) # Output folder
     mkpath(loop_folder)
+    
     n = 1000
     alpha = 0.5
     variable = "agg_labor_share_tech"
-    print(variable)
+    print(variable*"\n")
     best_params = Any[]
     for K in 1:50
         if loop == 1
