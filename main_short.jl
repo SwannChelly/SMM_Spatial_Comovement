@@ -24,8 +24,11 @@ using Dates
 using Statistics, Printf
 using StatsBase
 
-
-addprocs(100) # Number of parallel cores.
+#addprocs(100) # Number of parallel cores.
+available = Sys.CPU_THREADS - nprocs()
+available = 20
+println("Using "*string(available)*" workers")
+addprocs(max(available, 0))
 @everywhere include("model_CP.jl") # Import the model
 @everywhere include("tools.jl") # Import the model
 
@@ -90,11 +93,11 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 
 #### Bellow, the model is computed over a Halton grid of size n. 
 
-#### We first look at the best beta considering identical productivity
+# #### We first look at the best beta considering identical productivity
 params_list = [generate_halton_grid(2,1024,true)]
 best_params = params_list[1]
 beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-range_beta = range(0.01, stop = 5, length = 50) 
+range_beta = range(0.01, stop = 5, length = 2) 
 expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
 expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
 results_ = pmap(parallel_SMM_safe, expanding_beta)
@@ -106,28 +109,35 @@ reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for 
 y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
 init_beta = expanding_beta[argmin(y_flat)][1:5]
 
-n = 500000
+
+#n = 500000
+n = 50
 @everywhere include("tools.jl") # Import the model
 params_list,results = train_stage_one(n,init_beta)
 save_stage_best_params(params_list,results,output_folder,"0",50)
 generate_report(output_folder,"0",n)
 
+stage = 0
+# Before loop define global variables. 
 
 for loop in 1:2
-    if loop == 1
-        stage = 0
-    end
-    print(string(loop)*"\n")
+    global stage
+    global params_list
+    global results
+    global best_params
+
+    print("Loop number: "*string(loop)*"\n")
     past_loop_folder =  "./reporting_"*industry*"/epoch_"*string(loop-1) # Output folder
     loop_folder =  "./reporting_"*industry*"/epoch_"*string(loop) # Output folder
     mkpath(loop_folder)
     
-    n = 1000
+    #n = 1000
+    n = 2
     alpha = 0.5
     variable = "agg_labor_share_tech"
-    print(variable*"\n")
     best_params = Any[]
-    for K in 1:50
+    print("Variable is: "*variable*" and n = "*string(n)*"\n")
+    for K in 1:2
         if loop == 1
             params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,string(stage)),K,variable,alpha)
         else
@@ -143,72 +153,38 @@ for loop in 1:2
     npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
     generate_report(loop_folder,string(stage),n)
 
-    n = 10000
-    alpha = 2
-    variable = "productivity"
-    print(variable)
-    best_params = Any[]
-    for K in 1:50
-        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
-        params_list,results = train_stage_one(n,nothing,params_list)
-        score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        push!(best_params,params_list[argmin(score)])
-    end
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder) 
-    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-    generate_report(loop_folder,string(stage),n)    
-
-    n = 10000
-    alpha = 2
-    variable = "agg_industry_share_tech"
-    print(variable)
-    best_params = Any[]
-    for K in 1:50
-        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha,true)
-        params_list,results = train_stage_one(n,nothing,params_list,true)
-        score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        push!(best_params,params_list[argmin(score)])
-    end
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder) 
-    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-    generate_report(loop_folder,string(stage),n)
-
-    n = 10000
-    alpha = 2
-    variable = "T"
-    print(variable)
-    best_params = Any[]
-    for K in 1:50
-        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha,true)
-        params_list,results = train_stage_one(n,nothing,params_list,true)
-        score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        push!(best_params,params_list[argmin(score)])
-    end
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder) 
-    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-    generate_report(loop_folder,string(stage),n)
-
-
-    n = 10000
-    alpha = 2
-    variable = "beta"
-    print(variable)
-    best_params = Any[]
-    for K in 1:50
-        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
-        params_list,results = train_stage_one(n,nothing,params_list)
-        score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        push!(best_params,params_list[argmin(score)])
-    end
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder) 
-    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-    generate_report(loop_folder,string(stage),n)                                                                                
+    stage = run_stage("productivity",2,2,stage,loop_folder)
+    stage = run_stage("agg_industry_share_tech",2,2,stage,loop_folder)
+    stage = run_stage("T",2,2,stage,loop_folder)
+    stage = run_stage("beta",2,2,stage,loop_folder)
+                                                               
 end
+
+top_score = []
+folder =  "./reporting_"*industry*"/0" # Output folder
+best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
+params_list = [best_params[:,K] for K in 1:50]
+params_list,results = train_stage_one(n,nothing,params_list,false)
+score = [score[1] != nothing ? score[1][1] : missing for score in results]
+push!(top_score,minimum(score))
+
+stage = 1
+for loop in 1:2
+    for k in 1:5
+        folder =  "./reporting_"*industry*"/epoch_"*string(loop)*"/"*string(stage) # Output folder
+        best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
+        params_list = [best_params[:,K] for K in 1:2]
+        params_list,results = train_stage_one(n,nothing,params_list,false)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(top_score,minimum(score))
+        stage+=1
+    end
+end
+
+top_score = (top_score ./ top_score[1]) .* 100
+plot(top_score, marker=:circle, linewidth=2, label="My Data")
+savefig(joinpath("./reporting_aero/", "loss_function.png"))
+
+
+
+    

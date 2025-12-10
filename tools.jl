@@ -105,7 +105,6 @@ function assign_T_with_mask(true_T,sample)
 end
 
 function parallel_SMM(params,simulation,second_stage)
-    print(simulation,second_stage)
     return full_SMM(params,simulation,second_stage)
 end
 
@@ -312,14 +311,14 @@ function load_parameters_dict(folder = nothing,params = nothing)
     return params_dict
 end
 
-function generate_report(loop_folder,stage,n,K=1,variable = nothing,best_params= nothing,alpha = "")
+function generate_report(loop_folder,stage,n,variable = nothing,best_params= nothing,alpha = "")
 
     folder = joinpath(loop_folder, stage)
     mkpath(folder) 
 
     if best_params == nothing
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-        params_list = [best_params[:,K] for K in 1:50]
+        params_list = [best_params[:,K] for K in 1:2]
         params_list,results = train_stage_one(n,nothing,params_list,false)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
@@ -441,6 +440,25 @@ function generate_report(loop_folder,stage,n,K=1,variable = nothing,best_params=
 
     generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,folder*"/report.txt",variable,alpha)
 end
+
+
+function run_stage(variable,n,alpha,stage,loop_folder)
+    print("Variable is: "*variable*", n = "*string(n)*" and stage = "*string(stage)*"\n")
+    best_params = Any[]
+    for K in 1:2
+        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
+        params_list,results = train_stage_one(n,nothing,params_list)
+        score = [score[1] != nothing ? score[1][1] : missing for score in results]
+        push!(best_params,params_list[argmin(score)])
+    end
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder) 
+    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
+    generate_report(loop_folder,string(stage),n)    
+    return stage
+end
+
 
 ############ Old functions ##############
 
