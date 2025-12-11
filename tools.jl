@@ -318,7 +318,7 @@ function generate_report(loop_folder,stage,n,variable = nothing,best_params= not
 
     if best_params == nothing
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-        params_list = [best_params[:,K] for K in 1:2]
+        params_list = [best_params[:,K] for K in 1:50]
         params_list,results = train_stage_one(n,nothing,params_list,false)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
@@ -445,7 +445,7 @@ end
 function run_stage(variable,n,alpha,stage,loop_folder)
     print("Variable is: "*variable*", n = "*string(n)*" and stage = "*string(stage)*"\n")
     best_params = Any[]
-    for K in 1:2
+    for K in 1:50
         params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
         params_list,results = train_stage_one(n,nothing,params_list)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
