@@ -442,12 +442,12 @@ function generate_report(loop_folder,stage,n,variable = nothing,best_params= not
 end
 
 
-function run_stage(variable,n,alpha,stage,loop_folder)
+function run_stage(variable,n,alpha,stage,loop_folder,second_stage)
     print("Variable is: "*variable*", n = "*string(n)*" and stage = "*string(stage)*"\n")
     best_params = Any[]
     for K in 1:50
         params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
-        params_list,results = train_stage_one(n,nothing,params_list)
+        params_list,results = train_stage_one(n,nothing,params_list,second_stage)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         push!(best_params,params_list[argmin(score)])
     end

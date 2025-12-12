@@ -137,7 +137,7 @@ for loop in 1:2
     variable = "agg_labor_share_tech"
     best_params = Any[]
     print("Variable is: "*variable*" and n = "*string(n)*"\n")
-    for K in 1:2
+    for K in 1:50
         if loop == 1
             params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,string(stage)),K,variable,alpha)
         else
@@ -154,15 +154,16 @@ for loop in 1:2
     generate_report(loop_folder,string(stage),n)
 
     n = 10000
-    stage = run_stage("productivity",n,2,stage,loop_folder)
-    stage = run_stage("agg_industry_share_tech",n,2,stage,loop_folder)
-    stage = run_stage("T",n,2,stage,loop_folder)
-    stage = run_stage("beta",n,2,stage,loop_folder)
-                                                               
+    stage = run_stage("productivity",n,2,stage,loop_folder,false)
+    stage = run_stage("agg_industry_share_tech",n,2,stage,loop_folder,false)
+    stage = run_stage("T",n,2,stage,loop_folder,true)
+    stage = run_stage("beta",n,2,stage,loop_folder,true)
+                                                              
 end
 
 
 # # Reporting
+# n = 1
 # top_score = []
 # folder =  "./reporting_"*industry*"/0" # Output folder
 # best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
@@ -176,7 +177,7 @@ end
 #     for k in 1:5
 #         folder =  "./reporting_"*industry*"/epoch_"*string(loop)*"/"*string(stage) # Output folder
 #         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-#         params_list = [best_params[:,K] for K in 1:2]
+#         params_list = [best_params[:,K] for K in 1:50]
 #         params_list,results = train_stage_one(n,nothing,params_list,false)
 #         score = [score[1] != nothing ? score[1][1] : missing for score in results]
 #         push!(top_score,minimum(score))
@@ -189,5 +190,24 @@ end
 # savefig(joinpath("./reporting_aero/", "loss_function.png"))
 
 
+# folder =  "./reporting_"*industry*"/epoch_"*string(2)*"/"*string(10) # Output folder
+# best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
+# params_list = [best_params[:,K] for K in 1:50]
+# params_list,results = train_stage_one(n,nothing,params_list,false)
+# score = [score[1] != nothing ? score[1][1] : missing for score in results]
+# results[argmin(score)][2][4]
+
+
+
+# scores = [score != nothing ? score[1][1] : missing for score in results]
+# k = 1
+# y0 = reg_coef[k]
+# y1 = reg_coef[k+1]
+# reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results]
+# y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+# init_beta = expanding_beta[argmin(y_flat)][1:5]
+
+
+# # minimum(y_flat)
 
     
