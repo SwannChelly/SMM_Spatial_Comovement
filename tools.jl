@@ -3,7 +3,101 @@
 using Printf
 
 
-function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing,K = 1 ,variable = nothing,alpha = 0.1,second_stage = false)
+# function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing,K = 1 ,variable = nothing,alpha = 0.1,second_stage = false)
+#     """
+
+#     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
+#     This Halton grid function allows condition on the parameters and is much faster than the previous one. 
+
+#     """
+#     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+#     A ./= sum(A)
+#     if init
+#         return vcat([ones(5),[agg_labor_share],agg_industry_share,A,ones(S*R)]...)
+#     end
+#     if last_stage_folder == nothing
+#         lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = init_beta.*0.5,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
+#         ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = init_beta.*2,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
+        
+#         lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
+#         ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
+#         condition = true
+#     else
+#         best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
+#         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
+#         vals = unpack_params(best_params)
+#         params_dict = Dict(names .=> vals)
+#         lb = (1/alpha).*params_dict[Symbol(variable)]
+#         ub = (alpha).*params_dict[Symbol(variable)]
+#         if variable == "beta"
+#             condition = true
+#         elseif variable == "agg_labor_share_tech"
+#             lb = 0.001
+#             ub = 1
+#             condition = false
+#         else 
+#             condition = false
+#         end
+#         if variable == "T" && second_stage
+#             mask = vec(mask_emp_gamma_ls)
+#             lb = lb[mask.==1]
+#             ub = ub[mask.==1]
+#         end
+#     end
+    
+
+    
+#     d = length(lb)
+#     accepted = Vector{Vector{Float64}}(undef, 0)
+
+#     # Create a Halton point generator in dimension d
+#     hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
+
+#     idx = 1
+#     while length(accepted) < n_needed
+#         # get a batch of raw Halton points
+#         batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
+#         # Each point is in [0,1]^d
+
+#         for raw in batch_raw
+#             # scale each component
+#             scaled = lb .+ (ub .- lb) .* raw
+
+#             # apply your condition
+#             #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
+#             if condition
+#                 if (scaled[1]  < scaled[2]) & (scaled[2]  < scaled[3]) & (scaled[3]  < scaled[4]) & (scaled[4]  < scaled[5])  # Condition
+#                     push!(accepted, scaled)
+#                     if length(accepted) >= n_needed
+#                         break
+#                     end
+#                 end
+#             else
+#                 push!(accepted, scaled)
+#                     if length(accepted) >= n_needed
+#                         break
+#                 end
+#             end
+#         end
+
+#         idx += batchsize
+#     end
+#     if last_stage_folder != nothing
+#         names = ["beta", "agg_labor_share_tech", "agg_industry_share_tech", "productivity", "T"]
+#         # make sure keys match the dict type
+#         #return accepted,params_dict[:T]
+#         if variable == "T" && second_stage
+#             accepted = [assign_T_with_mask(params_dict[:T],sample) for sample in accepted ]
+#         end
+#         keyfun(x) = isa(first(keys(params_dict)), Symbol) ? Symbol(x) : x
+#         accepted = [ vcat([ (p != variable ? params_dict[keyfun(p)] : k) for p in names ]...) for k in accepted ]
+#         push!(accepted,best_params) # We add the last best parameter. 
+#         return accepted
+#     end
+#     return accepted
+# end
+
+function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, init_beta=ones(5), last_stage_folder=nothing, K=1, variable=nothing, alpha=0.1, second_stage=false)
     """
 
     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
@@ -13,35 +107,58 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
     A ./= sum(A)
     if init
-        return vcat([ones(5),[agg_labor_share],agg_industry_share,A,ones(S*R)]...)
+        return vcat([ones(5), [agg_labor_share], agg_industry_share, A, ones(S*R)]...)
     end
     if last_stage_folder == nothing
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = init_beta.*0.5,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = init_beta.*2,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
+        lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_beta.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
+        ub_beta, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T = init_beta.*2, 1.2*agg_labor_share, 1.2.*agg_industry_share, A.*10, 100*ones(S*R)
         
-        lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
-        ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
+        lb = vcat(lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T)
+        ub = vcat(ub_beta, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T)
         condition = true
     else
         best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
         vals = unpack_params(best_params)
         params_dict = Dict(names .=> vals)
-        lb = (1/alpha).*params_dict[Symbol(variable)]
-        ub = (alpha).*params_dict[Symbol(variable)]
-        if variable == "beta"
-            condition = true
-        elseif variable == "agg_labor_share_tech"
-            lb = 0.001
-            ub = 1
-            condition = false
-        else 
-            condition = false
+        
+        # Handle variable as either a single string or a list
+        variable_list = isa(variable, String) ? [variable] : variable
+        
+        # Build lb and ub by concatenating bounds for each variable in the list
+        lb = vcat([params_dict[Symbol(v)] ./ alpha for v in variable_list]...)
+        ub = vcat([params_dict[Symbol(v)] .* alpha for v in variable_list]...)
+        
+        # Set condition based on whether "beta" is in the variable list
+        condition = "beta" in variable_list
+        
+        # Apply special constraints for specific variables
+        for (var_idx, v) in enumerate(variable_list)
+            if v == "agg_labor_share_tech"
+                # Find the indices corresponding to this variable
+                idx_start = var_idx == 1 ? 1 : sum([length(params_dict[Symbol(variable_list[i])]) for i in 1:(var_idx-1)]) + 1
+                idx_end = idx_start + length(params_dict[:agg_labor_share_tech]) - 1
+                lb[idx_start:idx_end] .= 0.001
+                ub[idx_start:idx_end] .= 1
+                condition = false
+            end
         end
-        if variable == "T" && second_stage
+        
+        if "T" in variable_list && second_stage
+            # Find indices for T in the concatenated arrays
+            t_position = findfirst(==("T"), variable_list)
+            idx_before_T = t_position == 1 ? 0 : sum([length(params_dict[Symbol(variable_list[i])]) for i in 1:(t_position-1)])
+            
             mask = vec(mask_emp_gamma_ls)
-            lb = lb[mask.==1]
-            ub = ub[mask.==1]
+            t_length = length(params_dict[:T])
+            t_indices = (idx_before_T + 1):(idx_before_T + t_length)
+            
+            lb_T = lb[t_indices][mask.==1]
+            ub_T = ub[t_indices][mask.==1]
+            
+            # Rebuild lb and ub with masked T values
+            lb = vcat(lb[1:idx_before_T], lb_T, (idx_before_T + t_length < length(lb)) ? lb[idx_before_T + t_length + 1:end] : Float64[])
+            ub = vcat(ub[1:idx_before_T], ub_T, (idx_before_T + t_length < length(ub)) ? ub[idx_before_T + t_length + 1:end] : Float64[])
         end
     end
     
@@ -64,9 +181,8 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
             scaled = lb .+ (ub .- lb) .* raw
 
             # apply your condition
-            #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
             if condition
-                if (scaled[1]  < scaled[2]) & (scaled[2]  < scaled[3]) & (scaled[3]  < scaled[4]) & (scaled[4]  < scaled[5])  # Condition
+                if (scaled[1] < scaled[2]) & (scaled[2] < scaled[3]) & (scaled[3] < scaled[4]) & (scaled[4] < scaled[5])  # Condition
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -74,28 +190,45 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,in
                 end
             else
                 push!(accepted, scaled)
-                    if length(accepted) >= n_needed
-                        break
+                if length(accepted) >= n_needed
+                    break
                 end
             end
         end
 
         idx += batchsize
     end
+    
     if last_stage_folder != nothing
         names = ["beta", "agg_labor_share_tech", "agg_industry_share_tech", "productivity", "T"]
-        # make sure keys match the dict type
-        #return accepted,params_dict[:T]
-        if variable == "T" && second_stage
-            accepted = [assign_T_with_mask(params_dict[:T],sample) for sample in accepted ]
+        variable_list = isa(variable, String) ? [variable] : variable
+        
+        if "T" in variable_list && second_stage
+            accepted = [assign_T_with_mask(params_dict[:T], sample) for sample in accepted]
         end
+        
         keyfun(x) = isa(first(keys(params_dict)), Symbol) ? Symbol(x) : x
-        accepted = [ vcat([ (p != variable ? params_dict[keyfun(p)] : k) for p in names ]...) for k in accepted ]
-        push!(accepted,best_params) # We add the last best parameter. 
+        
+        # Helper function to get the slice of k corresponding to parameter p
+        function get_param_slice(k, p)
+            if !(p in variable_list)
+                return params_dict[keyfun(p)]
+            else
+                var_idx = findfirst(==(p), variable_list)
+                idx_start = var_idx == 1 ? 1 : sum([length(params_dict[Symbol(variable_list[i])]) for i in 1:(var_idx-1)]) + 1
+                idx_end = idx_start + length(params_dict[keyfun(p)]) - 1
+                return k[idx_start:idx_end]
+            end
+        end
+        
+        accepted = [vcat([get_param_slice(k, p) for p in names]...) for k in accepted]
+        
+        push!(accepted, best_params) # We add the last best parameter. 
         return accepted
     end
     return accepted
 end
+
 
 function assign_T_with_mask(true_T,sample)    
     mask = vec(mask_emp_gamma_ls)
@@ -318,7 +451,7 @@ function generate_report(loop_folder,stage,n,variable = nothing,best_params= not
 
     if best_params == nothing
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-        params_list = [best_params[:,K] for K in 1:50]
+        params_list = [best_params[:,K] for K in 1:K_max]
         params_list,results = train_stage_one(n,nothing,params_list,false)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
@@ -443,9 +576,10 @@ end
 
 
 function run_stage(variable,n,alpha,stage,loop_folder,second_stage)
-    print("Variable is: "*variable*", n = "*string(n)*" and stage = "*string(stage)*"\n")
+    variable_str = isa(variable, String) ? variable : join(variable, ", ")
+    print("Variable is: "*variable_str*", n = "*string(n)*" and stage = "*string(stage)*"\n")
     best_params = Any[]
-    for K in 1:50
+    for K in 1:K_max
         params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
         params_list,results = train_stage_one(n,nothing,params_list,second_stage)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
@@ -458,6 +592,9 @@ function run_stage(variable,n,alpha,stage,loop_folder,second_stage)
     generate_report(loop_folder,string(stage),n)    
     return stage
 end
+
+
+
 
 
 ############ Old functions ##############

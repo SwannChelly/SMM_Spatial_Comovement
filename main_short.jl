@@ -88,7 +88,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 @everywhere const mask_emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"mask_gamma_ls.npy"))')
 @everywhere const empirical_moments = $(empirical_moments_local)
 @everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
-
+@everywhere const K_max = $(50)
 
 
 #### Bellow, the model is computed over a Halton grid of size n. 
@@ -111,7 +111,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 
 
 # n = 500000
-# #n = 50
+# n = K_max
 # @everywhere include("tools.jl") # Import the model
 # params_list,results = train_stage_one(n,init_beta)
 # save_stage_best_params(params_list,results,output_folder,"0",50)
@@ -120,7 +120,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 stage = 0
 # Before loop define global variables. 
 
-for loop in 1:2
+for loop in 1:10
     global stage
     global params_list
     global results
@@ -132,12 +132,11 @@ for loop in 1:2
     mkpath(loop_folder)
     
     n = 1000
-    #n = 2
     alpha = 0.5
     variable = "agg_labor_share_tech"
     best_params = Any[]
     print("Variable is: "*variable*" and n = "*string(n)*"\n")
-    for K in 1:50
+    for K in 1:K_max
         if loop == 1
             params_list = generate_halton_grid(n,2000,false,nothing,joinpath(output_folder,string(stage)),K,variable,alpha)
         else
@@ -154,60 +153,95 @@ for loop in 1:2
     generate_report(loop_folder,string(stage),n)
 
     n = 10000
-    stage = run_stage("productivity",n,2,stage,loop_folder,false)
-    stage = run_stage("agg_industry_share_tech",n,2,stage,loop_folder,false)
-    stage = run_stage("T",n,2,stage,loop_folder,true)
-    stage = run_stage("beta",n,2,stage,loop_folder,true)
+    #n = 2
+    #stage = run_stage("productivity",n,2,stage,loop_folder,false)
+    #stage = run_stage("agg_industry_share_tech",n,2,stage,loop_folder,false)
+    stage = run_stage(["agg_industry_share_tech","productivity"],n,2,stage,loop_folder,false)
+    stage = run_stage(["beta","T"],n,2,stage,loop_folder,false)
+    #stage = run_stage("beta",n,2,stage,loop_folder,true)
                                                               
 end
 
+rmse(a::AbstractVector, b::AbstractVector) =
+    sqrt(mean((a .- b).^2))
 
-# # Reporting
-# n = 1
-# top_score = []
-# folder =  "./reporting_"*industry*"/0" # Output folder
-# best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-# params_list = [best_params[:,K] for K in 1:50]
-# params_list,results = train_stage_one(n,nothing,params_list,false)
-# score = [score[1] != nothing ? score[1][1] : missing for score in results]
-# push!(top_score,minimum(score))
+reporting = true
+if reporting
 
-# stage = 1
-# for loop in 1:2
-#     for k in 1:5
-#         folder =  "./reporting_"*industry*"/epoch_"*string(loop)*"/"*string(stage) # Output folder
-#         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-#         params_list = [best_params[:,K] for K in 1:50]
-#         params_list,results = train_stage_one(n,nothing,params_list,false)
-#         score = [score[1] != nothing ? score[1][1] : missing for score in results]
-#         push!(top_score,minimum(score))
-#         stage+=1
-#     end
-# end
-
-# top_score = (top_score ./ top_score[1]) .* 100
-# plot(top_score, marker=:circle, linewidth=2, label="My Data")
-# savefig(joinpath("./reporting_aero/", "loss_function.png"))
-
-
-# folder =  "./reporting_"*industry*"/epoch_"*string(2)*"/"*string(10) # Output folder
-# best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-# params_list = [best_params[:,K] for K in 1:50]
-# params_list,results = train_stage_one(n,nothing,params_list,false)
-# score = [score[1] != nothing ? score[1][1] : missing for score in results]
-# results[argmin(score)][2][4]
+    # Reporting
+    n = 1
+    folder = "./reporting_"*industry*"/" # Output folder
+    #folder = "./parameters/"
+    best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
+    params_list = [best_params[:,K] for K in 1:50]
 
 
 
-# scores = [score != nothing ? score[1][1] : missing for score in results]
-# k = 1
-# y0 = reg_coef[k]
-# y1 = reg_coef[k+1]
-# reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results]
-# y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
-# init_beta = expanding_beta[argmin(y_flat)][1:5]
+    # Compute scores for both stages
+    top_score_first, min_dist_first = compute_scores(folder,false)
+    top_score_second, min_dist_second = compute_scores(folder,true)
+
+    # Create subplots for first stage
+    p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",
+            xlabel="Iteration", ylabel="Normalized Loss (%)", 
+            title="First Stage", legend=:topright, color=:blue)
+    plot!(twinx(), min_dist_first, marker=:square, linewidth=2, label="Min Distance",
+        ylabel="Min Distance", legend=:topleft, color=:red)
+
+    # Create subplots for second stage
+    p2 = plot(top_score_second, marker=:circle, linewidth=2, label="Loss",
+            xlabel="Iteration", ylabel="Normalized Loss (%)", 
+            title="Second Stage", legend=:topright, color=:blue)
+    plot!(twinx(), min_dist_second, marker=:square, linewidth=2, label="Min Distance",
+        ylabel="Min Distance", legend=:topleft, color=:red)
+
+    # Combine into single figure with 2 subplots
+    combined_plot = plot(p1, p2, layout=(2,1), size=(800, 800))
+
+    # Save the figure
+    savefig(combined_plot, joinpath(folder, "loss_function_comparison.png"))
+end
 
 
-# # minimum(y_flat)
-
+# Function to compute scores for a given stage
+function compute_scores(folder,second_stage::Bool)
+    top_score = []
+    min_distances = []
     
+    # Initial evaluation
+    params_list_stage = [best_params[:,K] for K in 1:50]
+    params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
+    score = [s[1] != nothing ? s[1][1] : missing for s in results]
+    push!(top_score, minimum(score))
+    
+    # Compute min_distance
+    reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
+    min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
+    push!(min_distances, min_distance)
+    
+    # Loop through epochs
+    stage = 1
+    for loop in 1:10
+        for k in 1:3
+            folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
+            print(folder_stage)
+            best_params_stage = NPZ.npzread(joinpath(folder_stage, "best_params.npy"))
+            params_list_stage = [best_params_stage[:,K] for K in 1:50]
+            params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
+            score = [s[1] != nothing ? s[1][1] : missing for s in results]
+            push!(top_score, minimum(score))
+            
+            # Compute min_distance
+            reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
+            min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
+            push!(min_distances, min_distance)
+            
+            stage += 1
+        end
+    end
+    
+    # Normalize loss to percentage
+    normalized_score = (top_score ./ top_score[1]) .* 100
+    min_distances = (min_distances ./ min_distances[1]) .* 100
+    return normalized_score, min_distances
+end
