@@ -28,9 +28,10 @@ using StatsBase
 available = Sys.CPU_THREADS - nprocs()
 #available = 20
 println("Using "*string(available)*" workers")
-addprocs(max(available, 0))
+addprocs(max(available-1, 0))
 @everywhere include("model_CP.jl") # Import the model
 @everywhere include("tools.jl") # Import the model
+
 
 ############## Load Parameters #################
 
@@ -93,34 +94,34 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 
 #### Bellow, the model is computed over a Halton grid of size n. 
 
-# # #### We first look at the best beta considering identical productivity
-# params_list = [generate_halton_grid(2,1024,true)]
-# best_params = params_list[1]
-# beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-# range_beta = range(0.01, stop = 5, length = 50) 
-# expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
-# expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
-# results_ = pmap(parallel_SMM_safe, expanding_beta)
-# scores = [score != nothing ? score[1][1] : missing for score in results_]
-# k = 1
-# y0 = reg_coef[k]
-# y1 = reg_coef[k+1]
-# reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
-# y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
-# init_beta = expanding_beta[argmin(y_flat)][1:5]
+# #### We first look at the best beta considering identical productivity
+params_list = [generate_halton_grid(2,1024,true)]
+best_params = params_list[1]
+beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+range_beta = range(0.01, stop = 5, length = 50) 
+expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
+expanding_beta = [vcat(i, best_params[6:end]) for i in expanding_beta]
+results_ = pmap(parallel_SMM_safe, expanding_beta)
+scores = [score != nothing ? score[1][1] : missing for score in results_]
+k = 1
+y0 = reg_coef[k]
+y1 = reg_coef[k+1]
+reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
+y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+init_beta = expanding_beta[argmin(y_flat)][1:5]
 
 
-# n = 500000
-# n = K_max
-# @everywhere include("tools.jl") # Import the model
-# params_list,results = train_stage_one(n,init_beta)
-# save_stage_best_params(params_list,results,output_folder,"0",50)
-# generate_report(output_folder,"0",n)
+n = 500000
+n = K_max
+@everywhere include("tools.jl") # Import the model
+params_list,results = train_stage_one(n,init_beta)
+save_stage_best_params(params_list,results,output_folder,"0",50)
+generate_report(output_folder,"0",n)
 
 stage = 0
 # Before loop define global variables. 
-
-for loop in 1:10
+loop_start = 1
+for loop in loop_start:20
     global stage
     global params_list
     global results
@@ -165,48 +166,13 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-reporting = true
-if reporting
-
-    # Reporting
-    n = 1
-    folder = "./reporting_"*industry*"/" # Output folder
-    #folder = "./parameters/"
-    best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
-    params_list = [best_params[:,K] for K in 1:50]
-
-
-
-    # Compute scores for both stages
-    top_score_first, min_dist_first = compute_scores(folder,false)
-    top_score_second, min_dist_second = compute_scores(folder,true)
-
-    # Create subplots for first stage
-    p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",
-            xlabel="Iteration", ylabel="Normalized Loss (%)", 
-            title="First Stage", legend=:topright, color=:blue)
-    plot!(twinx(), min_dist_first, marker=:square, linewidth=2, label="Min Distance",
-        ylabel="Min Distance", legend=:topleft, color=:red)
-
-    # Create subplots for second stage
-    p2 = plot(top_score_second, marker=:circle, linewidth=2, label="Loss",
-            xlabel="Iteration", ylabel="Normalized Loss (%)", 
-            title="Second Stage", legend=:topright, color=:blue)
-    plot!(twinx(), min_dist_second, marker=:square, linewidth=2, label="Min Distance",
-        ylabel="Min Distance", legend=:topleft, color=:red)
-
-    # Combine into single figure with 2 subplots
-    combined_plot = plot(p1, p2, layout=(2,1), size=(800, 800))
-
-    # Save the figure
-    savefig(combined_plot, joinpath(folder, "loss_function_comparison.png"))
-end
-
 
 # Function to compute scores for a given stage
 function compute_scores(folder,second_stage::Bool)
     top_score = []
     min_distances = []
+    best_simulated_moments = []
+    best_parameters_list = []
     
     # Initial evaluation
     params_list_stage = [best_params[:,K] for K in 1:50]
@@ -230,6 +196,10 @@ function compute_scores(folder,second_stage::Bool)
             params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
             score = [s[1] != nothing ? s[1][1] : missing for s in results]
             push!(top_score, minimum(score))
+            simulated_moments = results[argmin(score)][2]
+            simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
+            push!(best_simulated_moments,simulated_moments)
+            push!(best_parameters_list,best_params_stage[:,argmin(score)])
             
             # Compute min_distance
             reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
@@ -243,5 +213,47 @@ function compute_scores(folder,second_stage::Bool)
     # Normalize loss to percentage
     normalized_score = (top_score ./ top_score[1]) .* 100
     min_distances = (min_distances ./ min_distances[1]) .* 100
-    return normalized_score, min_distances
+    return normalized_score, min_distances,best_simulated_moments,best_parameters_list
 end
+
+reporting = true
+if reporting
+
+    # Reporting
+    n = 1
+    folder = "./reporting_"*industry*"/" # Output folder
+    #folder = "./parameters/"
+    best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
+    params_list = [best_params[:,K] for K in 1:50]
+
+    # Compute scores for both stages
+    top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false)
+    top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true)
+
+    # Create subplots for first stage
+    p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",
+            xlabel="Iteration", ylabel="Normalized Loss (%)", 
+            title="First Stage", legend=:topright, color=:blue)
+    plot!(twinx(), min_dist_first, marker=:square, linewidth=2, label="Min Distance",
+        ylabel="Min Distance", legend=:topleft, color=:red)
+
+    # Create subplots for second stage
+    p2 = plot(top_score_second, marker=:circle, linewidth=2, label="Loss",
+            xlabel="Iteration", ylabel="Normalized Loss (%)", 
+            title="Second Stage", legend=:topright, color=:blue)
+    plot!(twinx(), min_dist_second, marker=:square, linewidth=2, label="Min Distance",
+        ylabel="Min Distance", legend=:topleft, color=:red)
+
+    # Combine into single figure with 2 subplots
+    combined_plot = plot(p1, p2, layout=(2,1), size=(800, 800))
+
+    # Save the figure
+    # savefig(combined_plot, joinpath(folder, "loss_function_comparison.png"))
+    
+    # npzwrite(joinpath(folder, "best_simulated_moments.npy"),hcat(best_simulated_moments...))
+    # npzwrite(joinpath(folder, "best_parameters_list.npy"),hcat(best_parameters_list...))
+    # npzwrite(joinpath(folder, "empirical_moments.npy"),empirical_moments)
+end
+
+
+

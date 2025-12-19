@@ -361,12 +361,12 @@ function loss_function(simulated_moments,emp,W)
     """
     Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
     """
-    
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)        
-    #simulated_moments = vcat([vec(simulated_moments),vec([N])]...)
+           
+    square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))'
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...) 
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
-    err = (emp-simulated_moments)
+    err = (emp-simulated_moments)./square_size
     W = isnothing(W) ? I(N) : W 
     return err*W*err'
 end

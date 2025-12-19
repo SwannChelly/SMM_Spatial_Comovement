@@ -383,7 +383,7 @@ function generate_dashboard_report(
         simulated = reg_sim
     )
 
-    date = now()
+    Dates.format(now(), "yyyy-mm-dd HH:MM")
     open(output_file, "w") do io
         println(io,"Date: $date\n")
         println(io,"Optimisation: $variable\n")

@@ -1,0 +1,52 @@
+Date: 2025-12-18T12:41:30.950
+
+Optimisation: All
+
+Learning rate: 
+
+Score: 0.27432486617912544
+
+Size of the grid: 10000
+
+===========================
+     MODEL DIAGNOSTICS REPORT
+===========================
+
+
+>> Aggregate labor share:
+
+Coefficient      Empirical:   0.1572  |  Simulated:   0.1765
+>> gamma_ls (quartile are for the distribution without zeros):
+
+Number of zeros  Empirical: 1493.000  |  Simulated:  919.000
+Q1               Empirical:    0.000  |  Simulated:    0.000
+Median           Empirical:    0.000  |  Simulated:    0.000
+Q3               Empirical:    0.002  |  Simulated:    0.001
+Max value        Empirical:    0.551  |  Simulated:    0.438
+
+>> pi_r :
+
+Q1               Empirical:    0.006  |  Simulated:    0.001
+Median           Empirical:    0.010  |  Simulated:    0.010
+Q3               Empirical:    0.020  |  Simulated:    0.032
+Max value        Empirical:    0.249  |  Simulated:    0.189
+
+>> Input share: 
+
+C22B             Empirical:    0.016  |  Simulated:    0.070
+C25D             Empirical:    0.014  |  Simulated:    0.016
+C26E             Empirical:    0.073  |  Simulated:    0.034
+C27B             Empirical:    0.016  |  Simulated:    0.014
+C28A             Empirical:    0.043  |  Simulated:    0.056
+C30C             Empirical:    0.659  |  Simulated:    0.672
+C33Z             Empirical:    0.133  |  Simulated:    0.117
+M70Z             Empirical:    0.025  |  Simulated:    0.006
+M71Z             Empirical:    0.020  |  Simulated:    0.015
+
+>> Regression coefficients: 
+
+]20,50]          Empirical:   -0.009  |  Simulated:   -0.024
+]50,100]         Empirical:   -0.022  |  Simulated:   -0.059
+]100,150]        Empirical:   -0.024  |  Simulated:   -0.074
+]150,200]        Empirical:   -0.038  |  Simulated:   -0.095
+>200             Empirical:   -0.029  |  Simulated:   -0.093
