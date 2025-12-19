@@ -166,11 +166,21 @@ println("Starting multi-stage PSO refinement")
 println("="^70)
 stage = 0
 loop_start = 1
-for loop in loop_start:5  # Reduced from 20 since PSO is more efficient
+if loop_start == 1
+    stage = 0
+else
+    stage = (loop_start-1)*2
+end
+
+for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more efficient
     global stage
     global best_params
     global best_fitness
-    
+    if loop >= 10 
+        rescale = true
+    else 
+        rescale = false
+    end
     println("\n" * "-"^70)
     println("REFINEMENT LOOP $loop")
     println("-"^70)
@@ -188,7 +198,8 @@ for loop in loop_start:5  # Reduced from 20 since PSO is more efficient
         last_stage_folder = joinpath(past_loop_folder, string(stage)),
         K = 1,
         alpha = 0.2,  # Narrower search for refinement
-        second_stage = false
+        second_stage = false,
+        rescale = rescale
     )
     
     stage += 1
@@ -210,7 +221,8 @@ for loop in loop_start:5  # Reduced from 20 since PSO is more efficient
         last_stage_folder = joinpath(loop_folder, string(stage)),
         K = 1,
         alpha = 0.2,
-        second_stage = false
+        second_stage = false,
+        rescale = rescale
     )
     
     stage += 1
@@ -291,12 +303,9 @@ end
 
 
 
-rmse(a::AbstractVector, b::AbstractVector) =
-    sqrt(mean((a .- b).^2))
-
 
 # Function to compute scores for a given stage
-function compute_scores(folder,second_stage::Bool)
+function compute_scores(folder,second_stage::Bool,max_stage = nothing)
     top_score = []
     min_distances = []
     best_simulated_moments = []
@@ -320,39 +329,46 @@ function compute_scores(folder,second_stage::Bool)
     push!(best_parameters_list,best_params)
     normalized_score = (top_score ./ top_score[1]) .* 100
     min_distances = (min_distances ./ min_distances[1]) .* 100
+    if max_stage == nothing
+        return normalized_score, min_distances,best_simulated_moments,best_parameters_list
+    end
+
+    # Loop through epochs
+    stage = 1
+    for loop in 1:max_stage
+        for k in 1:2
+            folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
+            print(folder_stage)
+            best_params_stage = NPZ.npzread(joinpath(folder_stage, "best_params.npy"))
+            params_list_stage = [best_params_stage]
+            params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
+            score = [s[1] != nothing ? s[1][1] : missing for s in results]
+            push!(top_score, minimum(score))
+            simulated_moments = results[argmin(score)][2]
+            simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
+            push!(best_simulated_moments,simulated_moments)
+            push!(best_parameters_list,best_params_stage[:,argmin(score)])
+            
+            # Compute min_distance
+            reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
+            min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
+            push!(min_distances, min_distance)
+            
+            stage += 1
+        end
+    end
+    
+    # Normalize loss to percentage
+    normalized_score = (top_score ./ top_score[1]) .* 100
+    min_distances = (min_distances ./ min_distances[1]) .* 100
     return normalized_score, min_distances,best_simulated_moments,best_parameters_list
 end
-#     # Loop through epochs
-#     stage = 1
-#     for loop in 1:10
-#         for k in 1:2
-#             folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
-#             print(folder_stage)
-#             best_params_stage = NPZ.npzread(joinpath(folder_stage, "best_params.npy"))
-#             params_list_stage = [best_params_stage]
-#             params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
-#             score = [s[1] != nothing ? s[1][1] : missing for s in results]
-#             push!(top_score, minimum(score))
-#             simulated_moments = results[argmin(score)][2]
-#             simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
-#             push!(best_simulated_moments,simulated_moments)
-#             push!(best_parameters_list,best_params_stage[:,argmin(score)])
-            
-#             # Compute min_distance
-#             reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
-#             min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
-#             push!(min_distances, min_distance)
-            
-#             stage += 1
-#         end
-#     end
-    
-#     # Normalize loss to percentage
-#     normalized_score = (top_score ./ top_score[1]) .* 100
-#     min_distances = (min_distances ./ min_distances[1]) .* 100
-#     return normalized_score, min_distances,best_simulated_moments,best_parameters_list
-# end
 
+
+rmse(a::AbstractVector, b::AbstractVector) =
+    sqrt(mean((a .- b).^2))
+
+max_stage = 20
 reporting = true
 if reporting
 
@@ -364,8 +380,8 @@ if reporting
     params_list = [best_params]
 
     # Compute scores for both stages
-    top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false)
-    top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true)
+    top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_stage)
+    top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true,max_stage)
 
     # Create subplots for first stage
     p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",

@@ -357,22 +357,26 @@ function SMM(params,simulation = false)
 end
 
 # Then compute scores. 
-function loss_function(simulated_moments,emp,W)
+function loss_function(simulated_moments,emp,W,rescale = false)
     """
     Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
     """
            
-    #square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))'
+    square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))'
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...) 
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments,(1,N))
-    err = (emp-simulated_moments)#./square_size
+    if rescale
+        err = (emp-simulated_moments)./square_size
+    else 
+        err = (emp-simulated_moments)
+    end
     W = isnothing(W) ? I(N) : W 
     return err*W*err'
 end
 
 
-function full_SMM(params,simulation = false,second_stage = false)
+function full_SMM(params,simulation = false,second_stage = false,rescale = false)
     """
     From the parameters, return the loss and the simulated moments (targeted and untargeted)
     """
@@ -390,7 +394,7 @@ function full_SMM(params,simulation = false,second_stage = false)
     if simulation 
         return simulated_moments
     else
-        return loss_function(moments,emp,W),simulated_moments
+        return loss_function(moments,emp,W,rescale),simulated_moments
     end
 end
 

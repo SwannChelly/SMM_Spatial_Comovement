@@ -237,14 +237,14 @@ function assign_T_with_mask(true_T,sample)
     return accept 
 end
 
-function parallel_SMM(params,simulation,second_stage)
-    return full_SMM(params,simulation,second_stage)
+function parallel_SMM(params,simulation,second_stage,rescale)
+    return full_SMM(params,simulation,second_stage,rescale)
 end
 
 
-function parallel_SMM_safe(params,simulation = false,second_stage=false,show_err = true)
+function parallel_SMM_safe(params,simulation = false,second_stage=false,rescale = false,show_err = true)
     try
-        result = parallel_SMM(params,simulation,second_stage) # Run the SMM in parallel. 
+        result = parallel_SMM(params,simulation,second_stage,rescale) # Run the SMM in parallel. 
 
         return result
     catch e
@@ -274,13 +274,13 @@ function distance_bin(d)
     end
 end
 
-function train_stage_one(n,init_beta,params_list = nothing,second_stage = false)
+function train_stage_one(n,init_beta,params_list = nothing,second_stage = false,rescale = false)
 
     t1 = time()
     if params_list == nothing
         params_list = generate_halton_grid(n,2000,false,init_beta)
     end
-    f = params -> parallel_SMM_safe(params, false, second_stage, true)
+    f = params -> parallel_SMM_safe(params, false, second_stage,rescale, true)
     results = pmap(f, params_list)
     return params_list,results
 end
@@ -594,6 +594,9 @@ function run_stage(variable,n,alpha,stage,loop_folder,second_stage)
 end
 
 
+
+rmse(a::AbstractVector, b::AbstractVector) =
+    sqrt(mean((a .- b).^2))
 
 
 

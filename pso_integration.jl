@@ -42,7 +42,7 @@ function parallel_pso_smm(
     n_particles::Int = 70,
     max_iter::Int = 100,
     warm_start_particle::Union{Vector{Float64}, Nothing} = nothing,
-    w_start::Float64 = 1.5,
+    w_start::Float64 = 2.5,
     w_end::Float64 = 0.4,
     c1::Float64 = 2.0,
     c2::Float64 = 2.0,
@@ -255,7 +255,8 @@ function train_stage_pso(
     last_stage_folder = nothing,
     K = 1,
     alpha = 0.1,
-    second_stage = false
+    second_stage = false,
+    rescale = false
 )
     
     # Build bounds based on previous stage or initialization
@@ -296,8 +297,8 @@ function train_stage_pso(
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
         
         # Build bounds for selected variables
-        lb = vcat([params_dict[Symbol(v)] ./ alpha for v in var_list]...)
-        ub = vcat([params_dict[Symbol(v)] .* alpha for v in var_list]...)
+        lb = vcat([params_dict[Symbol(v)] .* alpha for v in var_list]...)
+        ub = vcat([params_dict[Symbol(v)] ./ alpha for v in var_list]...)
         
         # Check if beta is being optimized
         beta_constraint = "beta" in var_list
@@ -378,7 +379,7 @@ function train_stage_pso(
         end
         
         # Evaluate SMM
-        result = parallel_SMM_safe(x_full, false, second_stage, false)
+        result = parallel_SMM_safe(x_full, false, second_stage, rescale,false)
         
         if isnothing(result)
             return Inf
