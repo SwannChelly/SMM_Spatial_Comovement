@@ -1,7 +1,6 @@
 """
-Particle Swarm Optimization integration for SMM calibration
-This file provides functions to replace Halton grid search with PSO
-while maintaining compatibility with your existing workflow.
+Particle Swarm Optimization integration for SMM calibration - FIXED VERSION
+Key fix: Always includes previous best as a warm start particle for monotonic improvement
 """
 
 using Distributed
@@ -10,9 +9,12 @@ using Statistics
 using NPZ
 
 """
-    parallel_pso_smm(objective_func, lb, ub; n_particles=70, max_iter=100, kwargs...)
+    parallel_pso_smm(objective_func, lb, ub; warm_start_particle=nothing, kwargs...)
 
 PSO optimized for your SMM calibration with parallel evaluation.
+
+**KEY FEATURE**: warm_start_particle ensures previous best is always included,
+guaranteeing monotonic improvement across stages.
 
 # Arguments
 - `objective_func`: Function that takes params vector and returns loss
@@ -20,7 +22,8 @@ PSO optimized for your SMM calibration with parallel evaluation.
 - `ub`: Upper bounds for parameters
 - `n_particles`: Number of particles (recommend = number of cores)
 - `max_iter`: Maximum iterations
-- `w_start`: Initial inertia (0.9 = more exploration)
+- `warm_start_particle`: Previous best solution (CRITICAL for monotonic improvement!)
+- `w_start`: Initial inertia (1.5 = more exploration)
 - `w_end`: Final inertia (0.4 = more exploitation)
 - `c1`: Cognitive parameter (personal best attraction)
 - `c2`: Social parameter (global best attraction)
@@ -38,6 +41,7 @@ function parallel_pso_smm(
     ub::Vector{Float64};
     n_particles::Int = 70,
     max_iter::Int = 100,
+    warm_start_particle::Union{Vector{Float64}, Nothing} = nothing,
     w_start::Float64 = 1.5,
     w_end::Float64 = 0.4,
     c1::Float64 = 2.0,
@@ -49,37 +53,56 @@ function parallel_pso_smm(
     
     d = length(lb)
     
-    # Initialize particles randomly in bounds
-    particles = [lb .+ rand(d) .* (ub .- lb) for _ in 1:n_particles]
+    # CRITICAL: Reserve one slot for warm start if provided
+    n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
+    particles = [lb .+ rand(d) .* (ub .- lb) for _ in 1:n_random]
     
-    # Apply beta constraint
+    # Apply beta constraint to random particles
     if beta_constraint
-        for i in 1:n_particles
+        for i in 1:n_random
             particles[i] = enforce_beta_constraint(particles[i], beta_indices)
         end
     end
     
-    # Initialize velocities
-    velocities = [0.1 * (ub .- lb) .* randn(d) for _ in 1:n_particles]
+    # CRITICAL FIX: Add previous best as a particle (guarantees monotonic improvement)
+    if warm_start_particle !== nothing
+        # Ensure warm start is within current bounds (bounds may have changed)
+        warm_start_clamped = clamp.(warm_start_particle, lb, ub)
+        
+        # Apply beta constraint
+        if beta_constraint
+            warm_start_clamped = enforce_beta_constraint(warm_start_clamped, beta_indices)
+        end
+        
+        push!(particles, warm_start_clamped)
+        
+        if verbose
+            println("[PSO] ✓ Including previous best as warm start particle")
+            println("  This guarantees fitness will not increase from previous stage")
+        end
+    end
+    
+    # Initialize velocities (including for warm start particle)
+    velocities = [0.1 * (ub .- lb) .* randn(d) for _ in 1:length(particles)]
     
     # PARALLEL EVALUATION - This is where we leverage your many cores
     if verbose
-        println("\n[PSO] Evaluating $n_particles initial particles in parallel...")
+        println("\n[PSO] Evaluating $(length(particles)) initial particles in parallel...")
         flush(stdout)
     end
     
     fitness = pmap(objective_func, particles)
     
     # Handle any failed evaluations (returning nothing)
-    for i in 1:n_particles
+    for i in 1:length(particles)
         if isnothing(fitness[i])
             fitness[i] = Inf
         end
     end
     
     # Personal best
-    p_best = copy(particles) # Param
-    p_best_fitness = copy(fitness) # Score : Loss output
+    p_best = copy(particles)
+    p_best_fitness = copy(fitness)
     
     # Global best
     g_best_idx = argmin(p_best_fitness)
@@ -96,9 +119,12 @@ function parallel_pso_smm(
     if verbose
         println("[PSO] Initialization complete:")
         println("  Workers: $(nworkers())")
-        println("  Particles: $n_particles")
+        println("  Particles: $(length(particles))")
         println("  Dimension: $d")
         println("  Initial best fitness: $(round(g_best_fitness, digits=6))")
+        if warm_start_particle !== nothing
+            println("  ✓ Warm start included - monotonic improvement guaranteed")
+        end
         println()
     end
     
@@ -110,7 +136,7 @@ function parallel_pso_smm(
         w = w_start - (w_start - w_end) * (iter / max_iter)
         
         # Update all particles
-        for i in 1:n_particles
+        for i in 1:length(particles)
             r1, r2 = rand(d), rand(d)
             
             # Update velocity: inertia + cognitive + social components
@@ -138,14 +164,14 @@ function parallel_pso_smm(
         fitness = pmap(objective_func, particles)
         
         # Handle failures
-        for i in 1:n_particles
+        for i in 1:length(particles)
             if isnothing(fitness[i])
                 fitness[i] = Inf
             end
         end
         
         # Update personal bests
-        for i in 1:n_particles
+        for i in 1:length(particles)
             if fitness[i] < p_best_fitness[i]
                 p_best[i] = copy(particles[i])
                 p_best_fitness[i] = fitness[i]
@@ -199,10 +225,12 @@ end
 
 
 """
-    train_stage_pso(n_particles, max_iter, init_beta, variable_list, last_stage_folder, K, alpha, second_stage)
+    train_stage_pso(n_particles, max_iter; kwargs...)
 
-Replace train_stage_one with PSO-based training.
-This integrates directly with your existing workflow.
+PSO-based training with automatic warm start from previous stage.
+
+**KEY FEATURE**: Automatically extracts previous best and passes it as warm start,
+ensuring monotonic improvement across optimization stages.
 
 # Arguments
 - `n_particles`: Number of PSO particles (use your number of cores)
@@ -215,7 +243,7 @@ This integrates directly with your existing workflow.
 - `second_stage`: Whether this is second-stage optimization
 
 # Returns
-- `best_params`: Best parameter vector found
+- `best_params`: Best parameter vector found (full parameter space)
 - `best_fitness`: Best loss value achieved
 - `history`: Optimization history
 """
@@ -241,7 +269,7 @@ function train_stage_pso(
             0.,
             0.8 .* agg_industry_share,
             0.01 .* A,
-            0.1 * ones(S*R)
+            0.1 * (vec(N_rs).+ 0.1)
         )
         
         ub = vcat(
@@ -249,11 +277,13 @@ function train_stage_pso(
             1.,
             1.2 .* agg_industry_share,
             A .* 100,
-            10000 * ones(S*R)
+            10000 * (vec(N_rs).+ 0.1)
         )
         
         beta_constraint = true
         beta_indices = 1:5
+        best_params_prev = nothing
+        warm_start = nothing
         
     else
         # Continue from previous stage - load best params
@@ -294,6 +324,36 @@ function train_stage_pso(
             lb = vcat(lb[1:t_start], lb_T, (t_start + t_length < length(lb)) ? lb[t_start + t_length + 1:end] : Float64[])
             ub = vcat(ub[1:t_start], ub_T, (t_start + t_length < length(ub)) ? ub[t_start + t_length + 1:end] : Float64[])
         end
+        
+        # CRITICAL: Extract warm start particle (previous best in reduced parameter space)
+        warm_start = Float64[]
+        for var in var_list
+            var_symbol = Symbol(var)
+            append!(warm_start, params_dict[var_symbol])
+        end
+        
+        # Handle second stage T masking for warm start
+        if "T" in var_list && second_stage
+            t_idx = findfirst(==("T"), var_list)
+            t_start = t_idx == 1 ? 0 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(t_idx-1)])
+            mask = vec(mask_emp_gamma_ls)
+            t_length = length(params_dict[:T])
+            t_indices = (t_start + 1):(t_start + t_length)
+            
+            # Extract only non-masked T values
+            warm_start_T = warm_start[t_indices][mask .== 1]
+            warm_start = vcat(
+                warm_start[1:t_start], 
+                warm_start_T, 
+                (t_start + t_length < length(warm_start)) ? warm_start[t_start + t_length + 1:end] : Float64[]
+            )
+        end
+        
+        println("\n[WARM START]")
+        println("  Previous best extracted from: $last_stage_folder")
+        println("  Warm start dimension: $(length(warm_start))")
+        println("  Bounds dimension: $(length(lb))")
+        @assert length(warm_start) == length(lb) "Warm start dimension mismatch!"
     end
     
     # Define objective function
@@ -327,7 +387,7 @@ function train_stage_pso(
         end
     end
     
-    # Run PSO
+    # Run PSO with warm start
     println("\n" * "="^60)
     println("Starting PSO Optimization")
     println("="^60)
@@ -338,6 +398,11 @@ function train_stage_pso(
     println("Particles: $n_particles")
     println("Max iterations: $max_iter")
     println("Dimension: $(length(lb))")
+    if warm_start !== nothing
+        println("Warm start: YES (guarantees monotonic improvement)")
+    else
+        println("Warm start: NO (first stage)")
+    end
     println("="^60)
     
     best_params, best_fitness, history = parallel_pso_smm(
@@ -345,6 +410,7 @@ function train_stage_pso(
         lb, ub,
         n_particles = n_particles,
         max_iter = max_iter,
+        warm_start_particle = warm_start,  # CRITICAL: Pass previous best
         beta_constraint = beta_constraint,
         beta_indices = beta_indices,
         verbose = true

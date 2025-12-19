@@ -103,7 +103,7 @@ expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
 # Use initial guess for other parameters
 A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
 A ./= sum(A)
-init_other = vcat([agg_labor_share], agg_industry_share, A, ones(S*R))
+init_other = vcat([agg_labor_share], agg_industry_share, A, vec(N_rs).+0.1)
 expanding_beta = [vcat(i, init_other) for i in expanding_beta]
 
 println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
@@ -119,13 +119,14 @@ y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
 init_beta = expanding_beta[argmin(y_flat)][1:5]
 
 println("Best initial beta: ", init_beta)
+println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
 
 
 ############## PSO-BASED OPTIMIZATION ##############
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 100    # Iterations for initial full optimization
+MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 30     # Iterations for each refinement stage
 
 println("\n" * "="^70)
@@ -158,91 +159,91 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
 
-############## MULTI-STAGE REFINEMENT ##############
+############# MULTI-STAGE REFINEMENT ##############
 
-# println("\n" * "="^70)
-# println("Starting multi-stage PSO refinement")
-# println("="^70)
-
-# loop_start = 1
-# for loop in loop_start:5  # Reduced from 20 since PSO is more efficient
-#     global stage
-#     global best_params
-#     global best_fitness
+println("\n" * "="^70)
+println("Starting multi-stage PSO refinement")
+println("="^70)
+stage = 0
+loop_start = 1
+for loop in loop_start:5  # Reduced from 20 since PSO is more efficient
+    global stage
+    global best_params
+    global best_fitness
     
-#     println("\n" * "-"^70)
-#     println("REFINEMENT LOOP $loop")
-#     println("-"^70)
+    println("\n" * "-"^70)
+    println("REFINEMENT LOOP $loop")
+    println("-"^70)
     
-#     past_loop_folder = loop == 1 ? output_folder : "./reporting_"*industry*"/epoch_"*string(loop-1)
-#     loop_folder = "./reporting_"*industry*"/epoch_"*string(loop)
-#     mkpath(loop_folder)
+    past_loop_folder = loop == 1 ? output_folder : "./reporting_"*industry*"/epoch_"*string(loop-1)
+    loop_folder = "./reporting_"*industry*"/epoch_"*string(loop)
+    mkpath(loop_folder)
     
-#     # Stage 1: Refine industry shares and productivity
-#     println("\nStage $(stage+1): Refining industry shares and productivity...")
-#     best_params, best_fitness, history = train_stage_pso(
-#         N_PARTICLES,
-#         MAX_ITER_STAGE,
-#         variable_list = ["agg_labor_share","agg_industry_share_tech", "productivity"],
-#         last_stage_folder = joinpath(past_loop_folder, string(stage)),
-#         K = 1,
-#         alpha = 0.2,  # Narrower search for refinement
-#         second_stage = false
-#     )
+    # Stage 1: Refine industry shares and productivity
+    println("\nStage $(stage+1): Refining industry shares and productivity...")
+    best_params, best_fitness, history = train_stage_pso(
+        N_PARTICLES,
+        MAX_ITER_STAGE,
+        variable_list = ["agg_labor_share_tech","agg_industry_share_tech", "productivity"],
+        last_stage_folder = joinpath(past_loop_folder, string(stage)),
+        K = 1,
+        alpha = 0.2,  # Narrower search for refinement
+        second_stage = false
+    )
     
-#     stage += 1
-#     folder = joinpath(loop_folder, string(stage))
-#     mkpath(folder)
-#     NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-#     NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-#         "best_fitness" => history["best_fitness"],
-#         "mean_fitness" => history["mean_fitness"]
-#     ))
-#     generate_report(loop_folder, string(stage), 1, ["agg_industry_share_tech", "productivity"], best_params, "0.2")
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder)
+    NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+    NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+        "best_fitness" => history["best_fitness"],
+        "mean_fitness" => history["mean_fitness"]
+    ))
+    generate_report(loop_folder, string(stage), 1, ["agg_industry_share_tech", "productivity"], best_params, "0.2")
     
-#     # Stage 2: Refine beta and T
-#     println("\nStage $(stage+1): Refining beta and T...")
-#     best_params, best_fitness, history = train_stage_pso(
-#         N_PARTICLES,
-#         MAX_ITER_STAGE,
-#         variable_list = ["beta", "T"],
-#         last_stage_folder = joinpath(loop_folder, string(stage)),
-#         K = 1,
-#         alpha = 0.2,
-#         second_stage = false
-#     )
+    # Stage 2: Refine beta and T
+    println("\nStage $(stage+1): Refining beta and T...")
+    best_params, best_fitness, history = train_stage_pso(
+        N_PARTICLES,
+        MAX_ITER_STAGE,
+        variable_list = ["beta", "T"],
+        last_stage_folder = joinpath(loop_folder, string(stage)),
+        K = 1,
+        alpha = 0.2,
+        second_stage = false
+    )
     
-#     stage += 1
-#     folder = joinpath(loop_folder, string(stage))
-#     mkpath(folder)
-#     NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-#     NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-#         "best_fitness" => history["best_fitness"],
-#         "mean_fitness" => history["mean_fitness"]
-#     ))
-#     generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, "0.2")
+    stage += 1
+    folder = joinpath(loop_folder, string(stage))
+    mkpath(folder)
+    NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+    NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+        "best_fitness" => history["best_fitness"],
+        "mean_fitness" => history["mean_fitness"]
+    ))
+    generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, "0.2")
     
-#     println("\nLoop $loop complete. Best fitness: $(round(best_fitness, digits=6))")
+    println("\nLoop $loop complete. Best fitness: $(round(best_fitness, digits=6))")
     
-#     # Check for convergence (optional)
-#     if loop > 2
-#         prev_folder = "./reporting_"*industry*"/epoch_"*string(loop-1)*"/"*string(stage-2)
-#         prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
-#         param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
-#         println("Maximum parameter change: $(round(param_change, digits=4))")
+    # Check for convergence (optional)
+    if loop > 2
+        prev_folder = "./reporting_"*industry*"/epoch_"*string(loop-1)*"/"*string(stage-2)
+        prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
+        param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
+        println("Maximum parameter change: $(round(param_change, digits=4))")
         
-#         if param_change < 0.01
-#             println("\nConvergence achieved! Parameter change < 1%")
-#             break
-#         end
-#     end
-# end
+        if param_change < 0.01
+            println("\nConvergence achieved! Parameter change < 1%")
+            break
+        end
+    end
+end
 
-# println("\n" * "="^70)
-# println("PSO OPTIMIZATION COMPLETE")
-# println("="^70)
-# println("Final best fitness: $(round(best_fitness, digits=6))")
-# println("Results saved to: $output_folder")
+println("\n" * "="^70)
+println("PSO OPTIMIZATION COMPLETE")
+println("="^70)
+println("Final best fitness: $(round(best_fitness, digits=6))")
+println("Results saved to: $output_folder")
 
 
 ############## PLOT CONVERGENCE ##############
