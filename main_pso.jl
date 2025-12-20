@@ -165,18 +165,19 @@ println("\n" * "="^70)
 println("Starting multi-stage PSO refinement")
 println("="^70)
 stage = 0
-loop_start = 1
+loop_start = 8
 if loop_start == 1
     stage = 0
 else
     stage = (loop_start-1)*2
 end
+println(stage)
 
 for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more efficient
     global stage
     global best_params
     global best_fitness
-    if loop >= 10 
+    if loop >= 7 
         rescale = true
     else 
         rescale = false
@@ -190,7 +191,7 @@ for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more effi
     mkpath(loop_folder)
     
     # Stage 1: Refine industry shares and productivity
-    println("\nStage $(stage+1): Refining industry shares and productivity...")
+    println("\nLoop $(loop): Refining industry shares and productivity...")
     best_params, best_fitness, history = train_stage_pso(
         N_PARTICLES,
         MAX_ITER_STAGE,
@@ -213,7 +214,7 @@ for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more effi
     generate_report(loop_folder, string(stage), 1, ["agg_industry_share_tech", "productivity"], best_params, "0.2")
     
     # Stage 2: Refine beta and T
-    println("\nStage $(stage+1): Refining beta and T...")
+    println("\nLoop $(loop): Refining beta and T...")
     best_params, best_fitness, history = train_stage_pso(
         N_PARTICLES,
         MAX_ITER_STAGE,
