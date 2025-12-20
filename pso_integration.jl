@@ -42,7 +42,7 @@ function parallel_pso_smm(
     n_particles::Int = 70,
     max_iter::Int = 100,
     warm_start_particle::Union{Vector{Float64}, Nothing} = nothing,
-    w_start::Float64 = 2.5,
+    w_start::Float64 = 2.,
     w_end::Float64 = 0.4,
     c1::Float64 = 2.0,
     c2::Float64 = 2.0,

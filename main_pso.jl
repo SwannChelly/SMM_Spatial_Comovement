@@ -126,7 +126,7 @@ println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
+MAX_ITER_INITIAL = 400    # Iterations for initial full optimization
 MAX_ITER_STAGE = 30     # Iterations for each refinement stage
 
 println("\n" * "="^70)
@@ -158,148 +158,149 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
+run_rest = false
+if run_multi_stage
+    ############# MULTI-STAGE REFINEMENT ##############
 
-############# MULTI-STAGE REFINEMENT ##############
-
-println("\n" * "="^70)
-println("Starting multi-stage PSO refinement")
-println("="^70)
-stage = 0
-loop_start = 8
-if loop_start == 1
+    println("\n" * "="^70)
+    println("Starting multi-stage PSO refinement")
+    println("="^70)
     stage = 0
-else
-    stage = (loop_start-1)*2
-end
-println(stage)
-
-for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more efficient
-    global stage
-    global best_params
-    global best_fitness
-    if loop >= 7 
-        rescale = true
-    else 
-        rescale = false
+    loop_start = 1
+    if loop_start == 1
+        stage = 0
+    else
+        stage = (loop_start-1)*2
     end
-    println("\n" * "-"^70)
-    println("REFINEMENT LOOP $loop")
-    println("-"^70)
-    
-    past_loop_folder = loop == 1 ? output_folder : "./reporting_"*industry*"/epoch_"*string(loop-1)
-    loop_folder = "./reporting_"*industry*"/epoch_"*string(loop)
-    mkpath(loop_folder)
-    
-    # Stage 1: Refine industry shares and productivity
-    println("\nLoop $(loop): Refining industry shares and productivity...")
-    best_params, best_fitness, history = train_stage_pso(
-        N_PARTICLES,
-        MAX_ITER_STAGE,
-        variable_list = ["agg_labor_share_tech","agg_industry_share_tech", "productivity"],
-        last_stage_folder = joinpath(past_loop_folder, string(stage)),
-        K = 1,
-        alpha = 0.2,  # Narrower search for refinement
-        second_stage = false,
-        rescale = rescale
-    )
-    
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder)
-    NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-    NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-        "best_fitness" => history["best_fitness"],
-        "mean_fitness" => history["mean_fitness"]
-    ))
-    generate_report(loop_folder, string(stage), 1, ["agg_industry_share_tech", "productivity"], best_params, "0.2")
-    
-    # Stage 2: Refine beta and T
-    println("\nLoop $(loop): Refining beta and T...")
-    best_params, best_fitness, history = train_stage_pso(
-        N_PARTICLES,
-        MAX_ITER_STAGE,
-        variable_list = ["beta", "T"],
-        last_stage_folder = joinpath(loop_folder, string(stage)),
-        K = 1,
-        alpha = 0.2,
-        second_stage = false,
-        rescale = rescale
-    )
-    
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder)
-    NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-    NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-        "best_fitness" => history["best_fitness"],
-        "mean_fitness" => history["mean_fitness"]
-    ))
-    generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, "0.2")
-    
-    println("\nLoop $loop complete. Best fitness: $(round(best_fitness, digits=6))")
-    
-    # Check for convergence (optional)
-    if loop > 2
-        prev_folder = "./reporting_"*industry*"/epoch_"*string(loop-1)*"/"*string(stage-2)
-        prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
-        param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
-        println("Maximum parameter change: $(round(param_change, digits=4))")
-        
-        if param_change < 0.01
-            println("\nConvergence achieved! Parameter change < 1%")
-            break
+    println(stage)
+
+    for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more efficient
+        global stage
+        global best_params
+        global best_fitness
+        if loop >= 7 
+            rescale = true
+        else 
+            rescale = false
         end
-    end
-end
-
-println("\n" * "="^70)
-println("PSO OPTIMIZATION COMPLETE")
-println("="^70)
-println("Final best fitness: $(round(best_fitness, digits=6))")
-println("Results saved to: $output_folder")
-
-
-############## PLOT CONVERGENCE ##############
-
-# Plot PSO convergence history
-function plot_pso_convergence(output_folder, n_loops)
-    all_best = Float64[]
-    all_mean = Float64[]
-    
-    # Load initial stage
-    hist = NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))
-    append!(all_best, hist["best_fitness"])
-    append!(all_mean, hist["mean_fitness"])
-    
-    # Load all refinement stages
-    for loop in 1:n_loops
-        for stage_offset in 1:2
-            folder = "./reporting_"*industry*"/epoch_"*string(loop)*"/"*string(stage_offset)
-            if isdir(folder)
-                hist_file = joinpath(folder, "pso_history.npy")
-                if isfile(hist_file)
-                    hist = NPZ.npzread(hist_file)
-                    append!(all_best, hist["best_fitness"])
-                    append!(all_mean, hist["mean_fitness"])
-                end
+        println("\n" * "-"^70)
+        println("REFINEMENT LOOP $loop")
+        println("-"^70)
+        
+        past_loop_folder = loop == 1 ? output_folder : "./reporting_"*industry*"/epoch_"*string(loop-1)
+        loop_folder = "./reporting_"*industry*"/epoch_"*string(loop)
+        mkpath(loop_folder)
+        
+        # Stage 1: Refine industry shares and productivity
+        println("\nLoop $(loop): Refining industry shares and productivity...")
+        best_params, best_fitness, history = train_stage_pso(
+            N_PARTICLES,
+            MAX_ITER_STAGE,
+            variable_list = ["agg_labor_share_tech","agg_industry_share_tech", "productivity"],
+            last_stage_folder = joinpath(past_loop_folder, string(stage)),
+            K = 1,
+            alpha = 0.2,  # Narrower search for refinement
+            second_stage = false,
+            rescale = rescale
+        )
+        
+        stage += 1
+        folder = joinpath(loop_folder, string(stage))
+        mkpath(folder)
+        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+        NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+            "best_fitness" => history["best_fitness"],
+            "mean_fitness" => history["mean_fitness"]
+        ))
+        generate_report(loop_folder, string(stage), 1, ["agg_industry_share_tech", "productivity"], best_params, "0.2")
+        
+        # Stage 2: Refine beta and T
+        println("\nLoop $(loop): Refining beta and T...")
+        best_params, best_fitness, history = train_stage_pso(
+            N_PARTICLES,
+            MAX_ITER_STAGE,
+            variable_list = ["beta", "T"],
+            last_stage_folder = joinpath(loop_folder, string(stage)),
+            K = 1,
+            alpha = 0.2,
+            second_stage = false,
+            rescale = rescale
+        )
+        
+        stage += 1
+        folder = joinpath(loop_folder, string(stage))
+        mkpath(folder)
+        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+        NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+            "best_fitness" => history["best_fitness"],
+            "mean_fitness" => history["mean_fitness"]
+        ))
+        generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, "0.2")
+        
+        println("\nLoop $loop complete. Best fitness: $(round(best_fitness, digits=6))")
+        
+        # Check for convergence (optional)
+        if loop > 2
+            prev_folder = "./reporting_"*industry*"/epoch_"*string(loop-1)*"/"*string(stage-2)
+            prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
+            param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
+            println("Maximum parameter change: $(round(param_change, digits=4))")
+            
+            if param_change < 0.01
+                println("\nConvergence achieved! Parameter change < 1%")
+                break
             end
         end
     end
-    
-    # Normalize to percentage of initial
-    all_best_norm = 100 * all_best / all_best[1]
-    all_mean_norm = 100 * all_mean / all_mean[1]
-    
-    p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
-             xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
-             title="PSO Convergence", legend=:topright, color=:blue)
-    plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
-          color=:red, linestyle=:dash)
-    
-    savefig(p, joinpath(output_folder, "pso_convergence.png"))
-    println("\nConvergence plot saved to: $(joinpath(output_folder, "pso_convergence.png"))")
-end
 
+    println("\n" * "="^70)
+    println("PSO OPTIMIZATION COMPLETE")
+    println("="^70)
+    println("Final best fitness: $(round(best_fitness, digits=6))")
+    println("Results saved to: $output_folder")
+
+
+    ############## PLOT CONVERGENCE ##############
+
+    # Plot PSO convergence history
+    function plot_pso_convergence(output_folder, n_loops)
+        all_best = Float64[]
+        all_mean = Float64[]
+        
+        # Load initial stage
+        hist = NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))
+        append!(all_best, hist["best_fitness"])
+        append!(all_mean, hist["mean_fitness"])
+        
+        # Load all refinement stages
+        for loop in 1:n_loops
+            for stage_offset in 1:2
+                folder = "./reporting_"*industry*"/epoch_"*string(loop)*"/"*string(stage_offset)
+                if isdir(folder)
+                    hist_file = joinpath(folder, "pso_history.npy")
+                    if isfile(hist_file)
+                        hist = NPZ.npzread(hist_file)
+                        append!(all_best, hist["best_fitness"])
+                        append!(all_mean, hist["mean_fitness"])
+                    end
+                end
+            end
+        end
+        
+        # Normalize to percentage of initial
+        all_best_norm = 100 * all_best / all_best[1]
+        all_mean_norm = 100 * all_mean / all_mean[1]
+        
+        p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
+                xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
+                title="PSO Convergence", legend=:topright, color=:blue)
+        plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
+            color=:red, linestyle=:dash)
+        
+        savefig(p, joinpath(output_folder, "pso_convergence.png"))
+        println("\nConvergence plot saved to: $(joinpath(output_folder, "pso_convergence.png"))")
+    end
+end
 # plot_pso_convergence(output_folder, 3)
 
 
@@ -369,8 +370,8 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-max_stage = 20
-reporting = true
+max_stage = 14
+reporting = false
 if reporting
 
     # Reporting
