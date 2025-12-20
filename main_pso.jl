@@ -121,12 +121,11 @@ init_beta = expanding_beta[argmin(y_flat)][1:5]
 println("Best initial beta: ", init_beta)
 println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
 
-
 ############## PSO-BASED OPTIMIZATION ##############
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 150    # Iterations for initial full optimization
+MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 30     # Iterations for each refinement stage
 
 println("\n" * "="^70)
@@ -143,7 +142,8 @@ best_params, best_fitness, history = train_stage_pso(
     variable_list = nothing,  # Optimize all parameters
     last_stage_folder = nothing,
     alpha = 0.5,
-    second_stage = false
+    second_stage = false,
+    rescale = false
 )
 
 # Save results
@@ -158,8 +158,8 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
-run_multi_stage = false
-if run_multi_stage
+max_loop = 50
+if max_loop != nothing
     ############# MULTI-STAGE REFINEMENT ##############
 
     println("\n" * "="^70)
@@ -173,20 +173,22 @@ if run_multi_stage
         stage = (loop_start-1)*2
     end
     println(stage)
-
-    for loop in loop_start:(loop_start+20)  # Reduced from 20 since PSO is more efficient
+    
+    alpha_start,alpha_end = 0.2,0.9
+    for loop in loop_start:max_loop  # Reduced from 20 since PSO is more efficient
         global stage
         global best_params
         global best_fitness
         if loop >= 7 
-            rescale = true
+            rescale = false
         else 
             rescale = false
         end
+        alpha = 0.2#alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
         println("\n" * "-"^70)
         println("REFINEMENT LOOP $loop")
         println("-"^70)
-        
+        println("Alpha is $alpha")
         past_loop_folder = loop == 1 ? output_folder : "./reporting_"*industry*"/epoch_"*string(loop-1)
         loop_folder = "./reporting_"*industry*"/epoch_"*string(loop)
         mkpath(loop_folder)
@@ -199,7 +201,7 @@ if run_multi_stage
             variable_list = ["agg_labor_share_tech","agg_industry_share_tech", "productivity"],
             last_stage_folder = joinpath(past_loop_folder, string(stage)),
             K = 1,
-            alpha = 0.2,  # Narrower search for refinement
+            alpha = alpha,  # Narrower search for refinement
             second_stage = false,
             rescale = rescale
         )
@@ -222,7 +224,7 @@ if run_multi_stage
             variable_list = ["beta", "T"],
             last_stage_folder = joinpath(loop_folder, string(stage)),
             K = 1,
-            alpha = 0.2,
+            alpha = alpha,
             second_stage = false,
             rescale = rescale
         )
@@ -246,8 +248,9 @@ if run_multi_stage
             param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
             println("Maximum parameter change: $(round(param_change, digits=4))")
             
-            if param_change < 0.01
+            if param_change < 0.0001
                 println("\nConvergence achieved! Parameter change < 1%")
+                max_loop = loop
                 break
             end
         end
@@ -307,7 +310,7 @@ end
 
 
 # Function to compute scores for a given stage
-function compute_scores(folder,second_stage::Bool,max_stage = nothing)
+function compute_scores(folder,second_stage::Bool,max_loop = nothing)
     top_score = []
     min_distances = []
     best_simulated_moments = []
@@ -331,13 +334,13 @@ function compute_scores(folder,second_stage::Bool,max_stage = nothing)
     push!(best_parameters_list,best_params)
     normalized_score = (top_score ./ top_score[1]) .* 100
     min_distances = (min_distances ./ min_distances[1]) .* 100
-    if max_stage == nothing
+    if max_loop == nothing
         return normalized_score, min_distances,best_simulated_moments,best_parameters_list
     end
 
     # Loop through epochs
     stage = 1
-    for loop in 1:max_stage
+    for loop in 1:max_loop
         for k in 1:2
             folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
             print(folder_stage)
@@ -370,8 +373,9 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-max_stage = nothing
-reporting = false
+
+max_loop = 39
+reporting = true
 if reporting
 
     # Reporting
@@ -382,8 +386,8 @@ if reporting
     params_list = [best_params]
 
     # Compute scores for both stages
-    top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_stage)
-    top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true,max_stage)
+    top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_loop)
+    top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true,max_loop)
 
     # Create subplots for first stage
     p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",

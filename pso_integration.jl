@@ -122,9 +122,6 @@ function parallel_pso_smm(
         println("  Particles: $(length(particles))")
         println("  Dimension: $d")
         println("  Initial best fitness: $(round(g_best_fitness, digits=6))")
-        if warm_start_particle !== nothing
-            println("  ✓ Warm start included - monotonic improvement guaranteed")
-        end
         println()
     end
     
@@ -184,6 +181,29 @@ function parallel_pso_smm(
             g_best = copy(p_best[current_best_idx])
             g_best_fitness = p_best_fitness[current_best_idx]
         end
+
+        # ============== ADD PARTICLE RESTART HERE ==============
+        # Reinitialize stagnant particles to escape local minima
+        if iter > 30 && iter % 25 == 0
+            n_restarted = 0
+            for i in 1:length(particles)
+                # Check if particle hasn't improved recently
+                if fitness[i] > g_best_fitness * 1.5  # Particle is far from best
+                    particles[i] = lb .+ rand(d) .* (ub .- lb)
+                    if beta_constraint
+                        particles[i] = enforce_beta_constraint(particles[i], beta_indices)
+                    end
+                    velocities[i] = 0.1 * (ub .- lb) .* randn(d)
+                    p_best[i] = copy(particles[i])
+                    p_best_fitness[i] = Inf  # Reset personal best
+                    n_restarted += 1
+                end
+            end
+            if verbose && n_restarted > 0
+                println("[PSO] Restarted $n_restarted stagnant particles")
+            end
+        end
+        # ========================================================
         
         # Store history
         push!(history["best_fitness"], g_best_fitness)
@@ -278,7 +298,7 @@ function train_stage_pso(
             1.,
             1.2 .* agg_industry_share,
             A .* 100,
-            10000 * (vec(N_rs).+ 0.1)
+            10 * (vec(N_rs).+ 0.1)
         )
         
         beta_constraint = true
@@ -297,8 +317,8 @@ function train_stage_pso(
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
         
         # Build bounds for selected variables
-        lb = vcat([params_dict[Symbol(v)] .* alpha for v in var_list]...)
-        ub = vcat([params_dict[Symbol(v)] ./ alpha for v in var_list]...)
+        lb = vcat([params_dict[Symbol(v)] .*alpha for v in var_list]...)
+        ub = vcat([params_dict[Symbol(v)] ./alpha for v in var_list]...)
         
         # Check if beta is being optimized
         beta_constraint = "beta" in var_list
