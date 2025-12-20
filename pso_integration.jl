@@ -42,10 +42,10 @@ function parallel_pso_smm(
     n_particles::Int = 70,
     max_iter::Int = 100,
     warm_start_particle::Union{Vector{Float64}, Nothing} = nothing,
-    w_start::Float64 = 2.,
+    w_start::Float64 = 0.9,
     w_end::Float64 = 0.4,
-    c1::Float64 = 2.0,
-    c2::Float64 = 2.0,
+    c1::Float64 = 1.5,
+    c2::Float64 = 2.5,
     beta_constraint::Bool = true,
     beta_indices::UnitRange = 1:5,
     verbose::Bool = true
@@ -145,7 +145,7 @@ function parallel_pso_smm(
                            c2 * r2 .* (g_best .- particles[i])
             
             # Velocity clamping (prevent particles from moving too fast)
-            v_max = 0.2 * (ub .- lb)
+            v_max = 0.1 * (ub .- lb)
             velocities[i] = clamp.(velocities[i], -v_max, v_max)
             
             # Update position

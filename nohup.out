@@ -1,3 +1,5 @@
+
+Stage 0 complete. Best fitness: 0.212526
 Using 71 workers
 
 ======================================================================
@@ -11,13 +13,13 @@ Related regression coefficients are: [-0.007843224049575853, -0.0215209457917773
 STAGE 1: Initial PSO optimization (all parameters)
 ======================================================================
 Particles: 70
-Iterations: 400
+Iterations: 150
 
 ============================================================
 Starting PSO Optimization
 ============================================================
 Particles: 70
-Max iterations: 400
+Max iterations: 150
 Dimension: 2498
 Warm start: NO (first stage)
 ============================================================
@@ -27,411 +29,161 @@ Warm start: NO (first stage)
   Workers: 70
   Particles: 70
   Dimension: 2498
-  Initial best fitness: 1.009509
+  Initial best fitness: 1.549382
 
-[PSO] Iteration 1/400 (2.62s):
-  Best fitness:     0.972051
-  Mean fitness:     4.171314
+[PSO] Iteration 1/150 (2.82s):
+  Best fitness:     1.491163
+  Mean fitness:     4.358109
 
-[PSO] Iteration 5/400 (2.04s):
-  Best fitness:     0.607603
-  Mean fitness:     3.513224
+[PSO] Iteration 5/150 (1.99s):
+  Best fitness:     0.572118
+  Mean fitness:     1.971395
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 10/400 (1.98s):
-  Best fitness:     0.607603
-  Mean fitness:     3.077285
+[PSO] Iteration 10/150 (2.18s):
+  Best fitness:     0.511516
+  Mean fitness:     0.706427
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 15/400 (1.92s):
-  Best fitness:     0.607603
-  Mean fitness:     2.223711
+[PSO] Iteration 15/150 (2.01s):
+  Best fitness:     0.49884
+  Mean fitness:     0.613407
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 20/400 (2.19s):
-  Best fitness:     0.607603
-  Mean fitness:     1.922593
+[PSO] Iteration 20/150 (2.1s):
+  Best fitness:     0.470164
+  Mean fitness:     0.551623
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 25/400 (2.15s):
-  Best fitness:     0.607603
-  Mean fitness:     1.703343
+[PSO] Iteration 25/150 (2.06s):
+  Best fitness:     0.431642
+  Mean fitness:     0.484992
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 30/400 (2.13s):
-  Best fitness:     0.607603
-  Mean fitness:     1.855199
+[PSO] Iteration 30/150 (2.02s):
+  Best fitness:     0.38682
+  Mean fitness:     0.42749
+  Improvement:      0.00719 (0.46%)
+
+[PSO] Iteration 35/150 (2.1s):
+  Best fitness:     0.350341
+  Mean fitness:     0.386667
+  Improvement:      0.00938 (0.61%)
+
+[PSO] Iteration 40/150 (2.06s):
+  Best fitness:     0.313222
+  Mean fitness:     0.358449
+  Improvement:      0.012942 (0.84%)
+
+[PSO] Iteration 45/150 (2.22s):
+  Best fitness:     0.287077
+  Mean fitness:     0.327274
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 35/400 (2.13s):
-  Best fitness:     0.607603
-  Mean fitness:     3.120486
+[PSO] Iteration 50/150 (2.25s):
+  Best fitness:     0.284582
+  Mean fitness:     0.310141
+  Improvement:      0.002495 (0.16%)
+
+[PSO] Iteration 55/150 (2.19s):
+  Best fitness:     0.275099
+  Mean fitness:     0.299139
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 40/400 (2.54s):
-  Best fitness:     0.607603
-  Mean fitness:     3.375101
+[PSO] Iteration 60/150 (2.6s):
+  Best fitness:     0.268112
+  Mean fitness:     0.285584
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 45/400 (2.08s):
-  Best fitness:     0.607603
-  Mean fitness:     1.826266
+[PSO] Iteration 65/150 (2.31s):
+  Best fitness:     0.260689
+  Mean fitness:     0.277307
+  Improvement:      0.001924 (0.12%)
+
+[PSO] Iteration 70/150 (1.98s):
+  Best fitness:     0.259728
+  Mean fitness:     0.276406
+  Improvement:      0.000789 (0.05%)
+
+[PSO] Iteration 75/150 (2.22s):
+  Best fitness:     0.253347
+  Mean fitness:     0.270329
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 50/400 (2.49s):
-  Best fitness:     0.607603
-  Mean fitness:     3.256522
+[PSO] Iteration 80/150 (2.06s):
+  Best fitness:     0.241185
+  Mean fitness:     0.257651
+  Improvement:      0.001869 (0.12%)
+
+[PSO] Iteration 85/150 (2.23s):
+  Best fitness:     0.233306
+  Mean fitness:     0.246921
+  Improvement:      0.002882 (0.19%)
+
+[PSO] Iteration 90/150 (1.97s):
+  Best fitness:     0.229241
+  Mean fitness:     0.243636
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 55/400 (1.97s):
-  Best fitness:     0.607603
-  Mean fitness:     1.385775
+[PSO] Iteration 95/150 (2.1s):
+  Best fitness:     0.224364
+  Mean fitness:     0.240363
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 60/400 (2.08s):
-  Best fitness:     0.607603
-  Mean fitness:     0.86752
+[PSO] Iteration 100/150 (2.27s):
+  Best fitness:     0.219904
+  Mean fitness:     0.232515
+  Improvement:      0.000933 (0.06%)
+
+[PSO] Iteration 105/150 (2.29s):
+  Best fitness:     0.215736
+  Mean fitness:     0.227311
+  Improvement:      0.000501 (0.03%)
+
+[PSO] Iteration 110/150 (2.19s):
+  Best fitness:     0.20627
+  Mean fitness:     0.217305
+  Improvement:      0.001049 (0.07%)
+
+[PSO] Iteration 115/150 (2.22s):
+  Best fitness:     0.205516
+  Mean fitness:     0.216561
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 65/400 (1.92s):
-  Best fitness:     0.607603
-  Mean fitness:     3.667808
+[PSO] Iteration 120/150 (2.09s):
+  Best fitness:     0.202246
+  Mean fitness:     0.210841
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 70/400 (2.06s):
-  Best fitness:     0.607603
-  Mean fitness:     3.272419
+[PSO] Iteration 125/150 (2.01s):
+  Best fitness:     0.196123
+  Mean fitness:     0.206555
+  Improvement:      0.001928 (0.12%)
+
+[PSO] Iteration 130/150 (2.04s):
+  Best fitness:     0.190233
+  Mean fitness:     0.199307
+  Improvement:      0.000952 (0.06%)
+
+[PSO] Iteration 135/150 (2.68s):
+  Best fitness:     0.187724
+  Mean fitness:     0.195941
+  Improvement:      0.001631 (0.11%)
+
+[PSO] Iteration 140/150 (2.02s):
+  Best fitness:     0.186589
+  Mean fitness:     0.194381
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 75/400 (1.94s):
-  Best fitness:     0.588637
-  Mean fitness:     0.695675
+[PSO] Iteration 145/150 (2.25s):
+  Best fitness:     0.181571
+  Mean fitness:     0.186879
   Improvement:      0.0 (0.0%)
 
-[PSO] Iteration 80/400 (1.98s):
-  Best fitness:     0.542364
-  Mean fitness:     0.608545
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 85/400 (2.04s):
-  Best fitness:     0.542364
-  Mean fitness:     0.769415
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 90/400 (1.95s):
-  Best fitness:     0.542364
-  Mean fitness:     2.479371
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 95/400 (1.91s):
-  Best fitness:     0.542364
-  Mean fitness:     0.586527
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 100/400 (2.15s):
-  Best fitness:     0.542364
-  Mean fitness:     3.759968
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 105/400 (1.95s):
-  Best fitness:     0.542364
-  Mean fitness:     0.702992
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 110/400 (1.89s):
-  Best fitness:     0.542364
-  Mean fitness:     NaN
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 115/400 (1.95s):
-  Best fitness:     0.542364
-  Mean fitness:     0.86649
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 120/400 (1.77s):
-  Best fitness:     0.542364
-  Mean fitness:     NaN
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 125/400 (2.33s):
-  Best fitness:     0.542364
-  Mean fitness:     3.185625
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 130/400 (2.06s):
-  Best fitness:     0.542364
-  Mean fitness:     2.130711
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 135/400 (1.99s):
-  Best fitness:     0.542364
-  Mean fitness:     1.359422
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 140/400 (2.03s):
-  Best fitness:     0.521777
-  Mean fitness:     0.627891
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 145/400 (1.97s):
-  Best fitness:     0.521777
-  Mean fitness:     0.890115
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 150/400 (1.93s):
-  Best fitness:     0.493205
-  Mean fitness:     NaN
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 155/400 (1.94s):
-  Best fitness:     0.493205
-  Mean fitness:     0.656838
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 160/400 (1.95s):
-  Best fitness:     0.490269
-  Mean fitness:     0.603513
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 165/400 (1.92s):
-  Best fitness:     0.490269
-  Mean fitness:     2.556967
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 170/400 (2.46s):
-  Best fitness:     0.490269
-  Mean fitness:     1.603882
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 175/400 (2.57s):
-  Best fitness:     0.490269
-  Mean fitness:     0.535153
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 180/400 (2.15s):
-  Best fitness:     0.490269
-  Mean fitness:     0.56514
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 185/400 (1.94s):
-  Best fitness:     0.484865
-  Mean fitness:     1.803885
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 190/400 (1.98s):
-  Best fitness:     0.484865
-  Mean fitness:     0.887359
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 195/400 (1.99s):
-  Best fitness:     0.484865
-  Mean fitness:     1.109697
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 200/400 (1.92s):
-  Best fitness:     0.471761
-  Mean fitness:     0.82844
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 205/400 (1.87s):
-  Best fitness:     0.435297
-  Mean fitness:     0.511369
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 210/400 (2.07s):
-  Best fitness:     0.435297
-  Mean fitness:     0.698825
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 215/400 (1.86s):
-  Best fitness:     0.396416
-  Mean fitness:     0.520065
-  Improvement:      0.014613 (1.45%)
-
-[PSO] Iteration 220/400 (2.15s):
-  Best fitness:     0.379357
-  Mean fitness:     0.707831
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 225/400 (2.06s):
-  Best fitness:     0.369862
-  Mean fitness:     0.612679
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 230/400 (1.97s):
-  Best fitness:     0.359471
-  Mean fitness:     0.719492
-  Improvement:      0.003921 (0.39%)
-
-[PSO] Iteration 235/400 (2.09s):
-  Best fitness:     0.318881
-  Mean fitness:     0.620439
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 240/400 (2.18s):
-  Best fitness:     0.277604
-  Mean fitness:     0.495905
-  Improvement:      0.040238 (3.99%)
-
-[PSO] Iteration 245/400 (2.13s):
-  Best fitness:     0.275084
-  Mean fitness:     0.372905
-  Improvement:      0.002519 (0.25%)
-
-[PSO] Iteration 250/400 (2.14s):
-  Best fitness:     0.275084
-  Mean fitness:     0.452141
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 255/400 (1.97s):
-  Best fitness:     0.268049
-  Mean fitness:     0.414604
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 260/400 (2.12s):
-  Best fitness:     0.251855
-  Mean fitness:     0.30786
-  Improvement:      0.00048 (0.05%)
-
-[PSO] Iteration 265/400 (1.99s):
-  Best fitness:     0.233667
-  Mean fitness:     0.324236
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 270/400 (2.01s):
-  Best fitness:     0.228751
-  Mean fitness:     0.307725
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 275/400 (2.06s):
-  Best fitness:     0.228751
-  Mean fitness:     0.287291
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 280/400 (2.16s):
-  Best fitness:     0.222463
-  Mean fitness:     0.270009
-  Improvement:      0.005312 (0.53%)
-
-[PSO] Iteration 285/400 (2.04s):
-  Best fitness:     0.210645
-  Mean fitness:     0.266342
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 290/400 (1.8s):
-  Best fitness:     0.208549
-  Mean fitness:     0.250857
-  Improvement:      0.002097 (0.21%)
-
-[PSO] Iteration 295/400 (1.99s):
-  Best fitness:     0.203904
-  Mean fitness:     0.239444
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 300/400 (2.02s):
-  Best fitness:     0.201065
-  Mean fitness:     0.23229
-  Improvement:      0.002839 (0.28%)
-
-[PSO] Iteration 305/400 (1.93s):
-  Best fitness:     0.200488
-  Mean fitness:     0.227978
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 310/400 (2.06s):
-  Best fitness:     0.198031
-  Mean fitness:     0.22652
-  Improvement:      0.002299 (0.23%)
-
-[PSO] Iteration 315/400 (2.18s):
-  Best fitness:     0.194604
-  Mean fitness:     0.228333
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 320/400 (2.04s):
-  Best fitness:     0.191378
-  Mean fitness:     0.226719
-  Improvement:      0.000453 (0.04%)
-
-[PSO] Iteration 325/400 (2.45s):
-  Best fitness:     0.189011
-  Mean fitness:     0.222627
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 330/400 (2.08s):
-  Best fitness:     0.18677
-  Mean fitness:     0.214585
-  Improvement:      0.001159 (0.11%)
-
-[PSO] Iteration 335/400 (2.46s):
-  Best fitness:     0.18608
-  Mean fitness:     0.203622
-  Improvement:      0.000134 (0.01%)
-
-[PSO] Iteration 340/400 (2.0s):
-  Best fitness:     0.183965
-  Mean fitness:     0.205336
-  Improvement:      0.00121 (0.12%)
-
-[PSO] Iteration 345/400 (2.16s):
-  Best fitness:     0.183814
-  Mean fitness:     0.203369
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 350/400 (2.23s):
-  Best fitness:     0.181024
-  Mean fitness:     0.19411
-  Improvement:      0.001476 (0.15%)
-
-[PSO] Iteration 355/400 (1.89s):
-  Best fitness:     0.178671
-  Mean fitness:     0.190442
-  Improvement:      0.000408 (0.04%)
-
-[PSO] Iteration 360/400 (1.93s):
-  Best fitness:     0.178042
-  Mean fitness:     0.188849
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 365/400 (2.04s):
-  Best fitness:     0.176554
-  Mean fitness:     0.186017
-  Improvement:      0.000636 (0.06%)
-
-[PSO] Iteration 370/400 (2.12s):
-  Best fitness:     0.173625
-  Mean fitness:     0.18212
-  Improvement:      0.001247 (0.12%)
-
-[PSO] Iteration 375/400 (2.08s):
-  Best fitness:     0.173241
-  Mean fitness:     0.179113
-  Improvement:      0.000178 (0.02%)
-
-[PSO] Iteration 380/400 (2.13s):
-  Best fitness:     0.171717
-  Mean fitness:     0.177605
-  Improvement:      0.000602 (0.06%)
-
-[PSO] Iteration 385/400 (2.06s):
-  Best fitness:     0.171555
-  Mean fitness:     0.176788
-  Improvement:      3.1e-5 (0.0%)
-
-[PSO] Iteration 390/400 (1.93s):
-  Best fitness:     0.170686
-  Mean fitness:     0.174957
-  Improvement:      0.0 (0.0%)
-
-[PSO] Iteration 395/400 (2.05s):
-  Best fitness:     0.170172
-  Mean fitness:     0.173279
-  Improvement:      1.1e-5 (0.0%)
-
-[PSO] Iteration 400/400 (1.98s):
-  Best fitness:     0.168702
-  Mean fitness:     0.171
-  Improvement:      0.000583 (0.06%)
+[PSO] Iteration 150/150 (2.08s):
+  Best fitness:     0.178532
+  Mean fitness:     0.183414
+  Improvement:      0.001246 (0.08%)
 
 GKS: cannot open display - headless operation mode active
 ┌ Warning: Assignment to `history` in soft scope is ambiguous because a global variable by the same name exists: `history` will be treated as a new local. Disambiguate by using `local history` to suppress this warning or `global history` to assign to the existing global variable.
@@ -449,4 +201,4 @@ Stacktrace:
    @ Base ./client.jl:550
 in expression starting at /home/onyxia/work/SMM_Spatial_Comovement/main_pso.jl:162
 
-Stage 0 complete. Best fitness: 0.168702
+Stage 0 complete. Best fitness: 0.178532

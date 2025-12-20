@@ -126,7 +126,7 @@ println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 400    # Iterations for initial full optimization
+MAX_ITER_INITIAL = 150    # Iterations for initial full optimization
 MAX_ITER_STAGE = 30     # Iterations for each refinement stage
 
 println("\n" * "="^70)
@@ -158,7 +158,7 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
-run_rest = false
+run_multi_stage = false
 if run_multi_stage
     ############# MULTI-STAGE REFINEMENT ##############
 
@@ -370,7 +370,7 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-max_stage = 14
+max_stage = nothing
 reporting = false
 if reporting
 
