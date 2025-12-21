@@ -90,7 +90,14 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 @everywhere const K_max = $(50)
 
 
-############## INITIAL SEARCH FOR GOOD BETA ##############
+# PSO Configuration
+N_PARTICLES = available-1  # Use all available cores except one 
+MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
+MAX_ITER_STAGE = 50     # Iterations for each refinement stage
+
+
+
+############# INITIAL SEARCH FOR GOOD BETA ##############
 
 println("\n" * "="^70)
 println("STAGE 0: Finding good initial beta values")
@@ -123,10 +130,6 @@ println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
 
 ############## PSO-BASED OPTIMIZATION ##############
 
-# PSO Configuration
-N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
-MAX_ITER_STAGE = 30     # Iterations for each refinement stage
 
 println("\n" * "="^70)
 println("STAGE 1: Initial PSO optimization (all parameters)")
@@ -158,7 +161,7 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
-max_loop = 50
+max_loop = 100
 if max_loop != nothing
     ############# MULTI-STAGE REFINEMENT ##############
 
@@ -177,6 +180,7 @@ if max_loop != nothing
     alpha_start,alpha_end = 0.2,0.9
     for loop in loop_start:max_loop  # Reduced from 20 since PSO is more efficient
         global stage
+        global max_loop
         global best_params
         global best_fitness
         if loop >= 7 
@@ -184,7 +188,7 @@ if max_loop != nothing
         else 
             rescale = false
         end
-        alpha = 0.2#alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
+        alpha = alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
         println("\n" * "-"^70)
         println("REFINEMENT LOOP $loop")
         println("-"^70)
@@ -248,7 +252,7 @@ if max_loop != nothing
             param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
             println("Maximum parameter change: $(round(param_change, digits=4))")
             
-            if param_change < 0.0001
+            if param_change < 0.000001
                 println("\nConvergence achieved! Parameter change < 1%")
                 max_loop = loop
                 break
@@ -373,8 +377,7 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-
-max_loop = 39
+max_loop = 48
 reporting = true
 if reporting
 
