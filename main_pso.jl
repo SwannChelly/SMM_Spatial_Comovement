@@ -377,7 +377,7 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-max_loop = 48
+max_loop = 47
 reporting = true
 if reporting
 
