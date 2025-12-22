@@ -405,42 +405,36 @@ function compute_moments(network, params)
     beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
     
     X_lrs = network.X_lrs
-    c_tilde_r = network.c_tilde_r
+    c_tilde_r = network.c_tilde_r  
     Y_r = network.Y_r
     linkages = network.linkages
     z = network.z
     closest_plant_dist = network.closest_plant_dist
     
-    mu = (epsilon - 1) / epsilon
-    
     # ─────────────────────────────────────────────────────────────────────────
-    # 1. Aggregate labor share
-    # 
-    # Labor expenditure in region r = Ω^L × (w_r/c_r)^{1-λ} × C_r
-    # where C_r = μ × Y_r (total cost)
+    # 1. Aggregate labor share (matching model_CP.jl exactly)
     # ─────────────────────────────────────────────────────────────────────────
-    labor_exp = zeros(R)
-    total_cost = zeros(R)
     
-    for r in 1:R
-        if N_downstream_per_region[r] >= 1 && Y_r[r] > 0
-            C_r = mu * Y_r[r]
-            # c_tilde_r = c_r / A_r, so c_r = c_tilde_r * A_r
-            # But for labor share ratio, we use c_r before productivity
-            # Actually, need c_r (before dividing by A_r)
-            # From the network solve, c_tilde_r = c_r / A_r
-            # Labor share term uses w_r / c_r, where c_r is cost BEFORE productivity
-            # This requires backing out c_r = c_tilde_r * A_r[r]
-            A_r_val = (r <= length(A_vec) && N_downstream_per_region[r] >= 1) ? 
-                      A_vec[sum(N_downstream_per_region[1:r] .!= 0)] : 1.0
-            c_r = c_tilde_r[r] * A_r_val
-            
-            labor_exp[r] = Omega_L * (regional_wages[r] / c_r)^(1-lambda) * C_r
-            total_cost[r] = C_r
-        end
-    end
+    active = N_downstream_per_region .!= 0
     
-    agg_labor_share = sum(labor_exp) / sum(total_cost)
+    # Compute price index and B exactly as in model_CP.jl
+    markup = (epsilon - 1) / epsilon
+    price_index = sum((c_tilde_r[active] .* markup).^epsilon .* delta_r[active])^(1/epsilon)
+    E = 1.0
+    B = (markup / price_index)^(epsilon - 1) * E / price_index
+    
+    # Compute y_r (output-related measure) as in model_CP.jl
+    y_r = zeros(R)
+    y_r[active] = c_tilde_r[active].^(epsilon - 1) .* delta_r[active] .* B
+    
+    # Compute labor_r exactly as in model_CP.jl:
+    # labor_r = labor_share_tech * y_r * (regional_wages / c_r)^(-lambda)
+    labor_r = zeros(R)
+    labor_r[active] = Omega_L .* y_r[active] .* (regional_wages[active] ./ c_tilde_r[active]).^(-lambda)
+    
+    # Aggregate labor share exactly as in model_CP.jl:
+    # agg_labor_share = sum(regional_wages * labor_r) / sum(c_r * y_r)
+    agg_labor_share = sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
     
     # ─────────────────────────────────────────────────────────────────────────
     # 2. Sectoral input shares: X_s / X
@@ -494,11 +488,11 @@ function compute_moments(network, params)
     reg_coef = fixest.coef[1:5]
     
     # ─────────────────────────────────────────────────────────────────────────
-    # 5. Regional employment shares π_r
+    # 5. Regional employment shares π_r (matching model_CP.jl)
+    # 
+    # From model_CP.jl:
+    #   pi_r = labor_r[active] / sum(labor_r[active])
     # ─────────────────────────────────────────────────────────────────────────
-    # Using labor expenditure as proxy for employment
-    labor_r = labor_exp
-    active = N_downstream_per_region .!= 0
     pi_r = labor_r[active] ./ sum(labor_r[active])
     
     return (

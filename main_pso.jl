@@ -26,16 +26,16 @@ available = Sys.CPU_THREADS - nprocs()
 println("Using "*string(available)*" workers")
 addprocs(max(available-1, 0)) # Always leave one core for other tests. 
 
-@everywhere include("model_CP.jl")
+@everywhere include("new_model_CP.jl")
 @everywhere include("tools.jl")
 @everywhere include("pso_integration.jl")  # NEW: PSO functions
-@everywhere include("run_untargeted_validation.jl")  
+# @everywhere include("run_untargeted_validation.jl")  
 
 ############## Load Parameters #################
 
 industry = "aero"
 input_folder = "./baseline_"*industry
-output_folder = "./test_before"*industry
+output_folder = "./test_before_"*industry
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy"))
@@ -166,7 +166,7 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
-max_loop = 1
+max_loop = 50
 if max_loop != nothing
     ############# MULTI-STAGE REFINEMENT ##############
 
@@ -194,8 +194,8 @@ if max_loop != nothing
         println("REFINEMENT LOOP $loop")
         println("-"^70)
         println("Alpha is $alpha")
-        past_loop_folder = loop == 1 ? output_folder : "./reporting_"*industry*"/epoch_"*string(loop-1)
-        loop_folder = "./reporting_"*industry*"/epoch_"*string(loop)
+        past_loop_folder = loop == 1 ? output_folder : output_folder*"/epoch_"*string(loop-1)
+        loop_folder = output_folder*"/epoch_"*string(loop)
         mkpath(loop_folder)
         
         # Stage 1: Refine industry shares and productivity
@@ -248,7 +248,7 @@ if max_loop != nothing
         
         # Check for convergence (optional)
         if loop > 2
-            prev_folder = "./reporting_"*industry*"/epoch_"*string(loop-1)*"/"*string(stage-2)
+            prev_folder = output_folder*"/epoch_"*string(loop-1)*"/"*string(stage-2)
             prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
             param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
             println("Maximum parameter change: $(round(param_change, digits=4))")
@@ -283,7 +283,7 @@ if max_loop != nothing
         # Load all refinement stages
         for loop in 1:n_loops
             for stage_offset in 1:2
-                folder = "./reporting_"*industry*"/epoch_"*string(loop)*"/"*string(stage_offset)
+                folder = output_folder*"/epoch_"*string(loop)*"/"*string(stage_offset)
                 if isdir(folder)
                     hist_file = joinpath(folder, "pso_history.npy")
                     if isfile(hist_file)
