@@ -35,7 +35,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 industry = "aero"
 input_folder = "./baseline_"*industry
-output_folder = "./reporting_"*industry
+output_folder = "./test_before"*industry
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy"))
@@ -166,7 +166,7 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
-max_loop = 15
+max_loop = 1
 if max_loop != nothing
     ############# MULTI-STAGE REFINEMENT ##############
 
@@ -384,7 +384,7 @@ if reporting
 
     # Reporting
     n = 1
-    folder = "./reporting_"*industry*"/" # Output folder
+    folder = output_folder*"/" # Output folder
     #folder = "./parameters/"
     best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
     params_list = [best_params]
@@ -422,6 +422,6 @@ end
 
 
 
-folder = "./reporting_"*industry*"/" # Output folder
-best_params = NPZ.npzread(joinpath(folder*"epoch_48/95", "best_params.npy"))# Load best params.
-results = validate_table2(best_params, "aero", σ_shock=0.05, T_periods=120)
+# folder = "./reporting_"*industry*"/" # Output folder
+# best_params = NPZ.npzread(joinpath(folder*"epoch_48/95", "best_params.npy"))# Load best params.
+# results = validate_table2(best_params, "aero", σ_shock=0.05, T_periods=120)

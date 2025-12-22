@@ -6,6 +6,10 @@
 #   1. Solve model ONCE to determine network structure (who supplies whom)
 #   2. Shocks to downstream firms propagate through fixed linkages
 #   3. Upstream sales scale with downstream demand shocks
+#
+# NOTE: This file expects the following global constants to be defined via @everywhere in main_pso.jl:
+#   S, R, N_downstream_per_region, regional_wages, w_rs, distances, DistBin,
+#   N_rho, theta, lambda, nu, nu_s, epsilon
 
 using Distributed
 using SparseArrays
@@ -36,9 +40,12 @@ default_config = SimulationConfig(120, 0.05, 0.8, 42)
 
 
 """
-    solve_baseline_network(params, model_globals)
+    solve_baseline_network(params)
 
 Solve the model ONCE to determine the fixed network structure.
+
+Uses global constants: S, R, N_downstream_per_region, regional_wages, w_rs, 
+                       distances, DistBin, N_rho, theta, lambda, nu, nu_s, epsilon
 
 Returns:
 - `firm_sales_baseline`: Baseline sales for each upstream firm (N_rho × S × R)
@@ -46,22 +53,7 @@ Returns:
 - `firm_downstream_exposure`: Share of each firm's sales going to downstream industry
 - `downstream_sales_baseline`: Baseline sales of downstream industry by region
 """
-function solve_baseline_network(params, model_globals)
-    
-    # Extract globals
-    N_downstream_per_region = model_globals.N_downstream_per_region
-    regional_wages = model_globals.regional_wages
-    w_rs = model_globals.w_rs
-    distances = model_globals.distances
-    DistBin = model_globals.DistBin
-    N_rho = model_globals.N_rho
-    theta = model_globals.theta
-    lambda = model_globals.lambda
-    nu = model_globals.nu
-    nu_s = model_globals.nu_s
-    epsilon = model_globals.epsilon
-    S = model_globals.S
-    R = model_globals.R
+function solve_baseline_network(params)
     
     # Unpack parameters
     R_downstream = sum(N_downstream_per_region .!= 0)
@@ -143,18 +135,32 @@ function solve_baseline_network(params, model_globals)
     end
     
     # Compute downstream output and final upstream sales
-    markup = (epsilon - 1) / epsilon
-    delta_r_baseline = ones(R)
-    price_index = sum((c_r[N_downstream_per_region .!= 0] * markup).^(epsilon) .* 
-                      delta_r_baseline[N_downstream_per_region .!= 0]).^(1/epsilon)
-    E = 1
-    B = (markup / price_index)^(epsilon-1) * E / price_index
+    # From the paper (p.24): q_r = (p_r/P)^{ε-1} * (E/P) * δ_r
+    # With monopolistic competition: p_r = c_r / μ where μ = (ε-1)/ε (inverse markup)
+    # 
+    # Price index: P = [Σ_r (p_r)^ε δ_r]^{1/ε} = [Σ_r (c_r/μ)^ε δ_r]^{1/ε}
+    # 
+    # Sales (revenue): Y_r = p_r * q_r = (c_r/μ)^ε * P^{-ε} * E * δ_r
     
-    # Downstream sales by region
+    inv_markup = (epsilon - 1) / epsilon  # μ = (ε-1)/ε, this is 1/markup
+    delta_r_baseline = ones(R)
+    
+    # Prices: p_r = c_r / μ = c_r * ε/(ε-1)
+    p_r = c_r ./ inv_markup
+    
+    # Price index: P = [Σ_r p_r^ε δ_r]^{1/ε}
+    price_index = sum((p_r[N_downstream_per_region .!= 0]).^(epsilon) .* 
+                      delta_r_baseline[N_downstream_per_region .!= 0])^(1/epsilon)
+    
+    E = 1  # Total expenditure (normalized)
+    
+    # Downstream sales by region (one downstream firm per region)
+    # Y_r = p_r^ε * P^{-ε} * E * δ_r
     downstream_sales_baseline = zeros(R)
     downstream_sales_baseline[N_downstream_per_region .!= 0] = 
-        c_r[N_downstream_per_region .!= 0].^(epsilon-1) .* delta_r_baseline[N_downstream_per_region .!= 0] .* 
-        N_downstream_per_region[N_downstream_per_region .!= 0] * B
+        (p_r[N_downstream_per_region .!= 0]).^(epsilon) .* 
+        price_index^(-epsilon) .* E .* 
+        delta_r_baseline[N_downstream_per_region .!= 0]
     
     # Upstream firm baseline sales (summed over all downstream customers)
     for l in 1:R
@@ -188,33 +194,33 @@ end
 
 
 """
-    propagate_shocks(baseline, shocks_matrix, model_globals)
+    propagate_shocks(baseline, shocks_matrix)
 
 Propagate downstream demand shocks through the FIXED network.
+
+Uses global constants: epsilon
 
 # Arguments
 - `baseline`: Output from solve_baseline_network
 - `shocks_matrix`: Matrix of shocks δ_r(t) for each downstream region and time period (R × T)
-- `model_globals`: Model parameters
 
 # Returns
 - `upstream_sales_ts`: Time series of upstream firm sales (N_rho × S × R × T)
 - `downstream_sales_ts`: Time series of total downstream sales (T,)
 """
-function propagate_shocks(baseline, shocks_matrix, model_globals)
+function propagate_shocks(baseline, shocks_matrix)
     
-    epsilon = model_globals.epsilon
-    N_downstream_per_region = baseline.N_downstream_per_region
+    N_downstream_per_region_local = baseline.N_downstream_per_region
     c_r = baseline.c_r
     
-    R, T = size(shocks_matrix)
-    N_rho = size(baseline.firm_sales_baseline, 1)
-    S = size(baseline.firm_sales_baseline, 2)
+    R_local, T = size(shocks_matrix)
+    N_rho_local = size(baseline.firm_sales_baseline, 1)
+    S_local = size(baseline.firm_sales_baseline, 2)
     
     # Storage
-    upstream_sales_ts = zeros(N_rho, S, R, T)
+    upstream_sales_ts = zeros(N_rho_local, S_local, R_local, T)
     downstream_sales_ts = zeros(T)
-    downstream_sales_by_region_ts = zeros(R, T)
+    downstream_sales_by_region_ts = zeros(R_local, T)
     
     for t in 1:T
         delta_r_t = shocks_matrix[:, t]
@@ -222,19 +228,19 @@ function propagate_shocks(baseline, shocks_matrix, model_globals)
         # Downstream sales scale with demand shock
         # y_r(t) ∝ δ_r(t) × c_r^(ε-1)
         # We use proportional scaling from baseline
-        downstream_sales_t = zeros(R)
-        downstream_sales_t[N_downstream_per_region .!= 0] = 
-            baseline.downstream_sales_baseline[N_downstream_per_region .!= 0] .* 
-            delta_r_t[N_downstream_per_region .!= 0]
+        downstream_sales_t = zeros(R_local)
+        downstream_sales_t[N_downstream_per_region_local .!= 0] = 
+            baseline.downstream_sales_baseline[N_downstream_per_region_local .!= 0] .* 
+            delta_r_t[N_downstream_per_region_local .!= 0]
         
         downstream_sales_ts[t] = sum(downstream_sales_t)
         downstream_sales_by_region_ts[:, t] = downstream_sales_t
         
         # Upstream sales: scale by their customers' demand shocks
         # Each firm's sales to region r scale with δ_r(t)
-        for l in 1:R
-            for r in 1:R
-                if N_downstream_per_region[r] >= 1
+        for l in 1:R_local
+            for r in 1:R_local
+                if N_downstream_per_region_local[r] >= 1
                     # Sales from firm in l to downstream in r, scaled by shock
                     upstream_sales_ts[:, :, l, t] .+= 
                         baseline.firm_sales_to_downstream[:, :, l, r] .* downstream_sales_t[r]
@@ -248,25 +254,45 @@ end
 
 
 """
-    generate_shock_process(R, T, config)
+    generate_shock_process(R_local, T, config)
 
-Generate correlated demand shocks for downstream regions.
-Uses AR(1) process: δ_r(t) = exp(z_r(t)) where z_r(t) = ρ z_r(t-1) + ε_r(t)
+Generate demand shocks for downstream regions.
+
+Shock structure:
+- ACROSS REGIONS: i.i.d. at each time t, all drawn from the same distribution
+- OVER TIME: AR(1) process for each region independently
+
+Each region r follows: z_r(t) = ρ × z_r(t-1) + ε_r(t)
+where ε_r(t) ~ N(0, σ²_innovation) are i.i.d. across both r and t
+
+The multiplicative shock is: δ_r(t) = exp(z_r(t))
+
+Parameters:
+- σ_shock: unconditional standard deviation of z_r(t)
+- ρ_ar: AR(1) persistence parameter
 """
-function generate_shock_process(R, T, config::SimulationConfig)
+function generate_shock_process(R_local, T, config::SimulationConfig)
     
     Random.seed!(config.seed)
     
-    # AR(1) process in logs
-    z = zeros(R, T)
-    innovation_std = config.σ_shock * sqrt(1 - config.ρ_ar^2)  # Unconditional std = σ_shock
+    # Innovation standard deviation (ensures unconditional std of z equals σ_shock)
+    innovation_std = config.σ_shock * sqrt(1 - config.ρ_ar^2)
     
-    for t in 1:T
-        if t == 1
-            z[:, t] = randn(R) * config.σ_shock
-        else
-            z[:, t] = config.ρ_ar * z[:, t-1] + randn(R) * innovation_std
-        end
+    # Draw ALL innovations at once: i.i.d. across regions and time from N(0, innovation_std²)
+    # This ensures shocks are i.i.d. across regions from the same distribution
+    innovations = randn(R_local, T) * innovation_std
+    
+    # AR(1) process in logs for each region independently
+    z = zeros(R_local, T)
+    
+    # Initial period: draw from unconditional distribution N(0, σ_shock²)
+    # These are i.i.d. across regions from the same law
+    z[:, 1] = randn(R_local) * config.σ_shock
+    
+    # Subsequent periods: AR(1) evolution
+    # At each t, the innovations are i.i.d. across regions from N(0, innovation_std²)
+    for t in 2:T
+        z[:, t] = config.ρ_ar * z[:, t-1] + innovations[:, t]
     end
     
     # Convert to multiplicative shocks
@@ -277,7 +303,7 @@ end
 
 
 """
-    build_panel_and_regress(upstream_sales_ts, downstream_sales_ts, baseline, model_globals)
+    build_panel_and_regress(upstream_sales_ts, downstream_sales_ts, baseline)
 
 Build panel dataset and run Table 2 regression.
 
@@ -285,9 +311,9 @@ Since there's no outside sector, ALL firms with positive sales are suppliers (a^
 We regress supplier sales growth on downstream industry growth.
 This corresponds to column (5) of Table 2: Sup_is × a^D_is × d ln x_{s,t} with coefficient 0.112.
 """
-function build_panel_and_regress(upstream_sales_ts, downstream_sales_ts, baseline, model_globals)
+function build_panel_and_regress(upstream_sales_ts, downstream_sales_ts, baseline)
     
-    N_rho, S, R, T = size(upstream_sales_ts)
+    N_rho_local, S_local, R_local, T = size(upstream_sales_ts)
     
     println("\nBuilding panel dataset (suppliers only)...")
     
@@ -310,9 +336,9 @@ function build_panel_and_regress(upstream_sales_ts, downstream_sales_ts, baselin
     firm_id = 0
     n_suppliers = 0
     
-    for l in 1:R  # Upstream region
-        for s in 1:S  # Sector
-            for rho in 1:N_rho  # Variety
+    for l in 1:R_local  # Upstream region
+        for s in 1:S_local  # Sector
+            for rho in 1:N_rho_local  # Variety
                 firm_id += 1
                 
                 # Only include suppliers (firms with positive baseline sales)
@@ -417,13 +443,15 @@ end
 
 
 """
-    run_untargeted_validation(params, model_globals; config=default_config, empirical=nothing)
+    run_untargeted_validation(params; config=default_config, empirical=nothing)
 
 Main function: validate calibrated model against Table 2.
+
+Uses global constants: S, R, N_downstream_per_region, regional_wages, w_rs, 
+                       distances, DistBin, N_rho, theta, lambda, nu, nu_s, epsilon
 """
 function run_untargeted_validation(
-    params, 
-    model_globals; 
+    params; 
     config::SimulationConfig = default_config,
     empirical = nothing
 )
@@ -433,24 +461,23 @@ function run_untargeted_validation(
     println("="^70)
     println("Config: T=$(config.T_periods), σ=$(config.σ_shock), ρ=$(config.ρ_ar)")
     
-    # Step 1: Solve network ONCE
+    # Step 1: Solve network ONCE (uses global constants)
     println("\n[Step 1] Solving baseline network (fixed structure)...")
-    baseline = solve_baseline_network(params, model_globals)
+    baseline = solve_baseline_network(params)
     
     # Step 2: Generate shocks
     println("\n[Step 2] Generating demand shocks...")
-    R = model_globals.R
     shocks = generate_shock_process(R, config.T_periods, config)
     println("  Shock std (realized): $(round(std(log.(shocks)), digits=4))")
     
     # Step 3: Propagate through fixed network
     println("\n[Step 3] Propagating shocks through network...")
-    upstream_sales_ts, downstream_sales_ts, _ = propagate_shocks(baseline, shocks, model_globals)
+    upstream_sales_ts, downstream_sales_ts, _ = propagate_shocks(baseline, shocks)
     
     # Step 4: Build panel and regress
     println("\n[Step 4] Running regressions...")
     panel_df, reg_results = build_panel_and_regress(
-        upstream_sales_ts, downstream_sales_ts, baseline, model_globals
+        upstream_sales_ts, downstream_sales_ts, baseline
     )
     
     # Step 5: Compare to empirical
@@ -481,52 +508,48 @@ end
 
 
 # ============================================================================
-# STANDALONE EXECUTION
+# STANDALONE EXECUTION (for testing without main_pso.jl)
 # ============================================================================
 
 if abspath(PROGRAM_FILE) == @__FILE__
     
     println("="^70)
-    println("Running Untargeted Moments Validation")
+    println("Running Untargeted Moments Validation (Standalone Mode)")
     println("="^70)
+    println("\nWARNING: Standalone mode requires loading data and defining globals.")
+    println("For normal usage, run from main_pso.jl which defines all @everywhere constants.\n")
     
     industry = "aero"
     input_folder = "./baseline_" * industry
     output_folder = "./reporting_" * industry
     
-    # Load data
-    println("\nLoading data...")
+    # Load data and define globals (mimics main_pso.jl)
+    println("Loading data and defining globals...")
     coefs = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
-    distances = NPZ.npzread(joinpath(input_folder, "distances.npy"))
-    w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-    regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
-    N_downstream_per_region = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
-    filter_N_upstream = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
     
-    S, R = size(filter_N_upstream)
+    global const distances = NPZ.npzread(joinpath(input_folder, "distances.npy"))
+    global const w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
+    global const regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
+    global const N_downstream_per_region = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
+    filter_N_upstream_local = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
+    
+    global const S = size(filter_N_upstream_local, 1)
+    global const R = size(filter_N_upstream_local, 2)
     
     # Build DistBin
-    DistBin = zeros(Int, R, R)
+    DistBin_local = zeros(Int, R, R)
     for i in 1:R, j in 1:R
         d = distances[i, j]
-        DistBin[i, j] = d <= 20 ? 0 : d <= 50 ? 1 : d <= 100 ? 2 : d <= 150 ? 3 : d <= 200 ? 4 : 5
+        DistBin_local[i, j] = d <= 20 ? 0 : d <= 50 ? 1 : d <= 100 ? 2 : d <= 150 ? 3 : d <= 200 ? 4 : 5
     end
+    global const DistBin = DistBin_local
     
-    model_globals = (
-        N_downstream_per_region = N_downstream_per_region,
-        regional_wages = regional_wages,
-        w_rs = w_rs,
-        distances = distances,
-        DistBin = DistBin,
-        N_rho = 50,
-        theta = 1.768,
-        lambda = 0.5,
-        nu = 0.2,
-        nu_s = ones(S) .* 2.5,
-        epsilon = coefs[1, "value"],
-        S = S,
-        R = R
-    )
+    global const N_rho = 50
+    global const theta = 1.768
+    global const lambda = 0.5
+    global const nu = 0.2
+    global const nu_s = ones(S) .* 2.5
+    global const epsilon = coefs[1, "value"]
     
     # Load calibrated parameters
     println("Loading calibrated parameters...")
@@ -550,14 +573,13 @@ if abspath(PROGRAM_FILE) == @__FILE__
     end
     
     # Empirical coefficient from Table 2, Column (5)
-    # Sup_is × a^D_is × d ln x_{s,t} = 0.112 for aerospace
     empirical = Dict(
         "gamma_col5" => 0.112   # Aerospace, col (5): Sup × a^D × d ln x
     )
     
     # Run validation
     config = SimulationConfig(120, 0.05, 0.8, 42)
-    results = run_untargeted_validation(best_params, model_globals, config=config, empirical=empirical)
+    results = run_untargeted_validation(best_params, config=config, empirical=empirical)
     
     # Save results
     if results["regression_results"]["firm_fe"] !== nothing

@@ -275,7 +275,7 @@ function SMM(params,simulation = false)
             # We create the trade flows and store the linkages.
             for l in 1:R
                 tmp = map(x -> x[2] == l ? 1 : 0, min_coord_rho)  # Here tmp is a dummy variable
-                linkages[:,:,l] += tmp # Here linkages is a matrix of size (N_rho,S,R) that contains an integer variable indicating if firm rho in s l suppliers the aerospace industry in region R
+                linkages[:,:,l] += tmp # Here linkages is a matrix of size (N_rho,S,R) that contains an integer variable indicating if firm rho in s l supplies the aerospace industry in region R
                 tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_rs_rho./p_rs).^(1 .- reshape(nu_s,1,S)) .* (p_rs./p_r).^(1-nu)*(p_r/c_r_).^(1-lambda)*c_r[r].^epsilon,dims = 1)
                 X_lrs[l,r,:] = tmp
             end
