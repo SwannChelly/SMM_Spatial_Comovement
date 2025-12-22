@@ -35,30 +35,28 @@ ref.reset_index(inplace=True)
 ref.rename(columns={'index': 'ze2010_i'}, inplace=True)
 ref = ref.melt(id_vars='ze2010_i', var_name='ze2010_j', value_name='M_ij')
 
-# Set the width of your LaTeX document in points
+
+
+# # Set the width of your LaTeX document in points
 document_width_pt = 511.  # Adjust this according to your LaTeX template
-#document_width_pt = 398.3386 # Beamer
-#plt.style.use('seaborn-whitegrid')
-# plt.rc('text', usetex=True)
-# plt.rc('font', family='serif')
-# cmap = plt.get_cmap('viridis')
-# #
-# toulouse_color = (132/255, 46/255, 27/255)
-# missing_color = (0/255, 0/255, 0/255)
-# #
-# custom_title_fontsize = 20
-# label_size = 18
-# font_size = 15  # Adjust according to your preference
-# plt.rcParams.update({
-#     "font.size": font_size,
-#     "axes.labelsize": font_size,
-#     "axes.titlesize": font_size+2,
-#     "xtick.labelsize": font_size-3,
-#     "ytick.labelsize": font_size-3,
-#     "legend.fontsize": font_size-3,
-#     "legend.title_fontsize": font_size,
-#     "figure.titlesize": font_size,
-# })
+#plt.rc('text', usetex=True)
+plt.rc('font', family='serif')
+toulouse_color = (132/255, 46/255, 27/255)
+missing_color = (0/255, 0/255, 0/255)
+label_size = 18
+font_size = 15  # Adjust according to your preference
+plt.rcParams.update({
+    "font.size": font_size,
+    "axes.labelsize": font_size,
+    "axes.titlesize": font_size+2,
+    "xtick.labelsize": font_size-3,
+    "ytick.labelsize": font_size-3,
+    "legend.fontsize": font_size-3,
+    "legend.title_fontsize": font_size,
+    "figure.titlesize": font_size,
+})
+
+
 
 
 

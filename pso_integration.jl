@@ -276,7 +276,7 @@ function train_stage_pso(
     K = 1,
     alpha = 0.1,
     second_stage = false,
-    rescale = false
+    method = false
 )
     
     # Build bounds based on previous stage or initialization
@@ -399,7 +399,7 @@ function train_stage_pso(
         end
         
         # Evaluate SMM
-        result = parallel_SMM_safe(x_full, false, second_stage, rescale,false)
+        result = parallel_SMM_safe(x_full, false, second_stage, method,false)
         
         if isnothing(result)
             return Inf

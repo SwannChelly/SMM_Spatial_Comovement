@@ -29,6 +29,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
 @everywhere include("pso_integration.jl")  # NEW: PSO functions
+@everywhere include("run_untargeted_validation.jl")  
 
 ############## Load Parameters #################
 
@@ -94,14 +95,17 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 N_PARTICLES = available-1  # Use all available cores except one 
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
+method = "original"
 
 
 
 ############# INITIAL SEARCH FOR GOOD BETA ##############
 
 println("\n" * "="^70)
+println("Method $method")
 println("STAGE 0: Finding good initial beta values")
 println("="^70)
+
 
 # First find a reasonable beta using targeted search on regression coefficients
 range_beta = range(0.01, stop = 5, length = 50) 
@@ -137,6 +141,7 @@ println("="^70)
 println("Particles: $N_PARTICLES")
 println("Iterations: $MAX_ITER_INITIAL")
 
+
 # Stage 1: Optimize all parameters starting from init_beta
 best_params, best_fitness, history = train_stage_pso(
     N_PARTICLES,
@@ -146,7 +151,7 @@ best_params, best_fitness, history = train_stage_pso(
     last_stage_folder = nothing,
     alpha = 0.5,
     second_stage = false,
-    rescale = false
+    method = method
 )
 
 # Save results
@@ -161,7 +166,7 @@ generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
 println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
-max_loop = 100
+max_loop = 15
 if max_loop != nothing
     ############# MULTI-STAGE REFINEMENT ##############
 
@@ -183,11 +188,7 @@ if max_loop != nothing
         global max_loop
         global best_params
         global best_fitness
-        if loop >= 7 
-            rescale = false
-        else 
-            rescale = false
-        end
+
         alpha = alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
         println("\n" * "-"^70)
         println("REFINEMENT LOOP $loop")
@@ -207,7 +208,7 @@ if max_loop != nothing
             K = 1,
             alpha = alpha,  # Narrower search for refinement
             second_stage = false,
-            rescale = rescale
+            method = method
         )
         
         stage += 1
@@ -230,7 +231,7 @@ if max_loop != nothing
             K = 1,
             alpha = alpha,
             second_stage = false,
-            rescale = rescale
+            method = method
         )
         
         stage += 1
@@ -377,7 +378,7 @@ end
 rmse(a::AbstractVector, b::AbstractVector) =
     sqrt(mean((a .- b).^2))
 
-max_loop = 47
+
 reporting = true
 if reporting
 
@@ -419,3 +420,8 @@ end
 
 
 
+
+
+folder = "./reporting_"*industry*"/" # Output folder
+best_params = NPZ.npzread(joinpath(folder*"epoch_48/95", "best_params.npy"))# Load best params.
+results = validate_table2(best_params, "aero", σ_shock=0.05, T_periods=120)

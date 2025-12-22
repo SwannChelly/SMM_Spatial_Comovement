@@ -11,7 +11,7 @@
 
 # The moments to be identified are: 
 # - The aggregate labor share
-# - The aggregate share of sector s in the industry’s input purchases
+# - The aggregate share of sector s in the industry's input purchases
 # - The share of the downstream input purchases of sector s sourced from region r′
 # - The extensive regression's parameters. 
 # - The share of each region in downstream sales
@@ -357,26 +357,53 @@ function SMM(params,simulation = false)
 end
 
 # Then compute scores. 
-function loss_function(simulated_moments,emp,W,rescale = false)
+function loss_function(simulated_moments, emp, W, method = "original")
     """
     Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
+    
+    Methods:
+    - false or "original": raw difference (emp - sim)
+    - true or "normalize": difference scaled by sqrt of moment group size  
+    - "hybrid": percentage deviation for non-zero empirical, absolute for zeros
     """
+    
+    # Backward compatibility with Bool
+    if method isa Bool
+        method = method ? "normalize" : "original"
+    end
            
     square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))'
     simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...) 
     N = length(simulated_moments)
-    simulated_moments = reshape(simulated_moments,(1,N))
-    if rescale
-        err = (emp-simulated_moments)./square_size
-    else 
-        err = (emp-simulated_moments)
+    simulated_moments = reshape(simulated_moments, (1, N))
+    
+    if method == "original"
+        err = (emp - simulated_moments)
+    elseif method == "normalize"
+        err = (emp - simulated_moments) ./ square_size
+    elseif method == "hybrid"
+        # Percentage deviation for non-zero empirical, absolute deviation for zeros
+        emp_vec = vec(emp)
+        sim_vec = vec(simulated_moments)
+        err_vec = similar(emp_vec)
+        for i in 1:length(emp_vec)
+            if abs(emp_vec[i]) > 1e-10  # Non-zero empirical
+                err_vec[i] = (sim_vec[i] - emp_vec[i]) / emp_vec[i]
+            else  # Zero empirical (handles gamma_ls zeros)
+                err_vec[i] = sim_vec[i]  # Penalize non-zero simulated values directly
+            end
+        end
+        err = reshape(err_vec, (1, N))
+    else
+        error("Unknown method: $method. Use 'original', 'normalize', or 'hybrid'.")
     end
+    
     W = isnothing(W) ? I(N) : W 
-    return err*W*err'
+    return err * W * err'
 end
 
 
-function full_SMM(params,simulation = false,second_stage = false,rescale = false)
+function full_SMM(params, simulation = false, second_stage = false, method = "original")
     """
     From the parameters, return the loss and the simulated moments (targeted and untargeted)
     """
@@ -394,7 +421,6 @@ function full_SMM(params,simulation = false,second_stage = false,rescale = false
     if simulation 
         return simulated_moments
     else
-        return loss_function(moments,emp,W,rescale),simulated_moments
+        return loss_function(moments, emp, W, method), simulated_moments
     end
 end
-

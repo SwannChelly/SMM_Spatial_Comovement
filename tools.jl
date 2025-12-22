@@ -1,5 +1,3 @@
-
-
 using Printf
 
 
@@ -237,14 +235,19 @@ function assign_T_with_mask(true_T,sample)
     return accept 
 end
 
-function parallel_SMM(params,simulation,second_stage,rescale)
-    return full_SMM(params,simulation,second_stage,rescale)
+function parallel_SMM(params, simulation, second_stage, method)
+    return full_SMM(params, simulation, second_stage, method)
 end
 
 
-function parallel_SMM_safe(params,simulation = false,second_stage=false,rescale = false,show_err = true)
+function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true)
+    # Backward compatibility: convert Bool to String
+    if method isa Bool
+        method = method ? "normalize" : "original"
+    end
+    
     try
-        result = parallel_SMM(params,simulation,second_stage,rescale) # Run the SMM in parallel. 
+        result = parallel_SMM(params, simulation, second_stage, method) # Run the SMM in parallel. 
 
         return result
     catch e
@@ -274,13 +277,17 @@ function distance_bin(d)
     end
 end
 
-function train_stage_one(n,init_beta,params_list = nothing,second_stage = false,rescale = false)
+function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original")
+    # Backward compatibility: convert Bool to String
+    if method isa Bool
+        method = method ? "normalize" : "original"
+    end
 
     t1 = time()
     if params_list == nothing
         params_list = generate_halton_grid(n,2000,false,init_beta)
     end
-    f = params -> parallel_SMM_safe(params, false, second_stage,rescale, true)
+    f = params -> parallel_SMM_safe(params, false, second_stage, method, true)
     results = pmap(f, params_list)
     return params_list,results
 end
