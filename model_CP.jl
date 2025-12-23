@@ -1,24 +1,51 @@
 ##### SMM for Spatial Comovement #####
 # Author: Swann Chelly 
-# The function for the simulation is "SMM"
-
-# Notations: In the paper, we use X_{r'rs} in order to describe the trade flow of goods manufactured by firms from sector s in region r' to downstream firms in region r. 
-# In this code, r' is replaced by l for clarity. 
-
-# This code simulate the SMM from the function 'SMM' and compare the simulated moments with the empirical one with 'loss_function'. 
-# 'full_SMM' takes a set of parameters and returns the score of the loss function along with simulated moments. Weight matrix is identity. 
-
-
-# The moments to be identified are: 
-# - The aggregate labor share
-# - The aggregate share of sector s in the industry's input purchases
-# - The share of the downstream input purchases of sector s sourced from region r′
-# - The extensive regression's parameters. 
-# - The share of each region in downstream sales
-
-# R is the number of domestic regions.  
-# S is the number of upstream sectors. 
-
+# 
+# This code implements the structural model from the paper "Spatial Comovements"
+# 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NOTATION (following the paper, Appendix B)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Indices:
+#   r, r'    : regions (r for downstream buyer, r' or l for upstream seller)
+#   s        : upstream sector
+#   ρ (rho)  : variety within a sector
+#
+# Parameters:
+#   ε (epsilon)   : demand elasticity for final goods (negative, e.g., -3.67)
+#   Ω^L (Omega_L) : labor share parameter in production
+#   Ω^s (Omega_s) : sectoral input share for sector s
+#   λ (lambda)    : elasticity of substitution between labor and intermediates
+#   ν (nu)        : elasticity of substitution across sectors
+#   ν_s (nu_s)    : elasticity of substitution across varieties within sector s
+#   θ (theta)     : Fréchet shape parameter (productivity dispersion)
+#   T_{sr}        : Fréchet scale (average productivity in sector s, region r)
+#   A_r           : downstream firm productivity in region r
+#   τ_{r'rs}      : iceberg trade cost from r' to r for sector s
+#   δ_r           : demand shifter for downstream region r
+#
+# Prices:
+#   w_r           : wage in region r
+#   w_{rs}        : wage in sector s, region r
+#   p_{ρsr'}      : price of variety ρ from sector s, region r'
+#   P_{sr}        : price index for sector s inputs in region r
+#   P_r           : aggregate intermediate input price index in region r
+#   c_r           : unit cost of downstream firm in region r (before productivity)
+#   c̃_r = c_r/A_r : unit cost after productivity adjustment
+#
+# Key relationships (from paper p.24-26):
+#   Price:     p_r = c̃_r / μ  where μ = (ε-1)/ε (inverse markup)
+#   Demand:    q_r = (p_r/P)^{ε-1} · (E/P) · δ_r
+#   Sales:     Y_r = p_r · q_r = p_r^ε · P^{-ε} · E · δ_r
+#   Cost:      C_r = c̃_r · q_r = μ · Y_r  (total cost = inverse markup × revenue)
+#   Inputs:    Input expenditure_r = (1 - Ω^L) · C_r = (1 - Ω^L) · μ · Y_r
+#
+# Trade flows:
+#   X_{r'rs} = γ_{r'rs} · (input expenditure on sector s in region r)
+#   where γ_{r'rs} is the sourcing share from r' for inputs s used in r
+#
+# ═══════════════════════════════════════════════════════════════════════════════
 
 ##################### Packages ###################
 
@@ -32,11 +59,10 @@ using QuasiMonteCarlo
 using DataFrames
 using Optim
 using CSV
-using FixedEffectModels,RDatasets,CategoricalArrays
+using FixedEffectModels, RDatasets, CategoricalArrays
 
 
 ###### Testing environment #####
-## If test is set to true, we can test the model directly from this code. 
 test = false 
 if test
     industry = "aero"
@@ -47,10 +73,9 @@ if test
     w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
     N_downstream_per_region = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy"))
     filter_N_upstream = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
-    S,R = size(filter_N_upstream) # Number of upstream sectors and domestic regions. 
+    S, R = size(filter_N_upstream)
     R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
     delta_r = ones(R)
-    #empirical_moments = NPZ.npzread(joinpath(input_folder,"empirical_moments.npy"))
 
     N_rho = 50
     agg_labor_share = coefs[2,"value"]
@@ -71,7 +96,6 @@ if test
     empirical_moments = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
-    # Then broadcast those large fixed arrays to all workers:
 
     function distance_bin(d)
         if 20 < d <= 50
@@ -85,295 +109,486 @@ if test
         elseif d > 200
             return 5
         else
-            return 0   # for ≤ 20, outside bins
+            return 0
         end
     end
 
     DistBin = Array{Int}(undef, R, R)
-
     for i in 1:R, j in 1:R
         DistBin[i,j] = distance_bin(distances[i,j])
     end
-
-    function generate_halton_grid(n_needed::Int, batchsize::Int=1024)
-        """
-
-        Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
-        This Halton grid function allows condition on the parameters and is much faster than the previous one. 
-
-        """
-        A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-        A ./= sum(A)
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
-
-        lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
-        ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
-
-        d = length(lb)
-        accepted = Vector{Vector{Float64}}(undef, 0)
-
-        # Create a Halton point generator in dimension d
-        hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
-
-        idx = 1
-        while length(accepted) < n_needed
-            # get a batch of raw Halton points
-            batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
-            # Each point is in [0,1]^d
-
-            for raw in batch_raw
-                # scale each component
-                scaled = lb .+ (ub .- lb) .* raw
-
-                # apply your condition
-                #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
-                if (scaled[1] < scaled[2]) & (scaled[1] < scaled[3]) & (scaled[1] < scaled[4]) & (scaled[1] < scaled[5])  # Condition
-                    push!(accepted, scaled)
-                    if length(accepted) >= n_needed
-                        break
-                    end
-                end
-            end
-            idx += batchsize
-        end
-        return accepted
-    end
-    params_list = generate_halton_grid(2)
-    params = params_list[1]
 end
 
 
+##################### Helper Functions ###################
 
+"""
+    unpack_params(params) -> (β, Ω^L, Ω^s, A, T)
+
+Unpack parameter vector into model components (paper notation).
+
+Returns:
+- β (beta): Trade cost parameters for distance bins [5 elements]
+- Ω^L (Omega_L): Labor share in production [scalar]
+- Ω^s (Omega_s): Sectoral input shares [S elements, normalized to sum to 1]
+- A: Downstream firm productivity by region [R_downstream elements]
+- T: Fréchet scale parameters [S × R elements]
+"""
 function unpack_params(params)
-    """
-    This function takes a vector of parameters and returns the parameters as separated variables. 
-    """
-    
     beta = params[1:5]
-    labor_share_tech = params[6]
-    input_share_tech = params[7:6+(S)]/sum(params[7:6+(S)])
-    productivity_ = params[(S+7):(R_downstream+S+6)]
-    T_ = params[(R_downstream+(S+7)):end]
-
-    #input_share_tech = params[2:1+(S)]/sum(params[2:1+(S)])
-    #productivity_ = params[(S+2):(R_downstream+S+1)]
-    #T_ = params[(R_downstream+(S+2)):end]
-
-    return beta,labor_share_tech,input_share_tech,productivity_,T_
+    Omega_L = params[6]
+    Omega_s = params[7:6+S] / sum(params[7:6+S])  # Normalize to sum to 1
+    A = params[(S+7):(R_downstream+S+6)]
+    T = params[(R_downstream+S+7):end]
+    
+    return beta, Omega_L, Omega_s, A, T
 end
 
+
+"""
+    build_tau(beta) -> τ[r', r, s]
+
+Build iceberg trade cost matrix from distance bin coefficients.
+
+τ_{r'rs} = 1 + β_b  where b = DistBin[r', r]
+
+Returns array of size (R, R, S).
+"""
 function build_tau(beta)
-    tau = ones(R,R,S)  # start with 1 everywhere
-    for i in 1:R, j in 1:R
-        b = DistBin[i,j]
+    tau = ones(R, R, S)
+    for r_prime in 1:R, r in 1:R
+        b = DistBin[r_prime, r]
         if b > 0
             for s in 1:S
-                tau[i,j,s] += beta[b]
+                tau[r_prime, r, s] += beta[b]
             end
         end
     end
     return tau
 end
 
-function SMM(params,simulation = false)
 
-    """
-    Main function to perform the Simulated Method of Moments (SMM) calibration or simulation.
+##################### Core Model: Network Solution ###################
 
-    # Arguments
-    - `params::Vector`: A vector containing the model parameters. These include:
-        - `beta`: Exponent on distance in the trade cost, capturing the elasticity of trade with respect to distance.
-        - `labor_share_tech`: Technological coefficient on labor (Ωᴸ), typically approximated by the labor share.
-        - `input_share_tech`: Vector of input-specific technological coefficients (Ωˢ), usually proxied by sectoral input shares.
-        - `productivity`: Region-specific productivity parameters of downstream firms.
-        - `T`: Matrix (Tₛⱼ) capturing the fundamental Ricardian advantage of region j in producing good s.
+"""
+    solve_network(params; return_firm_level=false)
 
-    - `simulation::Bool=false`: Optional. If set to `true`, the function returns the full matrix of simulated trade flows. 
-    If `false`, the function returns a set of simulated moments.
+Solve the production network equilibrium for given parameters.
 
-    # Returns
-    - If `simulation == true`: 
-        - `trade_flows::Matrix`: Simulated bilateral trade flows between regions and sectors.
+This function:
+1. Draws upstream firm productivities from Fréchet distribution
+2. For each downstream region, finds lowest-cost suppliers (Ricardian selection)
+3. Computes nested CES price indices
+4. Calculates downstream sales and trade flows
 
-    - If `simulation == false`: 
-        A named tuple with the following simulated moments:
-        - `gamma_ls`: Share of sector-s inputs sourced from region j.
-        - `pi_r`: Importance of downstream region j in the total sales of the downstream industry.
-        - `reg_coef`: Estimated elasticity of supply with respect to distance (i.e., a gravity regression coefficient).
-        - `input_share`: Share of purchases from sector s in the total intermediate input use of downstream industries.
+# Arguments
+- `params`: Parameter vector [β, Ω^L, Ω^s, A, T]
+- `return_firm_level`: If true, return firm-level data for untargeted validation
 
-    """
-    # Create the matrix giving for each region the closest region with a downstream industry
-    # this matrix will be used for the regression. 
-    closest_plant = map(x -> distances[x[1],x[2]],argmin(1 ./(1 ./distances.*(N_downstream_per_region.>0)'),dims = 2))
+# Returns (NamedTuple):
+- `X_lrs`: Trade flows X_{r'rs} from upstream (r',s) to downstream r [R × R × S]
+- `c_tilde_r`: Unit costs c̃_r = c_r/A_r of downstream firms [R]
+- `Y_r`: Downstream sales (revenue) by region [R]
+- `linkages`: Firm-level supplier indicator [N_rho × S × R]
+- `z`: Firm productivities [N_rho × R × S]
+- `closest_plant_dist`: Distance to nearest downstream plant [R]
+
+If return_firm_level=true, additionally returns:
+- `firm_expenditure_shares`: Expenditure share from (ρ,s,l) to r [N_rho × S × R × R]
+- `mu`: Inverse markup μ = (ε-1)/ε
+- `P`: Aggregate downstream price index
+"""
+function solve_network(params; return_firm_level=false)
     
+    Random.seed!(50)  # For reproducibility
     
-
-    # Set the parameters to the right format
-    Random.seed!(50) # For reproducibility 
-    beta,labor_share_tech,input_share_tech,productivity_,T_ = unpack_params(params) # Unpack parameters
-
-    # Old version of beta
-    #beta = isa(beta, Float64) ? fill(beta, S) : beta 
-    #tau = isnothing(beta) ? rand(S, R, R) : distances .^ reshape(beta, 1, 1, :)
-
-    tau = build_tau(beta) # Now tau is built based on bins of distance and the beta coefficients. 
-    productivity = ones(R)
-    productivity[N_downstream_per_region.!=0] = productivity_
-    input_share_tech = reshape(input_share_tech,1,S)
-    T = reshape(T_,S,R)
-
-    # Initialise the upstream firms: Draw productivities 
-    frechet_rand = Frechet.(theta, T.^(1/theta))
-    upstream_variety_productivity = zeros(S, R, N_rho)
-    # Fill z with Frechet draws
+    # ─────────────────────────────────────────────────────────────────────────
+    # Unpack parameters (paper notation)
+    # ─────────────────────────────────────────────────────────────────────────
+    beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
+    
+    # Build trade cost matrix τ_{r'rs}
+    tau = build_tau(beta)
+    
+    # Expand productivity A_r to full R vector
+    A_r = ones(R)
+    A_r[N_downstream_per_region .!= 0] = A_vec
+    
+    # Reshape for broadcasting
+    Omega_s = reshape(Omega_s_vec, 1, S)  # (1, S)
+    nu_s_mat = reshape(nu_s, 1, S)        # (1, S)
+    T = reshape(T_vec, S, R)              # (S, R)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Draw upstream firm productivities: z_{ρsr} ~ Fréchet(θ, T_{sr}^{1/θ})
+    # ─────────────────────────────────────────────────────────────────────────
+    frechet_dist = Frechet.(theta, T.^(1/theta))
+    z = zeros(S, R, N_rho)
     for s in 1:S, r in 1:R
-        upstream_variety_productivity[s, r, :] = rand(frechet_rand[s, r], N_rho)  
+        z[s, r, :] = rand(frechet_dist[s, r], N_rho)
     end
+    # Reshape to (N_rho, R, S) for indexing as z[ρ, r', s]
+    z = permutedims(z, (3, 2, 1))
+    z_inv = z.^(-1)
+    
+    # Reshape tau for broadcasting: (S, R_origin, R_dest)
+    tau_perm = permutedims(tau, (3, 1, 2))
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Distance to closest downstream plant (for regression)
+    # ─────────────────────────────────────────────────────────────────────────
+    closest_plant_dist = map(x -> distances[x[1], x[2]], 
+        argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2))
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Initialize storage
+    # ─────────────────────────────────────────────────────────────────────────
+    X_lrs = zeros(R, R, S)              # Trade flows (as expenditure shares initially)
+    c_tilde_r = zeros(R)                # Unit costs c̃_r = c_r / A_r
+    linkages = zeros(N_rho, S, R)       # Firm-level supplier indicator
+    
+    if return_firm_level
+        firm_expenditure_shares = zeros(N_rho, S, R, R)  # Share from (ρ,s,l) to r
+    end
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Solve for each downstream region r
+    # ─────────────────────────────────────────────────────────────────────────
+    for r in 1:R
+        if N_downstream_per_region[r] < 1
+            continue
+        end
+        
+        # ─────────────────────────────────────────────────────────────────────
+        # Compute prices faced by downstream firm r from all potential suppliers
+        # p_{ρsr'→r} = w_{r's} · τ_{r'rs} / z_{ρsr'}
+        # ─────────────────────────────────────────────────────────────────────
+        tau_to_r = reshape(tau_perm[:, :, r]', 1, R, S)  # (1, R, S)
+        prices = z_inv .* tau_to_r .* reshape(w_rs, (1, R, 1))  # (N_rho, R, S)
+        
+        # ─────────────────────────────────────────────────────────────────────
+        # Ricardian selection: lowest-cost supplier wins each variety
+        # ─────────────────────────────────────────────────────────────────────
+        min_coord = reshape(argmin(prices, dims=2), N_rho, S)  # Winner indices
+        p_rho_s = prices[min_coord]  # (N_rho, S) - winning prices
+        
+        # ─────────────────────────────────────────────────────────────────────
+        # Nested CES price indices (paper eq. in Appendix B)
+        # 
+        # P_{sr} = [Σ_ρ (1/N_ρ) · p_{ρs}^{1-ν_s}]^{1/(1-ν_s)}  (within-sector)
+        # P_r   = [Σ_s Ω^s · P_{sr}^{1-ν}]^{1/(1-ν)}           (across-sector)
+        # c_r   = [Ω^L w_r^{1-λ} + (1-Ω^L) P_r^{1-λ}]^{1/(1-λ)} (unit cost)
+        # ─────────────────────────────────────────────────────────────────────
+        P_sr = sum(1/N_rho .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
+        P_r = sum(P_sr.^(1 - nu) .* Omega_s)^(1 / (1 - nu))
+        c_r = (Omega_L * regional_wages[r]^(1-lambda) + 
+               (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
+        
+        # Apply downstream productivity: c̃_r = c_r / A_r
+        c_tilde_r[r] = c_r / A_r[r]
+        
+        # ─────────────────────────────────────────────────────────────────────
+        # Compute expenditure shares from each upstream region l
+        # 
+        # From nested CES demand (paper Appendix B):
+        # share_{ρsl→r} = (1/N_ρ) · Ω^s · (1-Ω^L) · 
+        #                 (p_{ρs}/P_{sr})^{1-ν_s} · (P_{sr}/P_r)^{1-ν} · (P_r/c_r)^{1-λ}
+        #
+        # This is the share of TOTAL COST going to input (ρ,s) from region l
+        # To get actual expenditure, multiply by total cost = μ · Y_r
+        # ─────────────────────────────────────────────────────────────────────
+        for l in 1:R
+            # Which varieties from region l won?
+            winner_mask = map(x -> x[2] == l ? 1.0 : 0.0, min_coord)  # (N_rho, S)
+            
+            # Update firm-level linkages (binary supplier status)
+            linkages[:, :, l] .= max.(linkages[:, :, l], winner_mask)
+            
+            # Expenditure share for winning firms
+            exp_share = winner_mask .* (1/N_rho) .* Omega_s .* (1-Omega_L) .* 
+                (p_rho_s ./ P_sr).^(1 .- nu_s_mat) .* 
+                (P_sr ./ P_r).^(1-nu) .* 
+                (P_r / c_r).^(1-lambda)
+            
+            # Aggregate to region level
+            X_lrs[l, r, :] = sum(exp_share, dims=1)
+            
+            # Store firm-level for untargeted validation
+            if return_firm_level
+                firm_expenditure_shares[:, :, l, r] = exp_share
+            end
+        end
+    end
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Compute downstream sales Y_r (paper eq. on p.24)
+    # 
+    # With monopolistic competition:
+    #   p_r = c̃_r / μ  where μ = (ε-1)/ε (inverse markup)
+    #   P = [Σ_r p_r^ε · δ_r]^{1/ε}  (price index, ε < 0)
+    #   Y_r = p_r^ε · P^{-ε} · E · δ_r  (sales = revenue)
+    # ─────────────────────────────────────────────────────────────────────────
+    mu = (epsilon - 1) / epsilon  # Inverse markup μ = (ε-1)/ε
+    
+    # Prices: p_r = c̃_r / μ
+    p_r = c_tilde_r ./ mu
+    
+    # Price index: P = [Σ_r p_r^ε · δ_r]^{1/ε}
+    # Note: ε < 0, so higher price → lower p_r^ε contribution
+    active = N_downstream_per_region .!= 0
+    P = sum((p_r[active]).^epsilon .* delta_r[active])^(1/epsilon)
+    
+    E = 1.0  # Normalize total expenditure
+    
+    # Downstream sales: Y_r = p_r^ε · P^{-ε} · E · δ_r
+    Y_r = zeros(R)
+    Y_r[active] = (p_r[active]).^epsilon .* P^(-epsilon) .* E .* delta_r[active]
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Scale expenditure shares to actual trade flows
+    # 
+    # X_lrs currently contains expenditure SHARES of total cost
+    # Total cost = μ · Y_r (since price = cost/μ → cost = μ × revenue)
+    # Actual trade flow: X_lrs = share × μ × Y_r
+    # ─────────────────────────────────────────────────────────────────────────
+    for r in 1:R
+        if N_downstream_per_region[r] >= 1
+            total_cost_r = mu * Y_r[r]
+            X_lrs[:, r, :] .*= total_cost_r
+        end
+    end
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Return results
+    # ─────────────────────────────────────────────────────────────────────────
+    if return_firm_level
+        return (
+            X_lrs = X_lrs,
+            c_tilde_r = c_tilde_r,
+            Y_r = Y_r,
+            linkages = linkages,
+            z = z,
+            closest_plant_dist = closest_plant_dist,
+            firm_expenditure_shares = firm_expenditure_shares,
+            mu = mu,
+            P = P
+        )
+    else
+        return (
+            X_lrs = X_lrs,
+            c_tilde_r = c_tilde_r,
+            Y_r = Y_r,
+            linkages = linkages,
+            z = z,
+            closest_plant_dist = closest_plant_dist
+        )
+    end
+end
 
-    upstream_variety_productivity = permutedims(upstream_variety_productivity, (3, 2, 1))
-    inv_upstream_variety_productivity = upstream_variety_productivity.^(-1)
-    tau_reshaped = permutedims(tau,(3,1,2))    
 
-    # Bellow, we will compute the matching for each downstream region with each sector. First we create 
-    # containers in order to store the results of this matching. 
+##################### Moment Computation ###################
 
-    X_lrs = zeros(R,R,S)  # Trade flows from upstream firms in region l and sector s to downstream firm in region r.
-    c_r = zeros(R)        # Marginal cost of production of region r
-    linkages = zeros(N_rho,S,R) # Firm level linkages to downstream regions
+"""
+    compute_moments(network, params)
 
-    # Other containers used for the regression
-    sirens = [ i for i in  1:(S*R*N_rho) ]
+Compute targeted moments from solved network for SMM estimation.
+
+# Moments (matching empirical_moments structure):
+1. Aggregate labor share: Σ_r w_r·L_r / Σ_r C_r
+2. Sectoral input shares: X_s / X
+3. Sourcing shares γ_{ls}: Share of sector s inputs from region l
+4. Regression coefficients: Elasticity of supplier probability to distance
+5. Regional employment shares π_r
+"""
+function compute_moments(network, params)
+    
+    beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
+    
+    X_lrs = network.X_lrs
+    c_tilde_r = network.c_tilde_r  
+    Y_r = network.Y_r
+    linkages = network.linkages
+    z = network.z
+    closest_plant_dist = network.closest_plant_dist
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 1. Aggregate labor share (matching model_CP.jl exactly)
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    active = N_downstream_per_region .!= 0
+    
+    # Compute price index and B exactly as in model_CP.jl
+    markup = (epsilon - 1) / epsilon
+    price_index = sum((c_tilde_r[active] .* markup).^epsilon .* delta_r[active])^(1/epsilon)
+    E = 1.0
+    B = (markup / price_index)^(epsilon - 1) * E / price_index
+    
+    # Compute y_r (output-related measure) as in model_CP.jl
+    y_r = zeros(R)
+    y_r[active] = c_tilde_r[active].^(epsilon - 1) .* delta_r[active] .* B
+    
+    # Compute labor_r exactly as in model_CP.jl:
+    # labor_r = labor_share_tech * y_r * (regional_wages / c_r)^(-lambda)
+    labor_r = zeros(R)
+    labor_r[active] = Omega_L .* y_r[active] .* (regional_wages[active] ./ c_tilde_r[active]).^(-lambda)
+    
+    # Aggregate labor share exactly as in model_CP.jl:
+    # agg_labor_share = sum(regional_wages * labor_r) / sum(c_r * y_r)
+    agg_labor_share = sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 2. Sectoral input shares: X_s / X
+    # ─────────────────────────────────────────────────────────────────────────
+    X_ls = reshape(sum(X_lrs, dims=2), R, S)  # Sum over downstream regions
+    X_s = sum(X_ls, dims=1)                    # Sum over upstream regions
+    X = sum(X_s)                               # Total input purchases
+    agg_industry_share = X_s ./ X              # (1, S)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 3. Sourcing shares γ_{ls}: Share of sector s sourced from region l
+    # γ_{ls} = (X_{ls} / X_s) × domestic_share_s
+    # ─────────────────────────────────────────────────────────────────────────
+    gamma_ls = X_ls ./ X_s .* reshape(domestic_share, 1, S)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 4. Regression: P(supplier) vs distance bins
+    # ─────────────────────────────────────────────────────────────────────────
+    sirens = collect(1:(S*R*N_rho))
     sectors = Int[]
     regions = Int[]
     suppliers = Float64[]
-    distance = Float64[]
-    log_distance = Float64[]
-    size_r = Float64[]
-
-    for r = 1:length(N_downstream_per_region) # Per downstream regions. 
-        if N_downstream_per_region[r] >= 1    # If there is an downstream industry in region i
-
-            # Compute prices faced by downstream firms in region i
-            tau_ = reshape(tau_reshaped[:,: ,r]',1,R,S)
-            prices_ = inv_upstream_variety_productivity .* tau_.*reshape(w_rs,(1,R,1))
-
-            # We select the lowest prices per variety and build all nests' price indices
-            min_coord_rho = reshape(argmin(prices_,dims = 2),N_rho,S)
-            p_rs_rho = prices_[min_coord_rho]
-            p_rs = sum(1/N_rho .* p_rs_rho.^(1 .- reshape(nu_s,1,S)),dims = 1).^(1 ./ (1 .- reshape(nu_s,1,S)))
-            p_r = sum((p_rs) .^ (1 - nu).*input_share_tech).^(1 ./ (1 - nu))
-            c_r_ = (labor_share_tech*regional_wages[r]^(1-lambda)  + (1-labor_share_tech)*p_r^(1-lambda))^(1/(1-lambda)) # Here regional_wages != 0 since N_downstream_per_region[r] >= 1  
-
-            #if isinf(c_r)
-            #    return p_r
-            #end
-
-
-            c_r[r] = c_r_*(productivity[r]^(-1))
-            # We create the trade flows and store the linkages.
-            for l in 1:R
-                tmp = map(x -> x[2] == l ? 1 : 0, min_coord_rho)  # Here tmp is a dummy variable
-                linkages[:,:,l] += tmp # Here linkages is a matrix of size (N_rho,S,R) that contains an integer variable indicating if firm rho in s l supplies the aerospace industry in region R
-                tmp = sum(tmp.* 1/N_rho .* input_share_tech .* (1-labor_share_tech) .* (p_rs_rho./p_rs).^(1 .- reshape(nu_s,1,S)) .* (p_rs./p_r).^(1-nu)*(p_r/c_r_).^(1-lambda)*c_r[r].^epsilon,dims = 1)
-                X_lrs[l,r,:] = tmp
+    distance_vec = Float64[]
+    size_vec = Float64[]
+    
+    for r in 1:R
+        for s in 1:S
+            for rho in 1:N_rho
+                push!(sectors, s)
+                push!(regions, r)
+                push!(suppliers, linkages[rho, s, r] > 0 ? 1.0 : 0.0)
+                push!(size_vec, z[rho, r, s])
+                push!(distance_vec, closest_plant_dist[r])
             end
-            
         end
     end
     
-    # Having all prices at all nest, we build the trade flows.
-    markup = (epsilon-1)/epsilon
-    price_index = sum((c_r[N_downstream_per_region.!=0]*markup).^(epsilon).*delta_r[N_downstream_per_region.!=0]).^(1/epsilon)
-    E = 1
-    B = (markup/price_index)^(epsilon-1)*E/price_index
-    X_lrs = X_lrs.*reshape(N_downstream_per_region.*delta_r,1,R)*B # Since the moments are only shares it is useless.
-
-    # We compute region level quantities
-    y_r = zeros(R)
-    y_r[N_downstream_per_region.!=0] = c_r[N_downstream_per_region.!=0].^(epsilon-1).*delta_r[N_downstream_per_region.!=0]*B
-
-    if simulation
-        return reshape(sum(X_lrs,dims = 3),R,R)
-    end
-    # Prepare dataframe for regression
-    id = 1
-    for r in 1:(R) 
-        for s in 1:S
-            for i in 1:N_rho
-                push!(sectors, s)
-                push!(regions, r)
-                push!(suppliers, linkages[i, s, r]>0)
-                push!(size_r, upstream_variety_productivity[i, r, s])
-                push!(distance, closest_plant[r])
-                push!(log_distance,log(closest_plant[r]))
-                id += 1
-            end
-        end
-    end
-
     df = DataFrame(
         SIREN = sirens,
         A129 = sectors,
         ze2010 = regions,
         supplier = suppliers,
-        size = size_r,
-        distance = distance,
-        log_distance = log_distance
+        size = size_vec,
+        distance = distance_vec
     )
-
-    # Build moments
-    #df = filter(row -> row.ze2010 != R, df) # We don't do the regression on foreign firms.
-    # 1. Aggregate labor share at the level of the industry \Gamma
-    # labor_r : total employement of the downstream industry in region $r$.
-    labor_r = zeros(R) 
-    labor_r[N_downstream_per_region.!=0]= labor_share_tech.*y_r[N_downstream_per_region.!=0].*(regional_wages[N_downstream_per_region.!=0]./c_r[N_downstream_per_region.!=0]).^(-lambda)
     
-    agg_labor_share = sum(regional_wages.*labor_r)/(sum(c_r.*y_r))
-
-    # 2. Aggregate share of sector s in the industry's input purchases.
-    # Vérifier la dimension.
-    X_ls = reshape(sum(X_lrs,dims = 2),(R,S))
-    X_s = sum(X_ls,dims = 1)
-    X = sum(X_s)
-    agg_industry_share = X_s./X
-
-    # 3. Share of the downstream input purchases of sector s sourced from region l.
-    gamma_ls = X_ls./X_s.*(reshape(domestic_share,1,S))
-
-    # 4. Probability that a supplier serves the downstream industry.
-    bins = [20,50, 100, 150, 200, Inf]   # bin edges
+    bins = [20, 50, 100, 150, 200, Inf]
     df.distance_bin = cut(df.distance, bins, extend=true)
-    fixest = reg(df, @formula(supplier ~ distance_bin + size + fe(A129)))
-    reg_coef = fixest.coef[1:5] # Change to have the binarised version
-
-    # 5. The share of each region the total employment. 
-    pi_r = labor_r[N_downstream_per_region.!=0]./sum(labor_r[N_downstream_per_region.!=0])    
-    return [agg_labor_share], agg_industry_share[2:end],gamma_ls,reg_coef,pi_r[2:end]
     
-
-
+    fixest = reg(df, @formula(supplier ~ distance_bin + size + fe(A129)))
+    reg_coef = fixest.coef[1:5]
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 5. Regional employment shares π_r (matching model_CP.jl)
+    # 
+    # From model_CP.jl:
+    #   pi_r = labor_r[active] / sum(labor_r[active])
+    # ─────────────────────────────────────────────────────────────────────────
+    pi_r = labor_r[active] ./ sum(labor_r[active])
+    
+    return (
+        agg_labor_share = [agg_labor_share],
+        agg_industry_share = agg_industry_share[2:end],  # Drop first (normalized)
+        gamma_ls = gamma_ls,
+        reg_coef = reg_coef,
+        pi_r = pi_r[2:end]  # Drop first
+    )
 end
 
-# Then compute scores. 
-function loss_function(simulated_moments, emp, W, method = "original")
-    """
-    Compute the loss between empirical and simulated moments. The weighting matrix is currently set to the identity.
+
+##################### Main SMM Function ###################
+
+"""
+    SMM(params, simulation=false)
+
+Main SMM function for optimization.
+
+# Arguments
+- `params`: Parameter vector
+- `simulation`: If true, return trade flow matrix only
+
+# Returns
+- If simulation=true: Trade flow matrix (R × R)
+- If simulation=false: Tuple of moments for SMM estimation
+"""
+function SMM(params, simulation=false)
     
-    Methods:
-    - false or "original": raw difference (emp - sim)
-    - true or "normalize": difference scaled by sqrt of moment group size  
-    - "hybrid": percentage deviation for non-zero empirical, absolute for zeros
-    """
+    # Solve network
+    network = solve_network(params, return_firm_level=false)
+    
+    if simulation
+        # Return aggregated trade flows (sum over sectors)
+        return reshape(sum(network.X_lrs, dims=3), R, R)
+    end
+    
+    # Compute and return moments
+    moments = compute_moments(network, params)
+    
+    return (
+        moments.agg_labor_share,
+        moments.agg_industry_share,
+        moments.gamma_ls,
+        moments.reg_coef,
+        moments.pi_r
+    )
+end
+
+
+"""
+    SMM_with_network(params)
+
+Solve network and return both moments and firm-level data.
+Used for untargeted moment validation (Table 2 regression).
+
+# Returns
+- `moments`: Tuple of targeted moments  
+- `network`: Full network solution including firm-level data
+"""
+function SMM_with_network(params)
+    
+    # Solve network with firm-level data
+    network = solve_network(params, return_firm_level=true)
+    
+    # Compute moments
+    moments = compute_moments(network, params)
+    
+    return moments, network
+end
+
+
+##################### Loss Function ###################
+
+"""
+    loss_function(simulated_moments, emp, W, method="original")
+
+Compute loss between empirical and simulated moments.
+
+# Methods
+- "original": Raw squared difference
+- "normalize": Difference scaled by sqrt of moment group size
+- "hybrid": Percentage deviation for non-zero, absolute for zeros
+"""
+function loss_function(simulated_moments, emp, W, method="original")
     
     # Backward compatibility with Bool
     if method isa Bool
         method = method ? "normalize" : "original"
     end
-           
+    
+    # Compute normalization factors
     square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))'
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...) 
+    
+    # Flatten moments
+    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
     N = length(simulated_moments)
     simulated_moments = reshape(simulated_moments, (1, N))
     
@@ -382,15 +597,14 @@ function loss_function(simulated_moments, emp, W, method = "original")
     elseif method == "normalize"
         err = (emp - simulated_moments) ./ square_size
     elseif method == "hybrid"
-        # Percentage deviation for non-zero empirical, absolute deviation for zeros
         emp_vec = vec(emp)
         sim_vec = vec(simulated_moments)
         err_vec = similar(emp_vec)
         for i in 1:length(emp_vec)
-            if abs(emp_vec[i]) > 1e-10  # Non-zero empirical
+            if abs(emp_vec[i]) > 1e-10
                 err_vec[i] = (sim_vec[i] - emp_vec[i]) / emp_vec[i]
-            else  # Zero empirical (handles gamma_ls zeros)
-                err_vec[i] = sim_vec[i]  # Penalize non-zero simulated values directly
+            else
+                err_vec[i] = sim_vec[i]
             end
         end
         err = reshape(err_vec, (1, N))
@@ -398,27 +612,31 @@ function loss_function(simulated_moments, emp, W, method = "original")
         error("Unknown method: $method. Use 'original', 'normalize', or 'hybrid'.")
     end
     
-    W = isnothing(W) ? I(N) : W 
+    W = isnothing(W) ? I(N) : W
     return err * W * err'
 end
 
 
-function full_SMM(params, simulation = false, second_stage = false, method = "original")
-    """
-    From the parameters, return the loss and the simulated moments (targeted and untargeted)
-    """
-    simulated_moments = SMM(params,simulation)
+"""
+    full_SMM(params, simulation=false, second_stage=false, method="original")
 
+Full SMM evaluation: compute loss and return moments.
+"""
+function full_SMM(params, simulation=false, second_stage=false, method="original")
+    
+    simulated_moments = SMM(params, simulation)
+    
     if second_stage
         emp = empirical_moments_reduced
         W = Weight_matrix
-        moments = [simulated_moments[3][mask_emp_gamma_ls.!=0]]
+        moments = [simulated_moments[3][mask_emp_gamma_ls .!= 0]]
     else
         emp = empirical_moments
         W = nothing
         moments = simulated_moments
     end
-    if simulation 
+    
+    if simulation
         return simulated_moments
     else
         return loss_function(moments, emp, W, method), simulated_moments

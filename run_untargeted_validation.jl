@@ -5,7 +5,6 @@
 #   results = validate_table2(best_params, industry)
 #
 # This file provides the interface between main_pso.jl and untargeted_moments.jl
-# It assumes all global constants are already defined via @everywhere in main_pso.jl
 
 include("untargeted_moments.jl")
 
@@ -78,45 +77,45 @@ Standalone version that loads data from disk (doesn't require main_pso.jl global
 
 Use this when running outside the main_pso.jl context.
 """
-function validate_table2_standalone(params, industry::String; sigma_s=0.17, T_periods=36, rho_s=0.92)
+# function validate_table2_standalone(params, industry::String; sigma_s=0.17, T_periods=36, rho_s=0.92)
     
-    input_folder = "./baseline_" * industry
-    output_folder = "./reporting_" * industry
+#     input_folder = "./baseline_" * industry
+#     output_folder = "./reporting_" * industry
     
-    # Load data
-    coefs = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
-    distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy"))
-    w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-    regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
-    N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
-    filter_N_upstream_local = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
+#     # Load data
+#     coefs = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
+#     distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy"))
+#     w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
+#     regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
+#     N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
+#     filter_N_upstream_local = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
     
-    S_local, R_local = size(filter_N_upstream_local)
+#     S_local, R_local = size(filter_N_upstream_local)
     
-    # Build DistBin
-    DistBin_local = zeros(Int, R_local, R_local)
-    for i in 1:R_local, j in 1:R_local
-        d = distances_local[i, j]
-        DistBin_local[i, j] = d <= 20 ? 0 : d <= 50 ? 1 : d <= 100 ? 2 : d <= 150 ? 3 : d <= 200 ? 4 : 5
-    end
+#     # Build DistBin
+#     DistBin_local = zeros(Int, R_local, R_local)
+#     for i in 1:R_local, j in 1:R_local
+#         d = distances_local[i, j]
+#         DistBin_local[i, j] = d <= 20 ? 0 : d <= 50 ? 1 : d <= 100 ? 2 : d <= 150 ? 3 : d <= 200 ? 4 : 5
+#     end
     
-    # Define globals (normally done by main_pso.jl)
-    global S = S_local
-    global R = R_local
-    global R_downstream = sum(N_downstream_per_region_local .!= 0)
-    global distances = distances_local
-    global w_rs = w_rs_local
-    global regional_wages = regional_wages_local
-    global N_downstream_per_region = N_downstream_per_region_local
-    global DistBin = DistBin_local
-    global N_rho = 50
-    global theta = 1.768
-    global lambda = 0.5
-    global nu = 0.2
-    global nu_s = ones(S_local) .* 2.5
-    global epsilon = coefs[1, "value"]
-    global delta_r = ones(R_local)
+#     # Define globals (normally done by main_pso.jl)
+#     global S = S_local
+#     global R = R_local
+#     global R_downstream = sum(N_downstream_per_region_local .!= 0)
+#     global distances = distances_local
+#     global w_rs = w_rs_local
+#     global regional_wages = regional_wages_local
+#     global N_downstream_per_region = N_downstream_per_region_local
+#     global DistBin = DistBin_local
+#     global N_rho = 50
+#     global theta = 1.768
+#     global lambda = 0.5
+#     global nu = 0.2
+#     global nu_s = ones(S_local) .* 2.5
+#     global epsilon = coefs[1, "value"]
+#     global delta_r = ones(R_local)
     
-    # Now call the standard function
-    return validate_table2(params, industry; sigma_s=sigma_s, T_periods=T_periods, rho_s=rho_s)
-end
+#     # Now call the standard function
+#     return validate_table2(params, industry; sigma_s=sigma_s, T_periods=T_periods, rho_s=rho_s)
+# end

@@ -284,12 +284,15 @@ function train_stage_pso(
         # Fresh start - use init_beta
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
+
+        A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
+        A ./= sum(A) 
         
         lb = vcat(
             init_beta .* 0.1,
             0.,
             0.8 .* agg_industry_share,
-            0.01 .* A,
+            0.8 .* A,
             0.1 * (vec(N_rs).+ 0.1)
         )
         
@@ -297,7 +300,7 @@ function train_stage_pso(
             init_beta .* 10,
             1.,
             1.2 .* agg_industry_share,
-            A .* 100,
+            A .* 1.2,
             10 * (vec(N_rs).+ 0.1)
         )
         

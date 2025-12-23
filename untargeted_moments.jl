@@ -265,11 +265,16 @@ function build_panel_and_regress(upstream_sales_ts, downstream_sales_ts, network
         reg2 = reg(panel_df, @formula(d_ln_x ~ fe(firm_id) + fe(sector_period)))
         
         results["sector_period_fe"] = Dict(
+            "beta" => coef(reg2)[1],
+            "beta_se" => stderror(reg2)[1],
             "R2" => r2(reg2),
             "N" => nobs(reg2)
         )
-        
-        println("  R² (with sector×period FE): $(round(results["sector_period_fe"]["R2"], digits=4))")
+        println("With sectorxpreiod FE")
+        println("  β (d_ln_downstream): $(round(results["sector_period_fe"]["beta"], digits=4)) " *
+                "(se: $(round(results["sector_period_fe"]["beta_se"], digits=4)))")
+        println("  R²: $(round(results["sector_period_fe"]["R2"], digits=4))")
+        println("  N:  $(results["sector_period_fe"]["N"])")
     catch e
         println("  ERROR: $e")
         results["sector_period_fe"] = nothing
