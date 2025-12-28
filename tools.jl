@@ -105,7 +105,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
     A ./= sum(A)
     if init
-        return vcat([ones(5), [agg_labor_share], agg_industry_share, A, ones(S*R)]...)
+        return vcat([ones(N_beta), [agg_labor_share], agg_industry_share, A, ones(S*R)]...)
     end
     if last_stage_folder == nothing
         lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_beta.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
@@ -180,7 +180,8 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
 
             # apply your condition
             if condition
-                if (scaled[1] < scaled[2]) & (scaled[2] < scaled[3]) & (scaled[3] < scaled[4]) & (scaled[4] < scaled[5])  # Condition
+                betas = scaled[1:N_beta]
+                if issorted(betas)
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -261,19 +262,36 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
 end
 
 
-function distance_bin(d)
-    if 20 < d <= 50
-        return 1
-    elseif 50 < d <= 100
-        return 2
-    elseif 100 < d <= 150
-        return 3
-    elseif 150 < d <= 200
-        return 4
-    elseif d > 200
-        return 5
+function distance_bin(d, n_bins=N_beta)
+    if n_bins == 5
+        if 20 < d <= 50
+            return 1
+        elseif 50 < d <= 100
+            return 2
+        elseif 100 < d <= 150
+            return 3
+        elseif 150 < d <= 200
+            return 4
+        elseif d > 200
+            return 5
+        else
+            return 0
+        end
+    elseif n_bins == 4
+        # Define your 4-bin version here
+        if 50 < d <= 100
+            return 1
+        elseif 100 < d <= 150
+            return 2
+        elseif 150 < d <= 200
+            return 3
+        elseif d > 200
+            return 4
+        else
+            return 0
+        end
     else
-        return 0   # for ≤ 20, outside bins
+        error("Unsupported number of distance bins: $n_bins")
     end
 end
 
@@ -384,8 +402,17 @@ function generate_dashboard_report(
         simulated = agg_industry_share_sim
     )
 
+
+    bin_labels = if N_beta == 5
+        ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
+    elseif N_beta == 4
+        ["]50,100]", "]100,150]", "]150,200]", ">200"]  # Example for 4 bins
+    else
+        ["Bin $i" for i in 1:N_beta]
+    end
+
     reg_df = DataFrame(
-        bins = ["]20,50]","]50,100]", "]100,150]", "]150,200]", ">200"],
+        bins = bin_labels,
         empirical = reg_emp,
         simulated = reg_sim
     )

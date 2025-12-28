@@ -135,11 +135,11 @@ Returns:
 - T: Fréchet scale parameters [S × R elements]
 """
 function unpack_params(params)
-    beta = params[1:5]
-    Omega_L = params[6]
-    Omega_s = params[7:6+S] / sum(params[7:6+S])  # Normalize to sum to 1
-    A = params[(S+7):(R_downstream+S+6)]
-    T = params[(R_downstream+S+7):end]
+    beta = params[1:N_beta]
+    Omega_L = params[N_beta + 1]
+    Omega_s = params[(N_beta + 2):(N_beta + 1 + S)] / sum(params[(N_beta + 2):(N_beta + 1 + S)])
+    A = params[(N_beta + S + 2):(N_beta + R_downstream + S + 1)]
+    T = params[(N_beta + R_downstream + S + 2):end]
     
     return beta, Omega_L, Omega_s, A, T
 end

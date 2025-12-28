@@ -47,7 +47,7 @@ function parallel_pso_smm(
     c1::Float64 = 1.5,
     c2::Float64 = 2.5,
     beta_constraint::Bool = true,
-    beta_indices::UnitRange = 1:5,
+    beta_indices::UnitRange = 1:N_beta,  # Changed from 1:5
     verbose::Bool = true
 )
     
@@ -305,7 +305,7 @@ function train_stage_pso(
         )
         
         beta_constraint = true
-        beta_indices = 1:5
+        beta_indices = 1:N_beta
         best_params_prev = nothing
         warm_start = nothing
         
@@ -328,7 +328,7 @@ function train_stage_pso(
         if beta_constraint
             beta_idx_in_var = findfirst(==("beta"), var_list)
             beta_start = beta_idx_in_var == 1 ? 1 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(beta_idx_in_var-1)]) + 1
-            beta_indices = beta_start:(beta_start + 4)
+            beta_indices = beta_start:(beta_start + N_beta - 1)  # Changed from + 4
         else
             beta_indices = 1:0
         end
@@ -473,13 +473,13 @@ function get_param_start_index(param_name::Symbol)
     if param_name == :beta
         return 1
     elseif param_name == :agg_labor_share_tech
-        return 6
+        return N_beta + 1  # Changed from 6
     elseif param_name == :agg_industry_share_tech
-        return 7
+        return N_beta + 2  # Changed from 7
     elseif param_name == :productivity
-        return 7 + S
+        return N_beta + 2 + S  # Changed from 7 + S
     elseif param_name == :T
-        return 7 + S + R_downstream
+        return N_beta + 2 + S + R_downstream  # Changed from 7 + S + R_downstream
     else
         error("Unknown parameter name: $param_name")
     end

@@ -2,6 +2,7 @@
 # Author: Swann Chelly (Modified for PSO)
 # This replaces Halton grid search with Particle Swarm Optimization
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
+# nohup julia SMM_Spatial_Comovement/main_pso.jl > reporting_aero/logs.log 2>&1 
 using Distributed
 using Dates
 @everywhere using NPZ
@@ -26,14 +27,10 @@ available = Sys.CPU_THREADS - nprocs()
 println("Using "*string(available)*" workers")
 addprocs(max(available-1, 0)) # Always leave one core for other tests. 
 
-@everywhere include("model_CP.jl")
-@everywhere include("tools.jl")
-@everywhere include("pso_integration.jl")  # NEW: PSO functions
-@everywhere include("run_untargeted_validation.jl")  
 
 ############## Load Parameters #################
 
-industry = "aero"
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
 input_folder = "./baseline_"*industry
 output_folder = "./reporting_"*industry
 mkpath(output_folder) 
@@ -52,11 +49,6 @@ S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
-# Distance bins
-DistBin_local = Array{Int}(undef, R,R)
-for i in 1:R, j in 1:R
-    DistBin_local[i,j] = distance_bin(distances_local[i,j])
-end
 
 R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const R_downstream = $(R_)
@@ -67,7 +59,6 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const distances = $(distances_local)
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const w_rs = $(w_rs_local)
-@everywhere const DistBin = $(DistBin_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
 @everywhere const epsilon = $(coefs[1,"value"])
@@ -84,22 +75,34 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const emp_pi_r_full = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_pi_r = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end])
 @everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef.npy")))
+@everywhere const N_beta = $(length(reg_coef))
 empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
 empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
-@everywhere const mask_emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"mask_gamma_ls.npy"))')
+# @everywhere const mask_emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"mask_gamma_ls.npy"))')
 @everywhere const empirical_moments = $(empirical_moments_local)
-@everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
+# @everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
 @everywhere const K_max = $(50)
 
+@everywhere include("model_CP.jl")
+@everywhere include("tools.jl")
+@everywhere include("pso_integration.jl")  # NEW: PSO functions
+@everywhere include("run_untargeted_validation.jl")  
+
+# Distance bins
+DistBin_local = Array{Int}(undef, R,R)
+for i in 1:R, j in 1:R
+    DistBin_local[i,j] = distance_bin(distances_local[i,j])
+end
+@everywhere const DistBin = $(DistBin_local)
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
-max_loop = 100
-full_run = false
+max_loop = 10
+full_run = true
 
 if full_run
     ############# INITIAL SEARCH FOR GOOD BETA ##############
@@ -112,11 +115,9 @@ if full_run
 
     # First find a reasonable beta using targeted search on regression coefficients
     range_beta = range(0.01, stop = 5, length = 50) 
-    expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
+    expanding_beta = [[i; fill(j, N_beta - 1)] for i in range_beta for j in range_beta if i < j]
 
     # Use initial guess for other parameters
-    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-    A ./= sum(A)
     A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
     A ./= sum(A) 
 
