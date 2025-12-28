@@ -76,10 +76,6 @@ function parallel_pso_smm(
         
         push!(particles, warm_start_clamped)
         
-        if verbose
-            println("[PSO] ✓ Including previous best as warm start particle")
-            println("  This guarantees fitness will not increase from previous stage")
-        end
     end
     
     # Initialize velocities (including for warm start particle)
