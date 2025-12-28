@@ -432,15 +432,28 @@ end
 
 ############## POST-HOC ANALYSIS ##############
 
-best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
+
+# Find the last stage folder dynamically
+last_stage_folder = find_last_stage_folder(output_folder)
+println("\n" * "="^70)
+println("POST-HOC ANALYSIS FOR $(uppercase(industry))")
+println("="^70)
+println("Loading parameters from: $last_stage_folder")
+
+best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))
+# Handle matrix vs vector
+if ndims(best_params) > 1
+    best_params = best_params[:, 1]
+end
+
 results = validate_table2(best_params, industry, T_periods=36)
-network = solve_network(best_params,return_firm_level = false)
+network = solve_network(best_params, return_firm_level=false)
 panel_df = results["panel_df"]
 
 function get_w_srd_r(params)
-    network = solve_network(best_params,return_firm_level = false)
+    net = solve_network(params, return_firm_level=false)
     w_srd_r = zeros(S, R, R)
-    X_lrs = network[1]
+    X_lrs = net[1]
     
     for s in 1:S
         for r_prime in 1:R  # Upstream region
@@ -457,16 +470,17 @@ function get_w_srd_r(params)
     return w_srd_r
 end
 
-folder = output_folder*"/" # Output folder
+folder = output_folder * "/"  # Output folder
 w_srd_r = get_w_srd_r(best_params)
-npzwrite(joinpath(folder, "w_srd_r.npy"),w_srd_r)
+npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-### To display map of number of suppliers. 
+### To display map of number of suppliers
 
-folder = output_folder*"/" # Output folder
-best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
-network = solve_network(best_params,return_firm_level = true)
+network = solve_network(best_params, return_firm_level=true)
 firm_expenditure_shares = network[7]
-links = firm_expenditure_shares .!= 0 #N_rho, S, l, r
-suppliers = reshape(sum(links,dims = 4),S,N_rho,R) .!= 0
-npzwrite(joinpath(folder, "suppliers.npy"),suppliers)
+links = firm_expenditure_shares .!= 0  # N_rho, S, l, r
+suppliers = reshape(sum(links, dims=4), S, N_rho, R) .!= 0
+npzwrite(joinpath(folder, "suppliers.npy"), suppliers)
+
+println("\nPost-hoc analysis complete for industry: $industry")
+println("Results saved to: $folder")

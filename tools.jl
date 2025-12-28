@@ -836,6 +836,59 @@ end
 
 
 
+# Function to find the last epoch and stage folder dynamically
+function find_last_stage_folder(base_folder::String)
+    # Find all epoch folders
+    epoch_folders = Tuple{Int, String}[]
+    for item in readdir(base_folder)
+        if startswith(item, "epoch_")
+            epoch_num = tryparse(Int, replace(item, "epoch_" => ""))
+            if epoch_num !== nothing
+                epoch_path = joinpath(base_folder, item)
+                if isdir(epoch_path)
+                    push!(epoch_folders, (epoch_num, epoch_path))
+                end
+            end
+        end
+    end
+    
+    if isempty(epoch_folders)
+        # Check for initial stage folder "0"
+        initial_folder = joinpath(base_folder, "0")
+        if isdir(initial_folder) && isfile(joinpath(initial_folder, "best_params.npy"))
+            return initial_folder
+        end
+        error("No epoch or stage folders found in $base_folder")
+    end
+    
+    # Sort by epoch number and get the last one
+    sort!(epoch_folders, by=x->x[1])
+    last_epoch_path = epoch_folders[end][2]
+    
+    # Find stage folders within the last epoch
+    stage_folders = Tuple{Int, String}[]
+    for item in readdir(last_epoch_path)
+        item_path = joinpath(last_epoch_path, item)
+        if isdir(item_path)
+            stage_num = tryparse(Int, item)
+            if stage_num !== nothing
+                if isfile(joinpath(item_path, "best_params.npy"))
+                    push!(stage_folders, (stage_num, item_path))
+                end
+            end
+        end
+    end
+    
+    if isempty(stage_folders)
+        error("No stage folders found in $last_epoch_path")
+    end
+    
+    # Sort by stage number and get the last one
+    sort!(stage_folders, by=x->x[1])
+    return stage_folders[end][2]
+end
+
+
 ############ Old functions ##############
 
 
