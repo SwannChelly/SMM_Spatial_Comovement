@@ -134,7 +134,7 @@ if full_run
     y1 = reg_coef[k+1]
     reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
     y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
-    init_beta = expanding_beta[argmin(y_flat)][1:5]
+    init_beta = expanding_beta[argmin(y_flat)][1:N_beta]
 
     println("Best initial beta: ", init_beta)
     println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])

@@ -459,7 +459,7 @@ function compute_moments(network, params)
     suppliers = Float64[]
     distance_vec = Float64[]
     size_vec = Float64[]
-    
+
     for r in 1:R
         for s in 1:S
             for rho in 1:N_rho
@@ -471,7 +471,7 @@ function compute_moments(network, params)
             end
         end
     end
-    
+
     df = DataFrame(
         SIREN = sirens,
         A129 = sectors,
@@ -480,12 +480,20 @@ function compute_moments(network, params)
         size = size_vec,
         distance = distance_vec
     )
-    
-    bins = [20, 50, 100, 150, 200, Inf]
+
+    # Define bins based on N_beta (must match distance_bin function in tools.jl)
+    if N_beta == 5
+        bins = [20, 50, 100, 150, 200, Inf]
+    elseif N_beta == 4
+        bins = [50, 100, 150, 200, Inf]
+    else
+        error("Unsupported N_beta: $N_beta. Add bin definition for this case.")
+    end
+
     df.distance_bin = cut(df.distance, bins, extend=true)
-    
+
     fixest = reg(df, @formula(supplier ~ distance_bin + size + fe(A129)))
-    reg_coef = fixest.coef[1:5]
+    reg_coef = fixest.coef[1:N_beta]  # Changed from hardcoded 1:5
     
     # ─────────────────────────────────────────────────────────────────────────
     # 5. Regional employment shares π_r (matching model_CP.jl)

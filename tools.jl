@@ -573,15 +573,15 @@ function generate_report(loop_folder,stage,n,variable = nothing,best_params= not
     npzwrite(joinpath(folder, "productivity.npy"), unpack_params(best_params)[4])
 
 
-    beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-    data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
-    beta = [2,9,18,5,17]
-    low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-    npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
-    current = SMM(vcat([1,1,1,1,1]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-    npzwrite(joinpath(folder, "M_ij_trade_cost.npy"), current)
-    high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-    npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
+    # beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
+    # data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
+    # beta = [2,9,18,5,17]
+    # low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
+    # npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
+    # current = SMM(vcat([1,1,1,1,1]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
+    # npzwrite(joinpath(folder, "M_ij_trade_cost.npy"), current)
+    # high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
+    # npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
 
 
     agg_labor_share_emp = agg_labor_share
