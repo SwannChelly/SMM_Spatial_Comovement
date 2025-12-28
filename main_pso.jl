@@ -1,7 +1,7 @@
 ##### Main with PSO Optimization #####
 # Author: Swann Chelly (Modified for PSO)
 # This replaces Halton grid search with Particle Swarm Optimization
-
+# ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 using Distributed
 using Dates
 @everywhere using NPZ
@@ -98,419 +98,462 @@ N_PARTICLES = available-1  # Use all available cores except one
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
+max_loop = 100
+full_run = false
 
-############# INITIAL SEARCH FOR GOOD BETA ##############
-
-println("\n" * "="^70)
-println("Method $method")
-println("STAGE 0: Finding good initial beta values")
-println("="^70)
-
-
-# First find a reasonable beta using targeted search on regression coefficients
-range_beta = range(0.01, stop = 5, length = 50) 
-expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
-
-# Use initial guess for other parameters
-A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-A ./= sum(A)
-A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
-A ./= sum(A) 
-
-init_other = vcat([agg_labor_share], agg_industry_share, A, vec(N_rs).+0.1)
-expanding_beta = [vcat(i, init_other) for i in expanding_beta]
-
-println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
-results_ = pmap(parallel_SMM_safe, expanding_beta)
-
-# Find beta that best matches regression coefficients
-scores = [score != nothing ? score[1][1] : missing for score in results_]
-k = 1
-y0 = reg_coef[k]
-y1 = reg_coef[k+1]
-reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
-y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
-init_beta = expanding_beta[argmin(y_flat)][1:5]
-
-println("Best initial beta: ", init_beta)
-println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
-
-############## PSO-BASED OPTIMIZATION ##############
-
-
-println("\n" * "="^70)
-println("STAGE 1: Initial PSO optimization (all parameters)")
-println("="^70)
-println("Particles: $N_PARTICLES")
-println("Iterations: $MAX_ITER_INITIAL")
-
-
-# Stage 1: Optimize all parameters starting from init_beta
-best_params, best_fitness, history = train_stage_pso(
-    N_PARTICLES,
-    MAX_ITER_INITIAL,
-    init_beta = init_beta,
-    variable_list = nothing,  # Optimize all parameters
-    last_stage_folder = nothing,
-    alpha = 0.5,
-    second_stage = false,
-    method = method
-)
-
-# Save results
-stage = 0
-mkpath(joinpath(output_folder, string(stage)))
-NPZ.npzwrite(joinpath(output_folder, string(stage), "best_params.npy"), reshape(best_params, :, 1))
-NPZ.npzwrite(joinpath(output_folder, string(stage), "pso_history.npy"), Dict(
-    "best_fitness" => history["best_fitness"],
-    "mean_fitness" => history["mean_fitness"]
-))
-generate_report(output_folder, string(stage), 1, nothing, best_params, "")
-
-println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
-
-max_loop = 10
-if max_loop != nothing
-    ############# MULTI-STAGE REFINEMENT ##############
+if full_run
+    ############# INITIAL SEARCH FOR GOOD BETA ##############
 
     println("\n" * "="^70)
-    println("Starting multi-stage PSO refinement (3 stages per loop)")
+    println("Method $method")
+    println("STAGE 0: Finding good initial beta values")
     println("="^70)
+
+
+    # First find a reasonable beta using targeted search on regression coefficients
+    range_beta = range(0.01, stop = 5, length = 50) 
+    expanding_beta = [[i,j,j,j,j] for i in range_beta for j in range_beta if i<j ]
+
+    # Use initial guess for other parameters
+    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+    A ./= sum(A)
+    A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
+    A ./= sum(A) 
+
+    init_other = vcat([agg_labor_share], agg_industry_share, A, vec(N_rs).+0.1)
+    expanding_beta = [vcat(i, init_other) for i in expanding_beta]
+
+    println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
+    results_ = pmap(parallel_SMM_safe, expanding_beta)
+
+    # Find beta that best matches regression coefficients
+    scores = [score != nothing ? score[1][1] : missing for score in results_]
+    k = 1
+    y0 = reg_coef[k]
+    y1 = reg_coef[k+1]
+    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
+    y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+    init_beta = expanding_beta[argmin(y_flat)][1:5]
+
+    println("Best initial beta: ", init_beta)
+    println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
+
+    ############## PSO-BASED OPTIMIZATION ##############
+
+
+    println("\n" * "="^70)
+    println("STAGE 1: Initial PSO optimization (all parameters)")
+    println("="^70)
+    println("Particles: $N_PARTICLES")
+    println("Iterations: $MAX_ITER_INITIAL")
+
+
+    # Stage 1: Optimize all parameters starting from init_beta
+    best_params, best_fitness, history = train_stage_pso(
+        N_PARTICLES,
+        MAX_ITER_INITIAL,
+        init_beta = init_beta,
+        variable_list = nothing,  # Optimize all parameters
+        last_stage_folder = nothing,
+        alpha = 0.5,
+        second_stage = false,
+        method = method
+    )
+
+    # Save results
     stage = 0
-    loop_start = 1
-    if loop_start == 1
-        stage = 0
-    else
-        stage = (loop_start-1)*3  # Now 3 stages per loop
-    end
-    println("Starting at stage: $stage")
-    
-    # Alpha controls search radius: starts tight, expands over time
-    alpha_start, alpha_end = 0.3, 0.9
-    
-    for loop in loop_start:max_loop
-        global stage
-        global max_loop
-        global best_params
-        global best_fitness
+    mkpath(joinpath(output_folder, string(stage)))
+    NPZ.npzwrite(joinpath(output_folder, string(stage), "best_params.npy"), reshape(best_params, :, 1))
+    NPZ.npzwrite(joinpath(output_folder, string(stage), "pso_history.npy"), Dict(
+        "best_fitness" => history["best_fitness"],
+        "mean_fitness" => history["mean_fitness"]
+    ))
+    generate_report(output_folder, string(stage), 1, nothing, best_params, "")
 
-        alpha = alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
-        
+    println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
+
+    if max_loop != nothing
+        ############# MULTI-STAGE REFINEMENT ##############
+
         println("\n" * "="^70)
-        println("REFINEMENT LOOP $loop / $max_loop")
+        println("Starting multi-stage PSO refinement (3 stages per loop)")
         println("="^70)
-        println("Alpha (search radius): $alpha")
+        stage = 0
+        loop_start = 1
+        if loop_start == 1
+            stage = 0
+        else
+            stage = (loop_start-1)*3  # Now 3 stages per loop
+        end
+        println("Starting at stage: $stage")
         
-        past_loop_folder = loop == 1 ? output_folder : output_folder*"/epoch_"*string(loop-1)
-        loop_folder = output_folder*"/epoch_"*string(loop)
-        mkpath(loop_folder)
+        # Alpha controls search radius: starts tight, expands over time
+        alpha_start, alpha_end = 0.3, 0.9
         
-        # ═══════════════════════════════════════════════════════════════════
-        # STAGE 1: Productivity (A_r) - MOST SENSITIVE
-        # ═══════════════════════════════════════════════════════════════════
-        # With ε = -16, errors in A_r are amplified 16x in π_r
-        # Use tight bounds and log-space loss for π_r matching
-        
-        println("\n" * "-"^50)
-        println("Loop $(loop) - Stage 1: PRODUCTIVITY (π_r matching)")
-        println("-"^50)
-        println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*alpha, digits=2)))")
-        
-        # Tighter alpha for productivity due to high sensitivity
-        alpha_productivity = 0.7 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
-        
-        best_params, best_fitness, history = train_stage_pso(
-            N_PARTICLES,
-            MAX_ITER_STAGE,
-            variable_list = ["productivity"],
-            last_stage_folder = joinpath(past_loop_folder, string(stage)),
-            K = 1,
-            alpha = alpha_productivity,
-            second_stage = false,
-            method = method  # Log-space loss for π_r (handles concentration)
-        )
-        
-        stage += 1
-        folder = joinpath(loop_folder, string(stage))
-        mkpath(folder)
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-        NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-            "best_fitness" => history["best_fitness"],
-            "mean_fitness" => history["mean_fitness"]
-        ))
-        generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_productivity))
-        
-        println("  ✓ Stage 1 complete. Fitness: $(round(best_fitness, digits=6))")
-        
-        # ═══════════════════════════════════════════════════════════════════
-        # STAGE 2: Spatial Structure (β, T) - MEDIUM SENSITIVITY
-        # ═══════════════════════════════════════════════════════════════════
-        # Trade costs affect regression coefficients
-        # Fréchet scales affect sourcing shares γ_{ls}
-        
-        println("\n" * "-"^50)
-        println("Loop $(loop) - Stage 2: SPATIAL STRUCTURE (β, T)")
-        println("-"^50)
-        println("  Sensitivity: MEDIUM")
-        println("  Targets: regression coefficients, γ_{ls}")
-        
-        best_params, best_fitness, history = train_stage_pso(
-            N_PARTICLES,
-            MAX_ITER_STAGE,
-            variable_list = ["beta", "T"],
-            last_stage_folder = joinpath(loop_folder, string(stage)),
-            K = 1,
-            alpha = alpha,  # Standard alpha
-            second_stage = false,
-            method = method
-        )
-        
-        stage += 1
-        folder = joinpath(loop_folder, string(stage))
-        mkpath(folder)
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-        NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-            "best_fitness" => history["best_fitness"],
-            "mean_fitness" => history["mean_fitness"]
-        ))
-        generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha))
-        
-        println("  ✓ Stage 2 complete. Fitness: $(round(best_fitness, digits=6))")
-        
-        # ═══════════════════════════════════════════════════════════════════
-        # STAGE 3: Technical Coefficients (Ω^L, Ω^s) - LOW SENSITIVITY
-        # ═══════════════════════════════════════════════════════════════════
-        # With λ=0.5 and ν=0.2, errors are DAMPED (×0.5 and ×0.8)
-        # Can use wider bounds since optimization landscape is smooth
-        
-        println("\n" * "-"^50)
-        println("Loop $(loop) - Stage 3: TECHNICAL COEFFICIENTS (Ω^L, Ω^s)")
-        println("-"^50)
-        println("  Sensitivity: LOW (damped by λ=0.5, ν=0.2)")
-        println("  Using wider bounds (alpha_tech = $(round(alpha * 0.7, digits=2)))")
-        
-        # Wider alpha for technical coefficients (less sensitive)
-        alpha_technical = alpha #* 0.7  # Allows broader exploration
-        
-        best_params, best_fitness, history = train_stage_pso(
-            N_PARTICLES,
-            MAX_ITER_STAGE,
-            variable_list = ["agg_labor_share_tech", "agg_industry_share_tech"],
-            last_stage_folder = joinpath(loop_folder, string(stage)),
-            K = 1,
-            alpha = alpha_technical,
-            second_stage = false,
-            method = method
-        )
-        
-        stage += 1
-        folder = joinpath(loop_folder, string(stage))
-        mkpath(folder)
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-        NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
-            "best_fitness" => history["best_fitness"],
-            "mean_fitness" => history["mean_fitness"]
-        ))
-        generate_report(loop_folder, string(stage), 1, ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha_technical))
-        
-        println("  ✓ Stage 3 complete. Fitness: $(round(best_fitness, digits=6))")
-        
-        # ═══════════════════════════════════════════════════════════════════
-        # LOOP SUMMARY & CONVERGENCE CHECK
-        # ═══════════════════════════════════════════════════════════════════
-        
-        println("\n" * "-"^50)
-        println("Loop $loop COMPLETE")
-        println("-"^50)
-        println("  Final fitness: $(round(best_fitness, digits=6))")
-        
-        # Check for convergence
-        if loop > 2
-            prev_folder = output_folder*"/epoch_"*string(loop-1)*"/"*string(stage-3)  # 3 stages back
-            prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
-            param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
-            println("  Max parameter change from prev loop: $(round(param_change, digits=6))")
+        for loop in loop_start:max_loop
+            global stage
+            global max_loop
+            global best_params
+            global best_fitness
+
+            alpha = alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
             
-            if param_change < 0.000001
-                println("\n" * "="^70)
-                println("CONVERGENCE ACHIEVED!")
-                println("Parameter change < 0.0001%")
-                println("="^70)
-                max_loop = loop
-                break
-            end
-        end
-    end
-
-    println("\n" * "="^70)
-    println("PSO OPTIMIZATION COMPLETE")
-    println("="^70)
-    println("Total loops completed: $loop_start to $(min(loop_start + max_loop - 1, max_loop))")
-    println("Total stages: $stage")
-    println("Final best fitness: $(round(best_fitness, digits=6))")
-    println("Results saved to: $output_folder")
-
-
-    ############## PLOT CONVERGENCE ##############
-
-    function plot_pso_convergence(output_folder, n_loops)
-        all_best = Float64[]
-        all_mean = Float64[]
-        stage_labels = String[]
-        
-        # Load initial stage
-        hist = NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))
-        append!(all_best, hist["best_fitness"])
-        append!(all_mean, hist["mean_fitness"])
-        
-        # Load all refinement stages (now 3 per loop)
-        for loop in 1:n_loops
-            for stage_offset in 1:3  # Changed from 2 to 3
-                folder = output_folder*"/epoch_"*string(loop)*"/"*string((loop-1)*3 + stage_offset)
-                if isdir(folder)
-                    hist_file = joinpath(folder, "pso_history.npy")
-                    if isfile(hist_file)
-                        hist = NPZ.npzread(hist_file)
-                        append!(all_best, hist["best_fitness"])
-                        append!(all_mean, hist["mean_fitness"])
-                    end
+            println("\n" * "="^70)
+            println("REFINEMENT LOOP $loop / $max_loop")
+            println("="^70)
+            println("Alpha (search radius): $alpha")
+            
+            past_loop_folder = loop == 1 ? output_folder : output_folder*"/epoch_"*string(loop-1)
+            loop_folder = output_folder*"/epoch_"*string(loop)
+            mkpath(loop_folder)
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # STAGE 1: Productivity (A_r) - MOST SENSITIVE
+            # ═══════════════════════════════════════════════════════════════════
+            # With ε = -16, errors in A_r are amplified 16x in π_r
+            # Use tight bounds and log-space loss for π_r matching
+            
+            println("\n" * "-"^50)
+            println("Loop $(loop) - Stage 1: PRODUCTIVITY (π_r matching)")
+            println("-"^50)
+            println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*alpha, digits=2)))")
+            
+            # Tighter alpha for productivity due to high sensitivity
+            alpha_productivity = 0.7 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
+            
+            best_params, best_fitness, history = train_stage_pso(
+                N_PARTICLES,
+                MAX_ITER_STAGE,
+                variable_list = ["productivity"],
+                last_stage_folder = joinpath(past_loop_folder, string(stage)),
+                K = 1,
+                alpha = alpha_productivity,
+                second_stage = false,
+                method = method  # Log-space loss for π_r (handles concentration)
+            )
+            
+            stage += 1
+            folder = joinpath(loop_folder, string(stage))
+            mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+                "best_fitness" => history["best_fitness"],
+                "mean_fitness" => history["mean_fitness"]
+            ))
+            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_productivity))
+            
+            println("  ✓ Stage 1 complete. Fitness: $(round(best_fitness, digits=6))")
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # STAGE 2: Spatial Structure (β, T) - MEDIUM SENSITIVITY
+            # ═══════════════════════════════════════════════════════════════════
+            # Trade costs affect regression coefficients
+            # Fréchet scales affect sourcing shares γ_{ls}
+            
+            println("\n" * "-"^50)
+            println("Loop $(loop) - Stage 2: SPATIAL STRUCTURE (β, T)")
+            println("-"^50)
+            println("  Sensitivity: MEDIUM")
+            println("  Targets: regression coefficients, γ_{ls}")
+            
+            best_params, best_fitness, history = train_stage_pso(
+                N_PARTICLES,
+                MAX_ITER_STAGE,
+                variable_list = ["beta", "T"],
+                last_stage_folder = joinpath(loop_folder, string(stage)),
+                K = 1,
+                alpha = alpha,  # Standard alpha
+                second_stage = false,
+                method = method
+            )
+            
+            stage += 1
+            folder = joinpath(loop_folder, string(stage))
+            mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+                "best_fitness" => history["best_fitness"],
+                "mean_fitness" => history["mean_fitness"]
+            ))
+            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha))
+            
+            println("  ✓ Stage 2 complete. Fitness: $(round(best_fitness, digits=6))")
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # STAGE 3: Technical Coefficients (Ω^L, Ω^s) - LOW SENSITIVITY
+            # ═══════════════════════════════════════════════════════════════════
+            # With λ=0.5 and ν=0.2, errors are DAMPED (×0.5 and ×0.8)
+            # Can use wider bounds since optimization landscape is smooth
+            
+            println("\n" * "-"^50)
+            println("Loop $(loop) - Stage 3: TECHNICAL COEFFICIENTS (Ω^L, Ω^s)")
+            println("-"^50)
+            println("  Sensitivity: LOW (damped by λ=0.5, ν=0.2)")
+            println("  Using wider bounds (alpha_tech = $(round(alpha * 0.7, digits=2)))")
+            
+            # Wider alpha for technical coefficients (less sensitive)
+            alpha_technical = alpha #* 0.7  # Allows broader exploration
+            
+            best_params, best_fitness, history = train_stage_pso(
+                N_PARTICLES,
+                MAX_ITER_STAGE,
+                variable_list = ["agg_labor_share_tech", "agg_industry_share_tech"],
+                last_stage_folder = joinpath(loop_folder, string(stage)),
+                K = 1,
+                alpha = alpha_technical,
+                second_stage = false,
+                method = method
+            )
+            
+            stage += 1
+            folder = joinpath(loop_folder, string(stage))
+            mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            NPZ.npzwrite(joinpath(folder, "pso_history.npy"), Dict(
+                "best_fitness" => history["best_fitness"],
+                "mean_fitness" => history["mean_fitness"]
+            ))
+            generate_report(loop_folder, string(stage), 1, ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha_technical))
+            
+            println("  ✓ Stage 3 complete. Fitness: $(round(best_fitness, digits=6))")
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # LOOP SUMMARY & CONVERGENCE CHECK
+            # ═══════════════════════════════════════════════════════════════════
+            
+            println("\n" * "-"^50)
+            println("Loop $loop COMPLETE")
+            println("-"^50)
+            println("  Final fitness: $(round(best_fitness, digits=6))")
+            
+            # Check for convergence
+            if loop > 2
+                prev_folder = output_folder*"/epoch_"*string(loop-1)*"/"*string(stage-3)  # 3 stages back
+                prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:,1]
+                param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
+                println("  Max parameter change from prev loop: $(round(param_change, digits=6))")
+                
+                if param_change < 0.000001
+                    println("\n" * "="^70)
+                    println("CONVERGENCE ACHIEVED!")
+                    println("Parameter change < 0.0001%")
+                    println("="^70)
+                    max_loop = loop
+                    break
                 end
             end
         end
-        
-        # Normalize to percentage of initial
-        all_best_norm = 100 * all_best / all_best[1]
-        all_mean_norm = 100 * all_mean / all_mean[1]
-        
-        p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
-                xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
-                title="PSO Convergence (3-stage refinement)", legend=:topright, color=:blue)
-        plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
-            color=:red, linestyle=:dash)
-        
-        # Add vertical lines at stage boundaries
-        cumulative_iter = length(NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))["best_fitness"])
-        for loop in 1:n_loops
-            for stage_offset in 1:3
-                folder = output_folder*"/epoch_"*string(loop)*"/"*string((loop-1)*3 + stage_offset)
-                if isdir(folder)
-                    hist_file = joinpath(folder, "pso_history.npy")
-                    if isfile(hist_file)
-                        hist = NPZ.npzread(hist_file)
-                        cumulative_iter += length(hist["best_fitness"])
-                        # Light vertical line at stage boundary
-                        vline!(p, [cumulative_iter], color=:gray, alpha=0.3, label="")
+
+        println("\n" * "="^70)
+        println("PSO OPTIMIZATION COMPLETE")
+        println("="^70)
+        println("Total loops completed: $loop_start to $(min(loop_start + max_loop - 1, max_loop))")
+        println("Total stages: $stage")
+        println("Final best fitness: $(round(best_fitness, digits=6))")
+        println("Results saved to: $output_folder")
+
+
+        ############## PLOT CONVERGENCE ##############
+
+        function plot_pso_convergence(output_folder, n_loops)
+            all_best = Float64[]
+            all_mean = Float64[]
+            stage_labels = String[]
+            
+            # Load initial stage
+            hist = NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))
+            append!(all_best, hist["best_fitness"])
+            append!(all_mean, hist["mean_fitness"])
+            
+            # Load all refinement stages (now 3 per loop)
+            for loop in 1:n_loops
+                for stage_offset in 1:3  # Changed from 2 to 3
+                    folder = output_folder*"/epoch_"*string(loop)*"/"*string((loop-1)*3 + stage_offset)
+                    if isdir(folder)
+                        hist_file = joinpath(folder, "pso_history.npy")
+                        if isfile(hist_file)
+                            hist = NPZ.npzread(hist_file)
+                            append!(all_best, hist["best_fitness"])
+                            append!(all_mean, hist["mean_fitness"])
+                        end
                     end
                 end
             end
+            
+            # Normalize to percentage of initial
+            all_best_norm = 100 * all_best / all_best[1]
+            all_mean_norm = 100 * all_mean / all_mean[1]
+            
+            p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
+                    xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
+                    title="PSO Convergence (3-stage refinement)", legend=:topright, color=:blue)
+            plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
+                color=:red, linestyle=:dash)
+            
+            # Add vertical lines at stage boundaries
+            cumulative_iter = length(NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))["best_fitness"])
+            for loop in 1:n_loops
+                for stage_offset in 1:3
+                    folder = output_folder*"/epoch_"*string(loop)*"/"*string((loop-1)*3 + stage_offset)
+                    if isdir(folder)
+                        hist_file = joinpath(folder, "pso_history.npy")
+                        if isfile(hist_file)
+                            hist = NPZ.npzread(hist_file)
+                            cumulative_iter += length(hist["best_fitness"])
+                            # Light vertical line at stage boundary
+                            vline!(p, [cumulative_iter], color=:gray, alpha=0.3, label="")
+                        end
+                    end
+                end
+            end
+            
+            savefig(p, joinpath(output_folder, "pso_convergence.png"))
+            println("\nConvergence plot saved to: $(joinpath(output_folder, "pso_convergence.png"))")
+        end
+    end
+
+
+
+    # Function to compute scores for a given stage
+    function compute_scores(folder,second_stage::Bool,max_loop = nothing)
+        top_score = []
+        min_distances = []
+        best_simulated_moments = []
+        best_parameters_list = []
+        
+        # Initial evaluation
+        params_list_stage = [best_params]
+        params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
+        score = [s[1] != nothing ? s[1][1] : missing for s in results]
+        push!(top_score, minimum(score))
+        
+        # Compute min_distance
+        reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
+        min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
+        push!(min_distances, min_distance)
+
+        simulated_moments = results[1][2]
+        simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
+        push!(best_simulated_moments,simulated_moments)
+
+        push!(best_parameters_list,best_params)
+        normalized_score = (top_score ./ top_score[1]) .* 100
+        min_distances = (min_distances ./ min_distances[1]) .* 100
+        if max_loop == nothing
+            return normalized_score, min_distances,best_simulated_moments,best_parameters_list
+        end
+
+        # Loop through epochs
+        stage = 1
+        for loop in 1:max_loop
+            for k in 1:3
+                folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
+                print(folder_stage)
+                best_params_stage = NPZ.npzread(joinpath(folder_stage, "best_params.npy"))
+                params_list_stage = [best_params_stage]
+                params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
+                score = [s[1] != nothing ? s[1][1] : missing for s in results]
+                push!(top_score, minimum(score))
+                simulated_moments = results[argmin(score)][2]
+                simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
+                push!(best_simulated_moments,simulated_moments)
+                push!(best_parameters_list,best_params_stage[:,argmin(score)])
+                
+                # Compute min_distance
+                reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
+                min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
+                push!(min_distances, min_distance)
+                
+                stage += 1
+            end
         end
         
-        savefig(p, joinpath(output_folder, "pso_convergence.png"))
-        println("\nConvergence plot saved to: $(joinpath(output_folder, "pso_convergence.png"))")
-    end
-end
-
-
-
-# Function to compute scores for a given stage
-function compute_scores(folder,second_stage::Bool,max_loop = nothing)
-    top_score = []
-    min_distances = []
-    best_simulated_moments = []
-    best_parameters_list = []
-    
-    # Initial evaluation
-    params_list_stage = [best_params]
-    params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
-    score = [s[1] != nothing ? s[1][1] : missing for s in results]
-    push!(top_score, minimum(score))
-    
-    # Compute min_distance
-    reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
-    min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
-    push!(min_distances, min_distance)
-
-    simulated_moments = results[1][2]
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
-    push!(best_simulated_moments,simulated_moments)
-
-    push!(best_parameters_list,best_params)
-    normalized_score = (top_score ./ top_score[1]) .* 100
-    min_distances = (min_distances ./ min_distances[1]) .* 100
-    if max_loop == nothing
+        # Normalize loss to percentage
+        normalized_score = (top_score ./ top_score[1]) .* 100
+        min_distances = (min_distances ./ min_distances[1]) .* 100
         return normalized_score, min_distances,best_simulated_moments,best_parameters_list
     end
 
-    # Loop through epochs
-    stage = 1
-    for loop in 1:max_loop
-        for k in 1:3
-            folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
-            print(folder_stage)
-            best_params_stage = NPZ.npzread(joinpath(folder_stage, "best_params.npy"))
-            params_list_stage = [best_params_stage]
-            params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
-            score = [s[1] != nothing ? s[1][1] : missing for s in results]
-            push!(top_score, minimum(score))
-            simulated_moments = results[argmin(score)][2]
-            simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
-            push!(best_simulated_moments,simulated_moments)
-            push!(best_parameters_list,best_params_stage[:,argmin(score)])
+    reporting = true
+    if reporting
+
+        # Reporting
+        n = 1
+        folder = output_folder*"/" # Output folder
+        #folder = "./parameters/"
+        best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
+        params_list = [best_params]
+
+        # Compute scores for both stages
+        top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_loop)
+        top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true,max_loop)
+
+        # Create subplots for first stage
+        p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",
+                xlabel="Iteration", ylabel="Normalized Loss (%)", 
+                title="First Stage", legend=:topright, color=:blue)
+        plot!(twinx(), min_dist_first, marker=:square, linewidth=2, label="Min Distance",
+            ylabel="Min Distance", legend=:topleft, color=:red)
+
+        # Create subplots for second stage
+        p2 = plot(top_score_second, marker=:circle, linewidth=2, label="Loss",
+                xlabel="Iteration", ylabel="Normalized Loss (%)", 
+                title="Second Stage", legend=:topright, color=:blue)
+        plot!(twinx(), min_dist_second, marker=:square, linewidth=2, label="Min Distance",
+            ylabel="Min Distance", legend=:topleft, color=:red)
+
+        # Combine into single figure with 2 subplots
+        combined_plot = plot(p1, p2, layout=(2,1), size=(800, 800))
+
+        # Save the figure
+        # savefig(combined_plot, joinpath(folder, "loss_function_comparison.png"))
+        
+        npzwrite(joinpath(folder, "best_simulated_moments.npy"),hcat(best_simulated_moments...))
+        npzwrite(joinpath(folder, "best_parameters_list.npy"),hcat(best_parameters_list...))
+        npzwrite(joinpath(folder, "empirical_moments.npy"),empirical_moments)
+    end
+end
+
+
+best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
+results = validate_table2(best_params, "aero", T_periods=36)
+network = solve_network(best_params,return_firm_level = false)
+panel_df = results["panel_df"]
+
+function get_w_srd_r(params)
+    network = solve_network(best_params,return_firm_level = false)
+    w_srd_r = zeros(S, R, R)
+    X_lrs = network[1]
+    
+    for s in 1:S
+        for r_prime in 1:R  # Upstream region
+            # Total sales from (s, r') to all downstream regions
+            total_downstream_sales = sum(X_lrs[r_prime, :, s])
             
-            # Compute min_distance
-            reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
-            min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
-            push!(min_distances, min_distance)
-            
-            stage += 1
+            if total_downstream_sales > 1e-10
+                for r in 1:R  # Downstream region
+                    w_srd_r[s, r_prime, r] = X_lrs[r_prime, r, s] / total_downstream_sales
+                end
+            end
         end
     end
-    
-    # Normalize loss to percentage
-    normalized_score = (top_score ./ top_score[1]) .* 100
-    min_distances = (min_distances ./ min_distances[1]) .* 100
-    return normalized_score, min_distances,best_simulated_moments,best_parameters_list
+    return w_srd_r
 end
 
-max_loop = 10
-reporting = true
-if reporting
+folder = output_folder*"/" # Output folder
+w_srd_r = get_w_srd_r(best_params)
+npzwrite(joinpath(folder, "w_srd_r.npy"),w_srd_r)
 
-    # Reporting
-    n = 1
-    folder = output_folder*"/" # Output folder
-    #folder = "./parameters/"
-    best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
-    params_list = [best_params]
 
-    # Compute scores for both stages
-    top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_loop)
-    top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true,max_loop)
 
-    # Create subplots for first stage
-    p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",
-            xlabel="Iteration", ylabel="Normalized Loss (%)", 
-            title="First Stage", legend=:topright, color=:blue)
-    plot!(twinx(), min_dist_first, marker=:square, linewidth=2, label="Min Distance",
-        ylabel="Min Distance", legend=:topleft, color=:red)
+### To display map of number of suppliers. 
 
-    # Create subplots for second stage
-    p2 = plot(top_score_second, marker=:circle, linewidth=2, label="Loss",
-            xlabel="Iteration", ylabel="Normalized Loss (%)", 
-            title="Second Stage", legend=:topright, color=:blue)
-    plot!(twinx(), min_dist_second, marker=:square, linewidth=2, label="Min Distance",
-        ylabel="Min Distance", legend=:topleft, color=:red)
 
-    # Combine into single figure with 2 subplots
-    combined_plot = plot(p1, p2, layout=(2,1), size=(800, 800))
+folder = output_folder*"/" # Output folder
+best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
+network = solve_network(best_params,return_firm_level = true)
+firm_expenditure_shares = network[7]
+links = firm_expenditure_shares .!= 0 #N_rho, S, l, r
+suppliers = reshape(sum(links,dims = 4),S,N_rho,R) .!= 0
+npzwrite(joinpath(folder, "suppliers.npy"),suppliers)
 
-    # Save the figure
-    # savefig(combined_plot, joinpath(folder, "loss_function_comparison.png"))
-    
-    npzwrite(joinpath(folder, "best_simulated_moments.npy"),hcat(best_simulated_moments...))
-    npzwrite(joinpath(folder, "best_parameters_list.npy"),hcat(best_parameters_list...))
-    npzwrite(joinpath(folder, "empirical_moments.npy"),empirical_moments)
-end
-
-best_params = NPZ.npzread(joinpath(output_folder*"/epoch_10/30", "best_params.npy"))# Load best params.
-results = validate_table2(best_params, "aero", T_periods=36)
