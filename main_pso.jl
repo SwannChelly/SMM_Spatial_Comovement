@@ -101,8 +101,14 @@ N_PARTICLES = available-1  # Use all available cores except one
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
-max_loop = 10
+max_loop = 100
 full_run = true
+length_range_beta = 50 # Normal is 50
+
+# Reporting configuration
+REPORT_EVERY = 5  # Run reporting every X epochs (set to nothing for only at the end)
+
+############## MAIN OPTIMIZATION ##############
 
 if full_run
     ############# INITIAL SEARCH FOR GOOD BETA ##############
@@ -114,7 +120,7 @@ if full_run
 
 
     # First find a reasonable beta using targeted search on regression coefficients
-    range_beta = range(0.01, stop = 5, length = 50) 
+    range_beta = range(0.01, stop = 5, length = length_range_beta) 
     expanding_beta = [[i; fill(j, N_beta - 1)] for i in range_beta for j in range_beta if i < j]
 
     # Use initial guess for other parameters
@@ -343,6 +349,16 @@ if full_run
                     break
                 end
             end
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # PERIODIC REPORTING
+            # ═══════════════════════════════════════════════════════════════════
+            if REPORT_EVERY !== nothing && loop % REPORT_EVERY == 0
+                println("\n" * "-"^50)
+                println("Running periodic reporting (every $REPORT_EVERY epochs)")
+                println("-"^50)
+                run_reporting(output_folder, loop)
+            end
         end
 
         println("\n" * "="^70)
@@ -366,18 +382,15 @@ if full_run
             append!(all_best, hist["best_fitness"])
             append!(all_mean, hist["mean_fitness"])
             
-            # Load all refinement stages (now 3 per loop)
-            for loop in 1:n_loops
-                for stage_offset in 1:3  # Changed from 2 to 3
-                    folder = output_folder*"/epoch_"*string(loop)*"/"*string((loop-1)*3 + stage_offset)
-                    if isdir(folder)
-                        hist_file = joinpath(folder, "pso_history.npy")
-                        if isfile(hist_file)
-                            hist = NPZ.npzread(hist_file)
-                            append!(all_best, hist["best_fitness"])
-                            append!(all_mean, hist["mean_fitness"])
-                        end
-                    end
+            # Load all refinement stages dynamically
+            all_folders = find_all_stage_folders(output_folder, n_loops)
+            
+            for folder in all_folders[2:end]  # Skip initial stage (already loaded)
+                hist_file = joinpath(folder, "pso_history.npy")
+                if isfile(hist_file)
+                    hist = NPZ.npzread(hist_file)
+                    append!(all_best, hist["best_fitness"])
+                    append!(all_mean, hist["mean_fitness"])
                 end
             end
             
@@ -387,24 +400,18 @@ if full_run
             
             p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
                     xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
-                    title="PSO Convergence (3-stage refinement)", legend=:topright, color=:blue)
+                    title="PSO Convergence", legend=:topright, color=:blue)
             plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
                 color=:red, linestyle=:dash)
             
             # Add vertical lines at stage boundaries
             cumulative_iter = length(NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))["best_fitness"])
-            for loop in 1:n_loops
-                for stage_offset in 1:3
-                    folder = output_folder*"/epoch_"*string(loop)*"/"*string((loop-1)*3 + stage_offset)
-                    if isdir(folder)
-                        hist_file = joinpath(folder, "pso_history.npy")
-                        if isfile(hist_file)
-                            hist = NPZ.npzread(hist_file)
-                            cumulative_iter += length(hist["best_fitness"])
-                            # Light vertical line at stage boundary
-                            vline!(p, [cumulative_iter], color=:gray, alpha=0.3, label="")
-                        end
-                    end
+            for folder in all_folders[2:end]
+                hist_file = joinpath(folder, "pso_history.npy")
+                if isfile(hist_file)
+                    hist = NPZ.npzread(hist_file)
+                    cumulative_iter += length(hist["best_fitness"])
+                    vline!(p, [cumulative_iter], color=:gray, alpha=0.3, label="")
                 end
             end
             
@@ -413,87 +420,17 @@ if full_run
         end
     end
 
-
-
-    # Function to compute scores for a given stage
-    function compute_scores(folder,second_stage::Bool,max_loop = nothing)
-        top_score = []
-        min_distances = []
-        best_simulated_moments = []
-        best_parameters_list = []
-        
-        # Initial evaluation
-        params_list_stage = [best_params]
-        params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
-        score = [s[1] != nothing ? s[1][1] : missing for s in results]
-        push!(top_score, minimum(score))
-        
-        # Compute min_distance
-        reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
-        min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
-        push!(min_distances, min_distance)
-
-        simulated_moments = results[1][2]
-        simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
-        push!(best_simulated_moments,simulated_moments)
-
-        push!(best_parameters_list,best_params)
-        normalized_score = (top_score ./ top_score[1]) .* 100
-        min_distances = (min_distances ./ min_distances[1]) .* 100
-        if max_loop == nothing
-            return normalized_score, min_distances,best_simulated_moments,best_parameters_list
-        end
-
-        # Loop through epochs
-        stage = 1
-        for loop in 1:max_loop
-            for k in 1:3
-                folder_stage = folder*"epoch_"*string(loop)*"/"*string(stage)
-                print(folder_stage)
-                best_params_stage = NPZ.npzread(joinpath(folder_stage, "best_params.npy"))
-                params_list_stage = [best_params_stage]
-                params_list_stage, results = train_stage_one(n, nothing, params_list_stage, second_stage)
-                score = [s[1] != nothing ? s[1][1] : missing for s in results]
-                push!(top_score, minimum(score))
-                simulated_moments = results[argmin(score)][2]
-                simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:(length(simulated_moments))]...)
-                push!(best_simulated_moments,simulated_moments)
-                push!(best_parameters_list,best_params_stage[:,argmin(score)])
-                
-                # Compute min_distance
-                reg_coef_ = [s != nothing ? s[2][4] : missing for s in results]
-                min_distance = minimum(rmse.(reg_coef_, Ref(reg_coef)))
-                push!(min_distances, min_distance)
-                
-                stage += 1
-            end
-        end
-        
-        # Normalize loss to percentage
-        normalized_score = (top_score ./ top_score[1]) .* 100
-        min_distances = (min_distances ./ min_distances[1]) .* 100
-        return normalized_score, min_distances,best_simulated_moments,best_parameters_list
-    end
-
-    reporting = true
-    if reporting
-
-        # Reporting
-        n = 1
-        folder = output_folder*"/" # Output folder
-        #folder = "./parameters/"
-        best_params = NPZ.npzread(joinpath(folder*"0/", "best_params.npy"))# Load best params.
-        params_list = [best_params]
-
-        # Compute scores for both stages
-        top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_loop)        
-        
-        npzwrite(joinpath(folder, "best_simulated_moments.npy"),hcat(best_simulated_moments...))
-        npzwrite(joinpath(folder, "best_parameters_list.npy"),hcat(best_parameters_list...))
-        npzwrite(joinpath(folder, "empirical_moments.npy"),empirical_moments)
-    end
+    ############## FINAL REPORTING ##############
+    
+    println("\n" * "="^70)
+    println("RUNNING FINAL REPORTING")
+    println("="^70)
+    
+    run_reporting(output_folder, max_loop)
 end
 
+
+############## POST-HOC ANALYSIS ##############
 
 best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
 results = validate_table2(best_params, "aero", T_periods=36)
@@ -536,4 +473,3 @@ firm_expenditure_shares = network[7]
 links = firm_expenditure_shares .!= 0 #N_rho, S, l, r
 suppliers = reshape(sum(links,dims = 4),S,N_rho,R) .!= 0
 npzwrite(joinpath(folder, "suppliers.npy"),suppliers)
-

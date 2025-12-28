@@ -634,6 +634,208 @@ rmse(a::AbstractVector, b::AbstractVector) =
 
 
 
+############ Reporting functions ##############
+
+"""
+    find_stage_folders(epoch_folder)
+
+Find all stage folders within an epoch folder.
+Returns sorted list of (stage_number, folder_path) tuples.
+"""
+function find_stage_folders(epoch_folder::String)
+    if !isdir(epoch_folder)
+        return Tuple{Int, String}[]
+    end
+    
+    stage_folders = Tuple{Int, String}[]
+    
+    for item in readdir(epoch_folder)
+        item_path = joinpath(epoch_folder, item)
+        if isdir(item_path)
+            # Try to parse folder name as integer (stage number)
+            stage_num = tryparse(Int, item)
+            if stage_num !== nothing
+                # Check if it contains best_params.npy
+                if isfile(joinpath(item_path, "best_params.npy"))
+                    push!(stage_folders, (stage_num, item_path))
+                end
+            end
+        end
+    end
+    
+    # Sort by stage number
+    sort!(stage_folders, by=x->x[1])
+    return stage_folders
+end
+
+
+"""
+    find_all_stage_folders(output_folder, max_loop)
+
+Find all stage folders across initial stage and all epochs.
+Returns list of folder paths in order.
+"""
+function find_all_stage_folders(output_folder::String, max_loop::Union{Int, Nothing}=nothing)
+    all_folders = String[]
+    
+    # Initial stage (folder "0")
+    initial_folder = joinpath(output_folder, "0")
+    if isdir(initial_folder) && isfile(joinpath(initial_folder, "best_params.npy"))
+        push!(all_folders, initial_folder)
+    end
+    
+    # Find all epoch folders
+    epoch_folders = Tuple{Int, String}[]
+    for item in readdir(output_folder)
+        if startswith(item, "epoch_")
+            epoch_num = tryparse(Int, replace(item, "epoch_" => ""))
+            if epoch_num !== nothing
+                epoch_path = joinpath(output_folder, item)
+                if isdir(epoch_path)
+                    push!(epoch_folders, (epoch_num, epoch_path))
+                end
+            end
+        end
+    end
+    
+    # Sort by epoch number
+    sort!(epoch_folders, by=x->x[1])
+    
+    # Apply max_loop filter if specified
+    if max_loop !== nothing
+        epoch_folders = filter(x -> x[1] <= max_loop, epoch_folders)
+    end
+    
+    # Get stage folders from each epoch
+    for (epoch_num, epoch_path) in epoch_folders
+        stage_folders = find_stage_folders(epoch_path)
+        for (stage_num, stage_path) in stage_folders
+            push!(all_folders, stage_path)
+        end
+    end
+    
+    return all_folders
+end
+
+
+"""
+    compute_scores_modular(output_folder, second_stage, max_loop=nothing)
+
+Compute scores by dynamically finding all stage folders.
+"""
+function compute_scores_modular(output_folder::String, second_stage::Bool, max_loop::Union{Int, Nothing}=nothing)
+    top_score = Float64[]
+    min_distances = Float64[]
+    best_simulated_moments = Vector{Vector{Float64}}()
+    best_parameters_list = Vector{Vector{Float64}}()
+    
+    # Find all stage folders
+    all_folders = find_all_stage_folders(output_folder, max_loop)
+    
+    if isempty(all_folders)
+        println("Warning: No stage folders found in $output_folder")
+        return Float64[], Float64[], Vector{Vector{Float64}}(), Vector{Vector{Float64}}()
+    end
+    
+    println("Found $(length(all_folders)) stage folders to evaluate")
+    
+    for (idx, folder) in enumerate(all_folders)
+        # Load best params from this stage
+        best_params_stage = NPZ.npzread(joinpath(folder, "best_params.npy"))
+        
+        # Handle matrix vs vector
+        if ndims(best_params_stage) > 1
+            best_params_stage = best_params_stage[:, 1]
+        end
+        
+        params_list_stage = [best_params_stage]
+        params_list_stage, results = train_stage_one(1, nothing, params_list_stage, second_stage)
+        
+        score = [s[1] !== nothing ? s[1][1] : Inf for s in results]
+        push!(top_score, minimum(score))
+        
+        # Compute min_distance
+        reg_coef_ = [s !== nothing ? s[2][4] : missing for s in results]
+        valid_reg = filter(!ismissing, reg_coef_)
+        if !isempty(valid_reg)
+            min_distance = minimum(rmse.(valid_reg, Ref(reg_coef)))
+            push!(min_distances, min_distance)
+        else
+            push!(min_distances, Inf)
+        end
+        
+        # Store simulated moments
+        if results[1] !== nothing && results[1][2] !== nothing
+            simulated_moments = results[1][2]
+            simulated_moments_vec = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
+            push!(best_simulated_moments, simulated_moments_vec)
+        end
+        
+        push!(best_parameters_list, best_params_stage)
+        
+        if idx % 10 == 0
+            println("  Evaluated $idx / $(length(all_folders)) stages")
+        end
+    end
+    
+    # Normalize to percentage of initial
+    if !isempty(top_score) && top_score[1] > 0
+        normalized_score = (top_score ./ top_score[1]) .* 100
+    else
+        normalized_score = top_score
+    end
+    
+    if !isempty(min_distances) && min_distances[1] > 0
+        normalized_distances = (min_distances ./ min_distances[1]) .* 100
+    else
+        normalized_distances = min_distances
+    end
+    
+    return normalized_score, normalized_distances, best_simulated_moments, best_parameters_list
+end
+
+
+"""
+    run_reporting(output_folder, max_loop=nothing; save_plots=true)
+
+Run full reporting: compute scores, create plots, save results.
+"""
+function run_reporting(output_folder::String, max_loop::Union{Int, Nothing}=nothing; save_plots::Bool=true)
+
+    folder = output_folder * "/"
+    
+    # Compute scores for both stages
+    top_score_first, min_dist_first, best_simulated_moments, best_parameters_list = 
+        compute_scores_modular(output_folder, false, max_loop)
+
+    
+    if !isempty(best_simulated_moments)
+        npzwrite(joinpath(folder, "best_simulated_moments.npy"), hcat(best_simulated_moments...))
+    end
+    
+    if !isempty(best_parameters_list)
+        npzwrite(joinpath(folder, "best_parameters_list.npy"), hcat(best_parameters_list...))
+    end
+    
+    npzwrite(joinpath(folder, "empirical_moments.npy"), empirical_moments)
+    
+    # Save score history
+    npzwrite(joinpath(folder, "score_history.npy"), Dict(
+        "first_stage" => top_score_first,
+        "min_dist_first" => min_dist_first
+    ))
+
+    return Dict(
+        "top_score_first" => top_score_first,
+        "min_dist_first" => min_dist_first,
+        "best_simulated_moments" => best_simulated_moments,
+        "best_parameters_list" => best_parameters_list
+    )
+end
+
+
+
+
 ############ Old functions ##############
 
 

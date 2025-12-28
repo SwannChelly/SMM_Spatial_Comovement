@@ -14,26 +14,6 @@ import statsmodels.api as sm
 
 K = -1
 
-industry = "aero"
-folder = f"../baseline_{industry}/"
-
-idf_ze = ['1101', '1111', '1102', '1104', '1118', '1115', '1116', '1105',
-       '1117', '1110', '1119', '1112', '1103', '1109', '1106', '1114',
-       '1113', '1108', '1107']
-
-       
-filter_N_upstream_df = pd.read_csv(os.path.join(folder,"filter_N_upstream.csv"))
-filter_N_upstream_df.ze2010 = filter_N_upstream_df.ze2010.astype(str).str.zfill(4)
-
-
-distances = np.load(os.path.join(folder,"full_distances.npy"))
-
-france = gpd.read_file(os.path.join(folder,"france.shp")).sort_values(by = 'ze2010')
-
-ref = pd.DataFrame(distances[:297,:297], index=france["ze2010"].values, columns=france["ze2010"].values)
-ref.reset_index(inplace=True)
-ref.rename(columns={'index': 'ze2010_i'}, inplace=True)
-ref = ref.melt(id_vars='ze2010_i', var_name='ze2010_j', value_name='M_ij')
 
 
 

@@ -431,11 +431,6 @@ function train_stage_pso(
     println("Particles: $n_particles")
     println("Max iterations: $max_iter")
     println("Dimension: $(length(lb))")
-    if warm_start !== nothing
-        println("Warm start: YES (guarantees monotonic improvement)")
-    else
-        println("Warm start: NO (first stage)")
-    end
     println("="^60)
     
     best_params, best_fitness, history = parallel_pso_smm(
