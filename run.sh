@@ -55,7 +55,7 @@ echo "Starting SMM calibration for industry: $INDUSTRY"
 echo "Logs will be written to: $LOG_FILE"
 echo ""
 
-nohup julia "$JULIA_SCRIPT" "$INDUSTRY" > "$LOG_FILE" 2>&1 
+nohup julia "$JULIA_SCRIPT" "$INDUSTRY" >> "$LOG_FILE" 2>&1 
 
 PID=$!
 echo "Process started with PID: $PID"

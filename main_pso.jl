@@ -102,7 +102,7 @@ MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
 max_loop = 100
-full_run = true
+full_run = false
 length_range_beta = 50 # Normal is 50
 
 # Reporting configuration
