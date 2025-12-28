@@ -433,7 +433,7 @@ end
 ############## POST-HOC ANALYSIS ##############
 
 best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
-results = validate_table2(best_params, "aero", T_periods=36)
+results = validate_table2(best_params, industry, T_periods=36)
 network = solve_network(best_params,return_firm_level = false)
 panel_df = results["panel_df"]
 
@@ -461,10 +461,7 @@ folder = output_folder*"/" # Output folder
 w_srd_r = get_w_srd_r(best_params)
 npzwrite(joinpath(folder, "w_srd_r.npy"),w_srd_r)
 
-
-
 ### To display map of number of suppliers. 
-
 
 folder = output_folder*"/" # Output folder
 best_params = NPZ.npzread(joinpath(output_folder*"/epoch_100/300", "best_params.npy"))# Load best params.
