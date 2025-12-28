@@ -76,6 +76,10 @@ function parallel_pso_smm(
         
         push!(particles, warm_start_clamped)
         
+        if verbose
+            println("[PSO] ✓ Including previous best as warm start particle")
+            println("  This guarantees fitness will not increase from previous stage")
+        end
     end
     
     # Initialize velocities (including for warm start particle)
@@ -111,6 +115,10 @@ function parallel_pso_smm(
         "mean_fitness" => Float64[mean(filter(isfinite, fitness))],
         "best_params" => [copy(g_best)]
     )
+    
+    # Track last printed fitness for improvement display
+    last_printed_fitness = g_best_fitness
+    last_printed_iter = 0
     
     if verbose
         println("[PSO] Initialization complete:")
@@ -212,13 +220,18 @@ function parallel_pso_smm(
             println("[PSO] Iteration $iter/$max_iter ($(round(t_elapsed, digits=2))s):")
             println("  Best fitness:     $(round(g_best_fitness, digits=6))")
             println("  Mean fitness:     $(round(mean(filter(isfinite, fitness)), digits=6))")
-            if iter > 1
-                improvement = history["best_fitness"][end-1] - g_best_fitness
-                pct_improvement = 100 * improvement / history["best_fitness"][1]
-                println("  Improvement:      $(round(improvement, digits=6)) ($(round(pct_improvement, digits=2))%)")
+            if last_printed_iter > 0
+                # Improvement since last printed iteration
+                improvement = last_printed_fitness - g_best_fitness
+                pct_improvement = 100 * improvement / last_printed_fitness
+                println("  Improvement:      $(round(improvement, digits=6)) ($(round(pct_improvement, digits=2))% since iter $last_printed_iter)")
             end
             println()
             flush(stdout)
+            
+            # Update last printed values
+            last_printed_fitness = g_best_fitness
+            last_printed_iter = iter
         end
     end
     

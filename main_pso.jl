@@ -486,28 +486,7 @@ if full_run
         params_list = [best_params]
 
         # Compute scores for both stages
-        top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_loop)
-        top_score_second, min_dist_second,_,best_parameters_list = compute_scores(folder,true,max_loop)
-
-        # Create subplots for first stage
-        p1 = plot(top_score_first, marker=:circle, linewidth=2, label="Loss",
-                xlabel="Iteration", ylabel="Normalized Loss (%)", 
-                title="First Stage", legend=:topright, color=:blue)
-        plot!(twinx(), min_dist_first, marker=:square, linewidth=2, label="Min Distance",
-            ylabel="Min Distance", legend=:topleft, color=:red)
-
-        # Create subplots for second stage
-        p2 = plot(top_score_second, marker=:circle, linewidth=2, label="Loss",
-                xlabel="Iteration", ylabel="Normalized Loss (%)", 
-                title="Second Stage", legend=:topright, color=:blue)
-        plot!(twinx(), min_dist_second, marker=:square, linewidth=2, label="Min Distance",
-            ylabel="Min Distance", legend=:topleft, color=:red)
-
-        # Combine into single figure with 2 subplots
-        combined_plot = plot(p1, p2, layout=(2,1), size=(800, 800))
-
-        # Save the figure
-        # savefig(combined_plot, joinpath(folder, "loss_function_comparison.png"))
+        top_score_first, min_dist_first,best_simulated_moments,best_parameters_list = compute_scores(folder,false,max_loop)        
         
         npzwrite(joinpath(folder, "best_simulated_moments.npy"),hcat(best_simulated_moments...))
         npzwrite(joinpath(folder, "best_parameters_list.npy"),hcat(best_parameters_list...))
