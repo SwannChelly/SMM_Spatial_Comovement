@@ -116,13 +116,6 @@ def add_colorbar(ax,fig,norm):
     cbar = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.02, pad=0.04, aspect=50, format='%1.4f')
     cbar.minorticks_off()
 
-def load_productivity(productivity):
-    prod = productivity
-    df = filter_N_upstream_df[["ze2010","pi_r"]].drop_duplicates()
-    df.loc[~df.pi_r.isna(),"productivity"] = prod
-    df.productivity.fillna(0,inplace = True)
-    return df
-
 def unpack_simulated_moments(sim_moments, empirical_moments):
     keys = [
         "agg_labor_share",
