@@ -30,7 +30,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 input_folder = "./baseline_"*industry
 output_folder = "./reporting_"*industry
 mkpath(output_folder) 
@@ -83,6 +83,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 @everywhere const empirical_moments = $(empirical_moments_local)
 # @everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
 @everywhere const K_max = $(50)
+@everywhere const sigma_sr = $(NPZ.npzread(joinpath(input_folder,"sigma_sr.npy")))
 
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
@@ -120,7 +121,7 @@ if full_run
 
 
     # First find a reasonable beta using targeted search on regression coefficients
-    range_beta = range(0.01, stop = 5, length = length_range_beta) 
+    range_beta = range(0.001, stop = 3, length = length_range_beta) 
     expanding_beta = [[i; fill(j, N_beta - 1)] for i in range_beta for j in range_beta if i < j]
 
     # Use initial guess for other parameters
@@ -226,7 +227,7 @@ if full_run
             println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*alpha, digits=2)))")
             
             # Tighter alpha for productivity due to high sensitivity
-            alpha_productivity = 0.7 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
+            alpha_productivity = 0.4 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
             
             best_params, best_fitness, history = train_stage_pso(
                 N_PARTICLES,
@@ -445,8 +446,11 @@ best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))
 if ndims(best_params) > 1
     best_params = best_params[:, 1]
 end
-
 results = validate_table2(best_params, industry, T_periods=36)
+CSV.write(joinpath(output_folder,"simulated_panel.csv"), results["panel_df"])
+
+
+
 network = solve_network(best_params, return_firm_level=false)
 panel_df = results["panel_df"]
 
