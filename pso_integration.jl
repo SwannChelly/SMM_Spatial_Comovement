@@ -301,7 +301,7 @@ function train_stage_pso(
             init_beta .* 0.5,
             0.,
             0.8 .* agg_industry_share,
-            0.5.* A,
+            0.8.* A,
             0.1 * (vec(N_rs).+ 0.1)
         )
         
@@ -309,7 +309,7 @@ function train_stage_pso(
             init_beta .* 1.5,
             1.,
             1.2 .* agg_industry_share,
-            A .* 1.5,
+            A .* 1.2,
             10 * (vec(N_rs).+ 0.1)
         )
         

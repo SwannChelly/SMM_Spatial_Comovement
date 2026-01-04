@@ -99,12 +99,12 @@ end
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
+MAX_ITER_INITIAL = 100    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
 max_loop = 100
-full_run = false
-length_range_beta = 50 # Normal is 50
+full_run = true
+length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
 REPORT_EVERY = 5  # Run reporting every X epochs (set to nothing for only at the end)
@@ -121,8 +121,20 @@ if full_run
 
 
     # First find a reasonable beta using targeted search on regression coefficients
-    range_beta = range(0.001, stop = 3, length = length_range_beta) 
-    expanding_beta = [[i; fill(j, N_beta - 1)] for i in range_beta for j in range_beta if i < j]
+    range_beta = range(0.0005, stop = 3, length = length_range_beta) 
+
+    # Create grid with 3 categories:
+    # - i: first beta (β₁)
+    # - j: second beta (β₂)  
+    # - k: remaining betas (β₃, β₄, β₅) - all share same value
+    expanding_beta = [
+        [i, j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
+        for i in range_beta 
+        for j in range_beta 
+        for k in range_beta
+        if i <= j <= k
+    ]
+
 
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
@@ -139,8 +151,9 @@ if full_run
     k = 1
     y0 = reg_coef[k]
     y1 = reg_coef[k+1]
-    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1]] : missing for score in results_]
-    y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 for yi in reg_coef_]...)
+    y2 = reg_coef[k+2]
+    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1],score[2][4][k+2]] : missing for score in results_]
+    y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 + abs(y2-yi[3])^2 for yi in reg_coef_]...)
     init_beta = expanding_beta[argmin(y_flat)][1:N_beta]
 
     println("Best initial beta: ", init_beta)
@@ -177,6 +190,7 @@ if full_run
         "mean_fitness" => history["mean_fitness"]
     ))
     generate_report(output_folder, string(stage), 1, nothing, best_params, "")
+    run_reporting(output_folder, 0)
 
     println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
@@ -227,8 +241,8 @@ if full_run
             println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*alpha, digits=2)))")
             
             # Tighter alpha for productivity due to high sensitivity
-            alpha_productivity = 0.4 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
-            
+            alpha_productivity = 0.7 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
+            #alpha_productivity = alpha
             best_params, best_fitness, history = train_stage_pso(
                 N_PARTICLES,
                 MAX_ITER_STAGE,
