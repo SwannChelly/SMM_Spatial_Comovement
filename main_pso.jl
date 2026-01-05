@@ -99,7 +99,7 @@ end
 
 # PSO Configuration
 N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 100    # Iterations for initial full optimization
+MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
 max_loop = 100
@@ -107,7 +107,7 @@ full_run = true
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
-REPORT_EVERY = 5  # Run reporting every X epochs (set to nothing for only at the end)
+REPORT_EVERY = 2  # Run reporting every X epochs (set to nothing for only at the end)
 
 ############## MAIN OPTIMIZATION ##############
 
@@ -121,21 +121,37 @@ if full_run
 
 
     # First find a reasonable beta using targeted search on regression coefficients
-    range_beta = range(0.0005, stop = 3, length = length_range_beta) 
+    
 
     # Create grid with 3 categories:
     # - i: first beta (β₁)
     # - j: second beta (β₂)  
     # - k: remaining betas (β₃, β₄, β₅) - all share same value
+    # if industry == "aero"
+    #     range_beta = range(0.0005, stop = 3, length = length_range_beta+30) 
+    #     expanding_beta = [
+    #         [i, k,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
+    #         for i in range_beta 
+    #         for k in range_beta
+    #         if i <= j <= k
+    #     ]
+    # else 
+    #     range_beta = range(0.0005, stop = 3, length = length_range_beta) 
+    #     expanding_beta = [
+    #         [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
+    #         for i in range_beta 
+    #         for j in range_beta 
+    #         for k in range_beta
+    #         if i <= j <= k
+    #     ]
+    range_beta = range(0.0005, stop = 3, length = length_range_beta) 
     expanding_beta = [
-        [i, j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-        for i in range_beta 
-        for j in range_beta 
-        for k in range_beta
-        if i <= j <= k
-    ]
-
-
+            [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
+            for i in range_beta 
+            for j in range_beta 
+            for k in range_beta
+            if i <= j <= k
+        ]
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
     A ./= sum(A) 

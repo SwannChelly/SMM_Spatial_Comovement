@@ -1,6 +1,7 @@
 """
 Particle Swarm Optimization integration for SMM calibration - FIXED VERSION
 Key fix: Always includes previous best as a warm start particle for monotonic improvement
+Additional fix: Enforce [0, 1] bounds for agg_labor_share_tech
 """
 
 using Distributed
@@ -299,7 +300,7 @@ function train_stage_pso(
         
         lb = vcat(
             init_beta .* 0.5,
-            0.,
+            0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
             0.1 * (vec(N_rs).+ 0.1)
@@ -307,7 +308,7 @@ function train_stage_pso(
         
         ub = vcat(
             init_beta .* 1.5,
-            1.,
+            1.2*agg_labor_share,
             1.2 .* agg_industry_share,
             A .* 1.2,
             10 * (vec(N_rs).+ 0.1)
@@ -329,8 +330,31 @@ function train_stage_pso(
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
         
         # Build bounds for selected variables
-        lb = vcat([params_dict[Symbol(v)] .*alpha for v in var_list]...)
-        ub = vcat([params_dict[Symbol(v)] ./alpha for v in var_list]...)
+        # For most parameters: [value * alpha, value / alpha]
+        # For agg_labor_share_tech: [value * (1-alpha), value * (1+alpha)] to stay in [0,1]
+        lb_parts = Vector{Float64}[]
+        ub_parts = Vector{Float64}[]
+        
+        for v in var_list
+            val = params_dict[Symbol(v)]
+            if v == "agg_labor_share_tech"
+                # Symmetric percentage bounds: ±alpha around current value
+                lb_v = val .* (1 - alpha)
+                ub_v = val .* (1 + alpha)
+                # Clamp to valid range [0.001, 1.0]
+                lb_v = max.(lb_v, 0.001)
+                ub_v = min.(ub_v, 1.0)
+            else
+                # Standard multiplicative bounds
+                lb_v = val .* alpha
+                ub_v = val ./ alpha
+            end
+            push!(lb_parts, isa(lb_v, Number) ? [lb_v] : lb_v)
+            push!(ub_parts, isa(ub_v, Number) ? [ub_v] : ub_v)
+        end
+        
+        lb = vcat(lb_parts...)
+        ub = vcat(ub_parts...)
         
         # Check if beta is being optimized
         beta_constraint = "beta" in var_list
