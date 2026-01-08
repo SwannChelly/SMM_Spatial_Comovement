@@ -146,7 +146,7 @@ if full_run
     #     ]
     range_beta = range(0.0005, stop = 3, length = length_range_beta) 
     expanding_beta = [
-            [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
+            [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
             for i in range_beta 
             for j in range_beta 
             for k in range_beta
