@@ -31,8 +31,14 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 ############## Load Parameters #################
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
+n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
+if !(n_coef in [4, 5])
+    error("n_coef must be 4 or 5, got: $n_coef")
+end
+println("Using $n_coef regression coefficients (reg_coef_$n_coef.npy)")
+
 input_folder = "./baseline_"*industry
-output_folder = "./reporting_"*industry
+output_folder = "./reporting_"*industry*"_coef"*string(n_coef)
 mkpath(output_folder) 
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
@@ -74,8 +80,8 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
 @everywhere const emp_pi_r_full = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_pi_r = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end])
-@everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef.npy")))
-@everywhere const N_beta = $(length(reg_coef))
+@everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy")))
+@everywhere const N_beta = $(length(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))))
 empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)   
 empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_moments_local))
@@ -103,7 +109,7 @@ MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
 max_loop = 100
-full_run = true
+full_run = false
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
@@ -145,13 +151,23 @@ if full_run
     #         if i <= j <= k
     #     ]
     range_beta = range(0.0005, stop = 3, length = length_range_beta) 
-    expanding_beta = [
-            [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-            for i in range_beta 
-            for j in range_beta 
-            for k in range_beta
-            if i <= j <= k
-        ]
+    if n_coef == 4
+        expanding_beta = [
+                [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=k
+                for i in range_beta 
+                for j in range_beta 
+                for k in range_beta
+                if i <= j <= k
+            ]
+    elseif n_coef == 5
+        expanding_beta = [
+                [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
+                for i in range_beta 
+                for j in range_beta 
+                for k in range_beta
+                if i <= j <= k
+            ]
+    end
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
     A ./= sum(A) 
