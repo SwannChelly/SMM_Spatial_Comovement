@@ -6,30 +6,29 @@
 # productivity shocks to generate time series variation for regression analysis.
 #
 # ═══════════════════════════════════════════════════════════════════════════════
-# NEW SIMULATION SETUP
+# SHOCK MODELS
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Downstream productivity shocks:
-#   A_{drt} = A_{dr} × exp(z_{dr,t})
-#   z_{dr,t} follows AR(1) with parameters (ρ_d, σ_d)
-#   Shocks are i.i.d. across regions but AR(1) over time
+# MODEL 1: UNIVARIATE (Original)
+#   z_{r,t} = ρ × z_{r,t-1} + u_{r,t}
+#   u_{r,t} ~ N(0, σ_d²) i.i.d. across regions
+#   - Same persistence ρ for all regions
+#   - Independent shocks across regions
+#
+# MODEL 2: MULTIVARIATE (New)
+#   z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}
+#   u_t ~ N(0, Σ)
+#   - Region-specific persistence ρ_r
+#   - Correlated innovations across regions via Σ
+#
+# ═══════════════════════════════════════════════════════════════════════════════
 #
 # Under sticky prices:
 #   d ln x_{d,t} = Σ_r w_r^d × d ln x_{dr,t}  (aggregate downstream)
 #   d ln x_{dr,t} = z_{dr,t}                   (regional downstream)
-#   where w_r^d = share of downstream firm in r in total downstream sales
 #
 # Supplier sales evolution:
 #   d ln x_{i,t} = a_{di}^D × Σ_r a_{rdi}^D × d ln x_{drt} + (1 - a_{di}^D) × d ln x_{oi,t}
-#
-# Where:
-#   a_{rdi}^D = share of supplier i's sales to downstream r in total sales to downstream
-#             (computed from calibrated model: firm_expenditure_shares)
-#   a_{di}^D  = share of supplier i's total sales going to downstream industry
-#             (drawn from empirical distribution by sector from CSV file)
-#   d ln x_{oi,t} = sales growth of "other customer" (i.i.d. with variance σ_{sr'})
-#
-# Each supplier (ρ, s, l) has a different "other customer" with i.i.d. shocks.
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -45,31 +44,114 @@ using CategoricalArrays
 using Statistics
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONFIGURATION STRUCTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""
+    ShockModel
+
+Enum-like type to specify which shock model to use.
+"""
+@enum ShockModel begin
+    UNIVARIATE   # Original: same ρ, i.i.d. across regions
+    MULTIVARIATE # New: region-specific ρ_r, correlated Σ
+end
+
+
 """
     SimulationConfig
 
 Configuration for the untargeted moments simulation.
+
+# Fields
+- `T_periods`: Number of time periods (quarters)
+- `sigma_d`: Std of downstream AR(1) shocks (univariate only)
+- `rho_d`: AR(1) persistence for downstream (univariate only)
+- `seed`: Random seed
+- `shock_model`: Which shock model to use (UNIVARIATE or MULTIVARIATE)
 """
 struct SimulationConfig
-    T_periods::Int          # Number of time periods (quarters)
-    sigma_d::Float64        # Std of downstream AR(1) shocks
-    rho_d::Float64          # AR(1) persistence for downstream
-    seed::Int               # Random seed
+    T_periods::Int
+    sigma_d::Float64        # Used only for UNIVARIATE
+    rho_d::Float64          # Used only for UNIVARIATE
+    seed::Int
+    shock_model::ShockModel
 end
 
-# Default configuration: 36 quarters (9 years)
-const DEFAULT_CONFIG = SimulationConfig(36, 0.05, -0.15, 42)
+# Constructor with default shock model (backward compatible)
+SimulationConfig(T_periods, sigma_d, rho_d, seed) = 
+    SimulationConfig(T_periods, sigma_d, rho_d, seed, UNIVARIATE)
 
+# Default configuration
+const DEFAULT_CONFIG = SimulationConfig(36, 0.05, -0.15, 42, UNIVARIATE)
+
+
+"""
+    MultivariateShockParams
+
+Parameters for the multivariate shock model.
+
+# Fields
+- `rho_r`: Vector of region-specific persistence parameters (R,)
+- `Sigma`: Cross-regional covariance matrix of innovations (R, R)
+"""
+struct MultivariateShockParams
+    rho_r::Vector{Float64}
+    Sigma::Matrix{Float64}
+end
+
+
+"""
+    load_multivariate_params(input_folder)
+
+Load multivariate shock parameters from .npy files.
+
+Expected files:
+- rho_r.npy: Region-specific persistence (R,)
+- Sigma_innovations.npy: Covariance matrix (R, R)
+"""
+function load_multivariate_params(input_folder::String)
+    rho_path = joinpath(input_folder, "rho_r.npy")
+    sigma_path = joinpath(input_folder, "Sigma_innovations.npy")
+    
+    if !isfile(rho_path)
+        error("Multivariate params file not found: $rho_path")
+    end
+    if !isfile(sigma_path)
+        error("Multivariate params file not found: $sigma_path")
+    end
+    
+    rho_r = NPZ.npzread(rho_path)
+    Sigma = NPZ.npzread(sigma_path)
+    
+    # Ensure Sigma is positive definite
+    eigenvalues = eigvals(Symmetric(Sigma))
+    if minimum(eigenvalues) < 0
+        @warn "Sigma not positive definite, adding ridge"
+        Sigma = Sigma + abs(minimum(eigenvalues)) * 1.01 * I
+    end
+    
+    println("  Loaded multivariate shock parameters:")
+    println("    R = $(length(rho_r))")
+    println("    ρ_r range: [$(round(minimum(rho_r), digits=3)), $(round(maximum(rho_r), digits=3))]")
+    println("    ρ_r mean: $(round(mean(rho_r), digits=3))")
+    println("    Σ diagonal mean: $(round(mean(diag(Sigma)), digits=6))")
+    println("    Σ off-diagonal mean: $(round(mean(Sigma[.!I(size(Sigma,1))]), digits=6))")
+    
+    return MultivariateShockParams(vec(rho_r), Sigma)
+end
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXPOSURE DISTRIBUTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
 """
     load_exposure_distribution(input_folder)
 
 Load the empirical distribution of a_{di}^D (share of sales to downstream industry)
 from CSV file share_dist.csv with columns: A129 (sector as string), PartCa (exposure share).
-
-The sectors (A129) are sorted alphabetically and assigned integer indices (1, 2, 3, ...).
-
-Returns a Dict: sector_index (Int) => Vector of exposure values
 """
 function load_exposure_distribution(input_folder)
     csv_path = joinpath(input_folder, "share_dist.csv")
@@ -81,18 +163,13 @@ function load_exposure_distribution(input_folder)
     
     df = CSV.read(csv_path, DataFrame)
     
-    # Ensure columns exist
     if !("A129" in names(df)) || !("PartCa" in names(df))
         error("CSV must have columns 'A129' (sector) and 'PartCa' (exposure)")
     end
     
-    # Convert A129 to string if not already
     df.A129 = string.(df.A129)
-    
-    # Sort by A129 (alphabetically)
     sort!(df, :A129)
     
-    # Get unique sectors and create mapping to integers
     unique_sectors = sort(unique(df.A129))
     sector_to_int = Dict(s => i for (i, s) in enumerate(unique_sectors))
     
@@ -101,7 +178,6 @@ function load_exposure_distribution(input_folder)
         println("    $s -> $i")
     end
     
-    # Build dictionary: sector_index => vector of exposures
     exposure_by_sector = Dict{Int, Vector{Float64}}()
     
     for row in eachrow(df)
@@ -128,8 +204,6 @@ end
     draw_exposures(exposure_by_sector, S_local, R_local, N_rho_local; seed=42)
 
 Draw a_{di}^D for each supplier from the empirical distribution of their sector.
-
-Returns: Matrix (N_rho × S × R) of exposure values a_{di}^D ∈ [0, 1]
 """
 function draw_exposures(exposure_by_sector, S_local, R_local, N_rho_local; seed=42)
     
@@ -139,7 +213,6 @@ function draw_exposures(exposure_by_sector, S_local, R_local, N_rho_local; seed=
     
     for s in 1:S_local
         if exposure_by_sector !== nothing && haskey(exposure_by_sector, s)
-            # Draw from empirical distribution
             emp_dist = exposure_by_sector[s]
             for l in 1:R_local
                 for rho in 1:N_rho_local
@@ -147,10 +220,9 @@ function draw_exposures(exposure_by_sector, S_local, R_local, N_rho_local; seed=
                 end
             end
         else
-            # Fallback: uniform distribution
             for l in 1:R_local
                 for rho in 1:N_rho_local
-                    a_d_D[rho, s, l] = rand() * 0.8 + 0.1  # Uniform [0.1, 0.9]
+                    a_d_D[rho, s, l] = rand() * 0.8 + 0.1
                 end
             end
         end
@@ -165,29 +237,17 @@ end
 
 Compute a_{rdi}^D: share of supplier i's sales to downstream region r 
 in total sales to downstream industry.
-
-From model_CP.jl:
-  firm_expenditure_shares[ρ, s, l, r] = share of downstream r's total cost going to (ρ,s,l)
-  Total sales of (ρ,s,l) to r = firm_expenditure_shares[ρ,s,l,r] × total_cost_r
-  
-  a_{rdi}^D = sales_to_r / Σ_{r'} sales_to_{r'}
-
-Returns: Array (N_rho × S × R_upstream × R_downstream) of shares
-         Sum over r_downstream = 1 for each supplier
 """
 function compute_a_rdi_D(network)
     
-    exp_shares = network.firm_expenditure_shares  # (N_rho, S, l, r)
-    Y_r = network.Y_r                              # Baseline downstream sales
-    mu = network.mu                                # Inverse markup
+    exp_shares = network.firm_expenditure_shares
+    Y_r = network.Y_r
+    mu = network.mu
     
     N_rho_local, S_local, R_local, _ = size(exp_shares)
     
-    # Compute total cost by region: total_cost_r = μ × Y_r
     total_cost = mu .* Y_r
     
-    # Sales from supplier (ρ,s,l) to downstream r
-    # sales[ρ,s,l,r] = exp_shares[ρ,s,l,r] × total_cost[r]
     sales_to_downstream = zeros(N_rho_local, S_local, R_local, R_local)
     
     for r in 1:R_local
@@ -196,18 +256,16 @@ function compute_a_rdi_D(network)
         end
     end
     
-    # Total sales of supplier (ρ,s,l) to entire downstream industry
-    total_sales_to_downstream = sum(sales_to_downstream, dims=4)  # (N_rho, S, R, 1)
+    total_sales_to_downstream = sum(sales_to_downstream, dims=4)
     
-    # Compute a_{rdi}^D = sales_to_r / total_sales_to_downstream
     a_rdi_D = zeros(N_rho_local, S_local, R_local, R_local)
     
-    for l in 1:R_local      # Upstream region
+    for l in 1:R_local
         for s in 1:S_local
             for rho in 1:N_rho_local
                 total = total_sales_to_downstream[rho, s, l, 1]
                 if total > 1e-12
-                    for r in 1:R_local  # Downstream region
+                    for r in 1:R_local
                         a_rdi_D[rho, s, l, r] = sales_to_downstream[rho, s, l, r] / total
                     end
                 end
@@ -219,31 +277,32 @@ function compute_a_rdi_D(network)
 end
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SHOCK GENERATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
 """
-    generate_downstream_shocks(R_local, T, config)
+    generate_downstream_shocks_univariate(R_local, T, config)
 
-Generate regional downstream productivity shocks z_{dr,t}.
+Generate regional downstream shocks using UNIVARIATE model.
 
-Shock structure:
-- ACROSS REGIONS: i.i.d. at each time t from same distribution
-- OVER TIME: AR(1) process per region: z_{dr,t} = ρ × z_{dr,t-1} + ε_{r,t}
+Model:
+    z_{r,t} = ρ × z_{r,t-1} + u_{r,t}
+    u_{r,t} ~ N(0, σ²) i.i.d. across regions
 
-Returns: Matrix (R × T) of log shocks z_{dr,t}
-         d ln x_{dr,t} = z_{dr,t} (under sticky prices)
+Returns: Matrix (R × T) of log shocks z_{r,t}
 """
-function generate_downstream_shocks(R_local, T, config::SimulationConfig)
+function generate_downstream_shocks_univariate(R_local, T, config::SimulationConfig)
     
     Random.seed!(config.seed)
     
-    # Innovation std (ensures unconditional std of z equals sigma_d)
     innovation_std = config.sigma_d * sqrt(1 - config.rho_d^2)
     
-    # Draw ALL innovations at once: i.i.d. across regions and time
+    # i.i.d. innovations across regions and time
     innovations = randn(R_local, T) * innovation_std
     
-    # AR(1) process in logs
     z = zeros(R_local, T)
-    z[:, 1] = randn(R_local) * config.sigma_d  # Initial from unconditional distribution
+    z[:, 1] = randn(R_local) * config.sigma_d
     
     for t in 2:T
         z[:, t] = config.rho_d * z[:, t-1] + innovations[:, t]
@@ -254,37 +313,105 @@ end
 
 
 """
+    generate_downstream_shocks_multivariate(R_local, T, params, seed)
+
+Generate regional downstream shocks using MULTIVARIATE model.
+
+Model:
+    z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}
+    u_t ~ N(0, Σ)
+
+Where:
+- ρ_r: region-specific persistence
+- Σ: cross-regional covariance matrix
+
+Returns: Matrix (R × T) of log shocks z_{r,t}
+"""
+function generate_downstream_shocks_multivariate(
+    R_local::Int, 
+    T::Int, 
+    params::MultivariateShockParams,
+    seed::Int
+)
+    Random.seed!(seed)
+    
+    rho_r = params.rho_r
+    Sigma = params.Sigma
+    
+    # Validate dimensions
+    if length(rho_r) != R_local
+        error("rho_r length ($(length(rho_r))) != R ($R_local)")
+    end
+    if size(Sigma, 1) != R_local || size(Sigma, 2) != R_local
+        error("Sigma size ($(size(Sigma))) != ($R_local, $R_local)")
+    end
+    
+    # Cholesky decomposition for correlated draws
+    L = cholesky(Symmetric(Sigma)).L
+    
+    # Draw correlated innovations: u_t = L × ε_t where ε ~ N(0, I)
+    standard_normals = randn(R_local, T)
+    innovations = L * standard_normals  # (R × T)
+    
+    # Compute unconditional variance for initialization
+    # For AR(1): Var(z_r) = σ²_r / (1 - ρ_r²)
+    # where σ²_r = Σ_{rr}
+    unconditional_std = sqrt.(diag(Sigma) ./ (1 .- rho_r.^2))
+    
+    # Initialize and simulate
+    z = zeros(R_local, T)
+    z[:, 1] = unconditional_std .* randn(R_local)
+    
+    for t in 2:T
+        # z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}
+        z[:, t] = rho_r .* z[:, t-1] + innovations[:, t]
+    end
+    
+    return z
+end
+
+
+"""
+    generate_downstream_shocks(R_local, T, config; multivar_params=nothing)
+
+Main dispatch function for generating downstream shocks.
+
+Uses config.shock_model to determine which model to use.
+"""
+function generate_downstream_shocks(
+    R_local::Int, 
+    T::Int, 
+    config::SimulationConfig;
+    multivar_params::Union{Nothing, MultivariateShockParams} = nothing
+)
+    if config.shock_model == UNIVARIATE
+        return generate_downstream_shocks_univariate(R_local, T, config)
+    elseif config.shock_model == MULTIVARIATE
+        if multivar_params === nothing
+            error("multivar_params required for MULTIVARIATE shock model")
+        end
+        return generate_downstream_shocks_multivariate(R_local, T, multivar_params, config.seed)
+    else
+        error("Unknown shock model: $(config.shock_model)")
+    end
+end
+
+
+"""
     generate_other_customer_shocks(N_rho_local, S_local, R_local, T, sigma_sr; seed=42)
 
 Generate i.i.d. shocks for "other customers" of each supplier.
-
-Each supplier (ρ, s, l) has a different other customer whose sales are i.i.d.
-d ln x_{oi,t} ~ N(0, σ_{sl}²)
-
-where σ_{sl} is the sector-region specific standard deviation loaded from sigma_sr.csv
-
-# Arguments
-- `N_rho_local`: Number of varieties per sector-region
-- `S_local`: Number of sectors
-- `R_local`: Number of regions
-- `T`: Number of time periods
-- `sigma_sr`: Matrix (S × R) of standard deviations, or nothing for default
-- `seed`: Random seed (default 42)
-
-Returns: Array (N_rho × S × R × T) of i.i.d. shocks
 """
 function generate_other_customer_shocks(N_rho_local, S_local, R_local, T, sigma_sr; seed=42)
     
-    Random.seed!(seed + 1000)  # Different seed from downstream shocks
+    Random.seed!(seed + 1000)
     
     shocks = zeros(N_rho_local, S_local, R_local, T)
     
     if sigma_sr === nothing
-        # Use default standard deviation
         default_sigma = 0.17
         shocks = randn(N_rho_local, S_local, R_local, T) * default_sigma
     else
-        # Use sector-region specific standard deviations
         for s in 1:S_local
             for l in 1:R_local
                 sigma = sigma_sr[s, l]
@@ -297,62 +424,44 @@ function generate_other_customer_shocks(N_rho_local, S_local, R_local, T, sigma_
 end
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIMULATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
 """
     simulate_supplier_sales(network, a_d_D, downstream_shocks, other_shocks, config)
 
-Simulate supplier sales growth using the new model:
+Simulate supplier sales growth.
 
-d ln x_{i,t} = a_{di}^D × Σ_r a_{rdi}^D × d ln x_{dr,t} + (1 - a_{di}^D) × d ln x_{oi,t}
-
-# Arguments
-- `network`: Output from solve_network(params, return_firm_level=true)
-- `a_d_D`: Exposure to downstream industry (N_rho × S × R)
-- `downstream_shocks`: Regional downstream shocks z_{dr,t} (R × T)
-- `other_shocks`: Other customer shocks (N_rho × S × R × T)
-- `config`: Simulation configuration
-
-# Returns
-- `d_ln_x_it`: Supplier sales growth (N_rho × S × R × T-1)
-- `d_ln_x_dt`: Aggregate downstream growth (T-1,)
-- `d_ln_x_drt`: Regional downstream growth (R × T-1)
-- `weighted_exposure_it`: Σ_r a_{rdi}^D × d ln x_{dr,t} for each supplier (N_rho × S × R × T-1)
+Model:
+    d ln x_{i,t} = a_{di}^D × Σ_r a_{rdi}^D × d ln x_{dr,t} + (1 - a_{di}^D) × d ln x_{oi,t}
 """
 function simulate_supplier_sales(network, a_d_D, downstream_shocks, other_shocks, config)
     
     R_local, T = size(downstream_shocks)
     N_rho_local, S_local, _ = size(a_d_D)
     
-    # Get baseline downstream sales and compute w_r^d (share of downstream sales)
     Y_r = network.Y_r
-    w_r_d = Y_r ./ sum(Y_r)  # Share of downstream in each region
+    w_r_d = Y_r ./ sum(Y_r)
     
-    # Compute a_{rdi}^D from network
     a_rdi_D, _, _ = compute_a_rdi_D(network)
     
-    # d ln x_{dr,t} = z_{dr,t} (regional downstream growth)
-    # Under sticky prices, sales growth equals productivity shock
-    d_ln_x_drt = downstream_shocks  # (R × T)
+    d_ln_x_drt = downstream_shocks
+    d_ln_x_dt = sum(w_r_d .* d_ln_x_drt, dims=1)[1, :]
     
-    # d ln x_{d,t} = Σ_r w_r^d × d ln x_{dr,t} (aggregate downstream growth)
-    d_ln_x_dt = sum(w_r_d .* d_ln_x_drt, dims=1)[1, :]  # (T,)
-    
-    # Storage for supplier growth
     d_ln_x_it = zeros(N_rho_local, S_local, R_local, T)
     weighted_exposure_it = zeros(N_rho_local, S_local, R_local, T)
     
-    # Compute supplier sales growth
     for t in 1:T
-        for l in 1:R_local      # Upstream region
+        for l in 1:R_local
             for s in 1:S_local
                 for rho in 1:N_rho_local
-                    # Weighted exposure to downstream: Σ_r a_{rdi}^D × d ln x_{dr,t}
                     exposure_term = 0.0
                     for r in 1:R_local
                         exposure_term += a_rdi_D[rho, s, l, r] * d_ln_x_drt[r, t]
                     end
                     weighted_exposure_it[rho, s, l, t] = exposure_term
                     
-                    # Supplier sales growth
                     a_d = a_d_D[rho, s, l]
                     d_ln_x_it[rho, s, l, t] = a_d * exposure_term + 
                                                (1 - a_d) * other_shocks[rho, s, l, t]
@@ -365,16 +474,14 @@ function simulate_supplier_sales(network, a_d_D, downstream_shocks, other_shocks
 end
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PANEL CONSTRUCTION AND REGRESSION
+# ═══════════════════════════════════════════════════════════════════════════════
+
 """
     build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, network, a_d_D)
 
 Build panel dataset and run Table 2 regressions.
-
-# Regression specifications:
-  reg1: d ln x_{i,t} = α_i + β × downstream_growth + ε
-  reg2: d ln x_{i,t} = α_i + γ_{st} + β × downstream_growth + ε
-
-Empirical target (Aerospace): 0.112
 """
 function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, network, a_d_D)
     
@@ -383,7 +490,6 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
     
     println("\nBuilding panel dataset (suppliers only)...")
     
-    # Build panel - ONLY suppliers (firms with linkages > 0)
     firm_ids = Int[]
     sector_ids = Int[]
     region_ids = Int[]
@@ -401,7 +507,6 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
             for rho in 1:N_rho_local
                 firm_id += 1
                 
-                # Only include suppliers
                 if linkages[rho, s, l] == 0
                     continue
                 end
@@ -433,24 +538,19 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
         a_d_D = exposure_to_downstream
     )
     
-    # Add sales growth assuming no other customer (a_d_D = 1)
-    # d ln x_{i,t} = 1 × weighted_exposure + 0 × other_shock = weighted_exposure
     panel_df.d_ln_x_no_other = panel_df.weighted_exposure
     
     println("  Observations: $(nrow(panel_df))")
     println("  Unique suppliers: $n_suppliers")
     println("  Periods: $T")
     
-    # ─────────────────────────────────────────────────────────────────────────
-    # Regressions
-    # ─────────────────────────────────────────────────────────────────────────
     println("\n" * "="^60)
     println("Table 2 Regression Results")
     println("="^60)
     
     results = Dict()
     
-    # Specification 1: Firm FE, downstream_growth
+    # Specification 1
     println("\nSpecification 1: Firm FE")
     println("  d ln x_{i,t} = α_i + β × downstream_growth + ε")
     try
@@ -480,7 +580,7 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
         results["reg1"] = nothing
     end
     
-    # Specification 2: Firm FE, weighted_exposure
+    # Specification 2
     println("\nSpecification 2: Firm FE (weighted exposure)")
     println("  d ln x_{i,t} = α_i + β × weighted_exposure + ε")
     try
@@ -510,8 +610,7 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
         results["reg2"] = nothing
     end
     
-    # Specification 3: No other customer (a_d_D = 1), downstream_growth
-    # Sales growth = weighted_exposure when firms have no other customer
+    # Specification 3
     println("\nSpecification 3: No other customer (a_d_D = 1)")
     println("  d ln x_{i,t}^{no other} = α_i + β × downstream_growth + ε")
     try
@@ -545,19 +644,21 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
 end
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN VALIDATION FUNCTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
 """
-    run_untargeted_validation(params; config=DEFAULT_CONFIG, empirical=nothing, input_folder=nothing)
+    run_untargeted_validation(params; config, empirical, input_folder, multivar_params)
 
 Main function: validate calibrated model against Table 2.
 
-Uses globals from main_pso.jl: S, R, N_downstream_per_region, regional_wages,
-w_rs, distances, DistBin, N_rho, theta, lambda, nu, nu_s, epsilon, sigma_sr
-
 # Arguments
 - `params`: Calibrated parameter vector
-- `config`: SimulationConfig
+- `config`: SimulationConfig (includes shock_model field)
 - `empirical`: Dict with empirical coefficients for comparison
 - `input_folder`: Path to folder containing share_dist.csv
+- `multivar_params`: MultivariateShockParams (required if config.shock_model == MULTIVARIATE)
 
 # Returns
 Dict with network, panel_df, regression_results, config, shocks, exposures
@@ -566,17 +667,28 @@ function run_untargeted_validation(
     params;
     config::SimulationConfig = DEFAULT_CONFIG,
     empirical = nothing,
-    input_folder = nothing
+    input_folder = nothing,
+    multivar_params::Union{Nothing, MultivariateShockParams} = nothing
 )
+    
+    model_name = config.shock_model == UNIVARIATE ? "UNIVARIATE" : "MULTIVARIATE"
     
     println("\n" * "="^70)
     println("UNTARGETED MOMENT VALIDATION: Table 2 Regression")
+    println("Shock Model: $model_name")
     println("="^70)
-    println("Config: T=$(config.T_periods), σ_d=$(config.sigma_d), ρ_d=$(config.rho_d)")
+    println("Config: T=$(config.T_periods), seed=$(config.seed)")
     
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 1: Solve network using model_CP.jl
-    # ─────────────────────────────────────────────────────────────────────────
+    if config.shock_model == UNIVARIATE
+        println("  σ_d=$(config.sigma_d), ρ_d=$(config.rho_d)")
+    else
+        if multivar_params !== nothing
+            println("  ρ_r mean=$(round(mean(multivar_params.rho_r), digits=3))")
+            println("  Σ diagonal mean=$(round(mean(diag(multivar_params.Sigma)), digits=6))")
+        end
+    end
+    
+    # Step 1: Solve network
     println("\n[Step 1] Solving baseline network (fixed structure)...")
     network = solve_network(params, return_firm_level=true)
     
@@ -588,9 +700,7 @@ function run_untargeted_validation(
     S_local = size(network.firm_expenditure_shares, 2)
     R_local = size(network.firm_expenditure_shares, 3)
     
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 2: Load exposure distribution and draw a_{di}^D
-    # ─────────────────────────────────────────────────────────────────────────
+    # Step 2: Draw exposures
     println("\n[Step 2] Drawing exposure to downstream (a_{di}^D)...")
     
     exposure_by_sector = nothing
@@ -599,32 +709,38 @@ function run_untargeted_validation(
     end
     
     a_d_D = draw_exposures(exposure_by_sector, S_local, R_local, N_rho_local; seed=config.seed)
-    
-    # Compute a_{rdi}^D from network
     a_rdi_D, sales_to_downstream, total_sales = compute_a_rdi_D(network)
     
     println("  a_{di}^D stats: mean=$(round(mean(a_d_D), digits=3)), " *
             "std=$(round(std(a_d_D), digits=3))")
     
-    # ─────────────────────────────────────────────────────────────────────────
     # Step 3: Generate shocks
-    # ─────────────────────────────────────────────────────────────────────────
-    println("\n[Step 3] Generating shocks...")
-    println("  Using global σ_{sr} matrix of size $(size(sigma_sr))")
+    println("\n[Step 3] Generating shocks ($model_name)...")
     
-    # Regional downstream productivity shocks (AR(1))
-    downstream_shocks = generate_downstream_shocks(R_local, config.T_periods, config)
+    if config.shock_model == MULTIVARIATE && multivar_params === nothing
+        # Try to load from input_folder
+        if input_folder !== nothing
+            println("  Loading multivariate params from: $input_folder")
+            multivar_params = load_multivariate_params(input_folder)
+        else
+            error("multivar_params required for MULTIVARIATE model")
+        end
+    end
+    
+    # Generate downstream shocks
+    downstream_shocks = generate_downstream_shocks(
+        R_local, config.T_periods, config; 
+        multivar_params=multivar_params
+    )
     println("  Downstream shock std (realized): $(round(std(downstream_shocks), digits=4))")
     
-    # Other customer shocks (i.i.d. with sector-region specific σ_{sr} from global)
+    # Other customer shocks
     other_shocks = generate_other_customer_shocks(
         N_rho_local, S_local, R_local, config.T_periods, sigma_sr; seed=config.seed
     )
     println("  Other customer shock std (overall): $(round(std(other_shocks), digits=4))")
     
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 4: Simulate supplier sales
-    # ─────────────────────────────────────────────────────────────────────────
+    # Step 4: Simulate
     println("\n[Step 4] Simulating supplier sales...")
     
     d_ln_x_it, d_ln_x_dt, d_ln_x_drt, weighted_exposure_it = simulate_supplier_sales(
@@ -634,15 +750,12 @@ function run_untargeted_validation(
     println("  Supplier sales growth std: $(round(std(d_ln_x_it), digits=4))")
     println("  Aggregate downstream growth std: $(round(std(d_ln_x_dt), digits=4))")
     
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 5: Build panel and regress
-    # ─────────────────────────────────────────────────────────────────────────
+    # Step 5: Regress
     println("\n[Step 5] Running regressions...")
     
     panel_df, reg_results = build_panel_and_regress(
         d_ln_x_it, d_ln_x_dt, weighted_exposure_it, network, a_d_D
     )
-
     
     return Dict(
         "network" => network,
@@ -652,6 +765,7 @@ function run_untargeted_validation(
         "downstream_shocks" => downstream_shocks,
         "other_shocks" => other_shocks,
         "a_d_D" => a_d_D,
-        "a_rdi_D" => a_rdi_D
+        "a_rdi_D" => a_rdi_D,
+        "shock_model" => model_name
     )
 end

@@ -30,15 +30,15 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
-n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
+n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
 end
 println("Using $n_coef regression coefficients (reg_coef_$n_coef.npy)")
 
 input_folder = "./baseline_"*industry
-output_folder = "./reporting_"*industry*"_coef"*string(n_coef)
+output_folder = "./reporting_"*industry
 mkpath(output_folder) 
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
@@ -109,7 +109,7 @@ MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
 max_loop = 100
-full_run = false
+full_run = true
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
@@ -476,9 +476,9 @@ if full_run
     run_reporting(output_folder, max_loop)
 end
 
-
 ############## POST-HOC ANALYSIS ##############
-
+# Replace the existing POST-HOC ANALYSIS section in main_pso.jl with this code
+# This runs validation with BOTH shock models and saves both panels
 
 # Find the last stage folder dynamically
 last_stage_folder = find_last_stage_folder(output_folder)
@@ -488,18 +488,69 @@ println("="^70)
 println("Loading parameters from: $last_stage_folder")
 
 best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))
-# Handle matrix vs vector
 if ndims(best_params) > 1
     best_params = best_params[:, 1]
 end
-results = validate_table2(best_params, industry, T_periods=36)
-CSV.write(joinpath(output_folder,"simulated_panel.csv"), results["panel_df"])
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Run validation with BOTH shock models
+# ═══════════════════════════════════════════════════════════════════════════════
 
+println("\n" * "="^70)
+println("RUNNING UNTARGETED VALIDATION (BOTH MODELS)")
+println("="^70)
+
+# Model 1: UNIVARIATE (original)
+println("\n>>> UNIVARIATE SHOCK MODEL <<<")
+results_univariate = validate_table2(best_params, industry, 
+    shock_model=UNIVARIATE, T_periods=36)
+panel_df = results_univariate["panel_df"]
+CSV.write(joinpath(output_folder, "simulated_panel.csv"), panel_df)
+println("Saved: simulated_panel.csv")
+
+# Model 2: MULTIVARIATE (new - if parameters exist)
+results_multivariate = nothing
+panel_df_multivar = nothing
+
+if isfile(joinpath(input_folder, "rho_r.npy")) && isfile(joinpath(input_folder, "Sigma_innovations.npy"))
+    println("\n>>> MULTIVARIATE SHOCK MODEL <<<")
+    results_multivariate = validate_table2(best_params, industry, 
+        shock_model=MULTIVARIATE, T_periods=36)
+    panel_df_multivar = results_multivariate["panel_df"]
+    CSV.write(joinpath(output_folder, "simulated_panel_multivar.csv"), panel_df_multivar)
+    println("Saved: simulated_panel_multivar.csv")
+else
+    println("\n>>> MULTIVARIATE MODEL: Skipped <<<")
+    println("  Missing rho_r.npy and/or Sigma_innovations.npy in $input_folder")
+    println("  To enable: run extract_shock_parameters.py on your downstream data")
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Print comparison
+# ═══════════════════════════════════════════════════════════════════════════════
+
+println("\n" * "="^70)
+println("REGRESSION COMPARISON")
+println("="^70)
+
+println("\nReg 1 (β on aggregate downstream growth):")
+if results_univariate["regression_results"]["reg1"] !== nothing
+    r = results_univariate["regression_results"]["reg1"]
+    println("  UNIVARIATE:   β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
+end
+if results_multivariate !== nothing && results_multivariate["regression_results"]["reg1"] !== nothing
+    r = results_multivariate["regression_results"]["reg1"]
+    println("  MULTIVARIATE: β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Solve network and save auxiliary outputs
+# ═══════════════════════════════════════════════════════════════════════════════
 
 network = solve_network(best_params, return_firm_level=false)
-panel_df = results["panel_df"]
+folder = output_folder * "/"
 
+# w_srd_r: share of supplier sales to each downstream region
 function get_w_srd_r(params)
     net = solve_network(params, return_firm_level=false)
     w_srd_r = zeros(S, R, R)
@@ -507,7 +558,6 @@ function get_w_srd_r(params)
     
     for s in 1:S
         for r_prime in 1:R  # Upstream region
-            # Total sales from (s, r') to all downstream regions
             total_downstream_sales = sum(X_lrs[r_prime, :, s])
             
             if total_downstream_sales > 1e-10
@@ -520,17 +570,106 @@ function get_w_srd_r(params)
     return w_srd_r
 end
 
-folder = output_folder * "/"  # Output folder
 w_srd_r = get_w_srd_r(best_params)
 npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-### To display map of number of suppliers
-
+# Supplier network
 network = solve_network(best_params, return_firm_level=true)
 firm_expenditure_shares = network[7]
-links = firm_expenditure_shares .!= 0  # N_rho, S, l, r
+links = firm_expenditure_shares .!= 0
 suppliers = reshape(sum(links, dims=4), S, N_rho, R) .!= 0
+
+# Save UNIVARIATE suppliers
 npzwrite(joinpath(folder, "suppliers.npy"), suppliers)
+
+# Save MULTIVARIATE suppliers (same network, different label for clarity)
+if results_multivariate !== nothing
+    npzwrite(joinpath(folder, "suppliers_multivar.npy"), suppliers)
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Save shock model comparison summary
+# ═══════════════════════════════════════════════════════════════════════════════
+
+open(joinpath(folder, "shock_model_comparison.txt"), "w") do f
+    println(f, "="^70)
+    println(f, "SHOCK MODEL COMPARISON SUMMARY")
+    println(f, "="^70)
+    println(f, "Industry: $industry")
+    println(f, "")
+    
+    println(f, "UNIVARIATE MODEL:")
+    println(f, "  z_{r,t} = ρ × z_{r,t-1} + u_{r,t}")
+    println(f, "  u_{r,t} ~ N(0, σ_d²) i.i.d. across regions")
+    println(f, "  ρ = $(round(results_univariate["config"].rho_d, digits=3))")
+    println(f, "  σ_d = $(round(results_univariate["config"].sigma_d, digits=3))")
+    println(f, "")
+    
+    if results_multivariate !== nothing
+        println(f, "MULTIVARIATE MODEL:")
+        println(f, "  z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}")
+        println(f, "  u_t ~ N(0, Σ)")
+        # Note: would need to access multivar_params here for details
+        println(f, "  (Region-specific persistence and correlated innovations)")
+        println(f, "")
+    end
+    
+    println(f, "-"^70)
+    println(f, "REGRESSION RESULTS (β on aggregate downstream growth):")
+    println(f, "-"^70)
+    
+    if results_univariate["regression_results"]["reg1"] !== nothing
+        r = results_univariate["regression_results"]["reg1"]
+        println(f, "UNIVARIATE:")
+        println(f, "  β = $(round(r["beta"], digits=4))")
+        println(f, "  SE = $(round(r["beta_se"], digits=4))")
+        println(f, "  95% CI = [$(round(r["ci_lower"], digits=4)), $(round(r["ci_upper"], digits=4))]")
+        println(f, "  R² = $(round(r["R2"], digits=4))")
+        println(f, "  N = $(r["N"])")
+        println(f, "")
+    end
+    
+    if results_multivariate !== nothing && results_multivariate["regression_results"]["reg1"] !== nothing
+        r = results_multivariate["regression_results"]["reg1"]
+        println(f, "MULTIVARIATE:")
+        println(f, "  β = $(round(r["beta"], digits=4))")
+        println(f, "  SE = $(round(r["beta_se"], digits=4))")
+        println(f, "  95% CI = [$(round(r["ci_lower"], digits=4)), $(round(r["ci_upper"], digits=4))]")
+        println(f, "  R² = $(round(r["R2"], digits=4))")
+        println(f, "  N = $(r["N"])")
+        println(f, "")
+    end
+    
+    # Empirical comparison
+    if industry == "aero"
+        println(f, "-"^70)
+        println(f, "EMPIRICAL TARGET (Table 2, Col 5): 0.112")
+        println(f, "-"^70)
+        
+        if results_univariate["regression_results"]["reg1"] !== nothing
+            beta = results_univariate["regression_results"]["reg1"]["beta"]
+            diff = abs(beta - 0.112) / 0.112 * 100
+            println(f, "UNIVARIATE:   Relative difference = $(round(diff, digits=1))%")
+        end
+        
+        if results_multivariate !== nothing && results_multivariate["regression_results"]["reg1"] !== nothing
+            beta = results_multivariate["regression_results"]["reg1"]["beta"]
+            diff = abs(beta - 0.112) / 0.112 * 100
+            println(f, "MULTIVARIATE: Relative difference = $(round(diff, digits=1))%")
+        end
+    end
+end
 
 println("\nPost-hoc analysis complete for industry: $industry")
 println("Results saved to: $folder")
+println("\nOutput files:")
+println("  - simulated_panel.csv (UNIVARIATE)")
+if results_multivariate !== nothing
+    println("  - simulated_panel_multivar.csv (MULTIVARIATE)")
+end
+println("  - suppliers.npy")
+if results_multivariate !== nothing
+    println("  - suppliers_multivar.npy")
+end
+println("  - w_srd_r.npy")
+println("  - shock_model_comparison.txt")

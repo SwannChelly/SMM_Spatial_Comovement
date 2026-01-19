@@ -40,7 +40,7 @@ if [ "$N_COEF" != "4" ] && [ "$N_COEF" != "5" ]; then
     exit 1
 fi
 
-REPORTING_FOLDER="reporting_${INDUSTRY}_coef${N_COEF}"
+REPORTING_FOLDER="reporting_${INDUSTRY}"
 LOG_FILE="${REPORTING_FOLDER}/logs.log"
 JULIA_SCRIPT="SMM_Spatial_Comovement/main_pso.jl"
 
