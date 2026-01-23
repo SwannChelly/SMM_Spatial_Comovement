@@ -1,34 +1,43 @@
-##### Untargeted Moments: Reproduce Table 2 Regression #####
-# Author: Swann Chelly
+##### Untargeted Moments: Reproduce Table 2 Regression (CORRECTED) #####
+# Author: Swann Chelly (corrected by Claude)
 # Purpose: Validate calibrated model by reproducing Table 2 regression
 #
-# This file uses solve_network() from model_CP.jl and simulates
-# productivity shocks to generate time series variation for regression analysis.
+# CORRECTIONS MADE:
+# 1. Fixed undefined `sigma_sr` variable
+# 2. Improved multivariate initialization to use FULL unconditional covariance
+# 3. Added univariate parameter loading from Python exports
+# 4. Clarified conditional vs unconditional variance terminology
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# VARIANCE TERMINOLOGY
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# CONDITIONAL (Innovation) Variance:
+#   Var(u_t) = Sigma                    (what we estimate from residuals)
+#
+# UNCONDITIONAL (Stationary) Variance:
+#   Var(z_t) = Gamma_0                  (long-run variance when process is stationary)
+#   [Gamma_0]_{rs} = Sigma_{rs} / (1 - rho_r * rho_s)
+#
+# For simulation:
+#   - Use INNOVATION variance (Sigma) for the noise term
+#   - Use UNCONDITIONAL variance (Gamma_0) for initialization
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 # SHOCK MODELS
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # MODEL 1: UNIVARIATE (Original)
-#   z_{r,t} = ρ × z_{r,t-1} + u_{r,t}
-#   u_{r,t} ~ N(0, σ_d²) i.i.d. across regions
-#   - Same persistence ρ for all regions
+#   z_{r,t} = rho × z_{r,t-1} + u_{r,t}
+#   u_{r,t} ~ N(0, sigma_innovation^2) i.i.d. across regions
+#   - Same persistence rho for all regions
 #   - Independent shocks across regions
 #
 # MODEL 2: MULTIVARIATE (New)
-#   z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}
-#   u_t ~ N(0, Σ)
-#   - Region-specific persistence ρ_r
-#   - Correlated innovations across regions via Σ
-#
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Under sticky prices:
-#   d ln x_{d,t} = Σ_r w_r^d × d ln x_{dr,t}  (aggregate downstream)
-#   d ln x_{dr,t} = z_{dr,t}                   (regional downstream)
-#
-# Supplier sales evolution:
-#   d ln x_{i,t} = a_{di}^D × Σ_r a_{rdi}^D × d ln x_{drt} + (1 - a_{di}^D) × d ln x_{oi,t}
+#   z_{r,t} = rho_r × z_{r,t-1} + u_{r,t}
+#   u_t ~ N(0, Sigma_innovation)
+#   - Region-specific persistence rho_r
+#   - Correlated innovations across regions via Sigma
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -54,8 +63,8 @@ using Statistics
 Enum-like type to specify which shock model to use.
 """
 @enum ShockModel begin
-    UNIVARIATE   # Original: same ρ, i.i.d. across regions
-    MULTIVARIATE # New: region-specific ρ_r, correlated Σ
+    UNIVARIATE   # Original: same rho, i.i.d. across regions
+    MULTIVARIATE # New: region-specific rho_r, correlated Sigma
 end
 
 
@@ -66,25 +75,30 @@ Configuration for the untargeted moments simulation.
 
 # Fields
 - `T_periods`: Number of time periods (quarters)
-- `sigma_d`: Std of downstream AR(1) shocks (univariate only)
+- `sigma_d`: Unconditional std of downstream AR(1) (univariate only)
 - `rho_d`: AR(1) persistence for downstream (univariate only)
 - `seed`: Random seed
 - `shock_model`: Which shock model to use (UNIVARIATE or MULTIVARIATE)
+- `sigma_other`: Std of "other customer" shocks (default: 0.17)
 """
 struct SimulationConfig
     T_periods::Int
-    sigma_d::Float64        # Used only for UNIVARIATE
+    sigma_d::Float64        # UNCONDITIONAL std (used only for UNIVARIATE)
     rho_d::Float64          # Used only for UNIVARIATE
     seed::Int
     shock_model::ShockModel
+    sigma_other::Float64    # Std for other customer shocks
 end
 
-# Constructor with default shock model (backward compatible)
+# Constructor with default shock model and sigma_other (backward compatible)
 SimulationConfig(T_periods, sigma_d, rho_d, seed) = 
-    SimulationConfig(T_periods, sigma_d, rho_d, seed, UNIVARIATE)
+    SimulationConfig(T_periods, sigma_d, rho_d, seed, UNIVARIATE, 0.17)
+
+SimulationConfig(T_periods, sigma_d, rho_d, seed, shock_model) = 
+    SimulationConfig(T_periods, sigma_d, rho_d, seed, shock_model, 0.17)
 
 # Default configuration
-const DEFAULT_CONFIG = SimulationConfig(36, 0.05, -0.15, 42, UNIVARIATE)
+const DEFAULT_CONFIG = SimulationConfig(36, 0.05, -0.15, 42, UNIVARIATE, 0.17)
 
 
 """
@@ -94,26 +108,70 @@ Parameters for the multivariate shock model.
 
 # Fields
 - `rho_r`: Vector of region-specific persistence parameters (R,)
-- `Sigma`: Cross-regional covariance matrix of innovations (R, R)
+- `Sigma_innovation`: Innovation (conditional) covariance matrix (R, R)
+- `Gamma_unconditional`: Unconditional covariance matrix (R, R) - optional, computed if not provided
 """
 struct MultivariateShockParams
     rho_r::Vector{Float64}
-    Sigma::Matrix{Float64}
+    Sigma_innovation::Matrix{Float64}
+    Gamma_unconditional::Matrix{Float64}
+end
+
+# Constructor that computes Gamma_unconditional from Sigma and rho_r
+function MultivariateShockParams(rho_r::Vector{Float64}, Sigma::Matrix{Float64})
+    R = length(rho_r)
+    Gamma = zeros(R, R)
+    for i in 1:R
+        for j in 1:R
+            denom = 1 - rho_r[i] * rho_r[j]
+            if abs(denom) > 1e-10 && abs(rho_r[i]) < 1 && abs(rho_r[j]) < 1
+                Gamma[i, j] = Sigma[i, j] / denom
+            else
+                Gamma[i, j] = abs(Sigma[i, j]) > 1e-10 ? 1e6 : 0.0
+            end
+        end
+    end
+    return MultivariateShockParams(rho_r, Sigma, Gamma)
+end
+
+
+"""
+    UnivariateShockParams
+
+Parameters for the univariate shock model (loaded from Python).
+
+# Fields
+- `rho`: Pooled AR(1) coefficient
+- `sigma_innovation`: Innovation std (conditional)
+- `sigma_unconditional`: Unconditional std (stationary)
+"""
+struct UnivariateShockParams
+    rho::Float64
+    sigma_innovation::Float64
+    sigma_unconditional::Float64
+end
+
+# Constructor that computes innovation std from unconditional std
+function UnivariateShockParams(rho::Float64, sigma_unconditional::Float64)
+    sigma_innovation = sigma_unconditional * sqrt(1 - rho^2)
+    return UnivariateShockParams(rho, sigma_innovation, sigma_unconditional)
 end
 
 
 """
     load_multivariate_params(input_folder)
 
-Load multivariate shock parameters from .npy files.
+Load multivariate shock parameters from .npy files exported by Python.
 
-Expected files:
+Expected files (from Python export_params_for_julia):
 - rho_r.npy: Region-specific persistence (R,)
-- Sigma_innovations.npy: Covariance matrix (R, R)
+- Sigma_innovations.npy: Innovation covariance matrix (R, R)
+- Gamma_unconditional.npy: Unconditional covariance matrix (R, R) [optional]
 """
 function load_multivariate_params(input_folder::String)
     rho_path = joinpath(input_folder, "rho_r.npy")
     sigma_path = joinpath(input_folder, "Sigma_innovations.npy")
+    gamma_path = joinpath(input_folder, "Gamma_unconditional.npy")
     
     if !isfile(rho_path)
         error("Multivariate params file not found: $rho_path")
@@ -122,24 +180,101 @@ function load_multivariate_params(input_folder::String)
         error("Multivariate params file not found: $sigma_path")
     end
     
-    rho_r = NPZ.npzread(rho_path)
+    rho_r = vec(NPZ.npzread(rho_path))
     Sigma = NPZ.npzread(sigma_path)
     
     # Ensure Sigma is positive definite
-    eigenvalues = eigvals(Symmetric(Sigma))
-    if minimum(eigenvalues) < 0
-        @warn "Sigma not positive definite, adding ridge"
-        Sigma = Sigma + abs(minimum(eigenvalues)) * 1.01 * I
+    Sigma = ensure_psd(Sigma)
+    
+    # Load or compute Gamma_unconditional
+    if isfile(gamma_path)
+        Gamma = NPZ.npzread(gamma_path)
+        # Replace inf/nan with large values
+        Gamma = replace(Gamma, Inf => 1e6, -Inf => -1e6, NaN => 0.0)
+        Gamma = ensure_psd(Gamma)
+        params = MultivariateShockParams(rho_r, Sigma, Gamma)
+    else
+        # Compute from Sigma and rho_r
+        params = MultivariateShockParams(rho_r, Sigma)
     end
     
     println("  Loaded multivariate shock parameters:")
     println("    R = $(length(rho_r))")
-    println("    ρ_r range: [$(round(minimum(rho_r), digits=3)), $(round(maximum(rho_r), digits=3))]")
-    println("    ρ_r mean: $(round(mean(rho_r), digits=3))")
-    println("    Σ diagonal mean: $(round(mean(diag(Sigma)), digits=6))")
-    println("    Σ off-diagonal mean: $(round(mean(Sigma[.!I(size(Sigma,1))]), digits=6))")
+    println("    rho_r range: [$(round(minimum(rho_r), digits=3)), $(round(maximum(rho_r), digits=3))]")
+    println("    rho_r mean: $(round(mean(rho_r), digits=3))")
+    println("    Sigma (innovation) diagonal mean: $(round(mean(diag(Sigma)), digits=6))")
+    println("    Gamma (unconditional) diagonal mean: $(round(mean(diag(params.Gamma_unconditional)), digits=6))")
     
-    return MultivariateShockParams(vec(rho_r), Sigma)
+    return params
+end
+
+
+"""
+    load_univariate_params(input_folder)
+
+Load univariate shock parameters from .npy files exported by Python.
+
+Expected files:
+- rho_univariate.npy: Pooled AR(1) coefficient
+- sigma_unconditional_univariate.npy: Unconditional std
+- sigma_innovation_univariate.npy: Innovation std [optional]
+"""
+function load_univariate_params(input_folder::String)
+    rho_path = joinpath(input_folder, "rho_univariate.npy")
+    sigma_uncond_path = joinpath(input_folder, "sigma_unconditional_univariate.npy")
+    sigma_innov_path = joinpath(input_folder, "sigma_innovation_univariate.npy")
+    
+    if !isfile(rho_path)
+        return nothing  # Univariate params not exported
+    end
+    
+    rho = NPZ.npzread(rho_path)[1]
+    sigma_unconditional = NPZ.npzread(sigma_uncond_path)[1]
+    
+    if isfile(sigma_innov_path)
+        sigma_innovation = NPZ.npzread(sigma_innov_path)[1]
+        params = UnivariateShockParams(rho, sigma_innovation, sigma_unconditional)
+    else
+        params = UnivariateShockParams(rho, sigma_unconditional)
+    end
+    
+    println("  Loaded univariate shock parameters:")
+    println("    rho: $(round(rho, digits=4))")
+    println("    sigma_innovation: $(round(params.sigma_innovation, digits=6))")
+    println("    sigma_unconditional: $(round(sigma_unconditional, digits=6))")
+    
+    return params
+end
+
+
+"""
+    ensure_psd(A)
+
+Ensure matrix is positive semi-definite by adjusting eigenvalues if needed.
+"""
+function ensure_psd(A::Matrix{Float64})::Matrix{Float64}
+    # Make symmetric
+    A_sym = (A + A') / 2
+    
+    # Eigendecomposition
+    eigen_decomp = eigen(Symmetric(A_sym))
+    eigenvalues = eigen_decomp.values
+    eigenvectors = eigen_decomp.vectors
+    
+    # Check if already PSD
+    min_eig = minimum(eigenvalues)
+    if min_eig >= 0
+        return A_sym
+    end
+    
+    # Fix negative eigenvalues
+    @warn "Matrix not positive definite (min eigenvalue: $min_eig), adjusting"
+    eigenvalues_fixed = max.(eigenvalues, 1e-10)
+    
+    # Reconstruct matrix
+    A_psd = eigenvectors * Diagonal(eigenvalues_fixed) * eigenvectors'
+    
+    return (A_psd + A_psd') / 2  # Ensure symmetry
 end
 
 
@@ -282,30 +417,51 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    generate_downstream_shocks_univariate(R_local, T, config)
+    generate_downstream_shocks_univariate(R_local, T, config; uni_params=nothing)
 
 Generate regional downstream shocks using UNIVARIATE model.
 
 Model:
-    z_{r,t} = ρ × z_{r,t-1} + u_{r,t}
-    u_{r,t} ~ N(0, σ²) i.i.d. across regions
+    z_{r,t} = rho × z_{r,t-1} + u_{r,t}
+    u_{r,t} ~ N(0, sigma_innovation^2) i.i.d. across regions
+
+Initialization:
+    z_{r,0} ~ N(0, sigma_unconditional^2)  (stationary distribution)
+
+If `uni_params` is provided (from Python), uses those values.
+Otherwise uses config.sigma_d as UNCONDITIONAL std (backward compatible).
 
 Returns: Matrix (R × T) of log shocks z_{r,t}
 """
-function generate_downstream_shocks_univariate(R_local, T, config::SimulationConfig)
-    
+function generate_downstream_shocks_univariate(
+    R_local::Int, 
+    T::Int, 
+    config::SimulationConfig;
+    uni_params::Union{Nothing, UnivariateShockParams} = nothing
+)
     Random.seed!(config.seed)
     
-    innovation_std = config.sigma_d * sqrt(1 - config.rho_d^2)
+    if uni_params !== nothing
+        # Use params loaded from Python
+        rho = uni_params.rho
+        sigma_innovation = uni_params.sigma_innovation
+        sigma_unconditional = uni_params.sigma_unconditional
+    else
+        # Backward compatible: config.sigma_d is UNCONDITIONAL std
+        rho = config.rho_d
+        sigma_unconditional = config.sigma_d
+        sigma_innovation = sigma_unconditional * sqrt(1 - rho^2)
+    end
     
-    # i.i.d. innovations across regions and time
-    innovations = randn(R_local, T) * innovation_std
+    # i.i.d. innovations with INNOVATION std
+    innovations = randn(R_local, T) * sigma_innovation
     
+    # Initialize from UNCONDITIONAL (stationary) distribution
     z = zeros(R_local, T)
-    z[:, 1] = randn(R_local) * config.sigma_d
+    z[:, 1] = randn(R_local) * sigma_unconditional
     
     for t in 2:T
-        z[:, t] = config.rho_d * z[:, t-1] + innovations[:, t]
+        z[:, t] = rho * z[:, t-1] + innovations[:, t]
     end
     
     return z
@@ -318,12 +474,15 @@ end
 Generate regional downstream shocks using MULTIVARIATE model.
 
 Model:
-    z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}
-    u_t ~ N(0, Σ)
+    z_{r,t} = rho_r × z_{r,t-1} + u_{r,t}
+    u_t ~ N(0, Sigma_innovation)
 
-Where:
-- ρ_r: region-specific persistence
-- Σ: cross-regional covariance matrix
+Initialization (CORRECTED):
+    z_0 ~ N(0, Gamma_unconditional)
+    
+Where Gamma_unconditional is the FULL unconditional covariance matrix,
+not just the diagonal. This properly captures cross-regional correlation
+at initialization.
 
 Returns: Matrix (R × T) of log shocks z_{r,t}
 """
@@ -336,7 +495,8 @@ function generate_downstream_shocks_multivariate(
     Random.seed!(seed)
     
     rho_r = params.rho_r
-    Sigma = params.Sigma
+    Sigma = params.Sigma_innovation
+    Gamma = params.Gamma_unconditional
     
     # Validate dimensions
     if length(rho_r) != R_local
@@ -346,24 +506,23 @@ function generate_downstream_shocks_multivariate(
         error("Sigma size ($(size(Sigma))) != ($R_local, $R_local)")
     end
     
-    # Cholesky decomposition for correlated draws
-    L = cholesky(Symmetric(Sigma)).L
+    # Cholesky decomposition of INNOVATION covariance for simulation
+    L_innovation = cholesky(Symmetric(Sigma)).L
     
-    # Draw correlated innovations: u_t = L × ε_t where ε ~ N(0, I)
+    # Cholesky decomposition of UNCONDITIONAL covariance for initialization
+    L_unconditional = cholesky(Symmetric(Gamma)).L
+    
+    # Draw correlated innovations: u_t = L_innovation × eps_t where eps ~ N(0, I)
     standard_normals = randn(R_local, T)
-    innovations = L * standard_normals  # (R × T)
+    innovations = L_innovation * standard_normals  # (R × T)
     
-    # Compute unconditional variance for initialization
-    # For AR(1): Var(z_r) = σ²_r / (1 - ρ_r²)
-    # where σ²_r = Σ_{rr}
-    unconditional_std = sqrt.(diag(Sigma) ./ (1 .- rho_r.^2))
-    
-    # Initialize and simulate
+    # Initialize from FULL unconditional distribution N(0, Gamma)
+    # This is the CORRECTED version - uses full covariance, not just diagonal
     z = zeros(R_local, T)
-    z[:, 1] = unconditional_std .* randn(R_local)
+    z[:, 1] = L_unconditional * randn(R_local)
     
     for t in 2:T
-        # z_{r,t} = ρ_r × z_{r,t-1} + u_{r,t}
+        # z_{r,t} = rho_r × z_{r,t-1} + u_{r,t}
         z[:, t] = rho_r .* z[:, t-1] + innovations[:, t]
     end
     
@@ -372,7 +531,7 @@ end
 
 
 """
-    generate_downstream_shocks(R_local, T, config; multivar_params=nothing)
+    generate_downstream_shocks(R_local, T, config; multivar_params=nothing, univar_params=nothing)
 
 Main dispatch function for generating downstream shocks.
 
@@ -382,10 +541,11 @@ function generate_downstream_shocks(
     R_local::Int, 
     T::Int, 
     config::SimulationConfig;
-    multivar_params::Union{Nothing, MultivariateShockParams} = nothing
+    multivar_params::Union{Nothing, MultivariateShockParams} = nothing,
+    univar_params::Union{Nothing, UnivariateShockParams} = nothing
 )
     if config.shock_model == UNIVARIATE
-        return generate_downstream_shocks_univariate(R_local, T, config)
+        return generate_downstream_shocks_univariate(R_local, T, config; uni_params=univar_params)
     elseif config.shock_model == MULTIVARIATE
         if multivar_params === nothing
             error("multivar_params required for MULTIVARIATE shock model")
@@ -398,27 +558,23 @@ end
 
 
 """
-    generate_other_customer_shocks(N_rho_local, S_local, R_local, T, sigma_sr; seed=42)
+    generate_other_customer_shocks(N_rho_local, S_local, R_local, T, config)
 
 Generate i.i.d. shocks for "other customers" of each supplier.
+
+CORRECTED: Uses config.sigma_other instead of undefined sigma_sr.
 """
-function generate_other_customer_shocks(N_rho_local, S_local, R_local, T, sigma_sr; seed=42)
+function generate_other_customer_shocks(
+    N_rho_local::Int, 
+    S_local::Int, 
+    R_local::Int, 
+    T::Int, 
+    config::SimulationConfig
+)
+    Random.seed!(config.seed + 1000)
     
-    Random.seed!(seed + 1000)
-    
-    shocks = zeros(N_rho_local, S_local, R_local, T)
-    
-    if sigma_sr === nothing
-        default_sigma = 0.17
-        shocks = randn(N_rho_local, S_local, R_local, T) * default_sigma
-    else
-        for s in 1:S_local
-            for l in 1:R_local
-                sigma = sigma_sr[s, l]
-                shocks[:, s, l, :] = randn(N_rho_local, T) * sigma
-            end
-        end
-    end
+    sigma = config.sigma_other
+    shocks = randn(N_rho_local, S_local, R_local, T) * sigma
     
     return shocks
 end
@@ -552,7 +708,7 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
     
     # Specification 1
     println("\nSpecification 1: Firm FE")
-    println("  d ln x_{i,t} = α_i + β × downstream_growth + ε")
+    println("  d ln x_{i,t} = alpha_i + beta × downstream_growth + eps")
     try
         reg1 = reg(panel_df, @formula(d_ln_x ~ downstream_growth + fe(firm_id)))
         
@@ -570,10 +726,10 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
             "N" => nobs(reg1)
         )
         
-        println("  β (downstream_growth): $(round(beta, digits=4)) " *
+        println("  beta (downstream_growth): $(round(beta, digits=4)) " *
                 "(se: $(round(beta_se, digits=4)))")
         println("  95% CI: [$(round(ci_lower, digits=4)), $(round(ci_upper, digits=4))]")
-        println("  R²: $(round(results["reg1"]["R2"], digits=4))")
+        println("  R2: $(round(results["reg1"]["R2"], digits=4))")
         println("  N:  $(results["reg1"]["N"])")
     catch e
         println("  ERROR: $e")
@@ -582,7 +738,7 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
     
     # Specification 2
     println("\nSpecification 2: Firm FE (weighted exposure)")
-    println("  d ln x_{i,t} = α_i + β × weighted_exposure + ε")
+    println("  d ln x_{i,t} = alpha_i + beta × weighted_exposure + eps")
     try
         reg2 = reg(panel_df, @formula(d_ln_x ~ a_d*weighted_exposure + fe(firm_id)))
         
@@ -600,10 +756,10 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
             "N" => nobs(reg2)
         )
         
-        println("  β (weighted_exposure): $(round(beta, digits=4)) " *
+        println("  beta (weighted_exposure): $(round(beta, digits=4)) " *
                 "(se: $(round(beta_se, digits=4)))")
         println("  95% CI: [$(round(ci_lower, digits=4)), $(round(ci_upper, digits=4))]")
-        println("  R²: $(round(results["reg2"]["R2"], digits=4))")
+        println("  R2: $(round(results["reg2"]["R2"], digits=4))")
         println("  N:  $(results["reg2"]["N"])")
     catch e
         println("  ERROR: $e")
@@ -612,7 +768,7 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
     
     # Specification 3
     println("\nSpecification 3: No other customer (a_d_D = 1)")
-    println("  d ln x_{i,t}^{no other} = α_i + β × downstream_growth + ε")
+    println("  d ln x_{i,t}^{no other} = alpha_i + beta × downstream_growth + eps")
     try
         reg3 = reg(panel_df, @formula(d_ln_x_no_other ~ downstream_growth + fe(firm_id)))
         
@@ -630,10 +786,10 @@ function build_panel_and_regress(d_ln_x_it, d_ln_x_dt, weighted_exposure_it, net
             "N" => nobs(reg3)
         )
         
-        println("  β (downstream_growth): $(round(beta, digits=4)) " *
+        println("  beta (downstream_growth): $(round(beta, digits=4)) " *
                 "(se: $(round(beta_se, digits=4)))")
         println("  95% CI: [$(round(ci_lower, digits=4)), $(round(ci_upper, digits=4))]")
-        println("  R²: $(round(results["reg3"]["R2"], digits=4))")
+        println("  R2: $(round(results["reg3"]["R2"], digits=4))")
         println("  N:  $(results["reg3"]["N"])")
     catch e
         println("  ERROR: $e")
@@ -657,8 +813,9 @@ Main function: validate calibrated model against Table 2.
 - `params`: Calibrated parameter vector
 - `config`: SimulationConfig (includes shock_model field)
 - `empirical`: Dict with empirical coefficients for comparison
-- `input_folder`: Path to folder containing share_dist.csv
-- `multivar_params`: MultivariateShockParams (required if config.shock_model == MULTIVARIATE)
+- `input_folder`: Path to folder containing share_dist.csv and shock params
+- `multivar_params`: MultivariateShockParams (loaded from input_folder if not provided)
+- `univar_params`: UnivariateShockParams (loaded from input_folder if not provided)
 
 # Returns
 Dict with network, panel_df, regression_results, config, shocks, exposures
@@ -668,7 +825,8 @@ function run_untargeted_validation(
     config::SimulationConfig = DEFAULT_CONFIG,
     empirical = nothing,
     input_folder = nothing,
-    multivar_params::Union{Nothing, MultivariateShockParams} = nothing
+    multivar_params::Union{Nothing, MultivariateShockParams} = nothing,
+    univar_params::Union{Nothing, UnivariateShockParams} = nothing
 )
     
     model_name = config.shock_model == UNIVARIATE ? "UNIVARIATE" : "MULTIVARIATE"
@@ -680,11 +838,12 @@ function run_untargeted_validation(
     println("Config: T=$(config.T_periods), seed=$(config.seed)")
     
     if config.shock_model == UNIVARIATE
-        println("  σ_d=$(config.sigma_d), ρ_d=$(config.rho_d)")
+        println("  sigma_d (unconditional)=$(config.sigma_d), rho_d=$(config.rho_d)")
     else
         if multivar_params !== nothing
-            println("  ρ_r mean=$(round(mean(multivar_params.rho_r), digits=3))")
-            println("  Σ diagonal mean=$(round(mean(diag(multivar_params.Sigma)), digits=6))")
+            println("  rho_r mean=$(round(mean(multivar_params.rho_r), digits=3))")
+            println("  Sigma (innovation) diagonal mean=$(round(mean(diag(multivar_params.Sigma_innovation)), digits=6))")
+            println("  Gamma (unconditional) diagonal mean=$(round(mean(diag(multivar_params.Gamma_unconditional)), digits=6))")
         end
     end
     
@@ -714,11 +873,10 @@ function run_untargeted_validation(
     println("  a_{di}^D stats: mean=$(round(mean(a_d_D), digits=3)), " *
             "std=$(round(std(a_d_D), digits=3))")
     
-    # Step 3: Generate shocks
-    println("\n[Step 3] Generating shocks ($model_name)...")
+    # Step 3: Load shock parameters if needed
+    println("\n[Step 3] Loading/preparing shock parameters...")
     
     if config.shock_model == MULTIVARIATE && multivar_params === nothing
-        # Try to load from input_folder
         if input_folder !== nothing
             println("  Loading multivariate params from: $input_folder")
             multivar_params = load_multivariate_params(input_folder)
@@ -727,21 +885,32 @@ function run_untargeted_validation(
         end
     end
     
-    # Generate downstream shocks
+    if config.shock_model == UNIVARIATE && univar_params === nothing && input_folder !== nothing
+        println("  Attempting to load univariate params from: $input_folder")
+        univar_params = load_univariate_params(input_folder)
+        if univar_params === nothing
+            println("  (Not found, using config values)")
+        end
+    end
+    
+    # Step 4: Generate shocks
+    println("\n[Step 4] Generating shocks ($model_name)...")
+    
     downstream_shocks = generate_downstream_shocks(
         R_local, config.T_periods, config; 
-        multivar_params=multivar_params
+        multivar_params=multivar_params,
+        univar_params=univar_params
     )
     println("  Downstream shock std (realized): $(round(std(downstream_shocks), digits=4))")
     
-    # Other customer shocks
+    # Other customer shocks - CORRECTED: uses config.sigma_other
     other_shocks = generate_other_customer_shocks(
-        N_rho_local, S_local, R_local, config.T_periods, sigma_sr; seed=config.seed
+        N_rho_local, S_local, R_local, config.T_periods, config
     )
-    println("  Other customer shock std (overall): $(round(std(other_shocks), digits=4))")
+    println("  Other customer shock std (sigma_other=$(config.sigma_other)): $(round(std(other_shocks), digits=4))")
     
-    # Step 4: Simulate
-    println("\n[Step 4] Simulating supplier sales...")
+    # Step 5: Simulate
+    println("\n[Step 5] Simulating supplier sales...")
     
     d_ln_x_it, d_ln_x_dt, d_ln_x_drt, weighted_exposure_it = simulate_supplier_sales(
         network, a_d_D, downstream_shocks, other_shocks, config
@@ -750,8 +919,8 @@ function run_untargeted_validation(
     println("  Supplier sales growth std: $(round(std(d_ln_x_it), digits=4))")
     println("  Aggregate downstream growth std: $(round(std(d_ln_x_dt), digits=4))")
     
-    # Step 5: Regress
-    println("\n[Step 5] Running regressions...")
+    # Step 6: Regress
+    println("\n[Step 6] Running regressions...")
     
     panel_df, reg_results = build_panel_and_regress(
         d_ln_x_it, d_ln_x_dt, weighted_exposure_it, network, a_d_D
@@ -766,6 +935,8 @@ function run_untargeted_validation(
         "other_shocks" => other_shocks,
         "a_d_D" => a_d_D,
         "a_rdi_D" => a_rdi_D,
-        "shock_model" => model_name
+        "shock_model" => model_name,
+        "multivar_params" => multivar_params,
+        "univar_params" => univar_params
     )
 end

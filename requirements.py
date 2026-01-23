@@ -135,22 +135,22 @@ def unpack_simulated_moments(sim_moments, empirical_moments):
     }
 
 
-def unpack_params(params, S = 9, R_downstream = 35):
-    """
-    This function takes a vector of parameters and returns the parameters
-    as separated variables.
-    """
-
-    beta = params[0:5]
-    labor_share_tech = params[5]
-
-    input_share_tech = params[6:6+S]
+def unpack_params(params, S=9, R_downstream=35, N_beta=5):
+    beta = params[0:N_beta]
+    labor_share_tech = params[N_beta]
+    input_share_tech = params[N_beta+1 : N_beta+1+S]
     input_share_tech = input_share_tech / np.sum(input_share_tech)
-
-    productivity_ = params[6+S : 6+S+R_downstream]
-    T_ = params[6+S+R_downstream :]
-
-    return {"beta":beta, "labor_share_tech":labor_share_tech, "input_share_tech":input_share_tech, "productivity":productivity_, "T":T_}
+    productivity_ = params[N_beta+1+S : N_beta+1+S+R_downstream]
+    T_ = params[N_beta+1+S+R_downstream:]
+    
+    return {
+        "beta": beta,
+        "labor_share_tech": labor_share_tech,
+        "input_share_tech": input_share_tech,
+        "productivity": productivity_,
+        "T": T_
+    }
+    
 def bubble_scatter(ax, x, y, xlabel, ylabel, title, size_scale=300,regression_line = False):
     mask = x > 0
     x, y = x[mask], y[mask]

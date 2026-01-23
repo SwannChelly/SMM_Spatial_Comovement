@@ -548,7 +548,7 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 network = solve_network(best_params, return_firm_level=false)
-folder = output_folder * "/"
+folder = output_folder 
 
 # w_srd_r: share of supplier sales to each downstream region
 function get_w_srd_r(params)

@@ -21,7 +21,7 @@ println("Using $(max(available-1, 1)) workers")
 addprocs(max(available-1, 0))
 
 # Include required files
-@everywhere include("new_model_CP.jl")
+@everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
 include("compute_amplification_weights.jl")
 
