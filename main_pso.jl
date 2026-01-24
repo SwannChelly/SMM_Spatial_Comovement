@@ -50,6 +50,7 @@ filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.n
 agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
 domestic_share_local = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
 N_rs_local = NPZ.npzread(joinpath(input_folder,"N_rs.npy")) # Number of upstream per region. 
+X_rs_local = NPZ.npzread(joinpath(input_folder,"X_rs.npy")) # Number of upstream per region. 
 
 S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
@@ -74,7 +75,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const theta = $(1.768) 
 @everywhere const delta_r = $(ones(R))
 @everywhere const Weight_matrix = $(nothing)
-@everywhere const N_rs = $(N_rs_local)
+@everywhere const N_rs = $(X_rs_local)
 
 # Load empirical moments
 @everywhere const emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')

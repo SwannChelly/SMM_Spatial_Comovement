@@ -79,7 +79,8 @@ Configuration for the untargeted moments simulation.
 - `rho_d`: AR(1) persistence for downstream (univariate only)
 - `seed`: Random seed
 - `shock_model`: Which shock model to use (UNIVARIATE or MULTIVARIATE)
-- `sigma_other`: Std of "other customer" shocks (default: 0.17)
+
+Note: sigma_sr (other customer shocks) is loaded as a global constant in main_pso.jl
 """
 struct SimulationConfig
     T_periods::Int
@@ -87,18 +88,14 @@ struct SimulationConfig
     rho_d::Float64          # Used only for UNIVARIATE
     seed::Int
     shock_model::ShockModel
-    sigma_other::Float64    # Std for other customer shocks
 end
 
-# Constructor with default shock model and sigma_other (backward compatible)
+# Constructor with default shock model (backward compatible)
 SimulationConfig(T_periods, sigma_d, rho_d, seed) = 
-    SimulationConfig(T_periods, sigma_d, rho_d, seed, UNIVARIATE, 0.17)
-
-SimulationConfig(T_periods, sigma_d, rho_d, seed, shock_model) = 
-    SimulationConfig(T_periods, sigma_d, rho_d, seed, shock_model, 0.17)
+    SimulationConfig(T_periods, sigma_d, rho_d, seed, UNIVARIATE)
 
 # Default configuration
-const DEFAULT_CONFIG = SimulationConfig(36, 0.05, -0.15, 42, UNIVARIATE, 0.17)
+const DEFAULT_CONFIG = SimulationConfig(36, 0.05, -0.15, 42, UNIVARIATE)
 
 
 """
@@ -562,7 +559,10 @@ end
 
 Generate i.i.d. shocks for "other customers" of each supplier.
 
-CORRECTED: Uses config.sigma_other instead of undefined sigma_sr.
+Uses the global `sigma_sr` matrix (S × R) loaded in main_pso.jl from sigma_sr.npy.
+If sigma_sr is not defined or is nothing, falls back to default σ = 0.17.
+
+The shocks are sector-region specific: each (s, l) pair has its own std from sigma_sr[s, l].
 """
 function generate_other_customer_shocks(
     N_rho_local::Int, 
@@ -573,8 +573,33 @@ function generate_other_customer_shocks(
 )
     Random.seed!(config.seed + 1000)
     
-    sigma = config.sigma_other
-    shocks = randn(N_rho_local, S_local, R_local, T) * sigma
+    shocks = zeros(N_rho_local, S_local, R_local, T)
+    
+    # Check if global sigma_sr is defined and available
+    use_sigma_sr = false
+    try
+        if @isdefined(sigma_sr) && sigma_sr !== nothing
+            use_sigma_sr = true
+        end
+    catch
+        use_sigma_sr = false
+    end
+    
+    if use_sigma_sr
+        # Use sector-region specific std from global sigma_sr
+        for s in 1:S_local
+            for l in 1:R_local
+                sigma = sigma_sr[s, l]
+                shocks[:, s, l, :] = randn(N_rho_local, T) * sigma
+            end
+        end
+        println("  Using global sigma_sr matrix (mean=$(round(mean(sigma_sr), digits=4)))")
+    else
+        # Fallback to default
+        default_sigma = 0.17
+        shocks = randn(N_rho_local, S_local, R_local, T) * default_sigma
+        println("  Using default sigma_other = $default_sigma (sigma_sr not found)")
+    end
     
     return shocks
 end
@@ -903,11 +928,11 @@ function run_untargeted_validation(
     )
     println("  Downstream shock std (realized): $(round(std(downstream_shocks), digits=4))")
     
-    # Other customer shocks - CORRECTED: uses config.sigma_other
+    # Other customer shocks - uses global sigma_sr matrix from main_pso.jl
     other_shocks = generate_other_customer_shocks(
         N_rho_local, S_local, R_local, config.T_periods, config
     )
-    println("  Other customer shock std (sigma_other=$(config.sigma_other)): $(round(std(other_shocks), digits=4))")
+    println("  Other customer shock std (realized): $(round(std(other_shocks), digits=4))")
     
     # Step 5: Simulate
     println("\n[Step 5] Simulating supplier sales...")
