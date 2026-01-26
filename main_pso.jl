@@ -30,7 +30,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -49,8 +49,8 @@ N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
 agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
 domestic_share_local = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
-N_rs_local = NPZ.npzread(joinpath(input_folder,"N_rs.npy")) # Number of upstream per region. 
 X_rs_local = NPZ.npzread(joinpath(input_folder,"X_rs.npy")) # Number of upstream per region. 
+N_rs_local = NPZ.npzread(joinpath(input_folder,"N_rs.npy")) # Number of upstream per region. 
 
 S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
@@ -75,7 +75,12 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const theta = $(1.768) 
 @everywhere const delta_r = $(ones(R))
 @everywhere const Weight_matrix = $(nothing)
-@everywhere const N_rs = $(X_rs_local)
+
+if industry == "aero"
+    @everywhere const T_rs_init = $(X_rs_local)
+elseif industry == "auto_23"
+    @everywhere const T_rs_init = $(N_rs_local)
+end
 
 # Load empirical moments
 @everywhere const emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
@@ -110,7 +115,7 @@ MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
 max_loop = 100
-full_run = true
+full_run = false
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
@@ -151,7 +156,7 @@ if full_run
     #         for k in range_beta
     #         if i <= j <= k
     #     ]
-    range_beta = range(0.0005, stop = 3, length = length_range_beta) 
+    range_beta = range(0.005, stop = 3, length = length_range_beta) 
     if n_coef == 4
         expanding_beta = [
                 [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=k
@@ -173,7 +178,7 @@ if full_run
     A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
     A ./= sum(A) 
 
-    init_other = vcat([agg_labor_share], agg_industry_share, A, vec(N_rs).+0.1)
+    init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init).+0.1)
     expanding_beta = [vcat(i, init_other) for i in expanding_beta]
 
     println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
@@ -493,57 +498,61 @@ if ndims(best_params) > 1
     best_params = best_params[:, 1]
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Run validation with BOTH shock models
-# ═══════════════════════════════════════════════════════════════════════════════
 
-println("\n" * "="^70)
-println("RUNNING UNTARGETED VALIDATION (BOTH MODELS)")
-println("="^70)
+run_untargeted = true
 
-# Model 1: UNIVARIATE (original)
-println("\n>>> UNIVARIATE SHOCK MODEL <<<")
-results_univariate = validate_table2(best_params, industry, 
-    shock_model=UNIVARIATE, T_periods=36)
-panel_df = results_univariate["panel_df"]
-CSV.write(joinpath(output_folder, "simulated_panel.csv"), panel_df)
-println("Saved: simulated_panel.csv")
+if run_untargeted
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # Run validation with BOTH shock models
+    # ═══════════════════════════════════════════════════════════════════════════════
 
-# Model 2: MULTIVARIATE (new - if parameters exist)
-results_multivariate = nothing
-panel_df_multivar = nothing
+    println("\n" * "="^70)
+    println("RUNNING UNTARGETED VALIDATION (BOTH MODELS)")
+    println("="^70)
 
-if isfile(joinpath(input_folder, "rho_r.npy")) && isfile(joinpath(input_folder, "Sigma_innovations.npy"))
-    println("\n>>> MULTIVARIATE SHOCK MODEL <<<")
-    results_multivariate = validate_table2(best_params, industry, 
-        shock_model=MULTIVARIATE, T_periods=36)
-    panel_df_multivar = results_multivariate["panel_df"]
-    CSV.write(joinpath(output_folder, "simulated_panel_multivar.csv"), panel_df_multivar)
-    println("Saved: simulated_panel_multivar.csv")
-else
-    println("\n>>> MULTIVARIATE MODEL: Skipped <<<")
-    println("  Missing rho_r.npy and/or Sigma_innovations.npy in $input_folder")
-    println("  To enable: run extract_shock_parameters.py on your downstream data")
+    # Model 1: UNIVARIATE (original)
+    println("\n>>> UNIVARIATE SHOCK MODEL <<<")
+    results_univariate = validate_table2(best_params, industry, 
+        shock_model=UNIVARIATE, T_periods=36)
+    panel_df = results_univariate["panel_df"]
+    CSV.write(joinpath(output_folder, "simulated_panel.csv"), panel_df)
+    println("Saved: simulated_panel.csv")
+
+    # Model 2: MULTIVARIATE (new - if parameters exist)
+    results_multivariate = nothing
+    panel_df_multivar = nothing
+
+    if isfile(joinpath(input_folder, "rho_r.npy")) && isfile(joinpath(input_folder, "Sigma_innovations.npy"))
+        println("\n>>> MULTIVARIATE SHOCK MODEL <<<")
+        results_multivariate = validate_table2(best_params, industry, 
+            shock_model=MULTIVARIATE, T_periods=36)
+        panel_df_multivar = results_multivariate["panel_df"]
+        CSV.write(joinpath(output_folder, "simulated_panel_multivar.csv"), panel_df_multivar)
+        println("Saved: simulated_panel_multivar.csv")
+    else
+        println("\n>>> MULTIVARIATE MODEL: Skipped <<<")
+        println("  Missing rho_r.npy and/or Sigma_innovations.npy in $input_folder")
+        println("  To enable: run extract_shock_parameters.py on your downstream data")
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # Print comparison
+    # ═══════════════════════════════════════════════════════════════════════════════
+
+    println("\n" * "="^70)
+    println("REGRESSION COMPARISON")
+    println("="^70)
+
+    println("\nReg 1 (β on aggregate downstream growth):")
+    if results_univariate["regression_results"]["reg1"] !== nothing
+        r = results_univariate["regression_results"]["reg1"]
+        println("  UNIVARIATE:   β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
+    end
+    if results_multivariate !== nothing && results_multivariate["regression_results"]["reg1"] !== nothing
+        r = results_multivariate["regression_results"]["reg1"]
+        println("  MULTIVARIATE: β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
+    end
 end
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Print comparison
-# ═══════════════════════════════════════════════════════════════════════════════
-
-println("\n" * "="^70)
-println("REGRESSION COMPARISON")
-println("="^70)
-
-println("\nReg 1 (β on aggregate downstream growth):")
-if results_univariate["regression_results"]["reg1"] !== nothing
-    r = results_univariate["regression_results"]["reg1"]
-    println("  UNIVARIATE:   β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
-end
-if results_multivariate !== nothing && results_multivariate["regression_results"]["reg1"] !== nothing
-    r = results_multivariate["regression_results"]["reg1"]
-    println("  MULTIVARIATE: β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
-end
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Solve network and save auxiliary outputs
 # ═══════════════════════════════════════════════════════════════════════════════

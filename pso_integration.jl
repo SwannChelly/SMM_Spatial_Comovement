@@ -303,7 +303,7 @@ function train_stage_pso(
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
-            0.1 * (vec(N_rs).+ 0.1)
+            0.1 * (vec(T_rs_init).+ 0.1)
         )
         
         ub = vcat(
@@ -311,7 +311,7 @@ function train_stage_pso(
             1.2*agg_labor_share,
             1.2 .* agg_industry_share,
             A .* 1.2,
-            10 * (vec(N_rs).+ 0.1)
+            10 * (vec(T_rs_init).+ 0.1)
         )
         
         beta_constraint = true
