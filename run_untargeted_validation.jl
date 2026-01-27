@@ -3,7 +3,6 @@
 # Usage after calibration:
 #   include("run_untargeted_validation.jl")
 #   results = validate_table2(best_params, industry)
-#   results_both = validate_table2_both_models(best_params, industry)  # NEW
 #
 # This file provides the interface between main_pso.jl and untargeted_moments.jl
 #
@@ -12,8 +11,8 @@
 #   MULTIVARIATE: Region-specific ρ_r, correlated innovations via Σ
 #
 # Required files for MULTIVARIATE (in baseline_{industry}/):
-#   - rho_r.npy: Region-specific persistence (R,)
-#   - Sigma_innovations.npy: Cross-regional covariance matrix (R, R)
+#   - rho_r.npy: Region-specific persistence (R_downstream,)
+#   - Sigma_innovations.npy: Cross-regional covariance matrix (R_downstream, R_downstream)
 
 include("untargeted_moments.jl")
 
@@ -107,8 +106,8 @@ function validate_table2(
                 println(f, "  Std:  $(round(std(multivar_params.rho_r), digits=4))")
                 println(f, "  Range: [$(round(minimum(multivar_params.rho_r), digits=4)), $(round(maximum(multivar_params.rho_r), digits=4))]")
                 println(f, "Σ (innovation covariance):")
-                println(f, "  Diagonal mean: $(round(mean(diag(multivar_params.Sigma)), digits=6))")
-                off_diag = multivar_params.Sigma[.!I(size(multivar_params.Sigma,1))]
+                println(f, "  Diagonal mean: $(round(mean(diag(multivar_params.Sigma_innovation)), digits=6))")
+                off_diag = multivar_params.Sigma_innovation[.!I(size(multivar_params.Sigma_innovation,1))]
                 println(f, "  Off-diagonal mean: $(round(mean(off_diag), digits=6))")
             end
             
