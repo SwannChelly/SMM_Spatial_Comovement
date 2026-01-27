@@ -30,7 +30,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
