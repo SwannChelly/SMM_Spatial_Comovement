@@ -317,6 +317,11 @@ function validate_table2_all_models(
     panel_file = joinpath(output_folder, "simulated_panel_unified.csv")
     CSV.write(panel_file, results["panel_df"])
     println("\nUnified panel saved to: $panel_file")
+
+    # Save regional sales
+    regional_sales_file = joinpath(output_folder, "regional_sales_unified.csv")
+    CSV.write(regional_sales_file, results["regional_sales_df"])
+    println("Regional sales saved to: $regional_sales_file")
     
     # Save summary
     summary_file = joinpath(output_folder, "untargeted_summary_unified.txt")

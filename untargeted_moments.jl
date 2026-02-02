@@ -875,7 +875,56 @@ function build_unified_panel_and_regress(
         end
     end
     
-    return panel_df, results
+    # Build regional sales DataFrame
+    regional_sales_df = build_regional_sales_df(
+        d_ln_x_drt_uni, d_ln_x_drt_multi, d_ln_x_drt_multi_fe
+    )
+    
+    return panel_df, results, regional_sales_df
+end
+
+
+
+"""
+Build regional sales DataFrame for all three shock models.
+
+Returns DataFrame with columns:
+- ze2010: Region identifier (1 to R_local)
+- period: Time period (1 to T)
+- d_ln_x_drt_uni: Regional sales change (UNIVARIATE model)
+- d_ln_x_drt_multi: Regional sales change (MULTIVARIATE model)
+- d_ln_x_drt_multi_fe: Regional sales change (MULTIVARIATE_FE model)
+"""
+function build_regional_sales_df(
+    d_ln_x_drt_uni, d_ln_x_drt_multi, d_ln_x_drt_multi_fe
+)
+    R_local, T = size(d_ln_x_drt_uni)
+    
+    ze2010_vec = Int[]
+    period_vec = Int[]
+    d_ln_x_drt_uni_vec = Float64[]
+    d_ln_x_drt_multi_vec = Float64[]
+    d_ln_x_drt_multi_fe_vec = Float64[]
+    
+    for r in 1:R_local, t in 1:T
+        push!(ze2010_vec, r)
+        push!(period_vec, t)
+        push!(d_ln_x_drt_uni_vec, d_ln_x_drt_uni[r, t])
+        push!(d_ln_x_drt_multi_vec, d_ln_x_drt_multi[r, t])
+        push!(d_ln_x_drt_multi_fe_vec, d_ln_x_drt_multi_fe[r, t])
+    end
+    
+    regional_df = DataFrame(
+        ze2010 = ze2010_vec,
+        period = period_vec,
+        d_ln_x_drt_uni = d_ln_x_drt_uni_vec,
+        d_ln_x_drt_multi = d_ln_x_drt_multi_vec,
+        d_ln_x_drt_multi_fe = d_ln_x_drt_multi_fe_vec
+    )
+    
+    println("  Regional sales DataFrame: $(nrow(regional_df)) observations ($(R_local) regions × $T periods)")
+    
+    return regional_df
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -972,7 +1021,7 @@ function run_untargeted_validation(
     # Step 5: Build unified panel and run regressions
     println("\n[Step 5] Building unified panel and running regressions...")
     
-    panel_df, reg_results = build_unified_panel_and_regress(
+    panel_df, reg_results, regional_sales_df = build_unified_panel_and_regress(
         network, a_d_D, other_shocks, config,
         uni_shocks, multi_shocks, multi_fe_shocks, active_regions
     )
@@ -1018,6 +1067,7 @@ function run_untargeted_validation(
     return Dict(
         "network" => network,
         "panel_df" => panel_df,
+        "regional_sales_df" => regional_sales_df,  # NEW
         "regression_results" => reg_results,
         "config" => config,
         "shocks" => Dict(
