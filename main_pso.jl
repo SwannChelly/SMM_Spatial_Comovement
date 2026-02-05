@@ -30,7 +30,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -517,29 +517,23 @@ for (reg_name, reg_key) in [("Reg 1 (β on downstream_growth)", "reg1"),
 end
 
 # Save network outputs
-network = solve_network(best_params, return_firm_level=false)
+network = solve_network(best_params, return_firm_level=true)
 folder = output_folder 
 
-function get_w_srd_r(params)
-    net = solve_network(params, return_firm_level=false)
-    w_srd_r = zeros(S, R, R)
-    X_lrs = net[1]
+w_srd_r = zeros(S, R, R)
+X_lrs = network[1]
     
-    for s in 1:S, r_prime in 1:R
-        total_downstream_sales = sum(X_lrs[r_prime, :, s])
-        if total_downstream_sales > 1e-10
-            for r in 1:R
-                w_srd_r[s, r_prime, r] = X_lrs[r_prime, r, s] / total_downstream_sales
-            end
+for s in 1:S, r_prime in 1:R
+    total_downstream_sales = sum(X_lrs[r_prime, :, s])
+    if total_downstream_sales > 1e-10
+        for r in 1:R
+            w_srd_r[s, r_prime, r] = X_lrs[r_prime, r, s] / total_downstream_sales
         end
     end
-    return w_srd_r
 end
 
-w_srd_r = get_w_srd_r(best_params)
 npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-network = solve_network(best_params, return_firm_level=true)
 firm_expenditure_shares = network[7]
 links = firm_expenditure_shares .!= 0
 suppliers = reshape(sum(links, dims=4), S, N_rho, R) .!= 0
@@ -552,3 +546,43 @@ println("  - simulated_panel_unified.csv (ALL THREE MODELS)")
 println("  - untargeted_summary_unified.txt")
 println("  - suppliers.npy")
 println("  - w_srd_r.npy")
+
+
+
+
+
+sirens = collect(1:(S*R*N_rho))
+sectors = Int[]
+ze2010 = Int[]
+ze2010_downstream = Int[]
+share = Float64[]
+size_vec = Float64[]
+siren = 0
+sirens = []
+downstream_purchase = Float64[]
+for l in 1:R
+    for s in 1:S
+        for rho in 1:N_rho
+            siren += 1
+            for r in 1:R
+                push!(sirens,siren)
+                push!(sectors, s)
+                push!(ze2010, l)
+                push!(ze2010_downstream, r)
+                push!(share, firm_expenditure_shares[rho,s,l,r])    
+                push!(downstream_purchase, network[3][r]*network[8])     
+            end       
+        end
+    end
+end
+
+df = DataFrame(
+    SIREN = sirens,
+    A129 = sectors,
+    ze2010 = ze2010,
+    ze2010_downstream = ze2010_downstream,
+    share = share,
+    downstream_purchase = downstream_purchase
+)
+
+CSV.write("suppliers.csv",df)
