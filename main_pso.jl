@@ -18,6 +18,7 @@ using Dates
 @everywhere using HaltonSequences
 @everywhere using ProgressMeter
 @everywhere using SharedArrays
+@everywhere using Parquet
 
 using Statistics, Printf
 using StatsBase
@@ -30,7 +31,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -83,9 +84,16 @@ elseif industry == "auto_23"
 end
 
 # Load empirical moments
-@everywhere const emp_gamma_ls = $(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
-@everywhere const emp_pi_r_full = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
-@everywhere const emp_pi_r = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end])
+
+
+@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
+
+
+@everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
+X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
+X_dr_local = X_dr_local[N_downstream_per_region.!=0]
+@everywhere const emp_pi_r_full = $(X_dr_local)
+@everywhere const emp_pi_r = $(X_dr_local[2:end])
 @everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy")))
 @everywhere const N_beta = $(length(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))))
 empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
@@ -101,6 +109,9 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 @everywhere include("tools.jl")
 @everywhere include("pso_integration.jl")  # NEW: PSO functions
 @everywhere include("run_untargeted_validation.jl")  
+
+
+
 
 # Distance bins
 DistBin_local = Array{Int}(undef, R,R)
@@ -551,15 +562,16 @@ println("  - w_srd_r.npy")
 
 
 
-sirens = collect(1:(S*R*N_rho))
+
+siren = 0
+sirens = Int[]
 sectors = Int[]
 ze2010 = Int[]
 ze2010_downstream = Int[]
 share = Float64[]
 size_vec = Float64[]
-siren = 0
-sirens = []
 downstream_purchase = Float64[]
+intermediate_derivative = Float64[]
 for l in 1:R
     for s in 1:S
         for rho in 1:N_rho
@@ -570,7 +582,8 @@ for l in 1:R
                 push!(ze2010, l)
                 push!(ze2010_downstream, r)
                 push!(share, firm_expenditure_shares[rho,s,l,r])    
-                push!(downstream_purchase, network[3][r]*network[8])     
+                push!(downstream_purchase, network[3][r]*network[9])     
+                push!(intermediate_derivative, network[8][rho, s, l, r])  # NEW
             end       
         end
     end
@@ -582,7 +595,9 @@ df = DataFrame(
     ze2010 = ze2010,
     ze2010_downstream = ze2010_downstream,
     share = share,
-    downstream_purchase = downstream_purchase
+    downstream_purchase = downstream_purchase,
+    intermediate_derivative = intermediate_derivative
 )
 
-CSV.write("suppliers.csv",df)
+Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
+describe(df)

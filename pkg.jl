@@ -14,7 +14,7 @@ Pkg.add("SharedArrays")
 Pkg.add("StatsBase")
 Pkg.add("CategoricalArrays")
 Pkg.add("HaltonSequences")
-
+Pkg.add("Parquet")
 
 
 

@@ -249,6 +249,7 @@ function solve_network(params; return_firm_level=false)
     
     if return_firm_level
         firm_expenditure_shares = zeros(N_rho, S, R, R)  # Share from (ρ,s,l) to r
+        firm_intermediate_derivative = zeros(N_rho, S, R, R)
     end
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -297,6 +298,7 @@ function solve_network(params; return_firm_level=false)
         # This is the share of TOTAL COST going to input (ρ,s) from region l
         # To get actual expenditure, multiply by total cost = μ · Y_r
         # ─────────────────────────────────────────────────────────────────────
+        labor_substitution_factor = (1 - Omega_L) * (P_r / c_r)^(1 - lambda)
         for l in 1:R
             # Which varieties from region l won?
             winner_mask = map(x -> x[2] == l ? 1.0 : 0.0, min_coord)  # (N_rho, S)
@@ -316,6 +318,7 @@ function solve_network(params; return_firm_level=false)
             # Store firm-level for untargeted validation
             if return_firm_level
                 firm_expenditure_shares[:, :, l, r] = exp_share
+                firm_intermediate_derivative[:, :, l, r] = exp_share ./ labor_substitution_factor
             end
         end
     end
@@ -370,6 +373,7 @@ function solve_network(params; return_firm_level=false)
             z = z,
             closest_plant_dist = closest_plant_dist,
             firm_expenditure_shares = firm_expenditure_shares,
+            firm_intermediate_derivative = firm_intermediate_derivative,
             mu = mu,
             P = P
         )
@@ -501,7 +505,10 @@ function compute_moments(network, params)
     # From model_CP.jl:
     #   pi_r = labor_r[active] / sum(labor_r[active])
     # ─────────────────────────────────────────────────────────────────────────
-    pi_r = labor_r[active] ./ sum(labor_r[active])
+    #pi_r = labor_r[active] ./ sum(labor_r[active])
+
+    # 6. Downstream sales share
+    pi_r = Y_r/sum(Y_r)
     
     return (
         agg_labor_share = [agg_labor_share],
