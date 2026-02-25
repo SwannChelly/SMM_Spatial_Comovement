@@ -295,7 +295,7 @@ function train_stage_pso(
         A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
         A ./= sum(A)
 
-        A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
+        A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
         A ./= sum(A) 
         
         lb = vcat(

@@ -508,7 +508,7 @@ function compute_moments(network, params)
     #pi_r = labor_r[active] ./ sum(labor_r[active])
 
     # 6. Downstream sales share
-    pi_r = Y_r/sum(Y_r)
+    pi_r = Y_r[active]/sum(Y_r[active])
     
     return (
         agg_labor_share = [agg_labor_share],
@@ -647,7 +647,7 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
         moments = [simulated_moments[3][mask_emp_gamma_ls .!= 0]]
     else
         emp = empirical_moments
-        W = nothing
+        W = Weight_matrix_custom
         moments = simulated_moments
     end
     

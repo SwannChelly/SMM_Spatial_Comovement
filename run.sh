@@ -50,6 +50,13 @@ if [ ! -f "$JULIA_SCRIPT" ]; then
     exit 1
 fi
 
+# Function to add timestamp to each line
+add_timestamp() {
+    while IFS= read -r line; do
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"
+    done
+}
+
 # Function to run a single industry
 run_industry() {
     local ind="$1"
@@ -87,10 +94,10 @@ run_industry() {
     echo ""
     
     if [ "$use_nohup" = "yes" ]; then
-        nohup julia "$JULIA_SCRIPT" "$ind" "$ncoef" >> "$log_file" 2>&1 &
+        nohup bash -c "julia \"$JULIA_SCRIPT\" \"$ind\" \"$ncoef\" 2>&1 | while IFS= read -r line; do echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] \$line\"; done" >> "$log_file" &
         echo "Process started with PID: $!"
     else
-        julia "$JULIA_SCRIPT" "$ind" "$ncoef" 2>&1 | tee -a "$log_file"
+        julia "$JULIA_SCRIPT" "$ind" "$ncoef" 2>&1 | add_timestamp | tee -a "$log_file"
     fi
 }
 

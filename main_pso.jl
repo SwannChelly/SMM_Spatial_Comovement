@@ -19,7 +19,7 @@ using Dates
 @everywhere using ProgressMeter
 @everywhere using SharedArrays
 @everywhere using Parquet
-
+using LinearAlgebra
 using Statistics, Printf
 using StatsBase
 
@@ -57,7 +57,6 @@ S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
-
 R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const R_downstream = $(R_)
 @everywhere const agg_industry_share = $(agg_industry_share_local)
@@ -80,7 +79,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 if industry == "aero"
     @everywhere const T_rs_init = $(X_rs_local)
 elseif industry == "auto_23"
-    @everywhere const T_rs_init = $(N_rs_local)
+    @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
 end
 
 # Load empirical moments
@@ -92,8 +91,9 @@ end
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
 X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
 X_dr_local = X_dr_local[N_downstream_per_region.!=0]
-@everywhere const emp_pi_r_full = $(X_dr_local)
-@everywhere const emp_pi_r = $(X_dr_local[2:end])
+emp_pi_r_local = X_dr_local./sum(X_dr_local)
+@everywhere const emp_pi_r_full = $(emp_pi_r_local)
+@everywhere const emp_pi_r = $(emp_pi_r_local[2:end])
 @everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy")))
 @everywhere const N_beta = $(length(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))))
 empirical_moments_local = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
@@ -104,6 +104,28 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 # @everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
 @everywhere const K_max = $(50)
 @everywhere const sigma_sr = $(NPZ.npzread(joinpath(input_folder,"sigma_sr.npy")))
+
+# After empirical_moments_local is built
+n_labor = 1
+n_industry = length(agg_industry_share) -1
+n_gamma = length(vec(emp_gamma_ls))  # however you reference it
+n_reg = length(reg_coef)
+n_pi = length(emp_pi_r)
+
+N_moments = n_labor + n_industry + n_gamma + n_reg + n_pi
+weights = ones(N_moments)
+
+# Upweight regression coefficients (indices for reg_coef block)
+reg_start = n_labor + n_industry + n_gamma + 1
+reg_end = reg_start + n_reg - 1
+weights[reg_start:reg_end] .= 1  # start with 10x, tune as needed
+
+
+# Construct the diagonal matrix
+Weight_matrix_custom_local = Diagonal(weights)
+
+# Make it available on all processes
+@everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
@@ -124,13 +146,14 @@ end
 N_PARTICLES = available-1  # Use all available cores except one 
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
-method = "original"
-max_loop = 100
-full_run = false
+method = "hybrid"
+max_loop = 10
+full_run = true
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
 REPORT_EVERY = 2  # Run reporting every X epochs (set to nothing for only at the end)
+
 
 ############## MAIN OPTIMIZATION ##############
 
@@ -167,7 +190,7 @@ if full_run
     #         for k in range_beta
     #         if i <= j <= k
     #     ]
-    range_beta = range(0.005, stop = 3, length = length_range_beta) 
+    range_beta = range(0.00005, stop = 10, length = length_range_beta) 
     if n_coef == 4
         expanding_beta = [
                 [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=k
@@ -186,7 +209,7 @@ if full_run
             ]
     end
     # Use initial guess for other parameters
-    A = copy(emp_pi_r_full).^(1/abs(epsilon))  # analytical inversion
+    A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
     A ./= sum(A) 
 
     init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init).+0.1)
@@ -198,11 +221,8 @@ if full_run
     # Find beta that best matches regression coefficients
     scores = [score != nothing ? score[1][1] : missing for score in results_]
     k = 1
-    y0 = reg_coef[k]
-    y1 = reg_coef[k+1]
-    y2 = reg_coef[k+2]
-    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1],score[2][4][k+2]] : missing for score in results_]
-    y_flat = vcat([abs(y0-yi[1])^2+abs(y1-yi[2])^2 + abs(y2-yi[3])^2 for yi in reg_coef_]...)
+    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1],score[2][4][k+2],score[2][4][k+3],score[2][4][k+4]] : missing for score in results_]
+    y_flat = vcat([abs(reg_coef[1]-yi[1])^2+abs(reg_coef[2]-yi[2])^2 + abs(reg_coef[3]-yi[3])^2 + abs(reg_coef[4]-yi[4])^2 + abs(reg_coef[5]-yi[5])^2 for yi in reg_coef_]...)
     init_beta = expanding_beta[argmin(y_flat)][1:N_beta]
 
     println("Best initial beta: ", init_beta)
@@ -527,6 +547,13 @@ for (reg_name, reg_key) in [("Reg 1 (β on downstream_growth)", "reg1"),
     end
 end
 
+
+
+Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet"), results_unified["panel_df"])
+Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
+
+
+
 # Save network outputs
 network = solve_network(best_params, return_firm_level=true)
 folder = output_folder 
@@ -600,4 +627,3 @@ df = DataFrame(
 )
 
 Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
-describe(df)
