@@ -28,10 +28,9 @@ available = Sys.CPU_THREADS - nprocs()
 println("Using "*string(available)*" workers")
 addprocs(max(available-1, 0)) # Always leave one core for other tests. 
 
-
 ############## Load Parameters #################
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto_23"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -67,7 +66,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const w_rs = $(w_rs_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
-@everywhere const N_rho = $(50)
+@everywhere const N_rho = $(100)
 @everywhere const epsilon = $(coefs[1,"value"])
 @everywhere const lambda = $(0.5)
 @everywhere const nu = $(0.2)
@@ -83,8 +82,6 @@ elseif industry == "auto_23"
 end
 
 # Load empirical moments
-
-
 @everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 
 
@@ -118,7 +115,7 @@ weights = ones(N_moments)
 # Upweight regression coefficients (indices for reg_coef block)
 reg_start = n_labor + n_industry + n_gamma + 1
 reg_end = reg_start + n_reg - 1
-weights[reg_start:reg_end] .= 1  # start with 10x, tune as needed
+weights[reg_start:reg_end] .= 100  # start with 10x, tune as needed
 
 
 # Construct the diagonal matrix
@@ -132,9 +129,6 @@ Weight_matrix_custom_local = Diagonal(weights)
 @everywhere include("pso_integration.jl")  # NEW: PSO functions
 @everywhere include("run_untargeted_validation.jl")  
 
-
-
-
 # Distance bins
 DistBin_local = Array{Int}(undef, R,R)
 for i in 1:R, j in 1:R
@@ -146,9 +140,9 @@ end
 N_PARTICLES = available-1  # Use all available cores except one 
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
-method = "hybrid"
-max_loop = 10
-full_run = true
+method = "original"
+max_loop = 100
+full_run = false
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
@@ -190,7 +184,7 @@ if full_run
     #         for k in range_beta
     #         if i <= j <= k
     #     ]
-    range_beta = range(0.00005, stop = 10, length = length_range_beta) 
+    range_beta = exp.(range(log(0.00005), stop=log(100), length=length_range_beta))
     if n_coef == 4
         expanding_beta = [
                 [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=k
@@ -529,30 +523,8 @@ end
 # Run unified validation (all three models in one panel)
 println("\n>>> RUNNING UNIFIED VALIDATION (ALL THREE MODELS) <<<")
 results_unified = validate_table2_all_models(best_params, industry, T_periods=36, time_fe_mode="resample")
-
-# Print comparison
-println("\n" * "="^70)
-println("REGRESSION COMPARISON (ALL THREE MODELS)")
-println("="^70)
-
-for (reg_name, reg_key) in [("Reg 1 (β on downstream_growth)", "reg1"),
-                             ("Reg 2 (β on weighted_exposure)", "reg2"),
-                             ("Reg 3 (β no other customer)", "reg3")]
-    println("\n$reg_name:")
-    for model in ["UNIVARIATE", "MULTIVARIATE", "MULTIVARIATE_FE"]
-        if results_unified["regression_results"][model][reg_key] !== nothing
-            r = results_unified["regression_results"][model][reg_key]
-            println("  $model: β = $(round(r["beta"], digits=4)) (SE: $(round(r["beta_se"], digits=4)))")
-        end
-    end
-end
-
-
-
 Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet"), results_unified["panel_df"])
 Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
-
-
 
 # Save network outputs
 network = solve_network(best_params, return_firm_level=true)
@@ -585,11 +557,6 @@ println("  - untargeted_summary_unified.txt")
 println("  - suppliers.npy")
 println("  - w_srd_r.npy")
 
-
-
-
-
-
 siren = 0
 sirens = Int[]
 sectors = Int[]
@@ -599,6 +566,7 @@ share = Float64[]
 size_vec = Float64[]
 downstream_purchase = Float64[]
 intermediate_derivative = Float64[]
+productivity = Float64[]
 for l in 1:R
     for s in 1:S
         for rho in 1:N_rho
@@ -610,7 +578,8 @@ for l in 1:R
                 push!(ze2010_downstream, r)
                 push!(share, firm_expenditure_shares[rho,s,l,r])    
                 push!(downstream_purchase, network[3][r]*network[9])     
-                push!(intermediate_derivative, network[8][rho, s, l, r])  # NEW
+                push!(intermediate_derivative, network[8][rho, s, l, r])  
+                push!(productivity, network[5][rho,l,s])  
             end       
         end
     end
@@ -623,7 +592,9 @@ df = DataFrame(
     ze2010_downstream = ze2010_downstream,
     share = share,
     downstream_purchase = downstream_purchase,
-    intermediate_derivative = intermediate_derivative
+    intermediate_derivative = intermediate_derivative,
+    productivity = productivity
 )
 
 Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
+

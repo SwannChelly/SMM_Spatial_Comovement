@@ -470,7 +470,7 @@ function compute_moments(network, params)
                 push!(sectors, s)
                 push!(regions, r)
                 push!(suppliers, linkages[rho, s, r] > 0 ? 1.0 : 0.0)
-                push!(size_vec, z[rho, r, s])
+                push!(size_vec, log(z[rho, r, s]))
                 push!(distance_vec, closest_plant_dist[r])
             end
         end

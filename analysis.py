@@ -207,81 +207,81 @@ def unpack_params(params, S = 9, R_downstream = 35):
 
 def bubble_scatter(
     ax, x, y, xlabel, ylabel, title,
-    size_scale=300,
-    regression_line=False,
-    weighted_regression=True,
-    weights=None
-):
-    mask = x > 0
-    x, y = x[mask], y[mask]
+        size_scale=300,
+            regression_line=False,
+                weighted_regression=True,
+                    weights=None
+                    ):
+                        mask = x > 0
+                            x, y = x[mask], y[mask]
 
-    sizes = size_scale * x / x.max()
-    lims = [min(x.min(), y.min()) * 1.2, max(x.max(), y.max()) * 1.2]
+                                sizes = size_scale * x / x.max()
+                                    lims = [min(x.min(), y.min()) * 1.2, max(x.max(), y.max()) * 1.2]
 
-    data = pd.DataFrame({"x": x, "y": y})
+                                        data = pd.DataFrame({"x": x, "y": y})
 
-    ax.scatter(
-        x, y,
-        s=sizes,
-        alpha=0.6,
-        edgecolor="black",
-        color=toulouse_color
-    )
+                                            ax.scatter(
+                                                    x, y,
+                                                            s=sizes,
+                                                                    alpha=0.6,
+                                                                            edgecolor="black",
+                                                                                    color=toulouse_color
+                                                                                        )
 
-    ax.set_xlim(lims)
-    ax.set_ylim(lims)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(linestyle="dashed", alpha=0.5)
+                                                                                            ax.set_xlim(lims)
+                                                                                                ax.set_ylim(lims)
+                                                                                                    ax.set_xlabel(xlabel)
+                                                                                                        ax.set_ylabel(ylabel)
+                                                                                                            ax.set_title(title)
+                                                                                                                ax.grid(linestyle="dashed", alpha=0.5)
 
-    # -------------------
-    # Regression section
-    # -------------------
-    if weighted_regression:
-        # Default weights: proportional to x (can be changed)
-        if weights is None:
-            weights = x
+                                                                                                                    # -------------------
+                                                                                                                        # Regression section
+                                                                                                                            # -------------------
+                                                                                                                                if weighted_regression:
+                                                                                                                                        # Default weights: proportional to x (can be changed)
+                                                                                                                                                if weights is None:
+                                                                                                                                                            weights = x
 
-        model = sm.WLS.from_formula(
-            'y ~ 0 + x',
-            data=data,
-            weights=weights
-        )
-    else:
-        model = sm.OLS.from_formula('y ~ 0 + x', data=data)
+                                                                                                                                                                    model = sm.WLS.from_formula(
+                                                                                                                                                                                'y ~ 0 + x',
+                                                                                                                                                                                            data=data,
+                                                                                                                                                                                                        weights=weights
+                                                                                                                                                                                                                )
+                                                                                                                                                                                                                    else:
+                                                                                                                                                                                                                            model = sm.OLS.from_formula('y ~ 0 + x', data=data)
 
-    results = model.fit()
-    b = results.params[0]
+                                                                                                                                                                                                                                results = model.fit()
+                                                                                                                                                                                                                                    b = results.params[0]
 
-    ax.text(
-        0.98, 0.09,
-        fr'Coefficient: ${np.round(b, 3)}$',
-        ha='right', va='bottom',
-        fontsize=10,
-        transform=ax.transAxes
-    )
+                                                                                                                                                                                                                                        ax.text(
+                                                                                                                                                                                                                                                0.98, 0.09,
+                                                                                                                                                                                                                                                        fr'Coefficient: ${np.round(b, 3)}$',
+                                                                                                                                                                                                                                                                ha='right', va='bottom',
+                                                                                                                                                                                                                                                                        fontsize=10,
+                                                                                                                                                                                                                                                                                transform=ax.transAxes
+                                                                                                                                                                                                                                                                                    )
 
-    ax.text(
-        0.98, 0.01,
-        fr't-stat: ${np.round(results.tvalues[0], 1)}$',
-        ha='right', va='bottom',
-        fontsize=10,
-        transform=ax.transAxes
-    )
+                                                                                                                                                                                                                                                                                        ax.text(
+                                                                                                                                                                                                                                                                                                0.98, 0.01,
+                                                                                                                                                                                                                                                                                                        fr't-stat: ${np.round(results.tvalues[0], 1)}$',
+                                                                                                                                                                                                                                                                                                                ha='right', va='bottom',
+                                                                                                                                                                                                                                                                                                                        fontsize=10,
+                                                                                                                                                                                                                                                                                                                                transform=ax.transAxes
+                                                                                                                                                                                                                                                                                                                                    )
 
-    # -------------------
-    # Lines
-    # -------------------
-    if regression_line:
-        X = np.linspace(0, lims[1], 100)
-        Y = b * X
-        ax.plot(X, Y, linestyle='--', color='green')
-    else:
-        ax.plot(lims, lims, color="black")
+                                                                                                                                                                                                                                                                                                                                        # -------------------
+                                                                                                                                                                                                                                                                                                                                            # Lines
+                                                                                                                                                                                                                                                                                                                                                # -------------------
+                                                                                                                                                                                                                                                                                                                                                    if regression_line:
+                                                                                                                                                                                                                                                                                                                                                            X = np.linspace(0, lims[1], 100)
+                                                                                                                                                                                                                                                                                                                                                                    Y = b * X
+                                                                                                                                                                                                                                                                                                                                                                            ax.plot(X, Y, linestyle='--', color='green')
+                                                                                                                                                                                                                                                                                                                                                                                else:
+                                                                                                                                                                                                                                                                                                                                                                                        ax.plot(lims, lims, color="black")
 
-    sns.despine()
-
+                                                                                                                                                                                                                                                                                                                                                                                            sns.despine()
+                                                                                                                                                                                                                                                                                                                                                                                            
 
 
 # In[2]:

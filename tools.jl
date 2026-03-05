@@ -478,134 +478,162 @@ function load_parameters_dict(folder = nothing,params = nothing)
     return params_dict
 end
 
-function generate_report(loop_folder,stage,n,variable = nothing,best_params= nothing,alpha = "")
+
+"""
+    bubble_scatter(x, y; xlabel, ylabel, title, size_scale, regression_line)
+
+Create a bubble scatter plot with empirical (x) vs simulated (y) values.
+Dot sizes are proportional to empirical values.
+Includes weighted regression (WLS, no intercept, weights = x) with coefficient and t-stat annotation.
+Draws a 45° reference line by default, or the regression line if `regression_line=true`.
+"""
+function bubble_scatter(x::AbstractVector, y::AbstractVector;
+                        xlabel::String="Empirical",
+                        ylabel::String="Simulated",
+                        title::String="",
+                        size_scale::Real=300,
+                        regression_line::Bool=false)
+
+    # Keep only observations where empirical value > 0
+    mask = x .> 0
+    xf = Float64.(x[mask])
+    yf = Float64.(y[mask])
+
+    # Marker sizes proportional to empirical values
+    sizes = size_scale .* xf ./ maximum(xf)
+
+    # Axis limits (with a small margin)
+    lo = min(minimum(xf), minimum(yf)) * 0.9
+    hi = max(maximum(xf), maximum(yf)) * 1.1
+    lims = (lo, hi)
+
+    # ── Weighted least-squares:  y = b·x  (no intercept), weights = x ──
+    w = xf
+    b = sum(w .* xf .* yf) / sum(w .* xf .^ 2)
+
+    # Residuals & standard error
+    resid = yf .- b .* xf
+    n = length(xf)
+    s2 = sum(w .* resid .^ 2) / max(n - 1, 1)
+    se_b = sqrt(s2 / sum(w .* xf .^ 2))
+    t_stat = se_b > 0 ? b / se_b : Inf
+
+    # ── Build scatter plot ──
+    p = scatter(xf, yf;
+        markersize  = sqrt.(sizes) ./ 2,
+        alpha       = 0.6,
+        markerstrokecolor = :black,
+        markerstrokewidth = 0.5,
+        color       = RGB(0.247, 0.404, 0.667),   # steelblue-ish, similar to Toulouse color
+        label       = "",
+        xlabel      = xlabel,
+        ylabel      = ylabel,
+        title       = title,
+        xlims       = lims,
+        ylims       = lims,
+        grid        = true,
+        gridalpha   = 0.5,
+        gridstyle   = :dash
+    )
+
+    # ── Reference / regression line ──
+    if regression_line
+        X_line = range(0, hi, length=100)
+        Y_line = b .* X_line
+        plot!(p, X_line, Y_line; linestyle=:dash, color=:green, label="Fit")
+    else
+        plot!(p, [lo, hi], [lo, hi]; color=:black, label="45°", linewidth=1)
+    end
+
+    # ── Annotate coefficient and t-stat ──
+    annotate!(p,
+        hi * 0.95, lo + (hi - lo) * 0.12,
+        text(@sprintf("Coef: %.3f", b), :right, 8))
+    annotate!(p,
+        hi * 0.95, lo + (hi - lo) * 0.04,
+        text(@sprintf("t-stat: %.1f", t_stat), :right, 8))
+
+    return p
+end
+
+
+function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="")
 
     folder = joinpath(loop_folder, stage)
-    mkpath(folder) 
+    mkpath(folder)
 
     if best_params == nothing
-        best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))# Load best params.
-        params_list = [best_params[:,K] for K in 1:K_max]
-        params_list,results = train_stage_one(n,nothing,params_list,false)
+        best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))
+        params_list = [best_params[:, K] for K in 1:K_max]
+        params_list, results = train_stage_one(n, nothing, params_list, false)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
-        best_params = best_params[:,best_index]
-    else 
-        results = [full_SMM(best_params)] # Get simulated moments. Since we set the seed in model_CP we ensure reproducibility.
+        best_params = best_params[:, best_index]
+    else
+        results = [full_SMM(best_params)]
         best_index = 1
     end
-    # print(best_index,score[best_index])
-    # Prepare vectors.
-    # Vectorize and filter
+
+    # ── Extract empirical & simulated vectors ──
+
     emp_gamma = vec(emp_gamma_ls)
     sim_gamma = vec(results[best_index][2][3])
 
-    # Filter non-zero values
-    emp_gamma_nz = emp_gamma[emp_gamma .>= 0.01]
-    sim_gamma_nz = sim_gamma[sim_gamma .>= 0.01]
     emp_pi = vec(emp_pi_r)
     sim_pi_r = vec(results[best_index][2][5])
+
     emp_pi_sA = agg_industry_share[2:end]
     sim_pi_sA = results[best_index][2][2]
 
-    # Define thresholds
-    x_chi = quantile(emp_gamma[emp_gamma.!=0],0.9)
-    x_pi_r = 0.0
-    x_pi_sA = 0.0
+    # ── Bubble scatter plots ──
 
-    # Define x_vals only for strictly positive values
-    xmin = minimum([minimum(emp_gamma_nz), minimum(sim_gamma_nz)])
-    xmax = maximum([maximum(emp_gamma_nz), maximum(sim_gamma_nz)])
-    x_vals = range(xmin, xmax, length=300)
-    x_vals = x_vals[x_vals .> 0]  # avoid x=0
-    # Compute cdf and survival
-    F_emp = ecdf(emp_gamma_nz)
-    F_sim = ecdf(sim_gamma_nz)
-    ccdf_emp = F_emp.(x_vals)
-    ccdf_sim = F_sim.(x_vals)
-    keep = (ccdf_emp .> 0) .& (ccdf_sim .> 0) .& (x_vals .> 0) # Filter to avoid log(0)
+    p1 = bubble_scatter(emp_gamma, sim_gamma;
+        xlabel = "Empirical γ_ls",
+        ylabel = "Simulated γ_ls",
+        title  = "γ_ls: Empirical vs Simulated")
 
-    # Plot only where both x and y values are > 0
-    p1 = plot(x_vals[keep], ccdf_emp[keep], label="Empirical", lw=2, color=:blue,
-        xscale=:log10, yscale=:log10, xlabel="gamma_{ls}", ylabel="CDF",
-        title="Log-Log Complementary CDF of gamma_{ls}")
-    plot!(p1,x_vals[keep], ccdf_sim[keep], label="Simulated", lw=2, color=:red)
+    p2 = bubble_scatter(emp_pi, sim_pi_r;
+        xlabel = "Empirical π_r",
+        ylabel = "Simulated π_r",
+        title  = "π_r: Empirical vs Simulated")
 
-    emp_vals = emp_gamma[emp_gamma .> x_chi]
-    sim_vals = sim_gamma[sim_gamma .> x_chi]
-    xmin = x_chi
-    xmax = maximum([maximum(emp_vals), maximum(sim_vals)])
-    nbins = 30
-    bin_edges = range(xmin, xmax; length=nbins+1)
+    p3 = bubble_scatter(emp_pi_sA, sim_pi_sA;
+        xlabel = "Empirical π_s",
+        ylabel = "Simulated π_s",
+        title  = "π_s: Empirical vs Simulated")
 
-    # Histogram with fixed bins
-    p2 = histogram(emp_vals,
-        alpha=0.5, bins=bin_edges, label="Empirical", color=:blue, title="gamma_{ls}",
-        xlims=(xmin, xmax))
-
-    histogram!(p2, sim_vals,
-        alpha=0.5, bins=bin_edges, label="Simulated", color=:red)
-
-
-    # Histogram 2: pi_r
-    p3 = histogram(emp_pi[emp_pi .> x_pi_r],
-        alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_r",
-        xlims=(x_pi_r, maximum([maximum(emp_pi), maximum(sim_pi_r)])))
-
-    histogram!(p3, sim_pi_r[sim_pi_r .> x_pi_r],
-        alpha=0.5, bins=30, label="Simulated", color=:red)
-
-    # Histogram 4: pi_s
-    p4 = histogram(emp_pi_sA[emp_pi_sA .> x_pi_sA],
-        alpha=0.5, bins=30, label="Empirical", color=:blue, title="pi_s",
-        xlims=(x_pi_sA, maximum([maximum(emp_pi_sA), maximum(sim_pi_sA)])))
-
-    histogram!(p4, sim_pi_sA[sim_pi_sA .> x_pi_sA],
-    alpha=0.5, bins=30, label="Simulated", color=:red)
-
-    # Combine into a 2x2 subplot layout (fourth plot left blank)
-    plot(p1, p2, p3,p4 , layout=(2,2), size=(800,800))
-
+    plot(p1, p2, p3, layout=(1, 3), size=(1500, 500), margin=5Plots.mm)
     savefig(joinpath(folder, "dashboard.png"))
 
-    # Bellow we store pi_r, the productivity, and trade flows in numpy to plot them with python. 
+    # ── Save numpy arrays ──
+
     npzwrite(joinpath(folder, "pi_r.npy"), results[best_index][2][5])
     npzwrite(joinpath(folder, "productivity.npy"), unpack_params(best_params)[4])
 
-
-    # beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_ = unpack_params(best_params)
-    # data = beta,agg_labor_share_tech,agg_industry_share_tech,productivity_,T_
-    # beta = [2,9,18,5,17]
-    # low = SMM(vcat(beta/10..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-    # npzwrite(joinpath(folder, "M_ij_low_trade_cost.npy"), low)
-    # current = SMM(vcat([1,1,1,1,1]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-    # npzwrite(joinpath(folder, "M_ij_trade_cost.npy"), current)
-    # high = SMM(vcat([2,100,100,100,100]..., data[2]..., data[3]..., data[4]...,data[5]...),true)
-    # npzwrite(joinpath(folder, "M_ij_high_trade_cost.npy"), high)
-
+    # ── Text report (unchanged) ──
 
     agg_labor_share_emp = agg_labor_share
     agg_labor_share_sim = results[best_index][2][1][1]
-    agg_labor_share_ = [agg_labor_share_emp,agg_labor_share_sim]
+    agg_labor_share_ = [agg_labor_share_emp, agg_labor_share_sim]
 
-    agg_industry_share_ = [agg_industry_share,add_first_element(results[best_index][2][2])]
+    agg_industry_share_ = [agg_industry_share, add_first_element(results[best_index][2][2])]
 
     gamma_emp_result = matrix_report(emp_gamma_ls)
     gamma_sim_result = matrix_report(results[best_index][2][3])
-    gamma_ls_ = [gamma_emp_result,gamma_sim_result]
+    gamma_ls_ = [gamma_emp_result, gamma_sim_result]
 
     reg_emp = reg_coef
     reg_sim = results[best_index][2][4]
-    reg_ = [reg_emp,reg_sim]
+    reg_ = [reg_emp, reg_sim]
 
-    pi_r_emp_result = matrix_report(emp_pi,false)
+    pi_r_emp_result = matrix_report(emp_pi, false)
     pi_r_sim_result = matrix_report(results[best_index][2][5])
-    pi_r = [pi_r_emp_result,pi_r_sim_result]
-
+    pi_r = [pi_r_emp_result, pi_r_sim_result]
 
     best_score = results[best_index][1][1]
 
-    generate_dashboard_report(n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,folder*"/report.txt",variable,alpha)
+    generate_dashboard_report(n, agg_labor_share_, agg_industry_share_, gamma_ls_, reg_, pi_r, best_score,
+        folder * "/report.txt", variable, alpha)
 end
 
 
