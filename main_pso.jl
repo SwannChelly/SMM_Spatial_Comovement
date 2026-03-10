@@ -31,7 +31,7 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 ############## Load Parameters #################
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
-n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5  # Default to 4 coefficients
+n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
 end
@@ -141,8 +141,8 @@ N_PARTICLES = available-1  # Use all available cores except one
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
-max_loop = 10
-full_run = false
+max_loop = 100
+full_run = true
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
@@ -215,8 +215,8 @@ if full_run
     # Find beta that best matches regression coefficients
     scores = [score != nothing ? score[1][1] : missing for score in results_]
     k = 1
-    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1],score[2][4][k+2],score[2][4][k+3],score[2][4][k+4]] : missing for score in results_]
-    y_flat = vcat([abs(reg_coef[1]-yi[1])^2+abs(reg_coef[2]-yi[2])^2 + abs(reg_coef[3]-yi[3])^2 + abs(reg_coef[4]-yi[4])^2 + abs(reg_coef[5]-yi[5])^2 for yi in reg_coef_]...)
+    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1],score[2][4][k+2],score[2][4][k+3]] : missing for score in results_]
+    y_flat = vcat([abs(reg_coef[1]-yi[1])^2+abs(reg_coef[2]-yi[2])^2 + abs(reg_coef[3]-yi[3])^2 + abs(reg_coef[4]-yi[4])^2 for yi in reg_coef_]...)
     init_beta = expanding_beta[argmin(y_flat)][1:N_beta]
 
     println("Best initial beta: ", init_beta)

@@ -481,7 +481,7 @@ function compute_moments(network, params)
         A129 = sectors,
         ze2010 = regions,
         supplier = suppliers,
-        size = size_vec,
+        log_productivity = size_vec,
         distance = distance_vec
     )
 
@@ -496,7 +496,7 @@ function compute_moments(network, params)
 
     df.distance_bin = cut(df.distance, bins, extend=true)
 
-    fixest = reg(df, @formula(supplier ~ distance_bin + size + fe(A129)))
+    fixest = reg(df, @formula(supplier ~ distance_bin + log_productivity + fe(A129)))
     reg_coef = fixest.coef[1:N_beta]  # Changed from hardcoded 1:5
     
     # ─────────────────────────────────────────────────────────────────────────
