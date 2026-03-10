@@ -141,7 +141,7 @@ N_PARTICLES = available-1  # Use all available cores except one
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
-max_loop = 100
+max_loop = 10
 full_run = false
 length_range_beta = 20 # Normal is 50
 
