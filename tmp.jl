@@ -57,14 +57,16 @@ S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
-R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
-@everywhere const R_downstream = $(R_)
+R_downstream_ = length(N_downstream_per_region_local)
+@everywhere const R_downstream = $(R_downstream_)
 @everywhere const agg_industry_share = $(agg_industry_share_local)
 @everywhere const agg_labor_share = $(coefs[2,"value"])
 @everywhere const domestic_share = $(domestic_share_local)
 @everywhere regional_wages = $(regional_wages_local)
+regional_wages_downstream_local = NPZ.npzread(joinpath(input_folder, "regional_wages_downstream.npy"))
+@everywhere const regional_wages_downstream = $(regional_wages_downstream_local)
 @everywhere const distances = $(distances_local)
-@everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
+@everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs = $(w_rs_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
@@ -73,7 +75,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const nu = $(0.2)
 @everywhere const nu_s = $(ones(S).*2.5) 
 @everywhere const theta = $(1.768) 
-@everywhere const delta_r = $(ones(R))
+@everywhere const delta_r = $(ones(R_downstream_))
 @everywhere const Weight_matrix = $(nothing)
 
 if industry == "aero"
@@ -90,8 +92,7 @@ end
 
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
 X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
-X_dr_local = X_dr_local[N_downstream_per_region.!=0]
-emp_pi_r_local = X_dr_local./sum(X_dr_local)
+emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r = $(emp_pi_r_local[2:end])
 @everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy")))
@@ -136,8 +137,8 @@ Weight_matrix_custom_local = Diagonal(weights)
 
 
 # Distance bins
-DistBin_local = Array{Int}(undef, R,R)
-for i in 1:R, j in 1:R
+DistBin_local = Array{Int}(undef, R, R_downstream)
+for i in 1:R, j in 1:R_downstream
     DistBin_local[i,j] = distance_bin(distances_local[i,j])
 end
 @everywhere const DistBin = $(DistBin_local)
@@ -206,8 +207,8 @@ elseif n_coef == 5
         ]
 end
 # Use initial guess for other parameters
-A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
-A ./= sum(A) 
+A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages_downstream  # analytical inversion
+A ./= sum(A)
 
 init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init).+0.1)
 expanding_beta = [vcat(i, init_other) for i in expanding_beta]

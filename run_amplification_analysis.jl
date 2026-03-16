@@ -58,18 +58,21 @@ S_, R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
+R_downstream_ = length(N_downstream_per_region_local)
+
 # Distance bins
-DistBin_local = Array{Int}(undef, R_, R_)
-for i in 1:R_, j in 1:R_
+DistBin_local = Array{Int}(undef, R_, R_downstream_)
+for i in 1:R_, j in 1:R_downstream_
     DistBin_local[i, j] = distance_bin(distances_local[i, j])
 end
 
-R_downstream_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])[1]
 @everywhere const R_downstream = $(R_downstream_)
 @everywhere const agg_industry_share = $(agg_industry_share_local)
 @everywhere const agg_labor_share = $(coefs[2, "value"])
 @everywhere const domestic_share = $(domestic_share_local)
 @everywhere regional_wages = $(regional_wages_local)
+regional_wages_downstream_local = NPZ.npzread(joinpath(input_folder, "regional_wages_downstream.npy"))
+@everywhere const regional_wages_downstream = $(regional_wages_downstream_local)
 @everywhere const distances = $(distances_local)
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs = $(w_rs_local)
@@ -81,7 +84,7 @@ R_downstream_ = size(N_downstream_per_region_local[N_downstream_per_region_local
 @everywhere const nu = $(0.2)
 @everywhere const nu_s = $(ones(S_) .* 2.5)
 @everywhere const theta = $(1.768)
-@everywhere const delta_r = $(ones(R_))
+@everywhere const delta_r = $(ones(R_downstream_))
 @everywhere const Weight_matrix = $(nothing)
 @everywhere const X_rs = $(X_rs_local)
 

@@ -59,19 +59,12 @@ function validate_table2(
     # Create config
     config = SimulationConfig(T_periods, sigma_d, rho_d, 42, shock_model)
     
-    # Load multivariate params if needed
-    multivar_params = nothing
-    if shock_model == MULTIVARIATE
-        multivar_params = load_multivariate_params(input_folder)
-    end
-    
     # Run validation
     results = run_untargeted_validation(
-        params, 
-        config = config, 
+        params,
+        config = config,
         empirical = empirical,
-        input_folder = input_folder,
-        multivar_params = multivar_params
+        input_folder = input_folder
     )
     
     # Save results

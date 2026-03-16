@@ -135,7 +135,7 @@ def unpack_simulated_moments(sim_moments, empirical_moments):
     }
 
 
-def unpack_params(params, S=9, R_downstream=35, N_beta=5):
+def unpack_params(params, S=9, R_downstream=None, N_beta=5):
     beta = params[0:N_beta]
     labor_share_tech = params[N_beta]
     input_share_tech = params[N_beta+1 : N_beta+1+S]

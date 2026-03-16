@@ -62,7 +62,7 @@ function compute_amplification_weights(params, industry::String; output_folder="
     
     println("  Network solved successfully")
     println("  Total downstream sales: $(round(sum(Y_r), digits=4))")
-    println("  Active downstream regions: $(sum(N_downstream_per_region .> 0))")
+    println("  Downstream regions: $R_downstream")
     
     # ─────────────────────────────────────────────────────────────────────────
     # Step 2: Compute w_d^{sr'} - Share of (s,r') sales going to downstream
@@ -142,31 +142,31 @@ function compute_amplification_weights(params, industry::String; output_folder="
     # firm in their OWN region l.
     # ─────────────────────────────────────────────────────────────────────────
     
-    println("\n[Step 3] Computing w_{r'}^{sr'd} (share to local downstream)...")
-    
-    w_r_srd = zeros(S, R)
-    
+    println("\n[Step 3] Computing w_{r'}^{sr'd} (share to each downstream region)...")
+
+    # With separate upstream/downstream index spaces, "local" (same zone) requires
+    # a mapping. Without a mapping table, we compute the full distribution of
+    # downstream sales shares for each (s, l) pair.
+    # w_r_srd[s, l, r] = X_lrs[l, r, s] / Σ_r' X_lrs[l, r', s]
+    w_r_srd = zeros(S, R, R_downstream)
+
     for l in 1:R
         for s in 1:S
             total_to_downstream = X_ls[l, s]
-            local_downstream = X_lrs[l, l, s]
-            
             if total_to_downstream > 1e-12
-                w_r_srd[s, l] = local_downstream / total_to_downstream
+                for r in 1:R_downstream
+                    w_r_srd[s, l, r] = X_lrs[l, r, s] / total_to_downstream
+                end
             end
         end
     end
     
-    println("  w_{r'}^{sr'd} computed (S×R matrix)")
-    
+    println("  w_{r'}^{sr'd} computed (S×R×R_downstream tensor)")
+
     # Print diagnostics
     println("\n  Diagnostics:")
     println("    w_{r'}^{sr'd} mean (non-zero): $(round(mean(w_r_srd[w_r_srd .> 0]), digits=4))")
     println("    w_{r'}^{sr'd} max: $(round(maximum(w_r_srd), digits=4))")
-    
-    # Count how many (s,l) pairs have local downstream exposure > 0.5
-    high_local = sum(w_r_srd .> 0.5)
-    println("    Pairs with >50% local exposure: $high_local / $(S*R)")
     
     # ─────────────────────────────────────────────────────────────────────────
     # Step 4: Save outputs
@@ -182,8 +182,8 @@ function compute_amplification_weights(params, industry::String; output_folder="
     NPZ.npzwrite(joinpath(output_folder, "X_ls.npy"), X_ls)
     NPZ.npzwrite(joinpath(output_folder, "Y_r.npy"), Y_r)
     
-    # Save downstream region indices
-    downstream_regions = findall(N_downstream_per_region .> 0)
+    # Save downstream region indices (all active in new index space)
+    downstream_regions = collect(1:R_downstream)
     NPZ.npzwrite(joinpath(output_folder, "downstream_regions.npy"), downstream_regions)
     
     # Save dimensions for Python

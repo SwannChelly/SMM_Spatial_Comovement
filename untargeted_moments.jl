@@ -126,8 +126,8 @@ Identify which regions have downstream activity.
 Returns vector of indices (1-based) of regions with N_downstream_per_region > 0.
 """
 function identify_active_downstream_regions(N_downstream_per_region::Vector{Float64})
-    active = findall(x -> x > 0, N_downstream_per_region)
-    return active
+    # All downstream regions are active in the new index space
+    return collect(1:length(N_downstream_per_region))
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -378,29 +378,29 @@ function compute_a_rdi_D(network)
     exp_shares = network.firm_expenditure_shares
     Y_r = network.Y_r
     mu = network.mu
-    
-    N_rho_local, S_local, R_local, _ = size(exp_shares)
+
+    N_rho_local, S_local, R_upstream, R_down = size(exp_shares)
     total_cost = mu .* Y_r
-    
-    sales_to_downstream = zeros(N_rho_local, S_local, R_local, R_local)
-    for r in 1:R_local
+
+    sales_to_downstream = zeros(N_rho_local, S_local, R_upstream, R_down)
+    for r in 1:R_down
         if total_cost[r] > 1e-10
             sales_to_downstream[:, :, :, r] = exp_shares[:, :, :, r] .* total_cost[r]
         end
     end
-    
+
     total_sales_to_downstream = sum(sales_to_downstream, dims=4)
-    a_rdi_D = zeros(N_rho_local, S_local, R_local, R_local)
-    
-    for l in 1:R_local, s in 1:S_local, rho in 1:N_rho_local
+    a_rdi_D = zeros(N_rho_local, S_local, R_upstream, R_down)
+
+    for l in 1:R_upstream, s in 1:S_local, rho in 1:N_rho_local
         total = total_sales_to_downstream[rho, s, l, 1]
         if total > 1e-12
-            for r in 1:R_local
+            for r in 1:R_down
                 a_rdi_D[rho, s, l, r] = sales_to_downstream[rho, s, l, r] / total
             end
         end
     end
-    
+
     return a_rdi_D, sales_to_downstream, total_sales_to_downstream[:,:,:,1]
 end
 
@@ -461,30 +461,18 @@ function generate_downstream_shocks_univariate(
         sigma_innovation = sigma_unconditional * sqrt(1 - rho^2)
     end
     
-    # If active_regions specified, only generate for those
-    if active_regions !== nothing
-        R_active = length(active_regions)
-        
-        innovations = randn(R_active, T) * sigma_innovation
-        z_active = zeros(R_active, T)
-        z_active[:, 1] = randn(R_active) * sigma_unconditional
-        
-        for t in 2:T
-            z_active[:, t] = rho * z_active[:, t-1] + innovations[:, t]
-        end
-        
-        z = zeros(R_local, T)
-        z[active_regions, :] = z_active
-    else
-        innovations = randn(R_local, T) * sigma_innovation
-        z = zeros(R_local, T)
-        z[:, 1] = randn(R_local) * sigma_unconditional
-        
-        for t in 2:T
-            z[:, t] = rho * z[:, t-1] + innovations[:, t]
-        end
+    # Generate shocks directly for R_local (= R_downstream) regions
+    # active_regions is now 1:R_downstream, so no embedding needed
+    R_gen = active_regions !== nothing ? length(active_regions) : R_local
+
+    innovations = randn(R_gen, T) * sigma_innovation
+    z = zeros(R_gen, T)
+    z[:, 1] = randn(R_gen) * sigma_unconditional
+
+    for t in 2:T
+        z[:, t] = rho * z[:, t-1] + innovations[:, t]
     end
-    
+
     return z
 end
 
@@ -526,21 +514,17 @@ function generate_downstream_shocks_multivariate(
     L_innovation = cholesky(Symmetric(Sigma)).L
     L_unconditional = cholesky(Symmetric(Gamma)).L
     
-    # Generate shocks for ACTIVE regions only
+    # Generate shocks directly for R_downstream regions (no embedding needed)
     standard_normals = randn(R_downstream, T)
     innovations = L_innovation * standard_normals
-    
-    z_active = zeros(R_downstream, T)
-    z_active[:, 1] = L_unconditional * randn(R_downstream)
-    
+
+    z = zeros(R_downstream, T)
+    z[:, 1] = L_unconditional * randn(R_downstream)
+
     for t in 2:T
-        z_active[:, t] = rho_r .* z_active[:, t-1] + innovations[:, t]
+        z[:, t] = rho_r .* z[:, t-1] + innovations[:, t]
     end
-    
-    # Map back to full R_local space
-    z = zeros(R_local, T)
-    z[active_regions, :] = z_active
-    
+
     return z
 end
 
@@ -630,37 +614,32 @@ Model:
 Aggregate downstream growth computed using ONLY active downstream regions.
 """
 function simulate_supplier_sales(network, a_d_D, downstream_shocks, other_shocks, config, active_regions)
-    R_local, T = size(downstream_shocks)
-    N_rho_local, S_local, _ = size(a_d_D)
-    
+    R_down, T = size(downstream_shocks)
+    N_rho_local, S_local, R_upstream = size(a_d_D)
+
     Y_r = network.Y_r
-    
-    # Compute weights using ONLY active downstream regions
-    Y_r_active = Y_r[active_regions]
-    w_r_d_active = Y_r_active ./ sum(Y_r_active)
-    
-    # Expand to full R_local with zeros for inactive
-    w_r_d = zeros(R_local)
-    w_r_d[active_regions] = w_r_d_active
-    
+
+    # Compute weights — Y_r is already R_downstream, all active
+    w_r_d = Y_r ./ sum(Y_r)
+
     a_rdi_D, _, _ = compute_a_rdi_D(network)
-    
+
     d_ln_x_drt = downstream_shocks
-    
-    # Aggregate downstream growth using ONLY active regions
+
+    # Aggregate downstream growth
     d_ln_x_dt = sum(w_r_d .* d_ln_x_drt, dims=1)[1, :]
-    
-    d_ln_x_it = zeros(N_rho_local, S_local, R_local, T)
-    weighted_exposure_it = zeros(N_rho_local, S_local, R_local, T)
-    
-    for t in 1:T, l in 1:R_local, s in 1:S_local, rho in 1:N_rho_local
-        exposure_term = sum(a_rdi_D[rho, s, l, r] * d_ln_x_drt[r, t] for r in 1:R_local)
+
+    d_ln_x_it = zeros(N_rho_local, S_local, R_upstream, T)
+    weighted_exposure_it = zeros(N_rho_local, S_local, R_upstream, T)
+
+    for t in 1:T, l in 1:R_upstream, s in 1:S_local, rho in 1:N_rho_local
+        exposure_term = sum(a_rdi_D[rho, s, l, r] * d_ln_x_drt[r, t] for r in 1:R_down)
         weighted_exposure_it[rho, s, l, t] = exposure_term
-        
+
         a_d = a_d_D[rho, s, l]
         d_ln_x_it[rho, s, l, t] = a_d * exposure_term + (1 - a_d) * other_shocks[rho, s, l, t]
     end
-    
+
     return d_ln_x_it, d_ln_x_dt, d_ln_x_drt, weighted_exposure_it
 end
 
@@ -958,7 +937,9 @@ function run_untargeted_validation(
     
     N_rho_local = size(network.firm_expenditure_shares, 1)
     S_local = size(network.firm_expenditure_shares, 2)
-    R_local = size(network.firm_expenditure_shares, 3)
+    R_upstream = size(network.firm_expenditure_shares, 3)
+    R_down = size(network.firm_expenditure_shares, 4)
+    R_local = R_upstream  # For backward compatibility in exposure drawing
     
     println("  Suppliers: $(sum(network.linkages .> 0))")
     
@@ -993,29 +974,29 @@ function run_untargeted_validation(
     
     # Get active regions (same for all multivariate models)
     active_regions = multi_params.active_regions
-    println("\n  Active downstream regions: $(length(active_regions)) / $R_local")
+    println("\n  Active downstream regions: $(length(active_regions)) / $R_down")
     
     # Step 4: Generate shocks for ALL THREE models with THEIR OWN parameters
     println("\n[Step 4] Generating shocks (each model uses its own parameters)...")
     
     println("  Generating UNIVARIATE shocks (using univariate params)...")
     uni_shocks = generate_downstream_shocks_univariate(
-        R_local, config.T_periods, config; 
-        uni_params=uni_params, 
+        R_down, config.T_periods, config;
+        uni_params=uni_params,
         active_regions=active_regions
     )
-    println("    Std (all): $(round(std(uni_shocks), digits=4)), Std (active): $(round(std(uni_shocks[active_regions, :]), digits=4))")
-    
+    println("    Std: $(round(std(uni_shocks), digits=4))")
+
     println("  Generating MULTIVARIATE shocks (using multivariate params)...")
-    multi_shocks = generate_downstream_shocks_multivariate(R_local, config.T_periods, multi_params, config.seed)
-    println("    Std (all): $(round(std(multi_shocks), digits=4)), Std (active): $(round(std(multi_shocks[active_regions, :]), digits=4))")
-    
+    multi_shocks = generate_downstream_shocks_multivariate(R_down, config.T_periods, multi_params, config.seed)
+    println("    Std: $(round(std(multi_shocks), digits=4))")
+
     println("  Generating MULTIVARIATE_FE shocks (using multivariate_fe params + time FE)...")
-    multi_fe_shocks = generate_downstream_shocks_multivariate_fe(R_local, config.T_periods, multi_fe_params, config.seed, config.time_fe_mode)
+    multi_fe_shocks = generate_downstream_shocks_multivariate_fe(R_down, config.T_periods, multi_fe_params, config.seed, config.time_fe_mode)
     
     # Generate other customer shocks (same for all models)
     println("  Generating other customer shocks...")
-    other_shocks = generate_other_customer_shocks(N_rho_local, S_local, R_local, config.T_periods, config)
+    other_shocks = generate_other_customer_shocks(N_rho_local, S_local, R_upstream, config.T_periods, config)
     println("    Std: $(round(std(other_shocks), digits=4))")
     
     # Step 5: Build unified panel and run regressions
