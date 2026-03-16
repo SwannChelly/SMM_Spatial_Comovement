@@ -29,8 +29,7 @@ println("Using "*string(available)*" workers")
 addprocs(max(available-1, 0)) # Always leave one core for other tests. 
 
 ############## Load Parameters #################
-
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -77,14 +76,12 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 
 if industry == "aero"
     @everywhere const T_rs_init = $(X_rs_local)
-elseif industry == "auto_23"
+elseif industry == "auto"
     @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
 end
 
 # Load empirical moments
-@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
-
-
+#@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
 X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
 X_dr_local = X_dr_local[N_downstream_per_region.!=0]
@@ -100,7 +97,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 @everywhere const empirical_moments = $(empirical_moments_local)
 # @everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
 @everywhere const K_max = $(50)
-@everywhere const sigma_sr = $(NPZ.npzread(joinpath(input_folder,"sigma_sr.npy")))
+#@everywhere const sigma_sr = $(NPZ.npzread(joinpath(input_folder,"sigma_sr.npy")))
 
 # After empirical_moments_local is built
 n_labor = 1
@@ -130,23 +127,23 @@ Weight_matrix_custom_local = Diagonal(weights)
 @everywhere include("run_untargeted_validation.jl")  
 
 # Distance bins
-DistBin_local = Array{Int}(undef, R,R)
-for i in 1:R, j in 1:R
+DistBin_local = Array{Int}(undef, R,R_downstream)
+for i in 1:R, j in 1:R_downstream
     DistBin_local[i,j] = distance_bin(distances_local[i,j])
 end
 @everywhere const DistBin = $(DistBin_local)
 
 # PSO Configuration
-N_PARTICLES = available-1  # Use all available cores except one 
-MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
-MAX_ITER_STAGE = 50     # Iterations for each refinement stage
+N_PARTICLES = available-1   # Use all available cores except one 
+MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
+MAX_ITER_STAGE = 50         # Iterations for each refinement stage
 method = "original"
 max_loop = 100
 full_run = true
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
-REPORT_EVERY = 2  # Run reporting every X epochs (set to nothing for only at the end)
+REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)
 
 
 ############## MAIN OPTIMIZATION ##############
@@ -447,55 +444,6 @@ if full_run
         println("Final best fitness: $(round(best_fitness, digits=6))")
         println("Results saved to: $output_folder")
 
-
-        ############## PLOT CONVERGENCE ##############
-
-        function plot_pso_convergence(output_folder, n_loops)
-            all_best = Float64[]
-            all_mean = Float64[]
-            stage_labels = String[]
-            
-            # Load initial stage
-            hist = NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))
-            append!(all_best, hist["best_fitness"])
-            append!(all_mean, hist["mean_fitness"])
-            
-            # Load all refinement stages dynamically
-            all_folders = find_all_stage_folders(output_folder, n_loops)
-            
-            for folder in all_folders[2:end]  # Skip initial stage (already loaded)
-                hist_file = joinpath(folder, "pso_history.npy")
-                if isfile(hist_file)
-                    hist = NPZ.npzread(hist_file)
-                    append!(all_best, hist["best_fitness"])
-                    append!(all_mean, hist["mean_fitness"])
-                end
-            end
-            
-            # Normalize to percentage of initial
-            all_best_norm = 100 * all_best / all_best[1]
-            all_mean_norm = 100 * all_mean / all_mean[1]
-            
-            p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
-                    xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
-                    title="PSO Convergence", legend=:topright, color=:blue)
-            plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
-                color=:red, linestyle=:dash)
-            
-            # Add vertical lines at stage boundaries
-            cumulative_iter = length(NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))["best_fitness"])
-            for folder in all_folders[2:end]
-                hist_file = joinpath(folder, "pso_history.npy")
-                if isfile(hist_file)
-                    hist = NPZ.npzread(hist_file)
-                    cumulative_iter += length(hist["best_fitness"])
-                    vline!(p, [cumulative_iter], color=:gray, alpha=0.3, label="")
-                end
-            end
-            
-            savefig(p, joinpath(output_folder, "pso_convergence.png"))
-            println("\nConvergence plot saved to: $(joinpath(output_folder, "pso_convergence.png"))")
-        end
     end
 
     ############## FINAL REPORTING ##############
@@ -570,6 +518,7 @@ productivity = Float64[]
 for l in 1:R
     for s in 1:S
         for rho in 1:N_rho
+            global siren  # ADD THIS LINE
             siren += 1
             for r in 1:R
                 push!(sirens,siren)

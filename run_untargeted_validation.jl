@@ -250,7 +250,7 @@ This is the comprehensive validation function that:
 
 # Arguments
 - `params`: Calibrated parameter vector
-- `industry`: Industry name (e.g., "aero", "auto_23")
+- `industry`: Industry name (e.g., "aero", "auto")
 - `T_periods`: Number of time periods (default: 36)
 - `time_fe_mode`: For MULTIVARIATE_FE only - "resample", "new", or "empirical" (default: "resample")
 
