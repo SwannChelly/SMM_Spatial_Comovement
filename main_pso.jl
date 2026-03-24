@@ -29,7 +29,8 @@ println("Using "*string(available)*" workers")
 addprocs(max(available-1, 0)) # Always leave one core for other tests. 
 
 ############## Load Parameters #################
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
+
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -55,14 +56,12 @@ S_,R_ = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
 @everywhere const R = $(R_)
 
-R_downstream_ = length(N_downstream_per_region_local)
-@everywhere const R_downstream = $(R_downstream_)
+R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
+@everywhere const R_downstream = $(R_)
 @everywhere const agg_industry_share = $(agg_industry_share_local)
 @everywhere const agg_labor_share = $(coefs[2,"value"])
 @everywhere const domestic_share = $(domestic_share_local)
 @everywhere regional_wages = $(regional_wages_local)
-regional_wages_downstream_local = NPZ.npzread(joinpath(input_folder, "regional_wages_downstream.npy"))
-@everywhere const regional_wages_downstream = $(regional_wages_downstream_local)
 @everywhere const distances = $(distances_local)
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const w_rs = $(w_rs_local)
@@ -73,7 +72,7 @@ regional_wages_downstream_local = NPZ.npzread(joinpath(input_folder, "regional_w
 @everywhere const nu = $(0.2)
 @everywhere const nu_s = $(ones(S).*2.5) 
 @everywhere const theta = $(1.768) 
-@everywhere const delta_r = $(ones(R_downstream_))
+@everywhere const delta_r = $(ones(R))
 @everywhere const Weight_matrix = $(nothing)
 
 if industry == "aero"
@@ -86,7 +85,8 @@ end
 #@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
 X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
-emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
+X_dr_local = X_dr_local[N_downstream_per_region.!=0]
+emp_pi_r_local = X_dr_local./sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r = $(emp_pi_r_local[2:end])
 @everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy")))
@@ -128,23 +128,23 @@ Weight_matrix_custom_local = Diagonal(weights)
 @everywhere include("run_untargeted_validation.jl")  
 
 # Distance bins
-DistBin_local = Array{Int}(undef, R,R_downstream)
-for i in 1:R, j in 1:R_downstream
+DistBin_local = Array{Int}(undef, R,R)
+for i in 1:R, j in 1:R
     DistBin_local[i,j] = distance_bin(distances_local[i,j])
 end
 @everywhere const DistBin = $(DistBin_local)
 
 # PSO Configuration
-N_PARTICLES = available-1   # Use all available cores except one 
-MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
-MAX_ITER_STAGE = 50         # Iterations for each refinement stage
+N_PARTICLES = available-1  # Use all available cores except one 
+MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
+MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
-max_loop = 100
+max_loop = 30
 full_run = true
 length_range_beta = 20 # Normal is 50
 
 # Reporting configuration
-REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)
+REPORT_EVERY = 2  # Run reporting every X epochs (set to nothing for only at the end)
 
 
 ############## MAIN OPTIMIZATION ##############
@@ -201,8 +201,8 @@ if full_run
             ]
     end
     # Use initial guess for other parameters
-    A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages_downstream  # analytical inversion
-    A ./= sum(A)
+    A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
+    A ./= sum(A) 
 
     init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init).+0.1)
     expanding_beta = [vcat(i, init_other) for i in expanding_beta]
@@ -445,6 +445,55 @@ if full_run
         println("Final best fitness: $(round(best_fitness, digits=6))")
         println("Results saved to: $output_folder")
 
+
+        ############## PLOT CONVERGENCE ##############
+
+        function plot_pso_convergence(output_folder, n_loops)
+            all_best = Float64[]
+            all_mean = Float64[]
+            stage_labels = String[]
+            
+            # Load initial stage
+            hist = NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))
+            append!(all_best, hist["best_fitness"])
+            append!(all_mean, hist["mean_fitness"])
+            
+            # Load all refinement stages dynamically
+            all_folders = find_all_stage_folders(output_folder, n_loops)
+            
+            for folder in all_folders[2:end]  # Skip initial stage (already loaded)
+                hist_file = joinpath(folder, "pso_history.npy")
+                if isfile(hist_file)
+                    hist = NPZ.npzread(hist_file)
+                    append!(all_best, hist["best_fitness"])
+                    append!(all_mean, hist["mean_fitness"])
+                end
+            end
+            
+            # Normalize to percentage of initial
+            all_best_norm = 100 * all_best / all_best[1]
+            all_mean_norm = 100 * all_mean / all_mean[1]
+            
+            p = plot(all_best_norm, label="Best Fitness", linewidth=2, 
+                    xlabel="PSO Iteration (cumulative)", ylabel="Fitness (% of initial)",
+                    title="PSO Convergence", legend=:topright, color=:blue)
+            plot!(p, all_mean_norm, label="Mean Fitness", linewidth=2, 
+                color=:red, linestyle=:dash)
+            
+            # Add vertical lines at stage boundaries
+            cumulative_iter = length(NPZ.npzread(joinpath(output_folder, "0", "pso_history.npy"))["best_fitness"])
+            for folder in all_folders[2:end]
+                hist_file = joinpath(folder, "pso_history.npy")
+                if isfile(hist_file)
+                    hist = NPZ.npzread(hist_file)
+                    cumulative_iter += length(hist["best_fitness"])
+                    vline!(p, [cumulative_iter], color=:gray, alpha=0.3, label="")
+                end
+            end
+            
+            savefig(p, joinpath(output_folder, "pso_convergence.png"))
+            println("\nConvergence plot saved to: $(joinpath(output_folder, "pso_convergence.png"))")
+        end
     end
 
     ############## FINAL REPORTING ##############
@@ -479,13 +528,13 @@ Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"),
 network = solve_network(best_params, return_firm_level=true)
 folder = output_folder 
 
-w_srd_r = zeros(S, R, R_downstream)
-X_lrs = network.X_lrs
-
+w_srd_r = zeros(S, R, R)
+X_lrs = network[1]
+    
 for s in 1:S, r_prime in 1:R
     total_downstream_sales = sum(X_lrs[r_prime, :, s])
     if total_downstream_sales > 1e-10
-        for r in 1:R_downstream
+        for r in 1:R
             w_srd_r[s, r_prime, r] = X_lrs[r_prime, r, s] / total_downstream_sales
         end
     end
@@ -493,9 +542,9 @@ end
 
 npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-firm_expenditure_shares = network.firm_expenditure_shares
+firm_expenditure_shares = network[7]
 links = firm_expenditure_shares .!= 0
-suppliers = reshape(sum(links, dims=4), N_rho, S, R) .!= 0
+suppliers = reshape(sum(links, dims=4), S, N_rho, R) .!= 0
 npzwrite(joinpath(folder, "suppliers.npy"), suppliers)
 
 println("\nPost-hoc analysis complete for industry: $industry")
@@ -519,17 +568,17 @@ productivity = Float64[]
 for l in 1:R
     for s in 1:S
         for rho in 1:N_rho
-            global siren  # ADD THIS LINE
+            global siren
             siren += 1
-            for r in 1:R_downstream
+            for r in 1:R
                 push!(sirens,siren)
                 push!(sectors, s)
                 push!(ze2010, l)
                 push!(ze2010_downstream, r)
-                push!(share, firm_expenditure_shares[rho,s,l,r])
-                push!(downstream_purchase, network.Y_r[r]*network.mu)
-                push!(intermediate_derivative, network.firm_intermediate_derivative[rho, s, l, r])
-                push!(productivity, network.z[rho,l,s])
+                push!(share, firm_expenditure_shares[rho,s,l,r])    
+                push!(downstream_purchase, network[3][r]*network[9])     
+                push!(intermediate_derivative, network[8][rho, s, l, r])  
+                push!(productivity, network[5][rho,l,s])  
             end       
         end
     end

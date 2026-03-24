@@ -74,8 +74,8 @@ if test
     N_downstream_per_region = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy"))
     filter_N_upstream = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
     S, R = size(filter_N_upstream)
-    R_downstream = length(N_downstream_per_region)  # All entries are positive now
-    delta_r = ones(R_downstream)
+    R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
+    delta_r = ones(R)
 
     N_rho = 50
     agg_labor_share = coefs[2,"value"]
@@ -88,7 +88,6 @@ if test
 
     w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
     regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
-    regional_wages_downstream = NPZ.npzread(joinpath(input_folder, "regional_wages_downstream.npy"))
 
     domestic_share = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
     emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
@@ -114,8 +113,8 @@ if test
         end
     end
 
-    DistBin = Array{Int}(undef, R, R_downstream)
-    for i in 1:R, j in 1:R_downstream
+    DistBin = Array{Int}(undef, R, R)
+    for i in 1:R, j in 1:R
         DistBin[i,j] = distance_bin(distances[i,j])
     end
 end
@@ -156,8 +155,8 @@ Build iceberg trade cost matrix from distance bin coefficients.
 Returns array of size (R, R, S).
 """
 function build_tau(beta)
-    tau = ones(R, R_downstream, S)
-    for r_prime in 1:R, r in 1:R_downstream
+    tau = ones(R, R, S)
+    for r_prime in 1:R, r in 1:R
         b = DistBin[r_prime, r]
         if b > 0
             for s in 1:S
@@ -211,8 +210,9 @@ function solve_network(params; return_firm_level=false)
     # Build trade cost matrix τ_{r'rs}
     tau = build_tau(beta)
     
-    # A_vec IS the R_downstream-vector, use directly
-    A_r = A_vec
+    # Expand productivity A_r to full R vector
+    A_r = ones(R)
+    A_r[N_downstream_per_region .!= 0] = A_vec
     
     # Reshape for broadcasting
     Omega_s = reshape(Omega_s_vec, 1, S)  # (1, S)
@@ -237,27 +237,30 @@ function solve_network(params; return_firm_level=false)
     # ─────────────────────────────────────────────────────────────────────────
     # Distance to closest downstream plant (for regression)
     # ─────────────────────────────────────────────────────────────────────────
-    # distances is R × R_downstream, take minimum over downstream dimension
-    closest_plant_dist = vec(minimum(distances, dims=2))
+    closest_plant_dist = map(x -> distances[x[1], x[2]], 
+        argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2))
+    closest_downstream_region  = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Initialize storage
     # ─────────────────────────────────────────────────────────────────────────
-    X_lrs = zeros(R, R_downstream, S)   # Trade flows (as expenditure shares initially)
-    c_tilde_r = zeros(R_downstream)     # Unit costs c̃_r = c_r / A_r
+    X_lrs = zeros(R, R, S)              # Trade flows (as expenditure shares initially)
+    c_tilde_r = zeros(R)                # Unit costs c̃_r = c_r / A_r
     linkages = zeros(N_rho, S, R)       # Firm-level supplier indicator
     
     if return_firm_level
-        firm_expenditure_shares = zeros(N_rho, S, R, R_downstream)  # Share from (ρ,s,l) to r
-        firm_intermediate_derivative = zeros(N_rho, S, R, R_downstream)
+        firm_expenditure_shares = zeros(N_rho, S, R, R)  # Share from (ρ,s,l) to r
+        firm_intermediate_derivative = zeros(N_rho, S, R, R)
     end
     
     # ─────────────────────────────────────────────────────────────────────────
     # Solve for each downstream region r
     # ─────────────────────────────────────────────────────────────────────────
-    for r in 1:R_downstream
-        # All R_downstream regions are active — no active check needed
-
+    for r in 1:R
+        if N_downstream_per_region[r] < 1
+            continue
+        end
+        
         # ─────────────────────────────────────────────────────────────────────
         # Compute prices faced by downstream firm r from all potential suppliers
         # p_{ρsr'→r} = w_{r's} · τ_{r'rs} / z_{ρsr'}
@@ -280,7 +283,7 @@ function solve_network(params; return_firm_level=false)
         # ─────────────────────────────────────────────────────────────────────
         P_sr = sum(1/N_rho .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
         P_r = sum(P_sr.^(1 - nu) .* Omega_s)^(1 / (1 - nu))
-        c_r = (Omega_L * regional_wages_downstream[r]^(1-lambda) +
+        c_r = (Omega_L * regional_wages[r]^(1-lambda) + 
                (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
         
         # Apply downstream productivity: c̃_r = c_r / A_r
@@ -336,12 +339,14 @@ function solve_network(params; return_firm_level=false)
     
     # Price index: P = [Σ_r p_r^ε · δ_r]^{1/ε}
     # Note: ε < 0, so higher price → lower p_r^ε contribution
-    P = sum(p_r.^epsilon .* delta_r)^(1/epsilon)
-
+    active = N_downstream_per_region .!= 0
+    P = sum((p_r[active]).^epsilon .* delta_r[active])^(1/epsilon)
+    
     E = 1.0  # Normalize total expenditure
-
+    
     # Downstream sales: Y_r = p_r^ε · P^{-ε} · E · δ_r
-    Y_r = p_r.^epsilon .* P^(-epsilon) .* E .* delta_r
+    Y_r = zeros(R)
+    Y_r[active] = (p_r[active]).^epsilon .* P^(-epsilon) .* E .* delta_r[active]
     
     # ─────────────────────────────────────────────────────────────────────────
     # Scale expenditure shares to actual trade flows
@@ -350,9 +355,11 @@ function solve_network(params; return_firm_level=false)
     # Total cost = μ · Y_r (since price = cost/μ → cost = μ × revenue)
     # Actual trade flow: X_lrs = share × μ × Y_r
     # ─────────────────────────────────────────────────────────────────────────
-    for r in 1:R_downstream
-        total_cost_r = mu * Y_r[r]
-        X_lrs[:, r, :] .*= total_cost_r
+    for r in 1:R
+        if N_downstream_per_region[r] >= 1
+            total_cost_r = mu * Y_r[r]
+            X_lrs[:, r, :] .*= total_cost_r
+        end
     end
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -369,7 +376,8 @@ function solve_network(params; return_firm_level=false)
             firm_expenditure_shares = firm_expenditure_shares,
             firm_intermediate_derivative = firm_intermediate_derivative,
             mu = mu,
-            P = P
+            P = P,
+            closest_downstream_region = closest_downstream_region
         )
     else
         return (
@@ -378,7 +386,8 @@ function solve_network(params; return_firm_level=false)
             Y_r = Y_r,
             linkages = linkages,
             z = z,
-            closest_plant_dist = closest_plant_dist
+            closest_plant_dist = closest_plant_dist,
+            closest_downstream_region = closest_downstream_region
         )
     end
 end
@@ -408,25 +417,32 @@ function compute_moments(network, params)
     linkages = network.linkages
     z = network.z
     closest_plant_dist = network.closest_plant_dist
+    closest_downstream_region = network.closest_downstream_region
     
     # ─────────────────────────────────────────────────────────────────────────
     # 1. Aggregate labor share (matching model_CP.jl exactly)
     # ─────────────────────────────────────────────────────────────────────────
     
+    active = N_downstream_per_region .!= 0
+    
     # Compute price index and B exactly as in model_CP.jl
     markup = (epsilon - 1) / epsilon
-    price_index = sum((c_tilde_r .* markup).^epsilon .* delta_r)^(1/epsilon)
+    price_index = sum((c_tilde_r[active] .* markup).^epsilon .* delta_r[active])^(1/epsilon)
     E = 1.0
     B = (markup / price_index)^(epsilon - 1) * E / price_index
-
-    # Compute y_r (output-related measure) — R_downstream-vector
-    y_r = c_tilde_r.^(epsilon - 1) .* delta_r .* B
-
-    # Compute labor_r using downstream wages
-    labor_r = Omega_L .* y_r .* (regional_wages_downstream ./ c_tilde_r).^(-lambda)
-
-    # Aggregate labor share using downstream wages
-    agg_labor_share = sum(regional_wages_downstream .* labor_r) / sum(c_tilde_r .* y_r)
+    
+    # Compute y_r (output-related measure) as in model_CP.jl
+    y_r = zeros(R)
+    y_r[active] = c_tilde_r[active].^(epsilon - 1) .* delta_r[active] .* B
+    
+    # Compute labor_r exactly as in model_CP.jl:
+    # labor_r = labor_share_tech * y_r * (regional_wages / c_r)^(-lambda)
+    labor_r = zeros(R)
+    labor_r[active] = Omega_L .* y_r[active] .* (regional_wages[active] ./ c_tilde_r[active]).^(-lambda)
+    
+    # Aggregate labor share exactly as in model_CP.jl:
+    # agg_labor_share = sum(regional_wages * labor_r) / sum(c_r * y_r)
+    agg_labor_share = sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
     
     # ─────────────────────────────────────────────────────────────────────────
     # 2. Sectoral input shares: X_s / X
@@ -448,6 +464,7 @@ function compute_moments(network, params)
     sirens = collect(1:(S*R*N_rho))
     sectors = Int[]
     regions = Int[]
+    downstream_regions = Int[]  
     suppliers = Float64[]
     distance_vec = Float64[]
     size_vec = Float64[]
@@ -457,6 +474,7 @@ function compute_moments(network, params)
             for rho in 1:N_rho
                 push!(sectors, s)
                 push!(regions, r)
+                push!(downstream_regions, closest_downstream_region[r])              
                 push!(suppliers, linkages[rho, s, r] > 0 ? 1.0 : 0.0)
                 push!(size_vec, log(z[rho, r, s]))
                 push!(distance_vec, closest_plant_dist[r])
@@ -470,7 +488,8 @@ function compute_moments(network, params)
         ze2010 = regions,
         supplier = suppliers,
         log_productivity = size_vec,
-        distance = distance_vec
+        distance = distance_vec,
+        downstream_regions = downstream_regions
     )
 
     # Define bins based on N_beta (must match distance_bin function in tools.jl)
@@ -481,10 +500,10 @@ function compute_moments(network, params)
     else
         error("Unsupported N_beta: $N_beta. Add bin definition for this case.")
     end
-
+    df.A129_r = string.(df.A129) .* "_" .* string.(df.downstream_regions)
     df.distance_bin = cut(df.distance, bins, extend=true)
 
-    fixest = reg(df, @formula(supplier ~ distance_bin + log_productivity + fe(A129)))
+    fixest = reg(df, @formula(supplier ~ distance_bin + log_productivity + fe(A129_r)))
     reg_coef = fixest.coef[1:N_beta]  # Changed from hardcoded 1:5
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -495,8 +514,8 @@ function compute_moments(network, params)
     # ─────────────────────────────────────────────────────────────────────────
     #pi_r = labor_r[active] ./ sum(labor_r[active])
 
-    # 6. Downstream sales share — Y_r is already R_downstream-vector, all active
-    pi_r = Y_r / sum(Y_r)
+    # 6. Downstream sales share
+    pi_r = Y_r[active]/sum(Y_r[active])
     
     return (
         agg_labor_share = [agg_labor_share],
@@ -530,7 +549,7 @@ function SMM(params, simulation=false)
     
     if simulation
         # Return aggregated trade flows (sum over sectors)
-        return reshape(sum(network.X_lrs, dims=3), R, R_downstream)
+        return reshape(sum(network.X_lrs, dims=3), R, R)
     end
     
     # Compute and return moments
