@@ -59,19 +59,12 @@ function validate_table2(
     # Create config
     config = SimulationConfig(T_periods, sigma_d, rho_d, 42, shock_model)
     
-    # Load multivariate params if needed
-    multivar_params = nothing
-    if shock_model == MULTIVARIATE
-        multivar_params = load_multivariate_params(input_folder)
-    end
-    
     # Run validation
     results = run_untargeted_validation(
-        params, 
-        config = config, 
+        params,
+        config = config,
         empirical = empirical,
-        input_folder = input_folder,
-        multivar_params = multivar_params
+        input_folder = input_folder
     )
     
     # Save results
@@ -250,7 +243,7 @@ This is the comprehensive validation function that:
 
 # Arguments
 - `params`: Calibrated parameter vector
-- `industry`: Industry name (e.g., "aero", "auto_23")
+- `industry`: Industry name (e.g., "aero", "auto")
 - `T_periods`: Number of time periods (default: 36)
 - `time_fe_mode`: For MULTIVARIATE_FE only - "resample", "new", or "empirical" (default: "resample")
 

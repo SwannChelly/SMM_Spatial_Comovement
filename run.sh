@@ -7,7 +7,7 @@
 #   ./run_smm.sh aero 4
 #   ./run_smm.sh aero 5
 #   ./run_smm.sh car 4
-#   ./run_smm.sh both 5    # Runs aero then auto_23 sequentially
+#   ./run_smm.sh both 5    # Runs aero then auto sequentially
 #
 
 set -e  # Exit on error
@@ -16,12 +16,12 @@ set -e  # Exit on error
 if [ -z "$1" ]; then
     echo "Error: No industry specified"
     echo "Usage: $0 <industry> <n_coef>"
-    echo "  industry: aero, auto_23, car, both (runs aero then auto_23)"
+    echo "  industry: aero, auto, car, both (runs aero then auto)"
     echo "  n_coef: 4 or 5 (number of regression coefficients)"
     echo ""
     echo "Example: $0 aero 4"
     echo "         $0 car 5"
-    echo "         $0 both 5  # runs aero then auto_23 sequentially"
+    echo "         $0 both 5  # runs aero then auto sequentially"
     exit 1
 fi
 
@@ -109,7 +109,7 @@ sleep 1  # Brief pause to ensure processes are terminated
 # Handle "both" option
 if [ "$INDUSTRY" = "both" ]; then
     echo "=========================================="
-    echo "Running aero then auto_23 sequentially"
+    echo "Running aero then auto sequentially"
     echo "=========================================="
     echo ""
     
@@ -120,11 +120,11 @@ if [ "$INDUSTRY" = "both" ]; then
     echo "--- aero completed ---"
     echo ""
     
-    # Run auto_23 second (foreground, wait for completion)
-    echo "--- Running auto_23 ---"
-    run_industry "auto_23" "$N_COEF" "no"
+    # Run auto second (foreground, wait for completion)
+    echo "--- Running auto ---"
+    run_industry "auto" "$N_COEF" "no"
     echo ""
-    echo "--- auto_23 completed ---"
+    echo "--- auto completed ---"
     echo ""
     
     echo "=========================================="
