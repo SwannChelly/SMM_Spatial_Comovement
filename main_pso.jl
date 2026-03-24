@@ -77,14 +77,12 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 
 if industry == "aero"
     @everywhere const T_rs_init = $(X_rs_local)
-elseif industry == "auto_23"
+elseif industry == "auto"
     @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
 end
 
 # Load empirical moments
-@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
-
-
+#@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
 X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
 X_dr_local = X_dr_local[N_downstream_per_region.!=0]
@@ -100,7 +98,7 @@ empirical_moments_local = reshape(empirical_moments_local,1,length(empirical_mom
 @everywhere const empirical_moments = $(empirical_moments_local)
 # @everywhere const empirical_moments_reduced = $(reshape(emp_gamma_ls[mask_emp_gamma_ls.!=0],(1,size(emp_gamma_ls[mask_emp_gamma_ls.!=0])[1])))
 @everywhere const K_max = $(50)
-@everywhere const sigma_sr = $(NPZ.npzread(joinpath(input_folder,"sigma_sr.npy")))
+#@everywhere const sigma_sr = $(NPZ.npzread(joinpath(input_folder,"sigma_sr.npy")))
 
 # After empirical_moments_local is built
 n_labor = 1
@@ -141,7 +139,7 @@ N_PARTICLES = available-1  # Use all available cores except one
 MAX_ITER_INITIAL = 200    # Iterations for initial full optimization
 MAX_ITER_STAGE = 50     # Iterations for each refinement stage
 method = "original"
-max_loop = 100
+max_loop = 30
 full_run = true
 length_range_beta = 20 # Normal is 50
 
@@ -570,6 +568,7 @@ productivity = Float64[]
 for l in 1:R
     for s in 1:S
         for rho in 1:N_rho
+            global siren
             siren += 1
             for r in 1:R
                 push!(sirens,siren)
