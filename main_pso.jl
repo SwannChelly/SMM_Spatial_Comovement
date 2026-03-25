@@ -127,8 +127,8 @@ Weight_matrix_custom_local = Diagonal(weights)
 @everywhere include("run_untargeted_validation.jl")  
 
 # Distance bins
-DistBin_local = Array{Int}(undef, R,R_downstream)
-for i in 1:R, j in 1:R_downstream
+DistBin_local = Array{Int}(undef, R,R)
+for i in 1:R, j in 1:R
     DistBin_local[i,j] = distance_bin(distances_local[i,j])
 end
 @everywhere const DistBin = $(DistBin_local)
@@ -138,7 +138,7 @@ N_PARTICLES = available-1   # Use all available cores except one
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
 MAX_ITER_STAGE = 50         # Iterations for each refinement stage
 method = "original"
-max_loop = 100
+max_loop = 30
 full_run = true
 length_range_beta = 20 # Normal is 50
 

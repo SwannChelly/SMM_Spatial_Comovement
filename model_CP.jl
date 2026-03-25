@@ -155,8 +155,8 @@ Build iceberg trade cost matrix from distance bin coefficients.
 Returns array of size (R, R, S).
 """
 function build_tau(beta)
-    tau = ones(R, R_downstream, S)
-    for r_prime in 1:R, r in 1:R_downstream
+    tau = ones(R, R, S)
+    for r_prime in 1:R, r in 1:R
         b = DistBin[r_prime, r]
         if b > 0
             for s in 1:S
@@ -239,6 +239,7 @@ function solve_network(params; return_firm_level=false)
     # ─────────────────────────────────────────────────────────────────────────
     closest_plant_dist = map(x -> distances[x[1], x[2]], 
         argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2))
+    closest_downstream_region  = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Initialize storage
@@ -375,7 +376,8 @@ function solve_network(params; return_firm_level=false)
             firm_expenditure_shares = firm_expenditure_shares,
             firm_intermediate_derivative = firm_intermediate_derivative,
             mu = mu,
-            P = P
+            P = P,
+            closest_downstream_region = closest_downstream_region
         )
     else
         return (
@@ -384,7 +386,8 @@ function solve_network(params; return_firm_level=false)
             Y_r = Y_r,
             linkages = linkages,
             z = z,
-            closest_plant_dist = closest_plant_dist
+            closest_plant_dist = closest_plant_dist,
+            closest_downstream_region = closest_downstream_region
         )
     end
 end
@@ -414,6 +417,7 @@ function compute_moments(network, params)
     linkages = network.linkages
     z = network.z
     closest_plant_dist = network.closest_plant_dist
+    closest_downstream_region = network.closest_downstream_region
     
     # ─────────────────────────────────────────────────────────────────────────
     # 1. Aggregate labor share (matching model_CP.jl exactly)
@@ -460,6 +464,7 @@ function compute_moments(network, params)
     sirens = collect(1:(S*R*N_rho))
     sectors = Int[]
     regions = Int[]
+    downstream_regions = Int[]  
     suppliers = Float64[]
     distance_vec = Float64[]
     size_vec = Float64[]
@@ -469,6 +474,7 @@ function compute_moments(network, params)
             for rho in 1:N_rho
                 push!(sectors, s)
                 push!(regions, r)
+                push!(downstream_regions, closest_downstream_region[r])              
                 push!(suppliers, linkages[rho, s, r] > 0 ? 1.0 : 0.0)
                 push!(size_vec, log(z[rho, r, s]))
                 push!(distance_vec, closest_plant_dist[r])
@@ -482,7 +488,8 @@ function compute_moments(network, params)
         ze2010 = regions,
         supplier = suppliers,
         log_productivity = size_vec,
-        distance = distance_vec
+        distance = distance_vec,
+        downstream_regions = downstream_regions
     )
 
     # Define bins based on N_beta (must match distance_bin function in tools.jl)
@@ -493,10 +500,10 @@ function compute_moments(network, params)
     else
         error("Unsupported N_beta: $N_beta. Add bin definition for this case.")
     end
-
+    df.A129_r = string.(df.A129) .* "_" .* string.(df.downstream_regions)
     df.distance_bin = cut(df.distance, bins, extend=true)
 
-    fixest = reg(df, @formula(supplier ~ distance_bin + log_productivity + fe(A129)))
+    fixest = reg(df, @formula(supplier ~ distance_bin + log_productivity + fe(A129_r)))
     reg_coef = fixest.coef[1:N_beta]  # Changed from hardcoded 1:5
     
     # ─────────────────────────────────────────────────────────────────────────
