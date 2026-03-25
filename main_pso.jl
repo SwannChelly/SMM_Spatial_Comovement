@@ -133,6 +133,12 @@ for i in 1:R, j in 1:R
 end
 @everywhere const DistBin = $(DistBin_local)
 
+# Precompute closest downstream plant distance and region (constants depending only on distances and N_downstream_per_region)
+closest_plant_dist_local = vec(map(x -> distances_local[x[1], x[2]], argmin(1 ./ (1 ./ distances_local .* (N_downstream_per_region_local .> 0)'), dims=2)))
+closest_downstream_region_local = vec(getindex.(argmin(1 ./ (1 ./ distances_local .* (N_downstream_per_region_local .> 0)'), dims=2), 2))
+@everywhere const CLOSEST_PLANT_DIST = $(closest_plant_dist_local)
+@everywhere const CLOSEST_DOWNSTREAM_REGION = $(closest_downstream_region_local)
+
 # PSO Configuration
 N_PARTICLES = available-1   # Use all available cores except one 
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization

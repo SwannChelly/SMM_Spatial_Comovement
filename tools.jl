@@ -236,19 +236,19 @@ function assign_T_with_mask(true_T,sample)
     return accept 
 end
 
-function parallel_SMM(params, simulation, second_stage, method)
-    return full_SMM(params, simulation, second_stage, method)
+function parallel_SMM(params, simulation, second_stage, method; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+    return full_SMM(params, simulation, second_stage, method; precomputed_tau=precomputed_tau)
 end
 
 
-function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true)
+function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
     end
     
     try
-        result = parallel_SMM(params, simulation, second_stage, method) # Run the SMM in parallel. 
+        result = parallel_SMM(params, simulation, second_stage, method; precomputed_tau=precomputed_tau) # Run the SMM in parallel.
 
         return result
     catch e

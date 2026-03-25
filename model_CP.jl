@@ -117,6 +117,9 @@ if test
     for i in 1:R, j in 1:R
         DistBin[i,j] = distance_bin(distances[i,j])
     end
+
+    CLOSEST_PLANT_DIST = vec(map(x -> distances[x[1], x[2]], argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2)))
+    CLOSEST_DOWNSTREAM_REGION = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
 end
 
 
@@ -198,7 +201,7 @@ If return_firm_level=true, additionally returns:
 - `mu`: Inverse markup μ = (ε-1)/ε
 - `P`: Aggregate downstream price index
 """
-function solve_network(params; return_firm_level=false)
+function solve_network(params; return_firm_level=false, precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
     
     Random.seed!(50)  # For reproducibility
     
@@ -208,7 +211,7 @@ function solve_network(params; return_firm_level=false)
     beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
     
     # Build trade cost matrix τ_{r'rs}
-    tau = build_tau(beta)
+    tau = precomputed_tau === nothing ? build_tau(beta) : precomputed_tau
     
     # Expand productivity A_r to full R vector
     A_r = ones(R)
@@ -235,11 +238,10 @@ function solve_network(params; return_firm_level=false)
     tau_perm = permutedims(tau, (3, 1, 2))
     
     # ─────────────────────────────────────────────────────────────────────────
-    # Distance to closest downstream plant (for regression)
+    # Distance to closest downstream plant (precomputed constants)
     # ─────────────────────────────────────────────────────────────────────────
-    closest_plant_dist = map(x -> distances[x[1], x[2]], 
-        argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2))
-    closest_downstream_region = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
+    closest_plant_dist = CLOSEST_PLANT_DIST
+    closest_downstream_region = CLOSEST_DOWNSTREAM_REGION
     
     # ─────────────────────────────────────────────────────────────────────────
     # Initialize storage
@@ -543,10 +545,10 @@ Main SMM function for optimization.
 - If simulation=true: Trade flow matrix (R × R)
 - If simulation=false: Tuple of moments for SMM estimation
 """
-function SMM(params, simulation=false)
-    
+function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+
     # Solve network
-    network = solve_network(params, return_firm_level=false)
+    network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau)
     
     if simulation
         # Return aggregated trade flows (sum over sectors)
@@ -576,10 +578,10 @@ Used for untargeted moment validation (Table 2 regression).
 - `moments`: Tuple of targeted moments  
 - `network`: Full network solution including firm-level data
 """
-function SMM_with_network(params)
-    
+function SMM_with_network(params; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+
     # Solve network with firm-level data
-    network = solve_network(params, return_firm_level=true)
+    network = solve_network(params, return_firm_level=true, precomputed_tau=precomputed_tau)
     
     # Compute moments
     moments = compute_moments(network, params)
@@ -645,9 +647,9 @@ end
 
 Full SMM evaluation: compute loss and return moments.
 """
-function full_SMM(params, simulation=false, second_stage=false, method="original")
-    
-    simulated_moments = SMM(params, simulation)
+function full_SMM(params, simulation=false, second_stage=false, method="original"; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+
+    simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau)
     
     if second_stage
         emp = empirical_moments_reduced
