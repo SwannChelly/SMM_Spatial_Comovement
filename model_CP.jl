@@ -155,8 +155,8 @@ Build iceberg trade cost matrix from distance bin coefficients.
 Returns array of size (R, R, S).
 """
 function build_tau(beta)
-    tau = ones(R, R_downstream, S)
-    for r_prime in 1:R, r in 1:R_downstream
+    tau = ones(R, R, S)
+    for r_prime in 1:R, r in 1:R
         b = DistBin[r_prime, r]
         if b > 0
             for s in 1:S
