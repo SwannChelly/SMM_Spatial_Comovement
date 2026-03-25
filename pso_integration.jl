@@ -318,6 +318,7 @@ function train_stage_pso(
         beta_indices = 1:N_beta
         best_params_prev = nothing
         warm_start = nothing
+        cached_tau = nothing  # Beta is being optimized in initial stage
         
     else
         # Continue from previous stage - load best params
@@ -328,6 +329,11 @@ function train_stage_pso(
         
         # Handle single variable or list
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
+
+        # Check if beta is fixed — if so, precompute and cache tau
+        beta_is_fixed = !("beta" in var_list)
+        cached_tau = beta_is_fixed ? build_tau(params_dict[:beta]) : nothing
+        beta_is_fixed && println("[PSO] Beta is fixed — tau precomputed and cached")
         
         # Build bounds for selected variables
         # For most parameters: [value * alpha, value / alpha]
@@ -435,7 +441,7 @@ function train_stage_pso(
         end
         
         # Evaluate SMM
-        result = parallel_SMM_safe(x_full, false, second_stage, method,false)
+        result = parallel_SMM_safe(x_full, false, second_stage, method, false; precomputed_tau=cached_tau)
         
         if isnothing(result)
             return Inf
