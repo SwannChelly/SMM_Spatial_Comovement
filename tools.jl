@@ -102,7 +102,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
     This Halton grid function allows condition on the parameters and is much faster than the previous one. 
 
     """
-    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+    A = copy(N_downstream_per_region)  # Already R_downstream, all positive
     A ./= sum(A)
     if init
         return vcat([ones(N_beta), [agg_labor_share], agg_industry_share, A, ones(S*R)]...)
@@ -931,9 +931,8 @@ function old_generate_halton_grid(n)
 
         """
         # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
-        A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
+        A = copy(N_downstream_per_region)  # Already R_downstream, all positive
         A ./= sum(A)
-        #A = ones(size(A)[1])
         #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
         #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
 
