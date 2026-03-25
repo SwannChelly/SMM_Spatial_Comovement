@@ -127,8 +127,8 @@ Weight_matrix_custom_local = Diagonal(weights)
 @everywhere include("run_untargeted_validation.jl")  
 
 # Distance bins
-DistBin_local = Array{Int}(undef, R,R_downstream)
-for i in 1:R, j in 1:R_downstream
+DistBin_local = Array{Int}(undef, R,R)
+for i in 1:R, j in 1:R
     DistBin_local[i,j] = distance_bin(distances_local[i,j])
 end
 @everywhere const DistBin = $(DistBin_local)
