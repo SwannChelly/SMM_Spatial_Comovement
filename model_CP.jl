@@ -239,7 +239,7 @@ function solve_network(params; return_firm_level=false)
     # ─────────────────────────────────────────────────────────────────────────
     closest_plant_dist = map(x -> distances[x[1], x[2]], 
         argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2))
-    closest_downstream_region = closest_plant_region = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
+    closest_downstream_region  = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Initialize storage

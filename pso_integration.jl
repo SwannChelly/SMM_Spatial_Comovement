@@ -292,7 +292,7 @@ function train_stage_pso(
     # Build bounds based on previous stage or initialization
     if last_stage_folder === nothing
         # Fresh start - use init_beta
-        A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages_downstream  # analytical inversion
+        A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region.!=0]  # analytical inversion
         A ./= sum(A)
         
         lb = vcat(
