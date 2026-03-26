@@ -24,10 +24,10 @@ using Statistics, Printf
 using StatsBase
 
 # Add workers
-available = Sys.CPU_THREADS - nprocs()
+available = 20#Sys.CPU_THREADS - nprocs()
 println("Using "*string(available)*" workers")
-addprocs(max(available-1, 0)) # Always leave one core for other tests. 
-
+#addprocs(max(available-1, 0)) # Always leave one core for other tests. 
+addprocs(20)
 ############## Load Parameters #################
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
