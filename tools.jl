@@ -916,6 +916,85 @@ function find_last_stage_folder(base_folder::String)
     return stage_folders[end][2]
 end
 
+"""
+    find_resume_state(base_folder)
+
+Scan the output folder to determine the resume point for PSO optimization.
+Returns a NamedTuple with:
+  - `last_folder`: path to the last completed stage folder
+  - `last_epoch`: epoch number (0 if only initial stage exists)
+  - `last_stage`: global stage counter value of the last completed stage
+  - `resume_loop`: which loop to resume in
+  - `resume_substage`: which sub-stage (1, 2, or 3) to resume at within that loop
+"""
+function find_resume_state(base_folder::String)
+    # Collect all epoch folders
+    epoch_folders = Tuple{Int, String}[]
+    for item in readdir(base_folder)
+        if startswith(item, "epoch_")
+            epoch_num = tryparse(Int, replace(item, "epoch_" => ""))
+            if epoch_num !== nothing
+                epoch_path = joinpath(base_folder, item)
+                if isdir(epoch_path)
+                    push!(epoch_folders, (epoch_num, epoch_path))
+                end
+            end
+        end
+    end
+
+    # Case 1: No epoch folders — only the initial stage 0 exists
+    if isempty(epoch_folders)
+        initial_folder = joinpath(base_folder, "0")
+        if isdir(initial_folder) && isfile(joinpath(initial_folder, "best_params.npy"))
+            return (last_folder = initial_folder, last_epoch = 0, last_stage = 0,
+                    resume_loop = 1, resume_substage = 1)
+        end
+        error("No completed stages found in $base_folder. Cannot resume.")
+    end
+
+    # Case 2: Find the last completed stage across all epochs
+    sort!(epoch_folders, by=x->x[1])
+    last_epoch_num = epoch_folders[end][1]
+    last_epoch_path = epoch_folders[end][2]
+
+    # Find stage folders within the last epoch
+    stage_folders = Tuple{Int, String}[]
+    for item in readdir(last_epoch_path)
+        item_path = joinpath(last_epoch_path, item)
+        if isdir(item_path)
+            stage_num = tryparse(Int, item)
+            if stage_num !== nothing && isfile(joinpath(item_path, "best_params.npy"))
+                push!(stage_folders, (stage_num, item_path))
+            end
+        end
+    end
+
+    if isempty(stage_folders)
+        error("No completed stage folders found in $last_epoch_path")
+    end
+
+    sort!(stage_folders, by=x->x[1])
+    last_stage_num = stage_folders[end][1]
+    last_stage_path = stage_folders[end][2]
+
+    # Determine sub-stage within the loop: stages are (loop-1)*3 + {1,2,3}
+    sub_stage_in_loop = last_stage_num - (last_epoch_num - 1) * 3  # 1, 2, or 3
+
+    if sub_stage_in_loop == 3
+        # All 3 sub-stages done for this loop → resume at next loop, sub-stage 1
+        resume_loop = last_epoch_num + 1
+        resume_substage = 1
+    else
+        # Resume within the same loop at the next sub-stage
+        resume_loop = last_epoch_num
+        resume_substage = sub_stage_in_loop + 1
+    end
+
+    return (last_folder = last_stage_path, last_epoch = last_epoch_num,
+            last_stage = last_stage_num, resume_loop = resume_loop,
+            resume_substage = resume_substage)
+end
+
 
 ############ Old functions ##############
 
