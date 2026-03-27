@@ -31,6 +31,7 @@ addprocs(20)
 ############## Load Parameters #################
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
+resume = length(ARGS) >= 3 && ARGS[3] == "resume"
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
 end
@@ -154,7 +155,34 @@ REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at t
 
 ############## MAIN OPTIMIZATION ##############
 
+# Resume state variables (set below if resuming)
+resume_loop = 1
+resume_substage = 1
+
+if resume
+    ############## RESUME MODE ##############
+    println("\n" * "="^70)
+    println("RESUME MODE: Scanning $output_folder for last completed stage...")
+    println("="^70)
+
+    resume_state = find_resume_state(output_folder)
+    best_params = NPZ.npzread(joinpath(resume_state.last_folder, "best_params.npy"))
+    if ndims(best_params) > 1
+        best_params = best_params[:, 1]
+    end
+    best_fitness = NaN  # Will be updated on next PSO call
+
+    resume_loop = resume_state.resume_loop
+    resume_substage = resume_state.resume_substage
+    stage = resume_state.last_stage
+
+    println("  Last completed: $(resume_state.last_folder)")
+    println("  Resuming at loop $resume_loop, sub-stage $resume_substage (global stage $stage)")
+    println("="^70)
+end
+
 if full_run
+    if !resume
     ############# INITIAL SEARCH FOR GOOD BETA ##############
 
     println("\n" * "="^70)
@@ -164,26 +192,26 @@ if full_run
 
 
     # First find a reasonable beta using targeted search on regression coefficients
-    
+
 
     # Create grid with 3 categories:
     # - i: first beta (β₁)
-    # - j: second beta (β₂)  
+    # - j: second beta (β₂)
     # - k: remaining betas (β₃, β₄, β₅) - all share same value
     # if industry == "aero"
-    #     range_beta = range(0.0005, stop = 3, length = length_range_beta+30) 
+    #     range_beta = range(0.0005, stop = 3, length = length_range_beta+30)
     #     expanding_beta = [
     #         [i, k,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-    #         for i in range_beta 
+    #         for i in range_beta
     #         for k in range_beta
     #         if i <= j <= k
     #     ]
-    # else 
-    #     range_beta = range(0.0005, stop = 3, length = length_range_beta) 
+    # else
+    #     range_beta = range(0.0005, stop = 3, length = length_range_beta)
     #     expanding_beta = [
     #         [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-    #         for i in range_beta 
-    #         for j in range_beta 
+    #         for i in range_beta
+    #         for j in range_beta
     #         for k in range_beta
     #         if i <= j <= k
     #     ]
@@ -191,23 +219,23 @@ if full_run
     if n_coef == 4
         expanding_beta = [
                 [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=k
-                for i in range_beta 
-                for j in range_beta 
+                for i in range_beta
+                for j in range_beta
                 for k in range_beta
                 if i <= j <= k
             ]
     elseif n_coef == 5
         expanding_beta = [
                 [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-                for i in range_beta 
-                for j in range_beta 
+                for i in range_beta
+                for j in range_beta
                 for k in range_beta
                 if i <= j <= k
             ]
     end
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
-    A ./= sum(A) 
+    A ./= sum(A)
 
     init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init).+0.1)
     expanding_beta = [vcat(i, init_other) for i in expanding_beta]
@@ -260,20 +288,19 @@ if full_run
 
     println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
+    end # if !resume
+
     if max_loop != nothing
         ############# MULTI-STAGE REFINEMENT ##############
 
         println("\n" * "="^70)
         println("Starting multi-stage PSO refinement (3 stages per loop)")
         println("="^70)
-        stage = 0
-        loop_start = 1
-        if loop_start == 1
+        loop_start = resume ? resume_loop : 1
+        if !resume
             stage = 0
-        else
-            stage = (loop_start-1)*3  # Now 3 stages per loop
         end
-        println("Starting at stage: $stage")
+        println("Starting at loop: $loop_start, stage: $stage")
         
         # Alpha controls search radius: starts tight, expands over time
         alpha_start, alpha_end = 0.3, 0.9
@@ -284,7 +311,7 @@ if full_run
             global best_params
             global best_fitness
 
-            alpha = alpha_start + (loop - loop_start) * (alpha_end - alpha_start) / (max_loop - loop_start)
+            alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
             
             println("\n" * "="^70)
             println("REFINEMENT LOOP $loop / $max_loop")
@@ -301,11 +328,19 @@ if full_run
             # With ε = -16, errors in A_r are amplified 16x in π_r
             # Use tight bounds and log-space loss for π_r matching
             
+            # Check if this sub-stage should be skipped (resume mode)
+            skip_substage_1 = resume && loop == resume_loop && resume_substage > 1
+
+            if skip_substage_1
+                stage += 1
+                println("  ⏭ Skipping Stage 1 (already completed)")
+            else
+
             println("\n" * "-"^50)
             println("Loop $(loop) - Stage 1: PRODUCTIVITY (π_r matching)")
             println("-"^50)
             println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*alpha, digits=2)))")
-            
+
             # Tighter alpha for productivity due to high sensitivity
             alpha_productivity = 0.7 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
             #alpha_productivity = alpha
@@ -319,7 +354,7 @@ if full_run
                 second_stage = false,
                 method = method  # Log-space loss for π_r (handles concentration)
             )
-            
+
             stage += 1
             folder = joinpath(loop_folder, string(stage))
             mkpath(folder)
@@ -329,8 +364,10 @@ if full_run
                 "mean_fitness" => history["mean_fitness"]
             ))
             generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_productivity))
-            
+
             println("  ✓ Stage 1 complete. Fitness: $(round(best_fitness, digits=6))")
+
+            end # skip_substage_1
             
             # ═══════════════════════════════════════════════════════════════════
             # STAGE 2: Spatial Structure (β, T) - MEDIUM SENSITIVITY
@@ -338,12 +375,20 @@ if full_run
             # Trade costs affect regression coefficients
             # Fréchet scales affect sourcing shares γ_{ls}
             
+            # Check if this sub-stage should be skipped (resume mode)
+            skip_substage_2 = resume && loop == resume_loop && resume_substage > 2
+
+            if skip_substage_2
+                stage += 1
+                println("  ⏭ Skipping Stage 2 (already completed)")
+            else
+
             println("\n" * "-"^50)
             println("Loop $(loop) - Stage 2: SPATIAL STRUCTURE (β, T)")
             println("-"^50)
             println("  Sensitivity: MEDIUM")
             println("  Targets: regression coefficients, γ_{ls}")
-            
+
             best_params, best_fitness, history = train_stage_pso(
                 N_PARTICLES,
                 MAX_ITER_STAGE,
@@ -354,7 +399,7 @@ if full_run
                 second_stage = false,
                 method = method
             )
-            
+
             stage += 1
             folder = joinpath(loop_folder, string(stage))
             mkpath(folder)
@@ -364,8 +409,10 @@ if full_run
                 "mean_fitness" => history["mean_fitness"]
             ))
             generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha))
-            
+
             println("  ✓ Stage 2 complete. Fitness: $(round(best_fitness, digits=6))")
+
+            end # skip_substage_2
             
             # ═══════════════════════════════════════════════════════════════════
             # STAGE 3: Technical Coefficients (Ω^L, Ω^s) - LOW SENSITIVITY
