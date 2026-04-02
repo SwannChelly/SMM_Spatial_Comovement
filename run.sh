@@ -3,11 +3,11 @@
 # run_smm.sh - Launch SMM Spatial Comovement calibration
 #
 # Usage:
-#   ./run_smm.sh <industry> <n_coef>
-#   ./run_smm.sh aero 4
-#   ./run_smm.sh aero 5
-#   ./run_smm.sh car 4
-#   ./run_smm.sh both 5    # Runs aero then auto sequentially
+#   ./run_smm.sh <industry> <n_coef> [optimizer]
+#   ./run_smm.sh aero 4          # PSO (default)
+#   ./run_smm.sh aero 4 pso      # PSO explicitly
+#   ./run_smm.sh aero 4 nm       # Nelder-Mead
+#   ./run_smm.sh both 5 nm       # Runs aero then auto with NM
 #
 
 set -e  # Exit on error
@@ -15,26 +15,28 @@ set -e  # Exit on error
 # Check if industry argument is provided
 if [ -z "$1" ]; then
     echo "Error: No industry specified"
-    echo "Usage: $0 <industry> <n_coef>"
-    echo "  industry: aero, auto, car, both (runs aero then auto)"
-    echo "  n_coef: 4 or 5 (number of regression coefficients)"
+    echo "Usage: $0 <industry> <n_coef> [optimizer]"
+    echo "  industry:  aero, auto, car, both (runs aero then auto)"
+    echo "  n_coef:    4 or 5 (number of regression coefficients)"
+    echo "  optimizer: pso (default) or nm (Nelder-Mead)"
     echo ""
     echo "Example: $0 aero 4"
-    echo "         $0 car 5"
-    echo "         $0 both 5  # runs aero then auto sequentially"
+    echo "         $0 aero 4 nm"
+    echo "         $0 both 5 nm"
     exit 1
 fi
 
 # Check if n_coef argument is provided
 if [ -z "$2" ]; then
     echo "Error: No n_coef specified"
-    echo "Usage: $0 <industry> <n_coef>"
+    echo "Usage: $0 <industry> <n_coef> [optimizer]"
     echo "  n_coef must be 4 or 5"
     exit 1
 fi
 
 INDUSTRY="$1"
 N_COEF="$2"
+OPTIMIZER="${3:-pso}"
 
 # Validate n_coef
 if [ "$N_COEF" != "4" ] && [ "$N_COEF" != "5" ]; then
@@ -42,7 +44,17 @@ if [ "$N_COEF" != "4" ] && [ "$N_COEF" != "5" ]; then
     exit 1
 fi
 
-JULIA_SCRIPT="SMM_Spatial_Comovement/main_pso.jl"
+# Select Julia script based on optimizer
+if [ "$OPTIMIZER" = "nm" ] || [ "$OPTIMIZER" = "NM" ]; then
+    JULIA_SCRIPT="SMM_Spatial_Comovement/main_NM.jl"
+    echo "Optimizer: Nelder-Mead (main_NM.jl)"
+elif [ "$OPTIMIZER" = "pso" ] || [ "$OPTIMIZER" = "PSO" ]; then
+    JULIA_SCRIPT="SMM_Spatial_Comovement/main_pso.jl"
+    echo "Optimizer: PSO (main_pso.jl)"
+else
+    echo "Error: optimizer must be 'pso' or 'nm', got: $OPTIMIZER"
+    exit 1
+fi
 
 # Check if Julia script exists
 if [ ! -f "$JULIA_SCRIPT" ]; then
@@ -137,11 +149,15 @@ else
     
     echo ""
     echo "To monitor progress:"
-    echo "  tail -f reporting_${INDUSTRY}/logs.log"
+    if [ "$OPTIMIZER" = "nm" ] || [ "$OPTIMIZER" = "NM" ]; then
+        echo "  tail -f reporting_${INDUSTRY}_NM/optimization.log"
+    else
+        echo "  tail -f reporting_${INDUSTRY}/logs.log"
+    fi
     echo ""
     echo "To stop the process:"
-    echo "  pkill -f 'julia.*main_pso'"
+    echo "  pkill -f 'julia.*main_'"
     echo ""
     echo "To check if still running:"
-    echo "  ps aux | grep '[j]ulia.*main_pso'"
+    echo "  ps aux | grep '[j]ulia.*main_'"
 fi

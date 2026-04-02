@@ -85,6 +85,11 @@ elseif industry == "auto"
     @everywhere const T_rs_init = $(X_rs_local)
 end
 
+# Mask for non-zero T_rs: only optimize T where gamma_ls > 0
+T_mask_local = vec(X_rs_local) .> 0
+@everywhere const T_MASK = $T_mask_local
+println("T_MASK: $(sum(T_mask_local)) / $(length(T_mask_local)) non-zero T parameters")
+
 # Load empirical moments
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
 X_dr_local = CSV.read(joinpath(input_folder, "X_dr.csv"), DataFrame).X_dr
@@ -227,7 +232,8 @@ lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 100.0)
 # Build full parameter vectors with analytical initial guesses
 A = copy(emp_pi_r_full) .^ (1 / abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
 A ./= sum(A)
-init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init) .+ 0.1)
+T_init_nonzero = vec(T_rs_init)[T_mask_local] .+ 0.1  # Only non-zero T values
+init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
 expanding_beta = [vcat(beta, init_other) for beta in lhs_betas]
 
 log_msg("Evaluating $(length(expanding_beta)) LHS beta samples in parallel...")

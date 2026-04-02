@@ -196,20 +196,24 @@ end
 Unpack parameter vector into model components (paper notation).
 
 Returns:
-- β (beta): Trade cost parameters for distance bins [5 elements]
+- β (beta): Trade cost parameters for distance bins [N_beta elements]
 - Ω^L (Omega_L): Labor share in production [scalar]
 - Ω^s (Omega_s): Sectoral input shares [S elements, normalized to sum to 1]
 - A: Downstream firm productivity by region [R_downstream elements]
-- T: Fréchet scale parameters [S × R elements]
+- T: Fréchet scale parameters [S × R elements, full vector with zeros for masked entries]
 """
 function unpack_params(params)
     beta = params[1:N_beta]
     Omega_L = params[N_beta + 1]
     Omega_s = params[(N_beta + 2):(N_beta + 1 + S)] / sum(params[(N_beta + 2):(N_beta + 1 + S)])
     A = params[(N_beta + S + 2):(N_beta + R_downstream + S + 1)]
-    T = params[(N_beta + R_downstream + S + 2):end]
-    
-    return beta, Omega_L, Omega_s, A, T
+    T_reduced = params[(N_beta + R_downstream + S + 2):end]
+
+    # Expand reduced T back to full S*R vector using T_MASK
+    T_full = zeros(S * R)
+    T_full[T_MASK] = T_reduced
+
+    return beta, Omega_L, Omega_s, A, T_full
 end
 
 
@@ -294,10 +298,13 @@ function solve_network(params; return_firm_level=false,
     if u_draws === nothing
         # Backward compatibility: random Fréchet draws with uniform weights
         Random.seed!(50)
-        frechet_dist = Frechet.(theta, T.^(1/theta))
         z_SRN = zeros(S, R, N_rho)
         for s in 1:S, r in 1:R
-            z_SRN[s, r, :] = rand(frechet_dist[s, r], N_rho)
+            if T[s, r] > 0
+                d = Frechet(theta, T[s, r]^(1/theta))
+                z_SRN[s, r, :] = rand(d, N_rho)
+            end
+            # T=0 → z stays 0 → z_inv=Inf → never wins Ricardian selection
         end
         z = permutedims(z_SRN, (3, 2, 1))
         if sample_weights === nothing
@@ -308,11 +315,14 @@ function solve_network(params; return_firm_level=false,
         # F⁻¹(u) = σ · (-ln(1-u))^(-1/θ) where σ = T_{sr}^{1/θ}
         z_SRN = zeros(S, R, N_rho)
         for s in 1:S, r in 1:R
-            scale = T[s, r]^(1/theta)
-            for rho in 1:N_rho
-                u = u_draws[rho, r, s]
-                z_SRN[s, r, rho] = scale * (-log(1.0 - u))^(-1.0/theta)
+            if T[s, r] > 0
+                scale = T[s, r]^(1/theta)
+                for rho in 1:N_rho
+                    u = u_draws[rho, r, s]
+                    z_SRN[s, r, rho] = scale * (-log(1.0 - u))^(-1.0/theta)
+                end
             end
+            # T=0 → z stays 0 → z_inv=Inf → never wins Ricardian selection
         end
         z = permutedims(z_SRN, (3, 2, 1))  # (N_rho, R, S)
     end
