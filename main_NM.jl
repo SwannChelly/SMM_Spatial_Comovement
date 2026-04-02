@@ -130,7 +130,7 @@ closest_downstream_region_local = vec(getindex.(argmin(1 ./ (1 ./ distances_loca
 
 # Precompute CdGM-style stratified productivity draws
 println("Generating CdGM-style stratified productivity draws...")
-u_draws_local, sample_weights_local = generate_stratified_draws(S_, R_, N_rho)
+u_draws_local, sample_weights_local = generate_stratified_draws(S, R, N_rho)
 @everywhere const U_DRAWS = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
 println("  Firms per (s,r): $(size(u_draws_local, 1))")
