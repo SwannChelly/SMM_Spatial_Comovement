@@ -123,6 +123,71 @@ if test
 end
 
 
+##################### Stratified Draws (CdGM-style) ###################
+
+"""
+    generate_stratified_draws(S, R, N_rho; seed=50) -> (u_matrix, weights)
+
+Generate CdGM-style stratified uniform draws for Fréchet inverse CDF.
+
+Uses 25 non-uniform bins on [0,1] that oversample the upper tail.
+Within each bin, draws are evenly spaced (deterministic).
+
+Returns:
+- `u_matrix`: Array of size (N_rho, R, S) with uniform quantiles in (0,1)
+- `weights`: Vector of length N_rho, weights sum to 1.0
+"""
+function generate_stratified_draws(S, R, N_rho; seed=50)
+
+    bin_edges = [0.00, 0.10, 0.20, 0.30, 0.40, 0.50,
+                 0.55, 0.60, 0.65, 0.70, 0.75,
+                 0.80, 0.85, 0.90, 0.925, 0.95,
+                 0.96, 0.97, 0.98, 0.99, 0.995,
+                 0.996, 0.997, 0.998, 0.999, 1.0]
+
+    N_bins = length(bin_edges) - 1  # 25
+
+    # Distribute N_rho across bins; extras go to tail bins
+    base_per_bin = div(N_rho, N_bins)
+    remainder = mod(N_rho, N_bins)
+
+    n_per_bin = fill(base_per_bin, N_bins)
+    for i in 1:remainder
+        n_per_bin[N_bins - i + 1] += 1
+    end
+
+    @assert sum(n_per_bin) == N_rho
+
+    # Generate uniform quantiles within each bin (evenly spaced midpoints)
+    u_quantiles = Float64[]
+    sample_weights = Float64[]
+
+    for b in 1:N_bins
+        lo = bin_edges[b]
+        hi = bin_edges[b + 1]
+        width = hi - lo
+        n = n_per_bin[b]
+
+        for k in 1:n
+            u = lo + (k - 0.5) / n * width  # midpoints within bin
+            push!(u_quantiles, u)
+            push!(sample_weights, width / n)  # weight = bin_width / n_firms_in_bin
+        end
+    end
+
+    # Normalize weights to sum to 1
+    sample_weights ./= sum(sample_weights)
+
+    # Expand to (N_rho, R, S) — same quantiles for all (s, r) pairs
+    u_matrix = zeros(N_rho, R, S)
+    for s in 1:S, r in 1:R
+        u_matrix[:, r, s] = u_quantiles
+    end
+
+    return u_matrix, sample_weights
+end
+
+
 ##################### Helper Functions ###################
 
 """
@@ -201,38 +266,60 @@ If return_firm_level=true, additionally returns:
 - `mu`: Inverse markup μ = (ε-1)/ε
 - `P`: Aggregate downstream price index
 """
-function solve_network(params; return_firm_level=false, precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
-    
-    Random.seed!(50)  # For reproducibility
-    
+function solve_network(params; return_firm_level=false,
+                       precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
+                       u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                       sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+
     # ─────────────────────────────────────────────────────────────────────────
     # Unpack parameters (paper notation)
     # ─────────────────────────────────────────────────────────────────────────
     beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
-    
+
     # Build trade cost matrix τ_{r'rs}
     tau = precomputed_tau === nothing ? build_tau(beta) : precomputed_tau
-    
+
     # Expand productivity A_r to full R vector
     A_r = ones(R)
     A_r[N_downstream_per_region .!= 0] = A_vec
-    
+
     # Reshape for broadcasting
     Omega_s = reshape(Omega_s_vec, 1, S)  # (1, S)
     nu_s_mat = reshape(nu_s, 1, S)        # (1, S)
     T = reshape(T_vec, S, R)              # (S, R)
-    
+
     # ─────────────────────────────────────────────────────────────────────────
-    # Draw upstream firm productivities: z_{ρsr} ~ Fréchet(θ, T_{sr}^{1/θ})
+    # Draw upstream firm productivities
     # ─────────────────────────────────────────────────────────────────────────
-    frechet_dist = Frechet.(theta, T.^(1/theta))
-    z = zeros(S, R, N_rho)
-    for s in 1:S, r in 1:R
-        z[s, r, :] = rand(frechet_dist[s, r], N_rho)
+    if u_draws === nothing
+        # Backward compatibility: random Fréchet draws with uniform weights
+        Random.seed!(50)
+        frechet_dist = Frechet.(theta, T.^(1/theta))
+        z_SRN = zeros(S, R, N_rho)
+        for s in 1:S, r in 1:R
+            z_SRN[s, r, :] = rand(frechet_dist[s, r], N_rho)
+        end
+        z = permutedims(z_SRN, (3, 2, 1))
+        if sample_weights === nothing
+            sample_weights = fill(1.0/N_rho, N_rho)
+        end
+    else
+        # CdGM-style: Fréchet inverse CDF from stratified uniform draws
+        # F⁻¹(u) = σ · (-ln(1-u))^(-1/θ) where σ = T_{sr}^{1/θ}
+        z_SRN = zeros(S, R, N_rho)
+        for s in 1:S, r in 1:R
+            scale = T[s, r]^(1/theta)
+            for rho in 1:N_rho
+                u = u_draws[rho, r, s]
+                z_SRN[s, r, rho] = scale * (-log(1.0 - u))^(-1.0/theta)
+            end
+        end
+        z = permutedims(z_SRN, (3, 2, 1))  # (N_rho, R, S)
     end
-    # Reshape to (N_rho, R, S) for indexing as z[ρ, r', s]
-    z = permutedims(z, (3, 2, 1))
     z_inv = z.^(-1)
+
+    # Reshape sample_weights for broadcasting in CES aggregation
+    w_rho = reshape(sample_weights, N_rho, 1)  # (N_rho, 1)
     
     # Reshape tau for broadcasting: (S, R_origin, R_dest)
     tau_perm = permutedims(tau, (3, 1, 2))
@@ -283,7 +370,7 @@ function solve_network(params; return_firm_level=false, precomputed_tau::Union{N
         # P_r   = [Σ_s Ω^s · P_{sr}^{1-ν}]^{1/(1-ν)}           (across-sector)
         # c_r   = [Ω^L w_r^{1-λ} + (1-Ω^L) P_r^{1-λ}]^{1/(1-λ)} (unit cost)
         # ─────────────────────────────────────────────────────────────────────
-        P_sr = sum(1/N_rho .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
+        P_sr = sum(w_rho .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
         P_r = sum(P_sr.^(1 - nu) .* Omega_s)^(1 / (1 - nu))
         c_r = (Omega_L * regional_wages[r]^(1-lambda) + 
                (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
@@ -310,7 +397,7 @@ function solve_network(params; return_firm_level=false, precomputed_tau::Union{N
             linkages[:, :, l] .= max.(linkages[:, :, l], winner_mask)
             
             # Expenditure share for winning firms
-            exp_share = winner_mask .* (1/N_rho) .* Omega_s .* (1-Omega_L) .* 
+            exp_share = winner_mask .* w_rho .* Omega_s .* (1-Omega_L) .*
                 (p_rho_s ./ P_sr).^(1 .- nu_s_mat) .* 
                 (P_sr ./ P_r).^(1-nu) .* 
                 (P_r / c_r).^(1-lambda)
@@ -379,7 +466,8 @@ function solve_network(params; return_firm_level=false, precomputed_tau::Union{N
             firm_intermediate_derivative = firm_intermediate_derivative,
             mu = mu,
             P = P,
-            closest_downstream_region = closest_downstream_region
+            closest_downstream_region = closest_downstream_region,
+            sample_weights = sample_weights
         )
     else
         return (
@@ -388,10 +476,77 @@ function solve_network(params; return_firm_level=false, precomputed_tau::Union{N
             Y_r = Y_r,
             linkages = linkages,
             z = z,
-            closest_plant_dist = closest_plant_dist, 
-            closest_downstream_region = closest_downstream_region
+            closest_plant_dist = closest_plant_dist,
+            closest_downstream_region = closest_downstream_region,
+            sample_weights = sample_weights
         )
     end
+end
+
+
+##################### Analytical Weighted OLS ###################
+
+"""
+    fast_weighted_regression(linkages, z, sample_weights)
+
+Compute regression: supplier ~ distance_bin_dummies + log_productivity + fe(A129_r)
+using analytical weighted OLS with group demeaning (Frisch-Waugh-Lovell).
+
+Replaces FixedEffectModels.reg() for major speedup per evaluation.
+"""
+function fast_weighted_regression(linkages, z, sample_weights)
+
+    N_obs = S * R * N_rho
+    n_regressors = N_beta + 1  # distance bins + log_productivity
+
+    y = Vector{Float64}(undef, N_obs)
+    X = zeros(N_obs, n_regressors)
+    w = Vector{Float64}(undef, N_obs)
+    fe_group = Vector{Int}(undef, N_obs)
+
+    idx = 0
+    for r in 1:R
+        dr = CLOSEST_DOWNSTREAM_REGION[r]
+        b = DistBin[r, dr]
+
+        for s in 1:S
+            group_id = (s - 1) * R_downstream + dr
+
+            for rho in 1:N_rho
+                idx += 1
+                y[idx] = linkages[rho, s, r] > 0 ? 1.0 : 0.0
+                w[idx] = sample_weights[rho]
+                fe_group[idx] = group_id
+
+                if b > 0 && b <= N_beta
+                    X[idx, b] = 1.0
+                end
+                X[idx, n_regressors] = log(z[rho, r, s])
+            end
+        end
+    end
+
+    # Weighted FWL demeaning by fixed-effect groups
+    unique_groups = unique(fe_group)
+    for g in unique_groups
+        mask = fe_group .== g
+        w_g = w[mask]
+        total_w = sum(w_g)
+        if total_w < 1e-15; continue; end
+
+        y[mask] .-= sum(w_g .* y[mask]) / total_w
+        for j in 1:n_regressors
+            X[mask, j] .-= sum(w_g .* X[mask, j]) / total_w
+        end
+    end
+
+    # Weighted OLS: transform by sqrt(w), then ordinary least squares
+    sqrt_w = sqrt.(w)
+    Xw = sqrt_w .* X
+    yw = sqrt_w .* y
+    coefs = Xw \ yw
+
+    return coefs[1:N_beta]
 end
 
 
@@ -461,52 +616,10 @@ function compute_moments(network, params)
     gamma_ls = X_ls ./ X_s .* reshape(domestic_share, 1, S)
     
     # ─────────────────────────────────────────────────────────────────────────
-    # 4. Regression: P(supplier) vs distance bins
+    # 4. Regression: P(supplier) vs distance bins (analytical weighted OLS)
     # ─────────────────────────────────────────────────────────────────────────
-    sirens = collect(1:(S*R*N_rho))
-    sectors = Int[]
-    regions = Int[]
-    downstream_regions = Int[]  
-    suppliers = Float64[]
-    distance_vec = Float64[]
-    size_vec = Float64[]
-
-    for r in 1:R
-        for s in 1:S
-            for rho in 1:N_rho
-                push!(sectors, s)
-                push!(regions, r)
-                push!(downstream_regions, closest_downstream_region[r])              
-                push!(suppliers, linkages[rho, s, r] > 0 ? 1.0 : 0.0)
-                push!(size_vec, log(z[rho, r, s]))
-                push!(distance_vec, closest_plant_dist[r])
-            end
-        end
-    end
-
-    df = DataFrame(
-        SIREN = sirens,
-        A129 = sectors,
-        ze2010 = regions,
-        supplier = suppliers,
-        log_productivity = size_vec,
-        distance = distance_vec,
-        downstream_regions = downstream_regions
-    )
-
-    # Define bins based on N_beta (must match distance_bin function in tools.jl)
-    if N_beta == 5
-        bins = [20, 50, 100, 150, 200, Inf]
-    elseif N_beta == 4
-        bins = [50, 100, 150, 200, Inf]
-    else
-        error("Unsupported N_beta: $N_beta. Add bin definition for this case.")
-    end
-    df.A129_r = string.(df.A129) .* "_" .* string.(df.downstream_regions)
-    df.distance_bin = cut(df.distance, bins, extend=true)
-
-    fixest = reg(df, @formula(supplier ~ distance_bin + log_productivity + fe(A129_r)))
-    reg_coef = fixest.coef[1:N_beta]  # Changed from hardcoded 1:5
+    sw = network.sample_weights
+    reg_coef = fast_weighted_regression(linkages, z, sw)
 
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -545,10 +658,13 @@ Main SMM function for optimization.
 - If simulation=true: Trade flow matrix (R × R)
 - If simulation=false: Tuple of moments for SMM estimation
 """
-function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
+             u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+             sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # Solve network
-    network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau)
+    network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau,
+                            u_draws=u_draws, sample_weights=sample_weights)
     
     if simulation
         # Return aggregated trade flows (sum over sectors)
@@ -578,10 +694,13 @@ Used for untargeted moment validation (Table 2 regression).
 - `moments`: Tuple of targeted moments  
 - `network`: Full network solution including firm-level data
 """
-function SMM_with_network(params; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+function SMM_with_network(params; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
+                          u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                          sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # Solve network with firm-level data
-    network = solve_network(params, return_firm_level=true, precomputed_tau=precomputed_tau)
+    network = solve_network(params, return_firm_level=true, precomputed_tau=precomputed_tau,
+                            u_draws=u_draws, sample_weights=sample_weights)
     
     # Compute moments
     moments = compute_moments(network, params)
@@ -647,9 +766,13 @@ end
 
 Full SMM evaluation: compute loss and return moments.
 """
-function full_SMM(params, simulation=false, second_stage=false, method="original"; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+function full_SMM(params, simulation=false, second_stage=false, method="original";
+                  precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
+                  u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                  sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
-    simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau)
+    simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
+                            u_draws=u_draws, sample_weights=sample_weights)
     
     if second_stage
         emp = empirical_moments_reduced
