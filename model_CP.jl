@@ -506,13 +506,20 @@ Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
 function fast_weighted_regression(linkages, z, sample_weights)
 
-    N_obs = S * R * N_rho
     n_regressors = N_beta + 1  # distance bins + log_productivity
 
-    y = Vector{Float64}(undef, N_obs)
-    X = zeros(N_obs, n_regressors)
-    w = Vector{Float64}(undef, N_obs)
-    fe_group = Vector{Int}(undef, N_obs)
+    # Count valid observations (exclude z=0 entries where T=0)
+    N_valid = 0
+    for r in 1:R, s in 1:S
+        if z[1, r, s] > 0.0
+            N_valid += N_rho
+        end
+    end
+
+    y = Vector{Float64}(undef, N_valid)
+    X = zeros(N_valid, n_regressors)
+    w = Vector{Float64}(undef, N_valid)
+    fe_group = Vector{Int}(undef, N_valid)
 
     idx = 0
     for r in 1:R
@@ -520,6 +527,11 @@ function fast_weighted_regression(linkages, z, sample_weights)
         b = DistBin[r, dr]
 
         for s in 1:S
+            # Skip (sector, region) pairs with no upstream firms (T=0 → z=0)
+            if z[1, r, s] == 0.0
+                continue
+            end
+
             group_id = (s - 1) * R_downstream + dr
 
             for rho in 1:N_rho

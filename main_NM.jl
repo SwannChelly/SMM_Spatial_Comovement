@@ -237,7 +237,7 @@ init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
 expanding_beta = [vcat(beta, init_other) for beta in lhs_betas]
 
 log_msg("Evaluating $(length(expanding_beta)) LHS beta samples in parallel...")
-results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_beta)
+results_ = @showprogress "Stage 0 LHS..." pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_beta)
 
 # Find beta closest to empirical regression coefficients
 n_success = count(r -> r !== nothing, results_)
@@ -263,6 +263,13 @@ x0 = copy(expanding_beta[best_idx])
 log_msg("Stage 0 completed in $(round(time() - t0_stage0, digits=1))s")
 log_param_summary(x0, "Initial ")
 
+# Save Stage 0 checkpoint
+mkpath(joinpath(output_folder, "stage0"))
+NPZ.npzwrite(joinpath(output_folder, "stage0", "best_params.npy"), reshape(x0, :, 1))
+generate_report(output_folder, "stage0", 1, nothing, x0, "";
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+log_msg("Stage 0 checkpoint saved to $(joinpath(output_folder, "stage0"))")
+
 
 ############## STEP 1: COARSE NELDER-MEAD (20 starts) ##############
 
@@ -273,11 +280,11 @@ log_msg("=" ^ 70)
 
 N_STARTS_STEP1 = 20
 MAX_ITER_STEP1 = 5000
-F_TOL_STEP1 = 1e-6
+F_RELTOL_STEP1 = 1e-6
 
 log_msg("Starting points: $N_STARTS_STEP1")
 log_msg("Max iterations per start: $MAX_ITER_STEP1")
-log_msg("Function tolerance: $F_TOL_STEP1")
+log_msg("Function tolerance: $F_RELTOL_STEP1")
 
 # Build bounds around x0
 d = length(x0)
@@ -310,11 +317,11 @@ end
 log_msg("Launching $N_STARTS_STEP1 parallel Nelder-Mead runs...")
 t0_step1 = time()
 
-step1_results = pmap(starts) do x_init
+step1_results = @showprogress "Step 1 NM..." pmap(starts) do x_init
     try
         r = optimize(nm_objective, lb, ub, x_init,
                      Fminbox(NelderMead()),
-                     Optim.Options(iterations=MAX_ITER_STEP1, f_tol=F_TOL_STEP1, show_trace=false))
+                     Optim.Options(iterations=MAX_ITER_STEP1, f_reltol=F_RELTOL_STEP1, show_trace=false))
         return (minimizer=Optim.minimizer(r), minimum=Optim.minimum(r),
                 converged=Optim.converged(r), iterations=Optim.iterations(r))
     catch e
@@ -369,7 +376,7 @@ log_msg("STEP 2: Refined Nelder-Mead optimization")
 log_msg("=" ^ 70)
 
 MAX_ITER_STEP2 = 10000
-F_TOL_STEP2 = 1e-10
+F_RELTOL_STEP2 = 1e-10
 
 if isempty(valid_step1)
     top_starts = [copy(best_params)]
@@ -380,7 +387,7 @@ else
 end
 
 log_msg("Max iterations per start: $MAX_ITER_STEP2")
-log_msg("Function tolerance: $F_TOL_STEP2")
+log_msg("Function tolerance: $F_RELTOL_STEP2")
 
 # Tighter bounds around best solution
 lb2 = best_params .* 0.5
@@ -400,12 +407,12 @@ end
 log_msg("Launching $(length(top_starts)) parallel refined NM runs...")
 t0_step2 = time()
 
-step2_results = pmap(top_starts) do x_init
+step2_results = @showprogress "Step 2 NM..." pmap(top_starts) do x_init
     x_init = clamp.(x_init, lb2, ub2)
     try
         r = optimize(nm_objective, lb2, ub2, x_init,
                      Fminbox(NelderMead()),
-                     Optim.Options(iterations=MAX_ITER_STEP2, f_tol=F_TOL_STEP2, show_trace=false))
+                     Optim.Options(iterations=MAX_ITER_STEP2, f_reltol=F_RELTOL_STEP2, show_trace=false))
         return (minimizer=Optim.minimizer(r), minimum=Optim.minimum(r),
                 converged=Optim.converged(r), iterations=Optim.iterations(r))
     catch
@@ -553,6 +560,7 @@ log_msg("Total time: $(round(time() - t0_stage0, digits=1))s")
 log_msg("Output folder: $output_folder")
 log_msg("Output files:")
 log_msg("  - optimization.log")
+log_msg("  - stage0/best_params.npy, dashboard.png, report.txt")
 log_msg("  - step1/best_params.npy, dashboard.png, report.txt")
 log_msg("  - step2/best_params.npy, dashboard.png, report.txt")
 log_msg("  - final/best_params.npy, dashboard.png, report.txt")
