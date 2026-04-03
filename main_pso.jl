@@ -81,6 +81,11 @@ elseif industry == "auto"
     @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
 end
 
+# Mask for non-zero T_rs: only optimize T where gamma_ls > 0
+T_mask_local = vec(X_rs_local) .> 0
+@everywhere const T_MASK = $T_mask_local
+println("T_MASK: $(sum(T_mask_local)) / $(length(T_mask_local)) non-zero T parameters")
+
 # Load empirical moments
 #@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
@@ -124,8 +129,18 @@ Weight_matrix_custom_local = Diagonal(weights)
 
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
-@everywhere include("pso_integration.jl")  # NEW: PSO functions
-@everywhere include("run_untargeted_validation.jl")  
+@everywhere include("pso_integration.jl")  # PSO functions
+@everywhere include("run_untargeted_validation.jl")
+
+# NOTE: pso_integration.jl needs to be updated to pass u_draws/sample_weights in its internal objective wrappers
+
+# Precompute CdGM-style stratified productivity draws
+println("Generating CdGM-style stratified productivity draws...")
+u_draws_local, sample_weights_local = generate_stratified_draws(S, R, N_rho)
+@everywhere const U_DRAWS = $u_draws_local
+@everywhere const SAMPLE_WEIGHTS = $sample_weights_local
+println("  Firms per (s,r): $(size(u_draws_local, 1))")
+println("  Weight range: [$(minimum(sample_weights_local)), $(maximum(sample_weights_local))]")
 
 # Distance bins
 DistBin_local = Array{Int}(undef, R,R)
@@ -194,64 +209,28 @@ if full_run
     # First find a reasonable beta using targeted search on regression coefficients
 
 
-    # Create grid with 3 categories:
-    # - i: first beta (β₁)
-    # - j: second beta (β₂)
-    # - k: remaining betas (β₃, β₄, β₅) - all share same value
-    # if industry == "aero"
-    #     range_beta = range(0.0005, stop = 3, length = length_range_beta+30)
-    #     expanding_beta = [
-    #         [i, k,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-    #         for i in range_beta
-    #         for k in range_beta
-    #         if i <= j <= k
-    #     ]
-    # else
-    #     range_beta = range(0.0005, stop = 3, length = length_range_beta)
-    #     expanding_beta = [
-    #         [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-    #         for i in range_beta
-    #         for j in range_beta
-    #         for k in range_beta
-    #         if i <= j <= k
-    #     ]
-    range_beta = exp.(range(log(0.00005), stop=log(100), length=length_range_beta))
-    if n_coef == 4
-        expanding_beta = [
-                [i,j,k,k]  # β₁=i, β₂=j, β₃=β₄=k
-                for i in range_beta
-                for j in range_beta
-                for k in range_beta
-                if i <= j <= k
-            ]
-    elseif n_coef == 5
-        expanding_beta = [
-                [i,j,k,k,k]  # β₁=i, β₂=j, β₃=β₄=β₅=k
-                for i in range_beta
-                for j in range_beta
-                for k in range_beta
-                if i <= j <= k
-            ]
-    end
+    # LHS-based initial beta search (replaces grid search)
+    N_LHS_SAMPLES = 1500
+    lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 100.0)
+
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
     A ./= sum(A)
 
-    init_other = vcat([agg_labor_share], agg_industry_share, A, vec(T_rs_init).+0.1)
-    expanding_beta = [vcat(i, init_other) for i in expanding_beta]
+    T_init_nonzero = vec(T_rs_init)[T_mask_local] .+ 0.1  # Only non-zero T values
+    init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
+    expanding_beta = [vcat(beta, init_other) for beta in lhs_betas]
 
-    println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
-    results_ = pmap(parallel_SMM_safe, expanding_beta)
+    println("Evaluating $(length(expanding_beta)) LHS beta samples in parallel...")
+    results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_beta)
 
     # Find beta that best matches regression coefficients
-    scores = [score != nothing ? score[1][1] : missing for score in results_]
-    k = 1
-    reg_coef_ = [score != nothing ? [score[2][4][k],score[2][4][k+1],score[2][4][k+2],score[2][4][k+3]] : missing for score in results_]
-    y_flat = vcat([abs(reg_coef[1]-yi[1])^2+abs(reg_coef[2]-yi[2])^2 + abs(reg_coef[3]-yi[3])^2 + abs(reg_coef[4]-yi[4])^2 for yi in reg_coef_]...)
-    init_beta = expanding_beta[argmin(y_flat)][1:N_beta]
+    reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
+    reg_distances = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
+    init_beta = expanding_beta[argmin(reg_distances)][1:N_beta]
 
-    println("Best initial beta: ", init_beta)
-    println("Related regression coefficients are: ", reg_coef_[argmin(y_flat)])
+    println("Best initial beta: ", round.(init_beta, digits=6))
+    println("Related regression coefficients are: ", round.(reg_coefs_sim[argmin(reg_distances)], digits=6))
 
     ############## PSO-BASED OPTIMIZATION ##############
 
@@ -283,7 +262,8 @@ if full_run
         "best_fitness" => history["best_fitness"],
         "mean_fitness" => history["mean_fitness"]
     ))
-    generate_report(output_folder, string(stage), 1, nothing, best_params, "")
+    generate_report(output_folder, string(stage), 1, nothing, best_params, "";
+                     u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
     run_reporting(output_folder, 0)
 
     println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
@@ -363,7 +343,8 @@ if full_run
                 "best_fitness" => history["best_fitness"],
                 "mean_fitness" => history["mean_fitness"]
             ))
-            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_productivity))
+            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_productivity);
+                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
             println("  ✓ Stage 1 complete. Fitness: $(round(best_fitness, digits=6))")
 
@@ -408,7 +389,8 @@ if full_run
                 "best_fitness" => history["best_fitness"],
                 "mean_fitness" => history["mean_fitness"]
             ))
-            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha))
+            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
+                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
             println("  ✓ Stage 2 complete. Fitness: $(round(best_fitness, digits=6))")
 
@@ -448,7 +430,8 @@ if full_run
                 "best_fitness" => history["best_fitness"],
                 "mean_fitness" => history["mean_fitness"]
             ))
-            generate_report(loop_folder, string(stage), 1, ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha_technical))
+            generate_report(loop_folder, string(stage), 1, ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha_technical);
+                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
             
             println("  ✓ Stage 3 complete. Fitness: $(round(best_fitness, digits=6))")
             
@@ -528,7 +511,7 @@ Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet")
 Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
 
 # Save network outputs
-network = solve_network(best_params, return_firm_level=true)
+network = solve_network(best_params, return_firm_level=true, u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 folder = output_folder 
 
 w_srd_r = zeros(S, R, R)

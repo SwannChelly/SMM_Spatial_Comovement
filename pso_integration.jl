@@ -298,20 +298,21 @@ function train_stage_pso(
         A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
         A ./= sum(A) 
         
+        T_init_nz = vec(T_rs_init)[T_MASK] .+ 0.1  # Only non-zero T values
         lb = vcat(
             init_beta .* 0.5,
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
-            0.1 * (vec(T_rs_init).+ 0.1)
+            0.1 * T_init_nz
         )
-        
+
         ub = vcat(
             init_beta .* 1.5,
             1.2*agg_labor_share,
             1.2 .* agg_industry_share,
             A .* 1.2,
-            10 * (vec(T_rs_init).+ 0.1)
+            10 * T_init_nz
         )
         
         beta_constraint = true
@@ -326,6 +327,8 @@ function train_stage_pso(
         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
+        # T from unpack_params is full S*R; reduce to only non-zero entries for optimization
+        params_dict[:T] = params_dict[:T][T_MASK]
         
         # Handle single variable or list
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
@@ -507,14 +510,19 @@ function get_param_start_index(param_name::Symbol)
     if param_name == :beta
         return 1
     elseif param_name == :agg_labor_share_tech
-        return N_beta + 1  # Changed from 6
+        return N_beta + 1
     elseif param_name == :agg_industry_share_tech
-        return N_beta + 2  # Changed from 7
+        return N_beta + 2
     elseif param_name == :productivity
-        return N_beta + 2 + S  # Changed from 7 + S
+        return N_beta + 2 + S
     elseif param_name == :T
-        return N_beta + 2 + S + R_downstream  # Changed from 7 + S + R_downstream
+        return N_beta + 2 + S + R_downstream
     else
         error("Unknown parameter name: $param_name")
     end
+end
+
+# Number of T parameters (only non-zero gamma_ls entries)
+function get_n_T_params()
+    return sum(T_MASK)
 end

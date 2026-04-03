@@ -95,6 +95,29 @@ using Printf
 #     return accepted
 # end
 
+"""
+    generate_lhs_beta(n_samples, n_beta, lb, ub; seed=42)
+
+Generate LHS samples for beta enforcing monotonicity: beta_1 <= beta_2 <= ... <= beta_K.
+Method: generate LHS in [0,1]^K, sort each sample, map to [lb, ub].
+"""
+function generate_lhs_beta(n_samples::Int, n_beta::Int, lb, ub; seed=42)
+    lb_vec = lb isa Number ? fill(Float64(lb), n_beta) : Float64.(lb)
+    ub_vec = ub isa Number ? fill(Float64(ub), n_beta) : Float64.(ub)
+
+    raw_matrix = QuasiMonteCarlo.sample(n_samples, zeros(n_beta), ones(n_beta),
+                                         LatinHypercubeSample())
+
+    samples = Vector{Vector{Float64}}()
+    for i in 1:n_samples
+        raw = sort(raw_matrix[:, i])  # Sort to enforce monotonicity
+        beta = lb_vec .+ raw .* (ub_vec .- lb_vec)
+        push!(samples, beta)
+    end
+    return samples
+end
+
+
 function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, init_beta=ones(5), last_stage_folder=nothing, K=1, variable=nothing, alpha=0.1, second_stage=false)
     """
 
@@ -236,19 +259,27 @@ function assign_T_with_mask(true_T,sample)
     return accept 
 end
 
-function parallel_SMM(params, simulation, second_stage, method; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
-    return full_SMM(params, simulation, second_stage, method; precomputed_tau=precomputed_tau)
+function parallel_SMM(params, simulation, second_stage, method;
+                      precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
+                      u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                      sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+    return full_SMM(params, simulation, second_stage, method;
+                    precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights)
 end
 
 
-function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing)
+function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true;
+                           precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
+                           u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                           sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
     end
-    
+
     try
-        result = parallel_SMM(params, simulation, second_stage, method; precomputed_tau=precomputed_tau) # Run the SMM in parallel.
+        result = parallel_SMM(params, simulation, second_stage, method;
+                              precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights)
 
         return result
     catch e
@@ -257,7 +288,7 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
             println("ERROR!!")
             println(e)
         end
-        return nothing  # You can also return an error message or a custom value
+        return nothing
     end
 end
 
@@ -295,7 +326,9 @@ function distance_bin(d, n_bins=N_beta)
     end
 end
 
-function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original")
+function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original";
+                        u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                        sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
@@ -305,7 +338,8 @@ function train_stage_one(n, init_beta, params_list = nothing, second_stage = fal
     if params_list == nothing
         params_list = generate_halton_grid(n,2000,false,init_beta)
     end
-    f = params -> parallel_SMM_safe(params, false, second_stage, method, true)
+    f = params -> parallel_SMM_safe(params, false, second_stage, method, true;
+                                    u_draws=u_draws, sample_weights=sample_weights)
     results = pmap(f, params_list)
     return params_list,results
 end
@@ -557,7 +591,9 @@ function bubble_scatter(x::AbstractVector, y::AbstractVector;
 end
 
 
-function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="")
+function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="";
+                         u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                         sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     folder = joinpath(loop_folder, stage)
     mkpath(folder)
@@ -565,12 +601,13 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     if best_params == nothing
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))
         params_list = [best_params[:, K] for K in 1:K_max]
-        params_list, results = train_stage_one(n, nothing, params_list, false)
+        params_list, results = train_stage_one(n, nothing, params_list, false;
+                                               u_draws=u_draws, sample_weights=sample_weights)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
         best_params = best_params[:, best_index]
     else
-        results = [full_SMM(best_params)]
+        results = [full_SMM(best_params; u_draws=u_draws, sample_weights=sample_weights)]
         best_index = 1
     end
 
