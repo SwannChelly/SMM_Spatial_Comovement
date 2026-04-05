@@ -43,10 +43,10 @@ mkpath(output_folder)
 
 coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy"))
-w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
+filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
+w_rs_local = reshape(NPZ.npzread(joinpath(input_folder, "w_rs.npy")), size(filter_N_upstream_local))
 regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy"))
-filter_N_upstream_local = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
 agg_industry_share_local = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
 domestic_share_local = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
 X_rs_local = NPZ.npzread(joinpath(input_folder,"X_rs.npy")) # Number of upstream per region. 
