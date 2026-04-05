@@ -667,10 +667,10 @@ function compute_moments(network, params)
     
     return (
         agg_labor_share = [agg_labor_share],
-        agg_industry_share = agg_industry_share[2:end],  # Drop first (normalized)
+        agg_industry_share = vec(agg_industry_share),  # Full S elements (mask handles [2:end])
         gamma_ls = gamma_ls,
         reg_coef = reg_coef,
-        pi_r = pi_r[2:end]  # Drop first
+        pi_r = pi_r                                     # Full R_downstream (mask handles [2:end])
     )
 end
 
@@ -760,27 +760,33 @@ Compute loss between empirical and simulated moments.
 - "hybrid": Percentage deviation for non-zero, absolute for zeros
 """
 function loss_function(simulated_moments, emp, W, method="original")
-    
+
     # Backward compatibility with Bool
     if method isa Bool
         method = method ? "normalize" : "original"
     end
-    
-    # Compute normalization factors
-    square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))'
-    
-    # Flatten moments
-    simulated_moments = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
-    N = length(simulated_moments)
-    simulated_moments = reshape(simulated_moments, (1, N))
-    
+
+    # Compute normalization factors on FULL moments (before masking)
+    square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))
+
+    # Flatten full moments
+    sim_flat = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
+
+    # Apply moment mask: drop redundant sum-to-1 elements
+    sim_flat = sim_flat[MOMENT_MASK]
+    square_size = square_size[MOMENT_MASK]
+
+    N = length(sim_flat)
+    sim_flat = reshape(sim_flat, (1, N))
+    square_size = reshape(square_size, (1, N))
+
     if method == "original"
-        err = (emp - simulated_moments)
+        err = (emp - sim_flat)
     elseif method == "normalize"
-        err = (emp - simulated_moments) ./ square_size
+        err = (emp - sim_flat) ./ square_size
     elseif method == "hybrid"
         emp_vec = vec(emp)
-        sim_vec = vec(simulated_moments)
+        sim_vec = vec(sim_flat)
         err_vec = similar(emp_vec)
         for i in 1:length(emp_vec)
             if abs(emp_vec[i]) > 1e-10
@@ -793,7 +799,7 @@ function loss_function(simulated_moments, emp, W, method="original")
     else
         error("Unknown method: $method. Use 'original', 'normalize', or 'hybrid'.")
     end
-    
+
     W = isnothing(W) ? I(N) : W
     return err * W * err'
 end
