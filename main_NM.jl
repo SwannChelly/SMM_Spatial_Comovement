@@ -48,7 +48,7 @@ mkpath(output_folder)
 coefs = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
 distances_local = NPZ.npzread(joinpath(input_folder, "distances.npy"))
 filter_N_upstream_local = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
-w_rs_local = reshape(NPZ.npzread(joinpath(input_folder, "w_rs.npy")), size(filter_N_upstream_local))
+w_rs_local = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))  # (R,) - regional wages, not (S,R)
 regional_wages_local = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
 agg_industry_share_local = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
@@ -105,7 +105,7 @@ for (g, ci) in enumerate(good_indices_local)
     SR_TO_GOOD_local[ci[1], ci[2]] = g
 end
 
-W_RS_FLAT_local = [w_rs_local[GOOD_S_local[g], GOOD_R_local[g]] for g in 1:n_good_local]
+W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]  # indexed by region only
 
 @everywhere const n_good = $n_good_local
 @everywhere const GOOD_S = $GOOD_S_local
