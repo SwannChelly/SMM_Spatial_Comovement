@@ -57,22 +57,33 @@ function compute_amplification_weights(params, industry::String; output_folder="
     println("\n[Step 1] Solving production network...")
     network = solve_network(params, return_firm_level=true)
     
-    X_lrs = network.X_lrs  # Trade flows: X[l, r, s] = flow from upstream (l,s) to downstream r
     Y_r = network.Y_r      # Downstream sales by region
-    
+    mu = network.mu
+
     println("  Network solved successfully")
     println("  Total downstream sales: $(round(sum(Y_r), digits=4))")
     println("  Active downstream regions: $(sum(N_downstream_per_region .> 0))")
-    
+
+    # Reconstruct X_lrs (R, R, S) from sparse COO firm-level data
+    X_lrs = zeros(R, R, S)
+    n_entries = length(network.firm_exp_rho)
+    for i in 1:n_entries
+        g = network.firm_exp_g[i]
+        l = GOOD_R[g]
+        s_idx = network.firm_exp_s[i]
+        r = network.firm_exp_r[i]
+        X_lrs[l, r, s_idx] += network.firm_exp_val[i] * mu * Y_r[r]
+    end
+
     # ─────────────────────────────────────────────────────────────────────────
     # Step 2: Compute w_d^{sr'} - Share of (s,r') sales going to downstream
     # ─────────────────────────────────────────────────────────────────────────
-    # 
+    #
     # w_d^{sr'} = (Sales from (s,r') to downstream) / (Total sales of (s,r'))
     #
     # In our model, X_lrs[l, r, s] is the flow from upstream region l, sector s
     # to downstream region r.
-    # 
+    #
     # Sales from (s,l) to downstream = Σ_r X_lrs[l, r, s]
     #
     # For total sales of (s,l), we need to include sales to other sectors too.
@@ -82,9 +93,9 @@ function compute_amplification_weights(params, industry::String; output_folder="
     # In practice, we'll compute this relative to the firm's total sales to
     # the downstream industry.
     # ─────────────────────────────────────────────────────────────────────────
-    
+
     println("\n[Step 2] Computing w_d^{sr'} (share to downstream)...")
-    
+
     # Sales from (s, l) to all downstream regions
     # X_ls[l, s] = Σ_r X_lrs[l, r, s]
     X_ls = dropdims(sum(X_lrs, dims=2), dims=2)  # [R, S]

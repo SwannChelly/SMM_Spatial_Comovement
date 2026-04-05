@@ -126,7 +126,7 @@ end
 ##################### Stratified Draws (CdGM-style) ###################
 
 """
-    generate_stratified_draws(S, R, N_rho; seed=50) -> (u_matrix, weights)
+    generate_stratified_draws(N_rho; seed=50) -> (u_quantiles, weights)
 
 Generate CdGM-style stratified uniform draws for Fréchet inverse CDF.
 
@@ -134,10 +134,10 @@ Uses 25 non-uniform bins on [0,1] that oversample the upper tail.
 Within each bin, draws are evenly spaced (deterministic).
 
 Returns:
-- `u_matrix`: Array of size (N_rho, R, S) with uniform quantiles in (0,1)
+- `u_quantiles`: Vector of length N_rho with uniform quantiles in (0,1)
 - `weights`: Vector of length N_rho, weights sum to 1.0
 """
-function generate_stratified_draws(S, R, N_rho; seed=50)
+function generate_stratified_draws(N_rho; seed=50)
 
     bin_edges = [0.00, 0.10, 0.20, 0.30, 0.40, 0.50,
                  0.55, 0.60, 0.65, 0.70, 0.75,
@@ -178,13 +178,7 @@ function generate_stratified_draws(S, R, N_rho; seed=50)
     # Normalize weights to sum to 1
     sample_weights ./= sum(sample_weights)
 
-    # Expand to (N_rho, R, S) — same quantiles for all (s, r) pairs
-    u_matrix = zeros(N_rho, R, S)
-    for s in 1:S, r in 1:R
-        u_matrix[:, r, s] = u_quantiles
-    end
-
-    return u_matrix, sample_weights
+    return u_quantiles, sample_weights
 end
 
 
@@ -218,22 +212,20 @@ end
 
 
 """
-    build_tau(beta) -> τ[r', r, s]
+    build_tau(beta) -> τ[r', r]
 
 Build iceberg trade cost matrix from distance bin coefficients.
 
-τ_{r'rs} = 1 + β_b  where b = DistBin[r', r]
+τ_{r'r} = 1 + β_b  where b = DistBin[r', r]
 
-Returns array of size (R, R, S).
+Returns matrix of size (R, R). Trade costs are identical across sectors.
 """
 function build_tau(beta)
-    tau = ones(R, R, S)
+    tau = ones(R, R)
     for r_prime in 1:R, r in 1:R
         b = DistBin[r_prime, r]
         if b > 0
-            for s in 1:S
-                tau[r_prime, r, s] += beta[b]
-            end
+            tau[r_prime, r] += beta[b]
         end
     end
     return tau
@@ -258,21 +250,23 @@ This function:
 - `return_firm_level`: If true, return firm-level data for untargeted validation
 
 # Returns (NamedTuple):
-- `X_lrs`: Trade flows X_{r'rs} from upstream (r',s) to downstream r [R × R × S]
+- `X_ls_flat`: Trade flows by good pair index [n_good], scaled by μ·Y_r
 - `c_tilde_r`: Unit costs c̃_r = c_r/A_r of downstream firms [R]
 - `Y_r`: Downstream sales (revenue) by region [R]
-- `linkages`: Firm-level supplier indicator [N_rho × S × R]
-- `z`: Firm productivities [N_rho × R × S]
+- `linkages_flat`: Firm-level supplier indicator [N_rho × n_good]
+- `z_flat`: Firm productivities [N_rho × n_good]
 - `closest_plant_dist`: Distance to nearest downstream plant [R]
 
-If return_firm_level=true, additionally returns:
-- `firm_expenditure_shares`: Expenditure share from (ρ,s,l) to r [N_rho × S × R × R]
+If return_firm_level=true, additionally returns sparse COO vectors:
+- `firm_exp_rho`, `firm_exp_s`, `firm_exp_g`, `firm_exp_r`: Indices
+- `firm_exp_val`: Expenditure share values
+- `firm_deriv_val`: Intermediate derivative values
 - `mu`: Inverse markup μ = (ε-1)/ε
 - `P`: Aggregate downstream price index
 """
 function solve_network(params; return_firm_level=false,
-                       precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
-                       u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                       precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
+                       u_draws::Union{Nothing, Vector{Float64}}=nothing,
                        sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -280,7 +274,7 @@ function solve_network(params; return_firm_level=false,
     # ─────────────────────────────────────────────────────────────────────────
     beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
 
-    # Build trade cost matrix τ_{r'rs}
+    # Build trade cost matrix τ_{r'r} — identical across sectors
     tau = precomputed_tau === nothing ? build_tau(beta) : precomputed_tau
 
     # Expand productivity A_r to full R vector
@@ -293,187 +287,210 @@ function solve_network(params; return_firm_level=false,
     T = reshape(T_vec, S, R)              # (S, R)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Draw upstream firm productivities
+    # Draw upstream firm productivities — flat (N_rho, n_good) layout
+    # Only good (s,r) pairs (where T_MASK is true) are computed.
     # ─────────────────────────────────────────────────────────────────────────
     if u_draws === nothing
         # Backward compatibility: random Fréchet draws with uniform weights
         Random.seed!(50)
-        z_SRN = zeros(S, R, N_rho)
-        for s in 1:S, r in 1:R
-            if T[s, r] > 0
-                d = Frechet(theta, T[s, r]^(1/theta))
-                z_SRN[s, r, :] = rand(d, N_rho)
+        z_flat = zeros(N_rho, n_good)
+        for g in 1:n_good
+            T_sr = T[GOOD_S[g], GOOD_R[g]]
+            if T_sr > 0
+                d = Frechet(theta, T_sr^(1/theta))
+                z_flat[:, g] = rand(d, N_rho)
             end
-            # T=0 → z stays 0 → z_inv=Inf → never wins Ricardian selection
         end
-        z = permutedims(z_SRN, (3, 2, 1))
         if sample_weights === nothing
             sample_weights = fill(1.0/N_rho, N_rho)
         end
     else
         # CdGM-style: Fréchet inverse CDF from stratified uniform draws
+        # u_draws is now a Vector{Float64} of length N_rho (same quantiles for all pairs)
         # F⁻¹(u) = σ · (-ln(1-u))^(-1/θ) where σ = T_{sr}^{1/θ}
-        z_SRN = zeros(S, R, N_rho)
-        for s in 1:S, r in 1:R
-            if T[s, r] > 0
-                scale = T[s, r]^(1/theta)
-                for rho in 1:N_rho
-                    u = u_draws[rho, r, s]
-                    z_SRN[s, r, rho] = scale * (-log(1.0 - u))^(-1.0/theta)
-                end
+        z_flat = zeros(N_rho, n_good)
+        for g in 1:n_good
+            T_sr = T[GOOD_S[g], GOOD_R[g]]
+            scale = T_sr^(1/theta)
+            for rho in 1:N_rho
+                z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho]))^(-1.0/theta)
             end
-            # T=0 → z stays 0 → z_inv=Inf → never wins Ricardian selection
         end
-        z = permutedims(z_SRN, (3, 2, 1))  # (N_rho, R, S)
     end
-    z_inv = z.^(-1)
+    z_inv_flat = z_flat .^ (-1)
 
     # Reshape sample_weights for broadcasting in CES aggregation
     w_rho = reshape(sample_weights, N_rho, 1)  # (N_rho, 1)
-    
-    # Reshape tau for broadcasting: (S, R_origin, R_dest)
-    tau_perm = permutedims(tau, (3, 1, 2))
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # Distance to closest downstream plant (precomputed constants)
     # ─────────────────────────────────────────────────────────────────────────
     closest_plant_dist = CLOSEST_PLANT_DIST
     closest_downstream_region = CLOSEST_DOWNSTREAM_REGION
-    
+
     # ─────────────────────────────────────────────────────────────────────────
-    # Initialize storage
+    # Initialize storage — flat arrays indexed by good pair index
     # ─────────────────────────────────────────────────────────────────────────
-    X_lrs = zeros(R, R, S)              # Trade flows (as expenditure shares initially)
-    c_tilde_r = zeros(R)                # Unit costs c̃_r = c_r / A_r
-    linkages = zeros(N_rho, S, R)       # Firm-level supplier indicator
-    
+    X_shares_by_r = zeros(n_good, R)     # Raw expenditure shares per good pair per downstream r
+    c_tilde_r = zeros(R)                 # Unit costs c̃_r = c_r / A_r
+    linkages_flat = zeros(N_rho, n_good) # Firm-level supplier indicator
+
     if return_firm_level
-        firm_expenditure_shares = zeros(N_rho, S, R, R)  # Share from (ρ,s,l) to r
-        firm_intermediate_derivative = zeros(N_rho, S, R, R)
+        # Sparse COO storage: one entry per (rho, downstream_r) winning pair
+        firm_exp_rho = Int[]
+        firm_exp_s = Int[]
+        firm_exp_g = Int[]        # good-pair index (encodes upstream region via GOOD_R[g])
+        firm_exp_r = Int[]        # downstream region
+        firm_exp_val = Float64[]  # expenditure share value
+        firm_deriv_val = Float64[] # intermediate derivative value
     end
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # Solve for each downstream region r
+    # Prices and argmin computed only over active (s,r') pairs per sector.
+    # The `for l in 1:R` inner loop is eliminated — winners are directly indexed.
     # ─────────────────────────────────────────────────────────────────────────
     for r in 1:R
         if N_downstream_per_region[r] < 1
             continue
         end
-        
+
         # ─────────────────────────────────────────────────────────────────────
-        # Compute prices faced by downstream firm r from all potential suppliers
-        # p_{ρsr'→r} = w_{r's} · τ_{r'rs} / z_{ρsr'}
+        # For each sector, find cheapest supplier among active upstream regions
+        # p_{ρsr'→r} = w_{r's} · τ_{r'r} / z_{ρsr'}
         # ─────────────────────────────────────────────────────────────────────
-        tau_to_r = reshape(tau_perm[:, :, r]', 1, R, S)  # (1, R, S)
-        prices = z_inv .* tau_to_r .* reshape(w_rs, (1, R, 1))  # (N_rho, R, S)
-        
-        # ─────────────────────────────────────────────────────────────────────
-        # Ricardian selection: lowest-cost supplier wins each variety
-        # ─────────────────────────────────────────────────────────────────────
-        min_coord = reshape(argmin(prices, dims=2), N_rho, S)  # Winner indices
-        p_rho_s = prices[min_coord]  # (N_rho, S) - winning prices
-        
+        p_rho_s = zeros(N_rho, S)
+        winner_good_idx = zeros(Int, N_rho, S)
+
+        for s in 1:S
+            g_indices = SECTOR_GOOD_INDICES[s]
+            if isempty(g_indices); continue; end
+            regions_s = SECTOR_GOOD_REGIONS[s]
+
+            # Prices only for active upstream (s,r') pairs
+            tau_sr = reshape(tau[regions_s, r], 1, :)        # (1, n_active_in_s)
+            w_sr = reshape(W_RS_FLAT[g_indices], 1, :)       # (1, n_active_in_s)
+            prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr  # (N_rho, n_active_in_s)
+
+            # Ricardian selection: lowest-cost supplier wins each variety
+            min_local = argmin(prices_s, dims=2)  # (N_rho, 1)
+            for rho in 1:N_rho
+                local_idx = min_local[rho][2]
+                winner_good_idx[rho, s] = g_indices[local_idx]
+                p_rho_s[rho, s] = prices_s[rho, local_idx]
+            end
+        end
+
         # ─────────────────────────────────────────────────────────────────────
         # Nested CES price indices (paper eq. in Appendix B)
-        # 
+        #
         # P_{sr} = [Σ_ρ (1/N_ρ) · p_{ρs}^{1-ν_s}]^{1/(1-ν_s)}  (within-sector)
         # P_r   = [Σ_s Ω^s · P_{sr}^{1-ν}]^{1/(1-ν)}           (across-sector)
         # c_r   = [Ω^L w_r^{1-λ} + (1-Ω^L) P_r^{1-λ}]^{1/(1-λ)} (unit cost)
         # ─────────────────────────────────────────────────────────────────────
         P_sr = sum(w_rho .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
         P_r = sum(P_sr.^(1 - nu) .* Omega_s)^(1 / (1 - nu))
-        c_r = (Omega_L * regional_wages[r]^(1-lambda) + 
+        c_r = (Omega_L * regional_wages[r]^(1-lambda) +
                (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
-        
+
         # Apply downstream productivity: c̃_r = c_r / A_r
         c_tilde_r[r] = c_r / A_r[r]
-        
+
         # ─────────────────────────────────────────────────────────────────────
-        # Compute expenditure shares from each upstream region l
-        # 
-        # From nested CES demand (paper Appendix B):
-        # share_{ρsl→r} = (1/N_ρ) · Ω^s · (1-Ω^L) · 
-        #                 (p_{ρs}/P_{sr})^{1-ν_s} · (P_{sr}/P_r)^{1-ν} · (P_r/c_r)^{1-λ}
+        # Accumulate expenditure shares directly by winner good pair
         #
-        # This is the share of TOTAL COST going to input (ρ,s) from region l
-        # To get actual expenditure, multiply by total cost = μ · Y_r
+        # share_{ρs} = w_ρ · Ω^s · (1-Ω^L) ·
+        #              (p_{ρs}/P_{sr})^{1-ν_s} · (P_{sr}/P_r)^{1-ν} · (P_r/c_r)^{1-λ}
         # ─────────────────────────────────────────────────────────────────────
         labor_substitution_factor = (1 - Omega_L) * (P_r / c_r)^(1 - lambda)
-        for l in 1:R
-            # Which varieties from region l won?
-            winner_mask = map(x -> x[2] == l ? 1.0 : 0.0, min_coord)  # (N_rho, S)
-            
-            # Update firm-level linkages (binary supplier status)
-            linkages[:, :, l] .= max.(linkages[:, :, l], winner_mask)
-            
-            # Expenditure share for winning firms
-            exp_share = winner_mask .* w_rho .* Omega_s .* (1-Omega_L) .*
-                (p_rho_s ./ P_sr).^(1 .- nu_s_mat) .* 
-                (P_sr ./ P_r).^(1-nu) .* 
-                (P_r / c_r).^(1-lambda)
-            
-            # Aggregate to region level
-            X_lrs[l, r, :] = sum(exp_share, dims=1)
-            
-            # Store firm-level for untargeted validation
-            if return_firm_level
-                firm_expenditure_shares[:, :, l, r] = exp_share
-                firm_intermediate_derivative[:, :, l, r] = exp_share ./ labor_substitution_factor
+        for s in 1:S
+            P_sr_s = P_sr[s]
+            nu_s_s = nu_s[s]
+            for rho in 1:N_rho
+                g_winner = winner_good_idx[rho, s]
+                if g_winner == 0; continue; end
+
+                # Mark linkage
+                linkages_flat[rho, g_winner] = 1.0
+
+                # Expenditure share for this variety
+                exp_val = sample_weights[rho] * Omega_s_vec[s] * (1-Omega_L) *
+                    (p_rho_s[rho, s] / P_sr_s)^(1 - nu_s_s) *
+                    (P_sr_s / P_r)^(1 - nu) *
+                    (P_r / c_r)^(1 - lambda)
+
+                X_shares_by_r[g_winner, r] += exp_val
+
+                if return_firm_level
+                    push!(firm_exp_rho, rho)
+                    push!(firm_exp_s, s)
+                    push!(firm_exp_g, g_winner)
+                    push!(firm_exp_r, r)
+                    push!(firm_exp_val, exp_val)
+                    push!(firm_deriv_val, exp_val / labor_substitution_factor)
+                end
             end
         end
     end
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # Compute downstream sales Y_r (paper eq. on p.24)
-    # 
+    #
     # With monopolistic competition:
     #   p_r = c̃_r / μ  where μ = (ε-1)/ε (inverse markup)
     #   P = [Σ_r p_r^ε · δ_r]^{1/ε}  (price index, ε < 0)
     #   Y_r = p_r^ε · P^{-ε} · E · δ_r  (sales = revenue)
     # ─────────────────────────────────────────────────────────────────────────
     mu = (epsilon - 1) / epsilon  # Inverse markup μ = (ε-1)/ε
-    
+
     # Prices: p_r = c̃_r / μ
     p_r = c_tilde_r ./ mu
-    
+
     # Price index: P = [Σ_r p_r^ε · δ_r]^{1/ε}
     # Note: ε < 0, so higher price → lower p_r^ε contribution
     active = N_downstream_per_region .!= 0
     P = sum((p_r[active]).^epsilon .* delta_r[active])^(1/epsilon)
-    
+
     E = 1.0  # Normalize total expenditure
-    
+
     # Downstream sales: Y_r = p_r^ε · P^{-ε} · E · δ_r
     Y_r = zeros(R)
     Y_r[active] = (p_r[active]).^epsilon .* P^(-epsilon) .* E .* delta_r[active]
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # Scale expenditure shares to actual trade flows
-    # 
-    # X_lrs currently contains expenditure SHARES of total cost
-    # Total cost = μ · Y_r (since price = cost/μ → cost = μ × revenue)
-    # Actual trade flow: X_lrs = share × μ × Y_r
+    #
+    # X_shares_by_r contains raw expenditure SHARES per good pair per downstream r.
+    # Total cost for downstream r = μ · Y_r.
+    # Actual flow: X_ls_flat[g] = Σ_r X_shares_by_r[g, r] × μ × Y_r[r]
     # ─────────────────────────────────────────────────────────────────────────
+    X_ls_flat = zeros(n_good)
     for r in 1:R
         if N_downstream_per_region[r] >= 1
             total_cost_r = mu * Y_r[r]
-            X_lrs[:, r, :] .*= total_cost_r
+            for g in 1:n_good
+                X_ls_flat[g] += X_shares_by_r[g, r] * total_cost_r
+            end
         end
     end
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # Return results
     # ─────────────────────────────────────────────────────────────────────────
     if return_firm_level
         return (
-            X_lrs = X_lrs,
+            X_ls_flat = X_ls_flat,
             c_tilde_r = c_tilde_r,
             Y_r = Y_r,
-            linkages = linkages,
-            z = z,
+            linkages_flat = linkages_flat,
+            z_flat = z_flat,
             closest_plant_dist = closest_plant_dist,
-            firm_expenditure_shares = firm_expenditure_shares,
-            firm_intermediate_derivative = firm_intermediate_derivative,
+            firm_exp_rho = firm_exp_rho,
+            firm_exp_s = firm_exp_s,
+            firm_exp_g = firm_exp_g,
+            firm_exp_r = firm_exp_r,
+            firm_exp_val = firm_exp_val,
+            firm_deriv_val = firm_deriv_val,
             mu = mu,
             P = P,
             closest_downstream_region = closest_downstream_region,
@@ -481,11 +498,11 @@ function solve_network(params; return_firm_level=false,
         )
     else
         return (
-            X_lrs = X_lrs,
+            X_ls_flat = X_ls_flat,
             c_tilde_r = c_tilde_r,
             Y_r = Y_r,
-            linkages = linkages,
-            z = z,
+            linkages_flat = linkages_flat,
+            z_flat = z_flat,
             closest_plant_dist = closest_plant_dist,
             closest_downstream_region = closest_downstream_region,
             sample_weights = sample_weights
@@ -504,17 +521,12 @@ using analytical weighted OLS with group demeaning (Frisch-Waugh-Lovell).
 
 Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
-function fast_weighted_regression(linkages, z, sample_weights)
+function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
 
     n_regressors = N_beta + 1  # distance bins + log_productivity
 
-    # Count valid observations (exclude z=0 entries where T=0)
-    N_valid = 0
-    for r in 1:R, s in 1:S
-        if z[1, r, s] > 0.0
-            N_valid += N_rho
-        end
-    end
+    # All good pairs are valid (n_good entries, each with N_rho varieties)
+    N_valid = n_good * N_rho
 
     y = Vector{Float64}(undef, N_valid)
     X = zeros(N_valid, n_regressors)
@@ -522,29 +534,23 @@ function fast_weighted_regression(linkages, z, sample_weights)
     fe_group = Vector{Int}(undef, N_valid)
 
     idx = 0
-    for r in 1:R
+    for g in 1:n_good
+        s = GOOD_S[g]
+        r = GOOD_R[g]
         dr = CLOSEST_DOWNSTREAM_REGION[r]
         b = DistBin[r, dr]
+        group_id = (s - 1) * R_downstream + dr
 
-        for s in 1:S
-            # Skip (sector, region) pairs with no upstream firms (T=0 → z=0)
-            if z[1, r, s] == 0.0
-                continue
+        for rho in 1:N_rho
+            idx += 1
+            y[idx] = linkages_flat[rho, g] > 0 ? 1.0 : 0.0
+            w[idx] = sample_weights[rho]
+            fe_group[idx] = group_id
+
+            if b > 0 && b <= N_beta
+                X[idx, b] = 1.0
             end
-
-            group_id = (s - 1) * R_downstream + dr
-
-            for rho in 1:N_rho
-                idx += 1
-                y[idx] = linkages[rho, s, r] > 0 ? 1.0 : 0.0
-                w[idx] = sample_weights[rho]
-                fe_group[idx] = group_id
-
-                if b > 0 && b <= N_beta
-                    X[idx, b] = 1.0
-                end
-                X[idx, n_regressors] = log(z[rho, r, s])
-            end
+            X[idx, n_regressors] = log(z_flat[rho, g])
         end
     end
 
@@ -587,14 +593,14 @@ Compute targeted moments from solved network for SMM estimation.
 5. Regional employment shares π_r
 """
 function compute_moments(network, params)
-    
+
     beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
-    
-    X_lrs = network.X_lrs
-    c_tilde_r = network.c_tilde_r  
+
+    X_ls_flat = network.X_ls_flat
+    c_tilde_r = network.c_tilde_r
     Y_r = network.Y_r
-    linkages = network.linkages
-    z = network.z
+    linkages_flat = network.linkages_flat
+    z_flat = network.z_flat
     closest_plant_dist = network.closest_plant_dist
     closest_downstream_region = network.closest_downstream_region
     
@@ -626,22 +632,26 @@ function compute_moments(network, params)
     # ─────────────────────────────────────────────────────────────────────────
     # 2. Sectoral input shares: X_s / X
     # ─────────────────────────────────────────────────────────────────────────
-    X_ls = reshape(sum(X_lrs, dims=2), R, S)  # Sum over downstream regions
+    # Reconstruct X_ls (R, S) from flat representation
+    X_ls = zeros(R, S)
+    for g in 1:n_good
+        X_ls[GOOD_R[g], GOOD_S[g]] = X_ls_flat[g]
+    end
     X_s = sum(X_ls, dims=1)                    # Sum over upstream regions
     X = sum(X_s)                               # Total input purchases
     agg_industry_share = X_s ./ X              # (1, S)
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # 3. Sourcing shares γ_{ls}: Share of sector s sourced from region l
     # γ_{ls} = (X_{ls} / X_s) × domestic_share_s
     # ─────────────────────────────────────────────────────────────────────────
     gamma_ls = X_ls ./ X_s .* reshape(domestic_share, 1, S)
-    
+
     # ─────────────────────────────────────────────────────────────────────────
     # 4. Regression: P(supplier) vs distance bins (analytical weighted OLS)
     # ─────────────────────────────────────────────────────────────────────────
     sw = network.sample_weights
-    reg_coef = fast_weighted_regression(linkages, z, sw)
+    reg_coef = fast_weighted_regression(linkages_flat, z_flat, sw)
 
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -680,8 +690,8 @@ Main SMM function for optimization.
 - If simulation=true: Trade flow matrix (R × R)
 - If simulation=false: Tuple of moments for SMM estimation
 """
-function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
-             u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
+             u_draws::Union{Nothing, Vector{Float64}}=nothing,
              sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # Solve network
@@ -689,8 +699,14 @@ function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Array{Flo
                             u_draws=u_draws, sample_weights=sample_weights)
     
     if simulation
-        # Return aggregated trade flows (sum over sectors)
-        return reshape(sum(network.X_lrs, dims=3), R, R)
+        # Return aggregated trade flows (sum over sectors) as (R, R)
+        # Reconstruct from flat X_ls: X_lr = Σ_s X_lrs, but X_ls_flat only has (l,s) pairs.
+        # This path is unused in optimization; return (R, S) sourcing instead.
+        X_ls = zeros(R, S)
+        for g in 1:n_good
+            X_ls[GOOD_R[g], GOOD_S[g]] = network.X_ls_flat[g]
+        end
+        return X_ls
     end
     
     # Compute and return moments
@@ -716,8 +732,8 @@ Used for untargeted moment validation (Table 2 regression).
 - `moments`: Tuple of targeted moments  
 - `network`: Full network solution including firm-level data
 """
-function SMM_with_network(params; precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
-                          u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+function SMM_with_network(params; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
+                          u_draws::Union{Nothing, Vector{Float64}}=nothing,
                           sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # Solve network with firm-level data
@@ -789,8 +805,8 @@ end
 Full SMM evaluation: compute loss and return moments.
 """
 function full_SMM(params, simulation=false, second_stage=false, method="original";
-                  precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
-                  u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                  precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
+                  u_draws::Union{Nothing, Vector{Float64}}=nothing,
                   sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,

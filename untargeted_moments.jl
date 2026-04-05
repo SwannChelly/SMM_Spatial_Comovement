@@ -375,23 +375,32 @@ end
 Compute a_{rdi}^D: share of supplier i's sales to downstream region r
 """
 function compute_a_rdi_D(network)
-    exp_shares = network.firm_expenditure_shares
     Y_r = network.Y_r
     mu = network.mu
-    
-    N_rho_local, S_local, R_local, _ = size(exp_shares)
     total_cost = mu .* Y_r
-    
+
+    R_local = length(Y_r)
+    N_rho_local = N_rho
+    S_local = S
+
+    # Reconstruct sales_to_downstream from sparse COO firm-level data
+    # firm_exp_val stores raw expenditure shares; scale by total_cost[r] for actual sales
     sales_to_downstream = zeros(N_rho_local, S_local, R_local, R_local)
-    for r in 1:R_local
+    n_entries = length(network.firm_exp_rho)
+    for i in 1:n_entries
+        rho = network.firm_exp_rho[i]
+        s = network.firm_exp_s[i]
+        g = network.firm_exp_g[i]
+        l = GOOD_R[g]
+        r = network.firm_exp_r[i]
         if total_cost[r] > 1e-10
-            sales_to_downstream[:, :, :, r] = exp_shares[:, :, :, r] .* total_cost[r]
+            sales_to_downstream[rho, s, l, r] = network.firm_exp_val[i] * total_cost[r]
         end
     end
-    
+
     total_sales_to_downstream = sum(sales_to_downstream, dims=4)
     a_rdi_D = zeros(N_rho_local, S_local, R_local, R_local)
-    
+
     for l in 1:R_local, s in 1:S_local, rho in 1:N_rho_local
         total = total_sales_to_downstream[rho, s, l, 1]
         if total > 1e-12
@@ -400,7 +409,7 @@ function compute_a_rdi_D(network)
             end
         end
     end
-    
+
     return a_rdi_D, sales_to_downstream, total_sales_to_downstream[:,:,:,1]
 end
 
@@ -676,7 +685,11 @@ function build_unified_panel_and_regress(
     uni_shocks, multi_shocks, multi_fe_shocks, active_regions
 )
     N_rho_local, S_local, R_local, T = size(other_shocks)
-    linkages = network.linkages
+    # Reconstruct 3D linkages (N_rho, S, R) from flat representation
+    linkages = zeros(N_rho_local, S_local, R_local)
+    for g in 1:n_good
+        linkages[:, GOOD_S[g], GOOD_R[g]] = network.linkages_flat[:, g]
+    end
     
     println("\n[Building unified panel with all three shock models]...")
     
@@ -956,11 +969,11 @@ function run_untargeted_validation(
     println("\n[Step 1] Solving network...")
     network = solve_network(params, return_firm_level=true)
     
-    N_rho_local = size(network.firm_expenditure_shares, 1)
-    S_local = size(network.firm_expenditure_shares, 2)
-    R_local = size(network.firm_expenditure_shares, 3)
-    
-    println("  Suppliers: $(sum(network.linkages .> 0))")
+    N_rho_local = N_rho
+    S_local = S
+    R_local = R
+
+    println("  Suppliers: $(sum(network.linkages_flat .> 0))")
     
     # Step 2: Draw exposures
     println("\n[Step 2] Drawing exposures (a_{di}^D)...")

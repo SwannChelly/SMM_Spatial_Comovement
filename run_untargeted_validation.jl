@@ -333,7 +333,7 @@ function validate_table2_all_models(
         println(f, "T periods: $T_periods")
         println(f, "Time FE mode: $time_fe_mode")
         println(f, "Observations: $(nrow(results["panel_df"]))")
-        println(f, "Suppliers: $(sum(results["network"].linkages .> 0))")
+        println(f, "Suppliers: $(sum(results["network"].linkages_flat .> 0))")
         
         # Parameter info for each model
         println(f, "\n" * "="^70)

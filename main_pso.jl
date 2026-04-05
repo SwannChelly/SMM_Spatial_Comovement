@@ -86,6 +86,35 @@ T_mask_local = vec(X_rs_local) .> 0
 @everywhere const T_MASK = $T_mask_local
 println("T_MASK: $(sum(T_mask_local)) / $(length(T_mask_local)) non-zero T parameters")
 
+# Precompute flat index mappings for good (s,r) pairs
+R_full = size(filter_N_upstream_local, 2)  # original R before R_ gets reassigned
+good_indices_local = findall(reshape(T_mask_local, S_, R_full))
+n_good_local = length(good_indices_local)
+GOOD_S_local = [ci[1] for ci in good_indices_local]
+GOOD_R_local = [ci[2] for ci in good_indices_local]
+
+# Per-sector grouping: for sector s, which indices in the good-pair list belong to it
+SECTOR_GOOD_INDICES_local = [findall(GOOD_S_local .== s) for s in 1:S_]
+SECTOR_GOOD_REGIONS_local = [GOOD_R_local[idx] for idx in SECTOR_GOOD_INDICES_local]
+
+# Reverse map: (s, r) -> good pair index (0 if inactive)
+SR_TO_GOOD_local = zeros(Int, S_, R_full)
+for (g, ci) in enumerate(good_indices_local)
+    SR_TO_GOOD_local[ci[1], ci[2]] = g
+end
+
+# Flat w_rs for good pairs only
+W_RS_FLAT_local = [w_rs_local[GOOD_S_local[g], GOOD_R_local[g]] for g in 1:n_good_local]
+
+@everywhere const n_good = $n_good_local
+@everywhere const GOOD_S = $GOOD_S_local
+@everywhere const GOOD_R = $GOOD_R_local
+@everywhere const SECTOR_GOOD_INDICES = $SECTOR_GOOD_INDICES_local
+@everywhere const SECTOR_GOOD_REGIONS = $SECTOR_GOOD_REGIONS_local
+@everywhere const SR_TO_GOOD = $SR_TO_GOOD_local
+@everywhere const W_RS_FLAT = $W_RS_FLAT_local
+println("  n_good: $n_good_local good (sector, region) pairs")
+
 # Load empirical moments
 #@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
@@ -136,10 +165,10 @@ Weight_matrix_custom_local = Diagonal(weights)
 
 # Precompute CdGM-style stratified productivity draws
 println("Generating CdGM-style stratified productivity draws...")
-u_draws_local, sample_weights_local = generate_stratified_draws(S, R, N_rho)
+u_draws_local, sample_weights_local = generate_stratified_draws(N_rho)
 @everywhere const U_DRAWS = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
-println("  Firms per (s,r): $(size(u_draws_local, 1))")
+println("  N_rho: $(length(u_draws_local)) quantiles")
 println("  Weight range: [$(minimum(sample_weights_local)), $(maximum(sample_weights_local))]")
 
 # Distance bins
@@ -510,27 +539,49 @@ results_unified = validate_table2_all_models(best_params, industry, T_periods=36
 Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet"), results_unified["panel_df"])
 Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
 
-# Save network outputs
+# Save network outputs (using sparse firm-level data)
 network = solve_network(best_params, return_firm_level=true, u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-folder = output_folder 
+folder = output_folder
 
+# Reconstruct w_srd_r from sparse firm-level data
+# w_srd_r[s, r_prime, r] = share of upstream (s, r_prime)'s sales going to downstream r
+# We need X_lrs-like data: expenditure from upstream (l,s) to downstream r, scaled by mu*Y_r
+mu = network.mu
+Y_r = network.Y_r
 w_srd_r = zeros(S, R, R)
-X_lrs = network[1]
-    
+# Build X_lrs from sparse COO
+X_lrs_sparse = zeros(R, R, S)
+n_entries = length(network.firm_exp_rho)
+for i in 1:n_entries
+    g = network.firm_exp_g[i]
+    l = GOOD_R[g]
+    s = network.firm_exp_s[i]
+    r = network.firm_exp_r[i]
+    X_lrs_sparse[l, r, s] += network.firm_exp_val[i] * mu * Y_r[r]
+end
+
 for s in 1:S, r_prime in 1:R
-    total_downstream_sales = sum(X_lrs[r_prime, :, s])
+    total_downstream_sales = sum(X_lrs_sparse[r_prime, :, s])
     if total_downstream_sales > 1e-10
         for r in 1:R
-            w_srd_r[s, r_prime, r] = X_lrs[r_prime, r, s] / total_downstream_sales
+            w_srd_r[s, r_prime, r] = X_lrs_sparse[r_prime, r, s] / total_downstream_sales
         end
     end
 end
 
 npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-firm_expenditure_shares = network[7]
-links = firm_expenditure_shares .!= 0
-suppliers = reshape(sum(links, dims=4), S, N_rho, R) .!= 0
+# Build suppliers indicator from flat linkages
+suppliers = zeros(Bool, S, N_rho, R)
+for g in 1:n_good
+    s = GOOD_S[g]
+    r = GOOD_R[g]
+    for rho in 1:N_rho
+        if network.linkages_flat[rho, g] > 0
+            suppliers[s, rho, r] = true
+        end
+    end
+end
 npzwrite(joinpath(folder, "suppliers.npy"), suppliers)
 
 println("\nPost-hoc analysis complete for industry: $industry")
@@ -541,33 +592,47 @@ println("  - untargeted_summary_unified.txt")
 println("  - suppliers.npy")
 println("  - w_srd_r.npy")
 
-siren = 0
+# Build suppliers DataFrame from sparse COO firm-level data (only non-zero entries)
 sirens = Int[]
 sectors = Int[]
 ze2010 = Int[]
 ze2010_downstream = Int[]
 share = Float64[]
-size_vec = Float64[]
 downstream_purchase = Float64[]
 intermediate_derivative = Float64[]
 productivity = Float64[]
-for l in 1:R
-    for s in 1:S
-        for rho in 1:N_rho
-            global siren  # ADD THIS LINE
-            siren += 1
-            for r in 1:R
-                push!(sirens,siren)
-                push!(sectors, s)
-                push!(ze2010, l)
-                push!(ze2010_downstream, r)
-                push!(share, firm_expenditure_shares[rho,s,l,r])    
-                push!(downstream_purchase, network[3][r]*network[9])     
-                push!(intermediate_derivative, network[8][rho, s, l, r])  
-                push!(productivity, network[5][rho,l,s])  
-            end       
+
+# Assign unique siren per (l, s, rho) triplet
+siren_map = Dict{Tuple{Int,Int,Int}, Int}()
+siren_counter = 0
+for g in 1:n_good
+    l = GOOD_R[g]
+    s = GOOD_S[g]
+    for rho in 1:N_rho
+        key = (l, s, rho)
+        if !haskey(siren_map, key)
+            siren_counter += 1
+            siren_map[key] = siren_counter
         end
     end
+end
+
+for i in 1:n_entries
+    rho = network.firm_exp_rho[i]
+    s = network.firm_exp_s[i]
+    g = network.firm_exp_g[i]
+    l = GOOD_R[g]
+    r = network.firm_exp_r[i]
+    siren_id = siren_map[(l, s, rho)]
+
+    push!(sirens, siren_id)
+    push!(sectors, s)
+    push!(ze2010, l)
+    push!(ze2010_downstream, r)
+    push!(share, network.firm_exp_val[i])
+    push!(downstream_purchase, Y_r[r] * mu)
+    push!(intermediate_derivative, network.firm_deriv_val[i])
+    push!(productivity, network.z_flat[rho, g])
 end
 
 df = DataFrame(

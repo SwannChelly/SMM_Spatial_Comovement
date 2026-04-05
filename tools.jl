@@ -260,8 +260,8 @@ function assign_T_with_mask(true_T,sample)
 end
 
 function parallel_SMM(params, simulation, second_stage, method;
-                      precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
-                      u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                      precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
+                      u_draws::Union{Nothing, Vector{Float64}}=nothing,
                       sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     return full_SMM(params, simulation, second_stage, method;
                     precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights)
@@ -269,8 +269,8 @@ end
 
 
 function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true;
-                           precomputed_tau::Union{Nothing, Array{Float64,3}}=nothing,
-                           u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                           precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
+                           u_draws::Union{Nothing, Vector{Float64}}=nothing,
                            sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
@@ -327,7 +327,7 @@ function distance_bin(d, n_bins=N_beta)
 end
 
 function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original";
-                        u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                        u_draws::Union{Nothing, Vector{Float64}}=nothing,
                         sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
@@ -592,7 +592,7 @@ end
 
 
 function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="";
-                         u_draws::Union{Nothing, Array{Float64,3}}=nothing,
+                         u_draws::Union{Nothing, Vector{Float64}}=nothing,
                          sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     folder = joinpath(loop_folder, stage)
