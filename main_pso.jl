@@ -168,8 +168,6 @@ Weight_matrix_custom_local = Diagonal(weights)
 @everywhere include("pso_integration.jl")  # PSO functions
 @everywhere include("run_untargeted_validation.jl")
 
-# NOTE: pso_integration.jl needs to be updated to pass u_draws/sample_weights in its internal objective wrappers
-
 # Precompute CdGM-style stratified productivity draws
 println("Generating CdGM-style stratified productivity draws...")
 u_draws_local, sample_weights_local = generate_stratified_draws(N_rho)
@@ -287,7 +285,9 @@ if full_run
         last_stage_folder = nothing,
         alpha = 0.5,
         second_stage = false,
-        method = method
+        method = method,
+        u_draws = U_DRAWS,
+        sample_weights = SAMPLE_WEIGHTS
     )
 
     # Save results
@@ -368,7 +368,9 @@ if full_run
                 K = 1,
                 alpha = alpha_productivity,
                 second_stage = false,
-                method = method  # Log-space loss for π_r (handles concentration)
+                method = method,  # Log-space loss for π_r (handles concentration)
+                u_draws = U_DRAWS,
+                sample_weights = SAMPLE_WEIGHTS
             )
 
             stage += 1
@@ -414,7 +416,9 @@ if full_run
                 K = 1,
                 alpha = alpha,  # Standard alpha
                 second_stage = false,
-                method = method
+                method = method,
+                u_draws = U_DRAWS,
+                sample_weights = SAMPLE_WEIGHTS
             )
 
             stage += 1
@@ -455,7 +459,9 @@ if full_run
                 K = 1,
                 alpha = alpha_technical,
                 second_stage = false,
-                method = method
+                method = method,
+                u_draws = U_DRAWS,
+                sample_weights = SAMPLE_WEIGHTS
             )
             
             stage += 1
