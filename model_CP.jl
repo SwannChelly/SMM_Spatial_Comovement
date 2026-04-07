@@ -784,18 +784,6 @@ function loss_function(simulated_moments, emp, W, method="original")
         err = (emp - sim_flat)
     elseif method == "normalize"
         err = (emp - sim_flat) ./ square_size
-    elseif method == "hybrid"
-        emp_vec = vec(emp)
-        sim_vec = vec(sim_flat)
-        err_vec = similar(emp_vec)
-        for i in 1:length(emp_vec)
-            if abs(emp_vec[i]) > 1e-10
-                err_vec[i] = (sim_vec[i] - emp_vec[i]) / emp_vec[i]
-            else
-                err_vec[i] = sim_vec[i]
-            end
-        end
-        err = reshape(err_vec, (1, N))
     else
         error("Unknown method: $method. Use 'original', 'normalize', or 'hybrid'.")
     end
