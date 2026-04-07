@@ -286,7 +286,9 @@ function train_stage_pso(
     K = 1,
     alpha = 0.1,
     second_stage = false,
-    method = false
+    method = false,
+    u_draws::Union{Nothing, Vector{Float64}} = nothing,
+    sample_weights::Union{Nothing, Vector{Float64}} = nothing
 )
     
     # Build bounds based on previous stage or initialization
@@ -444,7 +446,7 @@ function train_stage_pso(
         end
         
         # Evaluate SMM
-        result = parallel_SMM_safe(x_full, false, second_stage, method, false; precomputed_tau=cached_tau)
+        result = parallel_SMM_safe(x_full, false, second_stage, method, false; precomputed_tau=cached_tau, u_draws=u_draws, sample_weights=sample_weights)
         
         if isnothing(result)
             return Inf
