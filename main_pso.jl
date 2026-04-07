@@ -81,6 +81,9 @@ elseif industry == "auto"
     @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
 end
 
+
+
+
 # Mask for non-zero T_rs: only optimize T where gamma_ls > 0
 T_mask_local = vec(X_rs_local) .> 0
 @everywhere const T_MASK = $T_mask_local
@@ -223,11 +226,11 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 N_PARTICLES = 100   # Use all available cores except one 
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
 MAX_ITER_STAGE = 50         # Iterations for each refinement stage
-method = "original"
+method = "normalize"
 max_loop = 50
 full_run = true
-length_range_beta = 20 # Normal is 50
-BETA_SEARCH_METHOD = "lhs"  # Options: "lhs" (default), "log_grid" (old systematic grid)
+length_range_beta = 50 # Normal is 50
+BETA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
 BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
@@ -291,7 +294,8 @@ if full_run
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
     A ./= sum(A)
 
-    T_init_nonzero = vec(T_rs_init)[T_mask_local] .+ 0.1  # Only non-zero T values
+    T_init_nonzero = vec(T_rs_init)[T_mask_local]   # Only non-zero T values
+    
     init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
     expanding_beta = [vcat(beta, init_other) for beta in beta_candidates]
 

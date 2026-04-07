@@ -1,3 +1,0 @@
-import Pkg; Pkg.add("SparseArrays")
-import Pkg; Pkg.add("NPZ")
-import Pkg; Pkg.add("Distribution")
