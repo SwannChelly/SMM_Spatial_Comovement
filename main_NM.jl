@@ -269,7 +269,7 @@ t0_stage0 = time()
 
 N_LHS_SAMPLES = 1500
 log_msg("Generating $N_LHS_SAMPLES LHS beta samples...")
-lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 100.0)
+lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 10.0)
 
 # Build full parameter vectors with analytical initial guesses
 A = copy(emp_pi_r_full) .^ (1 / abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]

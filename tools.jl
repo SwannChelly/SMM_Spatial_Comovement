@@ -619,9 +619,10 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     emp_pi = vec(emp_pi_r)
     sim_pi_r = vec(results[best_index][2][5])
 
-    emp_pi_sA = agg_industry_share[2:end]
+    emp_pi_sA = agg_industry_share
     sim_pi_sA = results[best_index][2][2]
-
+    print(size(emp_pi_sA))
+    print(size(sim_pi_sA))
     # ── Bubble scatter plots ──
 
     p1 = bubble_scatter(emp_gamma, sim_gamma;
@@ -653,7 +654,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     agg_labor_share_sim = results[best_index][2][1][1]
     agg_labor_share_ = [agg_labor_share_emp, agg_labor_share_sim]
 
-    agg_industry_share_ = [agg_industry_share, add_first_element(results[best_index][2][2])]
+    agg_industry_share_ = [emp_pi_sA,sim_pi_sA]
 
     gamma_emp_result = matrix_report(emp_gamma_ls)
     gamma_sim_result = matrix_report(results[best_index][2][3])

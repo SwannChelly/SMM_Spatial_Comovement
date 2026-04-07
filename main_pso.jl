@@ -247,7 +247,7 @@ if full_run
 
     # LHS-based initial beta search (replaces grid search)
     N_LHS_SAMPLES = 1500
-    lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 100.0)
+    lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 10.0)
 
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
