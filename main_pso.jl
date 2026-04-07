@@ -84,6 +84,9 @@ end
 # Mask for non-zero T_rs: only optimize T where gamma_ls > 0
 T_mask_local = vec(X_rs_local) .> 0
 @everywhere const T_MASK = $T_mask_local
+T_mask_moment_local = vec(permutedims(X_rs_local)) .> 0
+@everywhere const T_MASK_MOMENT = $T_mask_moment_local
+
 println("T_MASK: $(sum(T_mask_local)) / $(length(T_mask_local)) non-zero T parameters")
 
 # Precompute flat index mappings for good (s,r) pairs
@@ -141,23 +144,42 @@ N_moments_full = n_labor + n_industry + n_gamma + n_reg + n_pi
 # Build MOMENT_MASK: true = keep, false = drop (sum-to-1 redundancies)
 moment_mask_local = trues(N_moments_full)
 moment_mask_local[n_labor + 1] = false                          # first industry share
-for s in 1:S_                                                   # first positive-gamma region per sector in gamma_ls
-    first_good_r = SECTOR_GOOD_REGIONS_local[s][1]
-    moment_mask_local[n_labor + n_industry + (s - 1) * R_full + first_good_r] = false
+# Step A: drop all inactive (zero) gamma_ls entries.
+for idx in 1:(S_ * R_full)
+    if !T_mask_moment_local[idx]
+        moment_mask_local[n_labor + n_industry + idx] = false
+    end
 end
+
+# Step B: drop the first *active* entry per sector (sum-to-1 redundancy).
+# Must come after Step A so we identify the first active r correctly.
+for s in 1:S_
+    sector_start = (s - 1) * R_full + 1
+    sector_end   = s * R_full
+    sector_slice = T_mask_moment_local[sector_start:sector_end]
+    active_positions = findall(sector_slice)   # indices within this sector's R_full block
+    if !isempty(active_positions)
+        first_active = active_positions[1]
+        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + first_active] = false
+    end
+end
+
 moment_mask_local[n_labor + n_industry + n_gamma + n_reg + 1] = false  # first pi_r
 
 # Apply mask to empirical moments
 empirical_moments_local = reshape(empirical_moments_local[moment_mask_local], 1, sum(moment_mask_local))
 N_moments = sum(moment_mask_local)
 
-# Build weight matrix: upweight reg_coef by 100
-weights_full = ones(N_moments_full)
-reg_start_full = n_labor + n_industry + n_gamma + 1
-reg_end_full = reg_start_full + n_reg - 1
-weights_full[reg_start_full:reg_end_full] .= 100
-weights = weights_full[moment_mask_local]
-Weight_matrix_custom_local = Diagonal(weights)
+# Load pre-built weight vector from Python (length = sum(MOMENT_MASK)).
+weight_vector_local = NPZ.npzread(joinpath(input_folder, "weight_vector.npy"))
+
+@assert length(weight_vector_local) == sum(moment_mask_local) """
+Weight vector length $(length(weight_vector_local)) != N_moments $(sum(moment_mask_local)).
+"""
+
+Weight_matrix_custom_local = Diagonal(weight_vector_local)
+@everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
+
 
 @everywhere const MOMENT_MASK = $moment_mask_local
 @everywhere const empirical_moments = $(empirical_moments_local)
