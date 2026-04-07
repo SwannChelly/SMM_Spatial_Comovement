@@ -117,6 +117,61 @@ function generate_lhs_beta(n_samples::Int, n_beta::Int, lb, ub; seed=42)
     return samples
 end
 
+"""
+    generate_log_grid_beta(n_beta, lb, ub, length_range)
+
+Generate log-spaced beta grid with monotonicity constraint (β₁ ≤ β₂ ≤ ... ≤ β_K).
+Supports n_beta = 4 (pattern [i,j,k,k]) or n_beta = 5 (pattern [i,j,k,k,k]).
+"""
+function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::Int)
+    range_beta = exp.(range(log(lb), stop=log(ub), length=length_range))
+
+    if n_beta == 4
+        expanding_beta = [
+            [i, j, k, k]
+            for i in range_beta
+            for j in range_beta
+            for k in range_beta
+            if i <= j <= k
+        ]
+    elseif n_beta == 5
+        expanding_beta = [
+            [i, j, k, k, k]
+            for i in range_beta
+            for j in range_beta
+            for k in range_beta
+            if i <= j <= k
+        ]
+    else
+        error("Log grid beta generation not implemented for n_beta=$n_beta")
+    end
+
+    return expanding_beta
+end
+
+"""
+    generate_initial_betas(method, n_beta, lb, ub; lhs_n_samples=1500, log_grid_length=20)
+
+Unified interface for generating initial beta candidates.
+
+# Arguments
+- `method`: "log_grid" or "lhs"
+- `n_beta`: Number of beta parameters
+- `lb`, `ub`: Bounds for beta values
+- `lhs_n_samples`: Number of LHS samples (only for method="lhs")
+- `log_grid_length`: Grid resolution (only for method="log_grid")
+"""
+function generate_initial_betas(method::String, n_beta::Int, lb::Real, ub::Real;
+                                 lhs_n_samples::Int=1500, log_grid_length::Int=20)
+    if method == "log_grid"
+        return generate_log_grid_beta(n_beta, lb, ub, log_grid_length)
+    elseif method == "lhs"
+        return generate_lhs_beta(lhs_n_samples, n_beta, lb, ub)
+    else
+        error("Unknown beta search method: $method. Use 'log_grid' or 'lhs'.")
+    end
+end
+
 
 function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, init_beta=ones(5), last_stage_folder=nothing, K=1, variable=nothing, alpha=0.1, second_stage=false)
     """

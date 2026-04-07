@@ -197,6 +197,8 @@ method = "original"
 max_loop = 50
 full_run = true
 length_range_beta = 20 # Normal is 50
+BETA_SEARCH_METHOD = "lhs"  # Options: "lhs" (default), "log_grid" (old systematic grid)
+BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
 REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)
@@ -237,15 +239,23 @@ if full_run
     println("\n" * "="^70)
     println("Method $method")
     println("STAGE 0: Finding good initial beta values")
+    println("Beta search method: $BETA_SEARCH_METHOD")
+    println("Beta selection criterion: $BETA_SELECTION_CRITERION")
     println("="^70)
 
-
-    # First find a reasonable beta using targeted search on regression coefficients
-
-
-    # LHS-based initial beta search (replaces grid search)
-    N_LHS_SAMPLES = 1500
-    lhs_betas = generate_lhs_beta(N_LHS_SAMPLES, N_beta, 0.00005, 10.0)
+    # Generate beta candidates using selected method
+    if BETA_SEARCH_METHOD == "log_grid"
+        beta_candidates = generate_initial_betas("log_grid", N_beta, 0.00005, 100.0;
+                                                  log_grid_length=length_range_beta)
+        println("Generated $(length(beta_candidates)) log-grid beta combinations")
+    elseif BETA_SEARCH_METHOD == "lhs"
+        N_LHS_SAMPLES = 1500
+        beta_candidates = generate_initial_betas("lhs", N_beta, 0.00005, 10.0;
+                                                  lhs_n_samples=N_LHS_SAMPLES)
+        println("Generated $(length(beta_candidates)) LHS beta samples")
+    else
+        error("Unknown BETA_SEARCH_METHOD: $BETA_SEARCH_METHOD")
+    end
 
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
@@ -253,18 +263,26 @@ if full_run
 
     T_init_nonzero = vec(T_rs_init)[T_mask_local] .+ 0.1  # Only non-zero T values
     init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
-    expanding_beta = [vcat(beta, init_other) for beta in lhs_betas]
+    expanding_beta = [vcat(beta, init_other) for beta in beta_candidates]
 
-    println("Evaluating $(length(expanding_beta)) LHS beta samples in parallel...")
+    println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
     results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_beta)
 
-    # Find beta that best matches regression coefficients
-    reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
-    reg_distances = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
-    init_beta = expanding_beta[argmin(reg_distances)][1:N_beta]
+    # Find best beta using selected criterion
+    if BETA_SELECTION_CRITERION == "reg_coef"
+        reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
+        reg_distances = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
+        best_idx = argmin(reg_distances)
+    elseif BETA_SELECTION_CRITERION == "score"
+        scores = [r !== nothing ? r[1][1] : Inf for r in results_]
+        best_idx = argmin(scores)
+    else
+        error("Unknown BETA_SELECTION_CRITERION: $BETA_SELECTION_CRITERION")
+    end
+    init_beta = beta_candidates[best_idx]
 
     println("Best initial beta: ", round.(init_beta, digits=6))
-    println("Related regression coefficients are: ", round.(reg_coefs_sim[argmin(reg_distances)], digits=6))
+    println("Related regression coefficients are: ", round.([r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_][best_idx], digits=6))
 
     ############## PSO-BASED OPTIMIZATION ##############
 
