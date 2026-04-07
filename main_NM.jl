@@ -144,8 +144,9 @@ N_moments_full = n_labor + n_industry + n_gamma + n_reg + n_pi
 # Build MOMENT_MASK: true = keep, false = drop (sum-to-1 redundancies)
 moment_mask_local = trues(N_moments_full)
 moment_mask_local[n_labor + 1] = false                          # first industry share
-for s in 1:S_                                                   # first region per sector in gamma_ls
-    moment_mask_local[n_labor + n_industry + (s - 1) * R_full + 1] = false
+for s in 1:S_                                                   # first positive-gamma region per sector in gamma_ls
+    first_good_r = SECTOR_GOOD_REGIONS_local[s][1]
+    moment_mask_local[n_labor + n_industry + (s - 1) * R_full + first_good_r] = false
 end
 moment_mask_local[n_labor + n_industry + n_gamma + n_reg + 1] = false  # first pi_r
 
