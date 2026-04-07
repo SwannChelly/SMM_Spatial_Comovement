@@ -166,16 +166,23 @@ Weight_matrix_custom_local = Diagonal(ones(N_moments))
 @everywhere include("tools.jl")
 @everywhere include("run_untargeted_validation.jl")
 
-# Distance bins
-DistBin_local = Array{Int}(undef, R, R)
-for i in 1:R, j in 1:R
-    DistBin_local[i, j] = distance_bin(distances_local[i, j])
+# Downstream region indices (maps r_d ∈ 1:R_downstream → r ∈ 1:R)
+downstream_regions_local = findall(N_downstream_per_region_local .> 0)
+@everywhere const DOWNSTREAM_REGIONS = $(downstream_regions_local)
+
+# R × R_downstream distance subset
+distances_downstream_local = distances_local[:, downstream_regions_local]
+
+# Distance bins (R × R_downstream)
+DistBin_local = Array{Int}(undef, R, R_downstream)
+for i in 1:R, j in 1:R_downstream
+    DistBin_local[i, j] = distance_bin(distances_downstream_local[i, j])
 end
 @everywhere const DistBin = $(DistBin_local)
 
-# Precompute closest downstream plant distance and region
-closest_plant_dist_local = vec(map(x -> distances_local[x[1], x[2]], argmin(1 ./ (1 ./ distances_local .* (N_downstream_per_region_local .> 0)'), dims=2)))
-closest_downstream_region_local = vec(getindex.(argmin(1 ./ (1 ./ distances_local .* (N_downstream_per_region_local .> 0)'), dims=2), 2))
+# Closest downstream plant: simpler computation now all columns are downstream
+closest_plant_dist_local = vec(minimum(distances_downstream_local, dims=2))
+closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_local, dims=2), 2))
 @everywhere const CLOSEST_PLANT_DIST = $(closest_plant_dist_local)
 @everywhere const CLOSEST_DOWNSTREAM_REGION = $(closest_downstream_region_local)
 

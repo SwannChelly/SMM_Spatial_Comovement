@@ -221,11 +221,11 @@ Build iceberg trade cost matrix from distance bin coefficients.
 Returns matrix of size (R, R). Trade costs are identical across sectors.
 """
 function build_tau(beta)
-    tau = ones(R, R)
-    for r_prime in 1:R, r in 1:R
-        b = DistBin[r_prime, r]
+    tau = ones(R, R_downstream)
+    for r_prime in 1:R, r_d in 1:R_downstream
+        b = DistBin[r_prime, r_d]
         if b > 0
-            tau[r_prime, r] += beta[b]
+            tau[r_prime, r_d] += beta[b]
         end
     end
     return tau
@@ -277,9 +277,8 @@ function solve_network(params; return_firm_level=false,
     # Build trade cost matrix τ_{r'r} — identical across sectors
     tau = precomputed_tau === nothing ? build_tau(beta) : precomputed_tau
 
-    # Expand productivity A_r to full R vector
-    A_r = ones(R)
-    A_r[N_downstream_per_region .!= 0] = A_vec
+    # A_vec is already R_downstream length
+    A_r = A_vec
 
     # Reshape for broadcasting
     Omega_s = reshape(Omega_s_vec, 1, S)  # (1, S)
@@ -331,8 +330,8 @@ function solve_network(params; return_firm_level=false,
     # ─────────────────────────────────────────────────────────────────────────
     # Initialize storage — flat arrays indexed by good pair index
     # ─────────────────────────────────────────────────────────────────────────
-    X_shares_by_r = zeros(n_good, R)     # Raw expenditure shares per good pair per downstream r
-    c_tilde_r = zeros(R)                 # Unit costs c̃_r = c_r / A_r
+    X_shares_by_r = zeros(n_good, R_downstream)  # Raw expenditure shares per good pair per downstream r
+    c_tilde_r = zeros(R_downstream)              # Unit costs c̃_r = c_r / A_r
     linkages_flat = zeros(N_rho, n_good) # Firm-level supplier indicator
 
     if return_firm_level
@@ -350,10 +349,8 @@ function solve_network(params; return_firm_level=false,
     # Prices and argmin computed only over active (s,r') pairs per sector.
     # The `for l in 1:R` inner loop is eliminated — winners are directly indexed.
     # ─────────────────────────────────────────────────────────────────────────
-    for r in 1:R
-        if N_downstream_per_region[r] < 1
-            continue
-        end
+    for r_d in 1:R_downstream
+        r = DOWNSTREAM_REGIONS[r_d]  # R-index for wages/regional lookups
 
         # ─────────────────────────────────────────────────────────────────────
         # For each sector, find cheapest supplier among active upstream regions
@@ -368,7 +365,7 @@ function solve_network(params; return_firm_level=false,
             regions_s = SECTOR_GOOD_REGIONS[s]
 
             # Prices only for active upstream (s,r') pairs
-            tau_sr = reshape(tau[regions_s, r], 1, :)        # (1, n_active_in_s)
+            tau_sr = reshape(tau[regions_s, r_d], 1, :)      # (1, n_active_in_s); tau is R × R_downstream
             w_sr = reshape(W_RS_FLAT[g_indices], 1, :)       # (1, n_active_in_s)
             prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr  # (N_rho, n_active_in_s)
 
@@ -394,7 +391,7 @@ function solve_network(params; return_firm_level=false,
                (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
 
         # Apply downstream productivity: c̃_r = c_r / A_r
-        c_tilde_r[r] = c_r / A_r[r]
+        c_tilde_r[r_d] = c_r / A_r[r_d]
 
         # ─────────────────────────────────────────────────────────────────────
         # Accumulate expenditure shares directly by winner good pair
@@ -419,13 +416,13 @@ function solve_network(params; return_firm_level=false,
                     (P_sr_s / P_r)^(1 - nu) *
                     (P_r / c_r)^(1 - lambda)
 
-                X_shares_by_r[g_winner, r] += exp_val
+                X_shares_by_r[g_winner, r_d] += exp_val
 
                 if return_firm_level
                     push!(firm_exp_rho, rho)
                     push!(firm_exp_s, s)
                     push!(firm_exp_g, g_winner)
-                    push!(firm_exp_r, r)
+                    push!(firm_exp_r, r)  # keep R-indexed for backward compat
                     push!(firm_exp_val, exp_val)
                     push!(firm_deriv_val, exp_val / labor_substitution_factor)
                 end
@@ -443,36 +440,37 @@ function solve_network(params; return_firm_level=false,
     # ─────────────────────────────────────────────────────────────────────────
     mu = (epsilon - 1) / epsilon  # Inverse markup μ = (ε-1)/ε
 
-    # Prices: p_r = c̃_r / μ
+    # Prices: p_r = c̃_r / μ  (R_downstream length)
     p_r = c_tilde_r ./ mu
 
     # Price index: P = [Σ_r p_r^ε · δ_r]^{1/ε}
     # Note: ε < 0, so higher price → lower p_r^ε contribution
-    active = N_downstream_per_region .!= 0
-    P = sum((p_r[active]).^epsilon .* delta_r[active])^(1/epsilon)
+    P = sum(p_r.^epsilon .* delta_r[DOWNSTREAM_REGIONS])^(1/epsilon)
 
     E = 1.0  # Normalize total expenditure
 
-    # Downstream sales: Y_r = p_r^ε · P^{-ε} · E · δ_r
-    Y_r = zeros(R)
-    Y_r[active] = (p_r[active]).^epsilon .* P^(-epsilon) .* E .* delta_r[active]
+    # Downstream sales: Y_r = p_r^ε · P^{-ε} · E · δ_r  (R_downstream length)
+    Y_r = p_r.^epsilon .* P^(-epsilon) .* E .* delta_r[DOWNSTREAM_REGIONS]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Scale expenditure shares to actual trade flows
     #
     # X_shares_by_r contains raw expenditure SHARES per good pair per downstream r.
     # Total cost for downstream r = μ · Y_r.
-    # Actual flow: X_ls_flat[g] = Σ_r X_shares_by_r[g, r] × μ × Y_r[r]
+    # Actual flow: X_ls_flat[g] = Σ_r X_shares_by_r[g, r_d] × μ × Y_r[r_d]
     # ─────────────────────────────────────────────────────────────────────────
     X_ls_flat = zeros(n_good)
-    for r in 1:R
-        if N_downstream_per_region[r] >= 1
-            total_cost_r = mu * Y_r[r]
-            for g in 1:n_good
-                X_ls_flat[g] += X_shares_by_r[g, r] * total_cost_r
-            end
+    for r_d in 1:R_downstream
+        total_cost_r = mu * Y_r[r_d]
+        for g in 1:n_good
+            X_ls_flat[g] += X_shares_by_r[g, r_d] * total_cost_r
         end
     end
+
+    # Pad c_tilde_r and Y_r back to R-length for backward compatibility
+    # (compute_moments uses c_tilde_r[active] with R-index; compute_amplification_weights uses Y_r[r])
+    c_tilde_r_full = zeros(R); c_tilde_r_full[DOWNSTREAM_REGIONS] = c_tilde_r
+    Y_r_full       = zeros(R); Y_r_full[DOWNSTREAM_REGIONS]       = Y_r
 
     # ─────────────────────────────────────────────────────────────────────────
     # Return results
@@ -480,8 +478,8 @@ function solve_network(params; return_firm_level=false,
     if return_firm_level
         return (
             X_ls_flat = X_ls_flat,
-            c_tilde_r = c_tilde_r,
-            Y_r = Y_r,
+            c_tilde_r = c_tilde_r_full,
+            Y_r = Y_r_full,
             linkages_flat = linkages_flat,
             z_flat = z_flat,
             closest_plant_dist = closest_plant_dist,
@@ -499,8 +497,8 @@ function solve_network(params; return_firm_level=false,
     else
         return (
             X_ls_flat = X_ls_flat,
-            c_tilde_r = c_tilde_r,
-            Y_r = Y_r,
+            c_tilde_r = c_tilde_r_full,
+            Y_r = Y_r_full,
             linkages_flat = linkages_flat,
             z_flat = z_flat,
             closest_plant_dist = closest_plant_dist,
@@ -785,7 +783,7 @@ function loss_function(simulated_moments, emp, W, method="original")
     elseif method == "normalize"
         err = (emp - sim_flat) ./ square_size
     else
-        error("Unknown method: $method. Use 'original', 'normalize', or 'hybrid'.")
+        error("Unknown method: $method. Use 'original' or 'normalize'.")
     end
 
     W = isnothing(W) ? I(N) : W
