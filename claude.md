@@ -6,6 +6,27 @@ Every change must pass two filters before being written:
 - **Senior economist**: Does it respect the structural model's identification logic, moment targeting, and equilibrium conditions? Does notation stay consistent with the paper?
 - **Senior developer**: Is the implementation efficient (time/memory), correct, minimal, and maintainable? No unnecessary abstraction. No breaking of existing interfaces.
 
+
+---
+
+## Planning and file access protocol
+
+When constructing an execution plan (debugging, extension, or refactor), adhere to the following discipline:
+
+- **Folder-first reasoning**: Always begin by reading the *descriptions of folders and files* (as documented here or inferred from structure) before opening any file.
+- **Selective file access**: Only read files if they are expected to be directly relevant for the current task. Avoid exhaustive or systematic file reading.
+- **Priority ordering**:
+  1. Documentation (this file, comments, high-level descriptions)
+  2. Entry points (`main_*.jl`, pipelines)
+  3. Core modules (`model_CP.jl`)
+  4. Auxiliary tools (only if needed)
+- **Avoid unnecessary I/O**: Do not open large or peripheral files unless a clear hypothesis requires it.
+- **`.ipynb` restriction**: Never read Jupyter notebook (`.ipynb`) files unless explicitly instructed. Treat them as non-source artifacts unless proven otherwise.
+- **Hypothesis-driven inspection**: Each file access must be justified by a specific question (e.g., parameter flow, moment construction, solver behavior).
+
+This protocol is binding: violations are considered both a **modeling failure** (loss of structural clarity) and a **software failure** (inefficient and non-scalable workflow).
+
+
 ---
 
 ## Model overview
