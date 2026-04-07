@@ -10,6 +10,12 @@
 
 using Distributed
 using Dates
+
+# Add workers (20 cores)
+available = 20
+println("Using $available workers")
+addprocs(max(available - 1, 0))
+
 @everywhere using NPZ
 @everywhere using QuasiMonteCarlo
 @everywhere using StatsPlots
@@ -28,10 +34,7 @@ using LinearAlgebra
 using Statistics, Printf
 using StatsBase
 
-# Add workers (20 cores)
-available = 20
-println("Using $available workers")
-addprocs(max(available - 1, 0))
+
 
 ############## Load Parameters #################
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
