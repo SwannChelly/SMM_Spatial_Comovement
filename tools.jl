@@ -128,12 +128,11 @@ function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::I
 
     if n_beta == 4
         expanding_beta = [
-            [i, j, k, l]
+            [i, j, j,k]
             for i in range_beta
             for j in range_beta
             for k in range_beta
-            for l in range_beta
-            if i <= j <= k <= l
+            if i <= j <= k 
         ]
     elseif n_beta == 5
         expanding_beta = [
@@ -677,8 +676,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     emp_pi_sA = agg_industry_share
     sim_pi_sA = results[best_index][2][2]
-    print(size(emp_pi_sA))
-    print(size(sim_pi_sA))
+
     # ── Bubble scatter plots ──
 
     p1 = bubble_scatter(emp_gamma, sim_gamma;

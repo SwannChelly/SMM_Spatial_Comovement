@@ -75,14 +75,43 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const delta_r = $(ones(R))
 @everywhere const Weight_matrix = $(nothing)
 
-if industry == "aero"
-    @everywhere const T_rs_init = $(X_rs_local)
-elseif industry == "auto"
-    @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
+
+
+
+############# GRAVITY-BASED T INITIALIZATION (tau = 1) ##############
+
+println("Building gravity-consistent T_init (tau = 1, max-normalized)...")
+
+T_gravity = zeros(S, R)
+
+for s in 1:S
+    idxs = SECTOR_GOOD_INDICES[s]  # indices in flat good list
+    
+    # Compute raw T_sl ∝ gamma_ls * w_l^theta
+    for g in idxs
+        l = GOOD_R[g]  # upstream region
+        
+        gamma_val = emp_gamma_ls[l,s]
+        w_l = w_rs[l]
+        
+        T_gravity[s, l] = max(gamma_val * (w_l^theta), 1e-12)
+    end
+    
+    # Max normalization within sector
+    sector_vals = T_gravity[s, GOOD_R[idxs]]
+    max_val = maximum(sector_vals)
+    
+    if max_val > 0
+        T_gravity[s, GOOD_R[idxs]] ./= max_val
+    end
 end
-
-
-
+@everywhere const T_rs_init = $(T_gravity)
+@everywhere const T_rs_init = $(X_rs_local)
+#if industry == "aero"
+#    @everywhere const T_rs_init = $(X_rs_local)
+#elseif industry == "auto"
+#    @everywhere const T_rs_init = $(X_rs_local)# N_rs_local
+#end
 
 # Mask for non-zero T_rs: only optimize T where gamma_ls > 0
 T_mask_local = vec(X_rs_local) .> 0
@@ -180,7 +209,7 @@ weight_vector_local = NPZ.npzread(joinpath(input_folder, "weight_vector.npy"))
 Weight vector length $(length(weight_vector_local)) != N_moments $(sum(moment_mask_local)).
 """
 
-Weight_matrix_custom_local = Diagonal(weight_vector_local)
+Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vector_local)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
 
@@ -226,12 +255,12 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 N_PARTICLES = 100   # Use all available cores except one 
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
 MAX_ITER_STAGE = 50         # Iterations for each refinement stage
-method = "log"
+method = "original"
 max_loop = 50
 full_run = true
-length_range_beta = 20 # Normal is 50
-BETA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
-BETA_SELECTION_CRITERION = "score"  # Options: "reg_coef" (default), "score"
+length_range_beta = 40 # Normal is 50
+BETA_SEARCH_METHOD = "lhs"  # Options: "lhs" (default), "log_grid" (old systematic grid)
+BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
 REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)
@@ -276,14 +305,20 @@ if full_run
     println("Beta selection criterion: $BETA_SELECTION_CRITERION")
     println("="^70)
 
+
+    beta_min_informed = 1#minimum(exp.(-reg_coef ./ theta) .- 1) * 0.3
+    beta_max_informed = 10#maximum(exp.(-reg_coef ./ theta) .- 1) * 3.0
+    #beta_min_informed = max(beta_min_informed, 1e-4)
+    print(beta_min_informed) 
+    print(beta_max_informed)
     # Generate beta candidates using selected method
     if BETA_SEARCH_METHOD == "log_grid"
-        beta_candidates = generate_initial_betas("log_grid", N_beta, 0.00005, 10.0;
+        beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min_informed, beta_max_informed;
                                                   log_grid_length=length_range_beta)
         println("Generated $(length(beta_candidates)) log-grid beta combinations")
     elseif BETA_SEARCH_METHOD == "lhs"
-        N_LHS_SAMPLES = 1500
-        beta_candidates = generate_initial_betas("lhs", N_beta, 0.00005, 10.0;
+        N_LHS_SAMPLES = 5000
+        beta_candidates = generate_initial_betas("lhs", N_beta, beta_min_informed, beta_max_informed;
                                                   lhs_n_samples=N_LHS_SAMPLES)
         println("Generated $(length(beta_candidates)) LHS beta samples")
     else
@@ -294,37 +329,9 @@ if full_run
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
     A ./= sum(A)
 
-    ############# GRAVITY-BASED T INITIALIZATION (tau = 1) ##############
-
-    println("Building gravity-consistent T_init (tau = 1, max-normalized)...")
-
-    T_gravity = zeros(S, R)
-
-    for s in 1:S
-        idxs = SECTOR_GOOD_INDICES[s]  # indices in flat good list
-        
-        # Compute raw T_sl ∝ gamma_ls * w_l^theta
-        for g in idxs
-            l = GOOD_R[g]  # upstream region
-            
-            gamma_val = emp_gamma_ls[l,s]
-            w_l = w_rs[l]
-            
-            T_gravity[s, l] = max(gamma_val * (w_l^theta), 1e-12)
-        end
-        
-        # Max normalization within sector
-        sector_vals = T_gravity[s, GOOD_R[idxs]]
-        max_val = maximum(sector_vals)
-        
-        if max_val > 0
-            T_gravity[s, GOOD_R[idxs]] ./= max_val
-        end
-    end
-
     # Extract only active entries (respect sparsity mask)
-    T_init_nonzero = vec(T_gravity)[T_mask_local]
-
+    T_init_nonzero = vec(T_rs_init)[T_mask_local]
+    
     println("T_init stats:")
     println("  min = $(minimum(T_init_nonzero))")
     println("  max = $(maximum(T_init_nonzero))")
@@ -340,6 +347,7 @@ if full_run
     # Find best beta using selected criterion
     if BETA_SELECTION_CRITERION == "reg_coef"
         reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
+        #reg_coefs_sim = filter(row -> all(diff(row) .< 0), reg_coefs_sim)
         reg_distances = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
         best_idx = argmin(reg_distances)
     elseif BETA_SELECTION_CRITERION == "score"
