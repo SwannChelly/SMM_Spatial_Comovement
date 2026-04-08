@@ -226,12 +226,12 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 N_PARTICLES = 100   # Use all available cores except one 
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
 MAX_ITER_STAGE = 50         # Iterations for each refinement stage
-method = "original"
+method = "log"
 max_loop = 50
 full_run = true
-length_range_beta = 50 # Normal is 50
+length_range_beta = 20 # Normal is 50
 BETA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
-BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
+BETA_SELECTION_CRITERION = "score"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
 REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)
@@ -278,7 +278,7 @@ if full_run
 
     # Generate beta candidates using selected method
     if BETA_SEARCH_METHOD == "log_grid"
-        beta_candidates = generate_initial_betas("log_grid", N_beta, 0.00005, 100.0;
+        beta_candidates = generate_initial_betas("log_grid", N_beta, 0.00005, 10.0;
                                                   log_grid_length=length_range_beta)
         println("Generated $(length(beta_candidates)) log-grid beta combinations")
     elseif BETA_SEARCH_METHOD == "lhs"
@@ -294,8 +294,43 @@ if full_run
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
     A ./= sum(A)
 
-    T_init_nonzero = vec(T_rs_init)[T_mask_local]   # Only non-zero T values
-    
+    ############# GRAVITY-BASED T INITIALIZATION (tau = 1) ##############
+
+    println("Building gravity-consistent T_init (tau = 1, max-normalized)...")
+
+    T_gravity = zeros(S, R)
+
+    for s in 1:S
+        idxs = SECTOR_GOOD_INDICES[s]  # indices in flat good list
+        
+        # Compute raw T_sl ∝ gamma_ls * w_l^theta
+        for g in idxs
+            l = GOOD_R[g]  # upstream region
+            
+            gamma_val = emp_gamma_ls[l,s]
+            w_l = w_rs[l]
+            
+            T_gravity[s, l] = max(gamma_val * (w_l^theta), 1e-12)
+        end
+        
+        # Max normalization within sector
+        sector_vals = T_gravity[s, GOOD_R[idxs]]
+        max_val = maximum(sector_vals)
+        
+        if max_val > 0
+            T_gravity[s, GOOD_R[idxs]] ./= max_val
+        end
+    end
+
+    # Extract only active entries (respect sparsity mask)
+    T_init_nonzero = vec(T_gravity)[T_mask_local]
+
+    println("T_init stats:")
+    println("  min = $(minimum(T_init_nonzero))")
+    println("  max = $(maximum(T_init_nonzero))")
+    println("  mean = $(mean(T_init_nonzero))")
+
+
     init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
     expanding_beta = [vcat(beta, init_other) for beta in beta_candidates]
 

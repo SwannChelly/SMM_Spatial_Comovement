@@ -128,11 +128,12 @@ function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::I
 
     if n_beta == 4
         expanding_beta = [
-            [i, j, k, k]
+            [i, j, k, l]
             for i in range_beta
             for j in range_beta
             for k in range_beta
-            if i <= j <= k
+            for l in range_beta
+            if i <= j <= k <= l
         ]
     elseif n_beta == 5
         expanding_beta = [

@@ -225,7 +225,7 @@ function build_tau(beta)
     for r_prime in 1:R, r_d in 1:R_downstream
         b = DistBin[r_prime, r_d]
         if b > 0
-            tau[r_prime, r_d] += beta[b]
+            tau[r_prime, r_d] = exp(beta[b])
         end
     end
     return tau
@@ -759,31 +759,54 @@ Compute loss between empirical and simulated moments.
 """
 function loss_function(simulated_moments, emp, W, method="original")
 
-    # Backward compatibility with Bool
     if method isa Bool
         method = method ? "normalize" : "original"
     end
 
-    # Compute normalization factors on FULL moments (before masking)
     square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))
-
-    # Flatten full moments
     sim_flat = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
 
-    # Apply moment mask: drop redundant sum-to-1 elements
-    sim_flat = sim_flat[MOMENT_MASK]
+    sim_flat    = sim_flat[MOMENT_MASK]
     square_size = square_size[MOMENT_MASK]
+    emp_flat    = vec(emp)
 
     N = length(sim_flat)
-    sim_flat = reshape(sim_flat, (1, N))
-    square_size = reshape(square_size, (1, N))
 
     if method == "original"
-        err = (emp - sim_flat)
+        err = reshape(emp_flat - sim_flat, (1, N))
+
     elseif method == "normalize"
-        err = (emp - sim_flat) ./ square_size
+        err = reshape((emp_flat - sim_flat) ./ square_size, (1, N))
+
+    elseif method == "log"
+        # Block boundaries in the masked moment vector:
+        #   [1 : n_good]              labor share + industry shares + gamma_ls → log
+        #   [n_good+1 : n_good+N_beta] reg_coef (negative, level deviation)   → level
+        #   [n_good+N_beta+1 : end]   pi_r                                     → log
+        eps = 1e-12
+        err = zeros(N)
+
+        # Log blocks: all strictly positive moments
+        log_end   = n_good
+        reg_start = n_good + 1
+        reg_end   = n_good + N_beta
+        pi_start  = n_good + N_beta + 1
+
+        err[1:log_end] = log.(max.(emp_flat[1:log_end], eps)) .-
+                         log.(max.(sim_flat[1:log_end], eps))
+
+        # Level block: reg_coef (negative coefficients, log undefined)
+        err[reg_start:reg_end] = emp_flat[reg_start:reg_end] .-
+                                 sim_flat[reg_start:reg_end]
+
+        # Log block: pi_r
+        err[pi_start:end] = log.(max.(emp_flat[pi_start:end], eps)) .-
+                            log.(max.(sim_flat[pi_start:end], eps))
+
+        err = reshape(err, (1, N))
+
     else
-        error("Unknown method: $method. Use 'original' or 'normalize'.")
+        error("Unknown method: $method. Use 'original', 'normalize', or 'log'.")
     end
 
     W = isnothing(W) ? I(N) : W
