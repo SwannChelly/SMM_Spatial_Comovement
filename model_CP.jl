@@ -225,7 +225,7 @@ function build_tau(beta)
     for r_prime in 1:R, r_d in 1:R_downstream
         b = DistBin[r_prime, r_d]
         if b > 0
-            tau[r_prime, r_d] = exp(beta[b])
+            tau[r_prime, r_d] += beta[b]
         end
     end
     return tau
