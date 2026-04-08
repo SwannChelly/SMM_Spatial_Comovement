@@ -843,33 +843,36 @@ end
 
 Compute scores by dynamically finding all stage folders.
 """
-function compute_scores_modular(output_folder::String, second_stage::Bool, max_loop::Union{Int, Nothing}=nothing)
+function compute_scores_modular(output_folder::String, second_stage::Bool, max_loop::Union{Int, Nothing}=nothing;
+                                u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                                sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     top_score = Float64[]
     min_distances = Float64[]
     best_simulated_moments = Vector{Vector{Float64}}()
     best_parameters_list = Vector{Vector{Float64}}()
-    
+
     # Find all stage folders
     all_folders = find_all_stage_folders(output_folder, max_loop)
-    
+
     if isempty(all_folders)
         println("Warning: No stage folders found in $output_folder")
         return Float64[], Float64[], Vector{Vector{Float64}}(), Vector{Vector{Float64}}()
     end
-    
+
     println("Found $(length(all_folders)) stage folders to evaluate")
-    
+
     for (idx, folder) in enumerate(all_folders)
         # Load best params from this stage
         best_params_stage = NPZ.npzread(joinpath(folder, "best_params.npy"))
-        
+
         # Handle matrix vs vector
         if ndims(best_params_stage) > 1
             best_params_stage = best_params_stage[:, 1]
         end
-        
+
         params_list_stage = [best_params_stage]
-        params_list_stage, results = train_stage_one(1, nothing, params_list_stage, second_stage)
+        params_list_stage, results = train_stage_one(1, nothing, params_list_stage, second_stage;
+                                                      u_draws=u_draws, sample_weights=sample_weights)
         
         score = [s[1] !== nothing ? s[1][1] : Inf for s in results]
         push!(top_score, minimum(score))
@@ -920,13 +923,17 @@ end
 
 Run full reporting: compute scores, create plots, save results.
 """
-function run_reporting(output_folder::String, max_loop::Union{Int, Nothing}=nothing; save_plots::Bool=true)
+function run_reporting(output_folder::String, max_loop::Union{Int, Nothing}=nothing;
+                       save_plots::Bool=true,
+                       u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                       sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     folder = output_folder * "/"
-    
+
     # Compute scores for both stages
-    top_score_first, min_dist_first, best_simulated_moments, best_parameters_list = 
-        compute_scores_modular(output_folder, false, max_loop)
+    top_score_first, min_dist_first, best_simulated_moments, best_parameters_list =
+        compute_scores_modular(output_folder, false, max_loop;
+                               u_draws=u_draws, sample_weights=sample_weights)
 
     
     if !isempty(best_simulated_moments)

@@ -395,7 +395,7 @@ if full_run
     ))
     generate_report(output_folder, string(stage), 1, nothing, best_params, "";
                      u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-    run_reporting(output_folder, 0)
+    run_reporting(output_folder, 0; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
     println("\nStage $stage complete. Best fitness: $(round(best_fitness, digits=6))")
 
@@ -605,7 +605,7 @@ if full_run
                 println("\n" * "-"^50)
                 println("Running periodic reporting (every $REPORT_EVERY epochs)")
                 println("-"^50)
-                run_reporting(output_folder, loop)
+                run_reporting(output_folder, loop; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
             end
         end
 
@@ -624,8 +624,8 @@ if full_run
     println("\n" * "="^70)
     println("RUNNING FINAL REPORTING")
     println("="^70)
-    
-    run_reporting(output_folder, max_loop)
+
+    run_reporting(output_folder, max_loop; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 end
 
 ############## POST-HOC ANALYSIS ##############
