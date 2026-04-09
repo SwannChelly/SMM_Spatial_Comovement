@@ -227,20 +227,20 @@ function parallel_pso_smm(
             println("  Mean fitness:     $(round(mean(filter(isfinite, fitness)), digits=6))")
 
             # Loss decomposition by block
-            c, blocks, total = loss_decomposition(g_best)
-            if prev_c !== nothing
-                ΔL = total - sum(prev_c)
-                if abs(ΔL) > 1e-12
-                    prev_blocks = [sum(prev_c[r]) for r in BLOCK_RANGES]
-                    Δblocks = blocks .- prev_blocks
-                    parts = join([
-                        @sprintf("%s:%+.0f%%", BLOCK_NAMES[k], 100*Δblocks[k]/abs(ΔL))
-                        for k in 1:5
-                    ], " | ")
-                    println("  Δ by block:       $parts")
-                end
-            end
-            prev_c = c
+            #c, blocks, total = loss_decomposition(g_best)
+            #if prev_c !== nothing
+            #    ΔL = total - sum(prev_c)
+            #    if abs(ΔL) > 1e-12
+            #        prev_blocks = [sum(prev_c[r]) for r in BLOCK_RANGES]
+            #        Δblocks = blocks .- prev_blocks
+            #        parts = join([
+            #            @sprintf("%s:%+.0f%%", BLOCK_NAMES[k], 100*Δblocks[k]/abs(ΔL))
+            #            for k in 1:5
+            #        ], " | ")
+            #        println("  Δ by block:       $parts")
+            #    end
+            #end
+            #prev_c = c
 
             # Keep existing improvement logging below...
             if last_printed_iter > 0
@@ -319,7 +319,7 @@ function train_stage_pso(
         A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
         A ./= sum(A) 
         
-        T_init_nz = vec(T_rs_init)[T_MASK] .+ 0.1  # Only non-zero T values
+        T_init_nz = vec(T_rs_init)[T_MASK]   # Only non-zero T values
         lb = vcat(
             init_beta .* 0.5,
             0.8*agg_labor_share,

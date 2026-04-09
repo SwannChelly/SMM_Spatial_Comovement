@@ -10,6 +10,11 @@ using Dates
 available = 50#Sys.CPU_THREADS - nprocs()
 println("Using "*string(available)*" workers")
 addprocs(max(available-1, 0)) # Always leave one core for other tests. 
+using Random
+seed = 1234
+Random.seed!(seed)
+@everywhere using Random
+@everywhere Random.seed!($seed)
 
 
 @everywhere using NPZ
@@ -19,7 +24,6 @@ addprocs(max(available-1, 0)) # Always leave one core for other tests.
 @everywhere using Distributions
 @everywhere using Plots
 @everywhere using CSV
-@everywhere using Random
 @everywhere using Optim
 @everywhere using Statistics
 @everywhere using HaltonSequences
@@ -172,7 +176,7 @@ for s in 1:S
     end
 end
 @everywhere const T_rs_init = $(T_gravity)
-@everywhere const T_rs_init = $(X_rs_local)
+#@everywhere const T_rs_init = $(X_rs_local)
 
 # Moment block sizes (full)
 n_labor = 1
@@ -320,8 +324,8 @@ if full_run
     println("="^70)
 
 
-    beta_min_informed = 1#minimum(exp.(-reg_coef ./ theta) .- 1) * 0.3
-    beta_max_informed = 10#maximum(exp.(-reg_coef ./ theta) .- 1) * 3.0
+    beta_min_informed = 1e-3#minimum(exp.(-reg_coef ./ theta) .- 1) * 0.3
+    beta_max_informed = 2#maximum(exp.(-reg_coef ./ theta) .- 1) * 3.0
     #beta_min_informed = max(beta_min_informed, 1e-4)
     print(beta_min_informed) 
     print(beta_max_informed)
@@ -331,7 +335,7 @@ if full_run
                                                   log_grid_length=length_range_beta)
         println("Generated $(length(beta_candidates)) log-grid beta combinations")
     elseif BETA_SEARCH_METHOD == "lhs"
-        N_LHS_SAMPLES = 5000
+        N_LHS_SAMPLES = 20000
         beta_candidates = generate_initial_betas("lhs", N_beta, beta_min_informed, beta_max_informed;
                                                   lhs_n_samples=N_LHS_SAMPLES)
         println("Generated $(length(beta_candidates)) LHS beta samples")

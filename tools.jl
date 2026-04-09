@@ -128,7 +128,7 @@ function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::I
 
     if n_beta == 4
         expanding_beta = [
-            [i, j, j,k]
+            [i, j, k,k]
             for i in range_beta
             for j in range_beta
             for k in range_beta
@@ -1137,19 +1137,18 @@ end
 Compute indices into masked moment vector for each moment block.
 Returns tuple of 5 index vectors (one per block).
 """
+
 function compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, mask)
     cuts = cumsum([0, n_labor, n_industry, n_gamma, n_reg, n_pi])
 
     masked_ranges = ntuple(5) do k
-        unmasked_range = cuts[k]+1 : cuts[k+1]
-        kept = findall(mask[unmasked_range])  # positions within block that survive mask
-        base = count(mask[1:cuts[k]])         # offset in masked vector
-        kept .+ base
+        base    = count(mask[1 : cuts[k]])
+        count_k = count(mask[cuts[k]+1 : cuts[k+1]])
+        (base + 1):(base + count_k)
     end
 
     return masked_ranges
 end
-
 
 """
     loss_decomposition(params) -> (c, block_totals, total)

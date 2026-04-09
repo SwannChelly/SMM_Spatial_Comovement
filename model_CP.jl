@@ -149,7 +149,7 @@ Returns:
 - sample_weights: Vector (N_rho,) summing to 1.0
 """
 function generate_stratified_draws(N_rho::Int, n_good::Int)
-    bin_edges = [0.00, 0.10, 0.20, 0.30, 0.40, 0.50,
+    bin_edges = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50,
                  0.55, 0.60, 0.65, 0.70, 0.75,
                  0.80, 0.85, 0.90, 0.925, 0.95,
                  0.96, 0.97, 0.98, 0.99, 0.995,
@@ -190,8 +190,13 @@ function generate_stratified_draws(N_rho::Int, n_good::Int)
             n = n_per_bin[b]
             for k in 1:n
                 idx += 1
+                frac = mod((k - 0.5)/n + offset, 1.0)
+                # Guard: when wrapping produces exactly 0.0, fall back to unshifted midpoint
+                if iszero(frac)
+                    frac = (k - 0.5) / n
+                end
+                U[idx, g] = lo + frac * width
                 # Midpoint in normalized bin coords, shifted by offset, wrapped
-                U[idx, g] = lo + mod((k - 0.5)/n + offset, 1.0) * width
             end
         end
     end
