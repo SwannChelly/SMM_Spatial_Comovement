@@ -5,6 +5,13 @@
 # nohup julia SMM_Spatial_Comovement/main_pso.jl > reporting_aero/logs.log 2>&1 
 using Distributed
 using Dates
+
+# Add workers
+available = 50#Sys.CPU_THREADS - nprocs()
+println("Using "*string(available)*" workers")
+addprocs(max(available-1, 0)) # Always leave one core for other tests. 
+
+
 @everywhere using NPZ
 @everywhere using QuasiMonteCarlo
 @everywhere using StatsPlots
@@ -23,10 +30,10 @@ using LinearAlgebra
 using Statistics, Printf
 using StatsBase
 
-# Add workers
-available = 50#Sys.CPU_THREADS - nprocs()
-println("Using "*string(available)*" workers")
-addprocs(max(available-1, 0)) # Always leave one core for other tests. 
+@everywhere include("model_CP.jl")
+@everywhere include("tools.jl")
+@everywhere include("pso_integration.jl")  # PSO functions
+@everywhere include("run_untargeted_validation.jl")
 
 ############## Load Parameters #################
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
@@ -77,36 +84,6 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 
 
 
-
-############# GRAVITY-BASED T INITIALIZATION (tau = 1) ##############
-
-println("Building gravity-consistent T_init (tau = 1, max-normalized)...")
-
-T_gravity = zeros(S, R)
-
-for s in 1:S
-    idxs = SECTOR_GOOD_INDICES[s]  # indices in flat good list
-    
-    # Compute raw T_sl ∝ gamma_ls * w_l^theta
-    for g in idxs
-        l = GOOD_R[g]  # upstream region
-        
-        gamma_val = emp_gamma_ls[l,s]
-        w_l = w_rs[l]
-        
-        T_gravity[s, l] = max(gamma_val * (w_l^theta), 1e-12)
-    end
-    
-    # Max normalization within sector
-    sector_vals = T_gravity[s, GOOD_R[idxs]]
-    max_val = maximum(sector_vals)
-    
-    if max_val > 0
-        T_gravity[s, GOOD_R[idxs]] ./= max_val
-    end
-end
-@everywhere const T_rs_init = $(T_gravity)
-@everywhere const T_rs_init = $(X_rs_local)
 #if industry == "aero"
 #    @everywhere const T_rs_init = $(X_rs_local)
 #elseif industry == "auto"
@@ -165,6 +142,38 @@ emp_pi_r_local = X_dr_local./sum(X_dr_local)
 empirical_moments_local = [[agg_labor_share], vec(agg_industry_share), emp_gamma_ls, reg_coef, emp_pi_r]
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)
 
+
+
+############# GRAVITY-BASED T INITIALIZATION (tau = 1) ##############
+
+println("Building gravity-consistent T_init (tau = 1, max-normalized)...")
+
+T_gravity = zeros(S, R)
+
+for s in 1:S
+    idxs = SECTOR_GOOD_INDICES[s]  # indices in flat good list
+    
+    # Compute raw T_sl ∝ gamma_ls * w_l^theta
+    for g in idxs
+        l = GOOD_R[g]  # upstream region
+        
+        gamma_val = emp_gamma_ls[l,s]
+        w_l = w_rs[l]
+        
+        T_gravity[s, l] = max(gamma_val * (w_l^theta), 1e-12)
+    end
+    
+    # Max normalization within sector
+    sector_vals = T_gravity[s, GOOD_R[idxs]]
+    max_val = maximum(sector_vals)
+    
+    if max_val > 0
+        T_gravity[s, GOOD_R[idxs]] ./= max_val
+    end
+end
+@everywhere const T_rs_init = $(T_gravity)
+@everywhere const T_rs_init = $(X_rs_local)
+
 # Moment block sizes (full)
 n_labor = 1
 n_industry = length(vec(agg_industry_share))       # S
@@ -218,6 +227,8 @@ Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vect
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 @everywhere const K_max = $(50)
 
+
+
 # Block ranges for loss decomposition (must come after MOMENT_MASK)
 BLOCK_RANGES_local = compute_block_ranges(
     n_labor, n_industry, n_gamma, n_reg, n_pi, moment_mask_local
@@ -225,10 +236,6 @@ BLOCK_RANGES_local = compute_block_ranges(
 @everywhere const BLOCK_RANGES = $BLOCK_RANGES_local
 @everywhere const BLOCK_NAMES = ("labor", "industry", "gamma_ls", "reg_coef", "pi_r")
 
-@everywhere include("model_CP.jl")
-@everywhere include("tools.jl")
-@everywhere include("pso_integration.jl")  # PSO functions
-@everywhere include("run_untargeted_validation.jl")
 
 # Precompute CdGM-style stratified productivity draws
 println("Generating CdGM-style stratified productivity draws...")
