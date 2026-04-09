@@ -316,7 +316,7 @@ end
 
 function parallel_SMM(params, simulation, second_stage, method;
                       precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-                      u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                      u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                       sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     return full_SMM(params, simulation, second_stage, method;
                     precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights)
@@ -325,7 +325,7 @@ end
 
 function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true;
                            precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-                           u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                           u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                            sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
@@ -382,7 +382,7 @@ function distance_bin(d, n_bins=N_beta)
 end
 
 function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original";
-                        u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                        u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                         sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
@@ -647,7 +647,7 @@ end
 
 
 function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="";
-                         u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                         u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                          sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     folder = joinpath(loop_folder, stage)
@@ -844,7 +844,7 @@ end
 Compute scores by dynamically finding all stage folders.
 """
 function compute_scores_modular(output_folder::String, second_stage::Bool, max_loop::Union{Int, Nothing}=nothing;
-                                u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                                u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                                 sample_weights::Union{Nothing, Vector{Float64}}=nothing)
     top_score = Float64[]
     min_distances = Float64[]
@@ -925,7 +925,7 @@ Run full reporting: compute scores, create plots, save results.
 """
 function run_reporting(output_folder::String, max_loop::Union{Int, Nothing}=nothing;
                        save_plots::Bool=true,
-                       u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                        sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     folder = output_folder * "/"
@@ -1121,11 +1121,53 @@ function old_generate_halton_grid(n)
 
         lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
         ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
-        
+
         halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
         halton_samples =  [halton_samples[:,i] for i in range(1,n)]
 
         return halton_samples
         # This will create a vector of 100 tuples, each with 8 parameters
         #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
+end
+
+
+"""
+    compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, mask)
+
+Compute indices into masked moment vector for each moment block.
+Returns tuple of 5 index vectors (one per block).
+"""
+function compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, mask)
+    cuts = cumsum([0, n_labor, n_industry, n_gamma, n_reg, n_pi])
+
+    masked_ranges = ntuple(5) do k
+        unmasked_range = cuts[k]+1 : cuts[k+1]
+        kept = findall(mask[unmasked_range])  # positions within block that survive mask
+        base = count(mask[1:cuts[k]])         # offset in masked vector
+        kept .+ base
+    end
+
+    return masked_ranges
+end
+
+
+"""
+    loss_decomposition(params) -> (c, block_totals, total)
+
+Decompose SMM loss into per-moment contributions.
+
+Uses global constants: U_DRAWS, SAMPLE_WEIGHTS, MOMENT_MASK,
+                       empirical_moments, Weight_matrix_custom, BLOCK_RANGES
+"""
+function loss_decomposition(params)
+    _, sim = full_SMM(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+
+    sim_vec = vcat([vec(sim[i]) for i in 1:length(sim)]...)[MOMENT_MASK]
+    emp_vec = vec(empirical_moments)
+    w = diag(Weight_matrix_custom)
+
+    c = w .* (emp_vec .- sim_vec).^2   # per-moment contributions
+    block_totals = [sum(c[r]) for r in BLOCK_RANGES]
+
+    return c, block_totals, sum(c)
 end

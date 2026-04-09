@@ -218,6 +218,13 @@ Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vect
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 @everywhere const K_max = $(50)
 
+# Block ranges for loss decomposition (must come after MOMENT_MASK)
+BLOCK_RANGES_local = compute_block_ranges(
+    n_labor, n_industry, n_gamma, n_reg, n_pi, moment_mask_local
+)
+@everywhere const BLOCK_RANGES = $BLOCK_RANGES_local
+@everywhere const BLOCK_NAMES = ("labor", "industry", "gamma_ls", "reg_coef", "pi_r")
+
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
 @everywhere include("pso_integration.jl")  # PSO functions
@@ -225,10 +232,10 @@ Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vect
 
 # Precompute CdGM-style stratified productivity draws
 println("Generating CdGM-style stratified productivity draws...")
-u_draws_local, sample_weights_local = generate_stratified_draws(N_rho)
+u_draws_local, sample_weights_local = generate_stratified_draws(N_rho, n_good_local)
 @everywhere const U_DRAWS = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
-println("  N_rho: $(length(u_draws_local)) quantiles")
+println("  U_DRAWS shape: $(size(u_draws_local)) (N_rho × n_good)")
 println("  Weight range: [$(minimum(sample_weights_local)), $(maximum(sample_weights_local))]")
 
 # Downstream region indices (maps r_d ∈ 1:R_downstream → r ∈ 1:R)

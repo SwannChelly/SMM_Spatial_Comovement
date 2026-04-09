@@ -8,6 +8,7 @@ using Distributed
 using Random
 using Statistics
 using NPZ
+using Printf
 
 """
     parallel_pso_smm(objective_func, lb, ub; warm_start_particle=nothing, kwargs...)
@@ -120,6 +121,9 @@ function parallel_pso_smm(
     # Track last printed fitness for improvement display
     last_printed_fitness = g_best_fitness
     last_printed_iter = 0
+
+    # Track previous loss decomposition for Δ reporting
+    prev_c = nothing
     
     if verbose
         println("[PSO] Initialization complete:")
@@ -221,16 +225,32 @@ function parallel_pso_smm(
             println("[PSO] Iteration $iter/$max_iter ($(round(t_elapsed, digits=2))s):")
             println("  Best fitness:     $(round(g_best_fitness, digits=6))")
             println("  Mean fitness:     $(round(mean(filter(isfinite, fitness)), digits=6))")
+
+            # Loss decomposition by block
+            c, blocks, total = loss_decomposition(g_best)
+            if prev_c !== nothing
+                ΔL = total - sum(prev_c)
+                if abs(ΔL) > 1e-12
+                    prev_blocks = [sum(prev_c[r]) for r in BLOCK_RANGES]
+                    Δblocks = blocks .- prev_blocks
+                    parts = join([
+                        @sprintf("%s:%+.0f%%", BLOCK_NAMES[k], 100*Δblocks[k]/abs(ΔL))
+                        for k in 1:5
+                    ], " | ")
+                    println("  Δ by block:       $parts")
+                end
+            end
+            prev_c = c
+
+            # Keep existing improvement logging below...
             if last_printed_iter > 0
-                # Improvement since last printed iteration
                 improvement = last_printed_fitness - g_best_fitness
                 pct_improvement = 100 * improvement / last_printed_fitness
                 println("  Improvement:      $(round(improvement, digits=6)) ($(round(pct_improvement, digits=2))% since iter $last_printed_iter)")
             end
             println()
             flush(stdout)
-            
-            # Update last printed values
+
             last_printed_fitness = g_best_fitness
             last_printed_iter = iter
         end
@@ -287,7 +307,7 @@ function train_stage_pso(
     alpha = 0.1,
     second_stage = false,
     method = false,
-    u_draws::Union{Nothing, Vector{Float64}} = nothing,
+    u_draws::Union{Nothing, Matrix{Float64}} = nothing,
     sample_weights::Union{Nothing, Vector{Float64}} = nothing
 )
     

@@ -126,59 +126,77 @@ end
 ##################### Stratified Draws (CdGM-style) ###################
 
 """
-    generate_stratified_draws(N_rho; seed=50) -> (u_quantiles, weights)
+Van der Corput sequence (base 2) — deterministic quasi-random in [0,1).
+"""
+function vdc(n::Int)::Float64
+    r, den = 0.0, 1.0
+    while n > 0
+        den *= 2
+        r += (n % 2) / den
+        n = div(n, 2)
+    end
+    return r
+end
 
-Generate CdGM-style stratified uniform draws for Fréchet inverse CDF.
 
-Uses 25 non-uniform bins on [0,1] that oversample the upper tail.
-Within each bin, draws are evenly spaced (deterministic).
+"""
+    generate_stratified_draws(N_rho, n_good) -> (U, sample_weights)
+
+CdGM-style stratified draws with per-good-pair quasi-random offsets.
 
 Returns:
-- `u_quantiles`: Vector of length N_rho with uniform quantiles in (0,1)
-- `weights`: Vector of length N_rho, weights sum to 1.0
+- U: Matrix (N_rho × n_good) of uniform quantiles in (0,1)
+- sample_weights: Vector (N_rho,) summing to 1.0
 """
-function generate_stratified_draws(N_rho; seed=50)
-
+function generate_stratified_draws(N_rho::Int, n_good::Int)
     bin_edges = [0.00, 0.10, 0.20, 0.30, 0.40, 0.50,
                  0.55, 0.60, 0.65, 0.70, 0.75,
                  0.80, 0.85, 0.90, 0.925, 0.95,
                  0.96, 0.97, 0.98, 0.99, 0.995,
                  0.996, 0.997, 0.998, 0.999, 1.0]
-
-    N_bins = length(bin_edges) - 1  # 25
+    N_bins = length(bin_edges) - 1
 
     # Distribute N_rho across bins; extras go to tail bins
     base_per_bin = div(N_rho, N_bins)
     remainder = mod(N_rho, N_bins)
-
     n_per_bin = fill(base_per_bin, N_bins)
     for i in 1:remainder
         n_per_bin[N_bins - i + 1] += 1
     end
-
     @assert sum(n_per_bin) == N_rho
 
-    # Generate uniform quantiles within each bin (evenly spaced midpoints)
-    u_quantiles = Float64[]
-    sample_weights = Float64[]
-
+    # Compute sample weights (same for all good pairs)
+    sample_weights = Vector{Float64}(undef, N_rho)
+    idx = 0
     for b in 1:N_bins
-        lo = bin_edges[b]
-        hi = bin_edges[b + 1]
+        lo, hi = bin_edges[b], bin_edges[b+1]
         width = hi - lo
         n = n_per_bin[b]
-
         for k in 1:n
-            u = lo + (k - 0.5) / n * width  # midpoints within bin
-            push!(u_quantiles, u)
-            push!(sample_weights, width / n)  # weight = bin_width / n_firms_in_bin
+            idx += 1
+            sample_weights[idx] = width / n
+        end
+    end
+    sample_weights ./= sum(sample_weights)
+
+    # Generate (N_rho × n_good) draws with per-pair Van der Corput offset
+    U = Matrix{Float64}(undef, N_rho, n_good)
+    for g in 1:n_good
+        offset = vdc(g)  # Deterministic offset ∈ [0,1) for this good pair
+        idx = 0
+        for b in 1:N_bins
+            lo, hi = bin_edges[b], bin_edges[b+1]
+            width = hi - lo
+            n = n_per_bin[b]
+            for k in 1:n
+                idx += 1
+                # Midpoint in normalized bin coords, shifted by offset, wrapped
+                U[idx, g] = lo + mod((k - 0.5)/n + offset, 1.0) * width
+            end
         end
     end
 
-    # Normalize weights to sum to 1
-    sample_weights ./= sum(sample_weights)
-
-    return u_quantiles, sample_weights
+    return U, sample_weights
 end
 
 
@@ -266,7 +284,7 @@ If return_firm_level=true, additionally returns sparse COO vectors:
 """
 function solve_network(params; return_firm_level=false,
                        precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-                       u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                        sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -305,14 +323,14 @@ function solve_network(params; return_firm_level=false,
         end
     else
         # CdGM-style: Fréchet inverse CDF from stratified uniform draws
-        # u_draws is now a Vector{Float64} of length N_rho (same quantiles for all pairs)
+        # u_draws is a Matrix{Float64} (N_rho × n_good) with per-pair quantiles
         # F⁻¹(u) = σ · (-ln(1-u))^(-1/θ) where σ = T_{sr}^{1/θ}
         z_flat = zeros(N_rho, n_good)
         for g in 1:n_good
             T_sr = T[GOOD_S[g], GOOD_R[g]]
             scale = T_sr^(1/theta)
             for rho in 1:N_rho
-                z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho]))^(-1.0/theta)
+                z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
             end
         end
     end
@@ -689,7 +707,7 @@ Main SMM function for optimization.
 - If simulation=false: Tuple of moments for SMM estimation
 """
 function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-             u_draws::Union{Nothing, Vector{Float64}}=nothing,
+             u_draws::Union{Nothing, Matrix{Float64}}=nothing,
              sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # Solve network
@@ -731,7 +749,7 @@ Used for untargeted moment validation (Table 2 regression).
 - `network`: Full network solution including firm-level data
 """
 function SMM_with_network(params; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-                          u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                          u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                           sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     # Solve network with firm-level data
@@ -821,7 +839,7 @@ Full SMM evaluation: compute loss and return moments.
 """
 function full_SMM(params, simulation=false, second_stage=false, method="original";
                   precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-                  u_draws::Union{Nothing, Vector{Float64}}=nothing,
+                  u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                   sample_weights::Union{Nothing, Vector{Float64}}=nothing)
 
     simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
