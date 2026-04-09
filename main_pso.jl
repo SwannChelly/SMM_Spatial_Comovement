@@ -273,11 +273,11 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 N_PARTICLES = 100   # Use all available cores except one 
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
 MAX_ITER_STAGE = 50         # Iterations for each refinement stage
-method = "original"
+method = "log"
 max_loop = 50
 full_run = true
 length_range_beta = 40 # Normal is 50
-BETA_SEARCH_METHOD = "lhs"  # Options: "lhs" (default), "log_grid" (old systematic grid)
+BETA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
 BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
