@@ -278,7 +278,7 @@ max_loop = 50
 full_run = true
 length_range_beta = 40 # Normal is 50
 BETA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
-BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
+BETA_SELECTION_CRITERION = "score"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
 REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)

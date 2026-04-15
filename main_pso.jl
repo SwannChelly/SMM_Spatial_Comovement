@@ -77,7 +77,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)     
 @everywhere const w_rs = $(w_rs_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
-@everywhere const N_rho = $(100)
+@everywhere const N_rho = $(1000)
 @everywhere const epsilon = $(coefs[1,"value"])
 @everywhere const lambda = $(0.5)
 @everywhere const nu = $(0.2)
@@ -222,7 +222,7 @@ weight_vector_local = NPZ.npzread(joinpath(input_folder, "weight_vector.npy"))
 Weight vector length $(length(weight_vector_local)) != N_moments $(sum(moment_mask_local)).
 """
 
-Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vector_local)
+Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vector_local)#I(length(weight_vector_local))
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
 
@@ -273,7 +273,7 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 N_PARTICLES = 100   # Use all available cores except one 
 MAX_ITER_INITIAL = 200      # Iterations for initial full optimization
 MAX_ITER_STAGE = 50         # Iterations for each refinement stage
-method = "log"
+method = "original"
 max_loop = 50
 full_run = true
 length_range_beta = 40 # Normal is 50

@@ -461,7 +461,7 @@ function solve_network(params; return_firm_level=false,
     #   P = [Σ_r p_r^ε · δ_r]^{1/ε}  (price index, ε < 0)
     #   Y_r = p_r^ε · P^{-ε} · E · δ_r  (sales = revenue)
     # ─────────────────────────────────────────────────────────────────────────
-    mu = (epsilon - 1) / epsilon  # Inverse markup μ = (ε-1)/ε
+    mu = epsilon/(epsilon - 1)    # Inverse markup μ = ε/(ε-1)
 
     # Prices: p_r = c̃_r / μ  (R_downstream length)
     p_r = c_tilde_r ./ mu
@@ -624,12 +624,13 @@ function compute_moments(network, params)
     z_flat = network.z_flat
     closest_plant_dist = network.closest_plant_dist
     closest_downstream_region = network.closest_downstream_region
+    active = N_downstream_per_region .!= 0
     
     # ─────────────────────────────────────────────────────────────────────────
+    # We can use the output of the network to build it. No need for those additional calculs to build y_r. 
     # 1. Aggregate labor share (matching model_CP.jl exactly)
     # ─────────────────────────────────────────────────────────────────────────
     
-    active = N_downstream_per_region .!= 0
     
     # Compute price index and B exactly as in model_CP.jl
     markup = (epsilon - 1) / epsilon
