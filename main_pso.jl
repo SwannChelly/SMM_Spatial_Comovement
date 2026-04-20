@@ -222,13 +222,10 @@ weight_vector_local = NPZ.npzread(joinpath(input_folder, "weight_vector.npy"))
 Weight vector length $(length(weight_vector_local)) != N_moments $(sum(moment_mask_local)).
 """
 
-Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vector_local)#I(length(weight_vector_local))
-@everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
 
 @everywhere const MOMENT_MASK = $moment_mask_local
 @everywhere const empirical_moments = $(empirical_moments_local)
-@everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 @everywhere const K_max = $(50)
 
 
@@ -240,6 +237,11 @@ BLOCK_RANGES_local = compute_block_ranges(
 @everywhere const BLOCK_RANGES = $BLOCK_RANGES_local
 @everywhere const BLOCK_NAMES = ("labor", "industry", "gamma_ls", "reg_coef", "pi_r")
 
+Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vector_local)#I(length(weight_vector_local))
+w_vec = ones(N_moments)
+w_vec[BLOCK_RANGES_local[4]] .= 100.0
+Weight_matrix_custom_local = Diagonal(w_vec)
+@everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
 # Precompute CdGM-style stratified productivity draws
 println("Generating CdGM-style stratified productivity draws...")
