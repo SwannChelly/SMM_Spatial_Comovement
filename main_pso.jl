@@ -40,7 +40,7 @@ using StatsBase
 @everywhere include("run_untargeted_validation.jl")
 
 ############## Load Parameters #################
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
 resume = length(ARGS) >= 3 && ARGS[3] == "resume"
 if !(n_coef in [4, 5])
