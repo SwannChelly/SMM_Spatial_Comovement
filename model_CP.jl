@@ -148,7 +148,7 @@ Returns:
 - U: Matrix (N_rho × n_good) of uniform quantiles in (0,1)
 - sample_weights: Vector (N_rho,) summing to 1.0
 """
-function generate_stratified_draws(N_rho::Int, n_good::Int)
+function generate_stratified_draws(N_rho::Int, n_good::Int; seed_offset::Int=0)
     bin_edges = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50,
                  0.55, 0.60, 0.65, 0.70, 0.75,
                  0.80, 0.85, 0.90, 0.925, 0.95,
@@ -180,9 +180,10 @@ function generate_stratified_draws(N_rho::Int, n_good::Int)
     sample_weights ./= sum(sample_weights)
 
     # Generate (N_rho × n_good) draws with per-pair Van der Corput offset
+    # seed_offset shifts vdc index so K independent samples can be drawn
     U = Matrix{Float64}(undef, N_rho, n_good)
     for g in 1:n_good
-        offset = vdc(g)  # Deterministic offset ∈ [0,1) for this good pair
+        offset = vdc(g + seed_offset * n_good)  # Deterministic offset ∈ [0,1) for this good pair
         idx = 0
         for b in 1:N_bins
             lo, hi = bin_edges[b], bin_edges[b+1]
@@ -846,18 +847,19 @@ Full SMM evaluation: compute loss and return moments.
 function full_SMM(params, simulation=false, second_stage=false, method="original";
                   precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                   u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                  sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                  sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                  W_override::Union{Nothing, AbstractMatrix}=nothing)
 
     simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
                             u_draws=u_draws, sample_weights=sample_weights)
-    
+
     if second_stage
         emp = empirical_moments_reduced
         W = Weight_matrix
         moments = [simulated_moments[3][mask_emp_gamma_ls .!= 0]]
     else
         emp = empirical_moments
-        W = Weight_matrix_custom
+        W = W_override !== nothing ? W_override : Weight_matrix_custom
         moments = simulated_moments
     end
     

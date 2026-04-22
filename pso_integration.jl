@@ -308,7 +308,9 @@ function train_stage_pso(
     second_stage = false,
     method = false,
     u_draws::Union{Nothing, Matrix{Float64}} = nothing,
-    sample_weights::Union{Nothing, Vector{Float64}} = nothing
+    sample_weights::Union{Nothing, Vector{Float64}} = nothing,
+    weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
+    warm_start_override::Union{Nothing, Vector{Float64}} = nothing
 )
     
     # Build bounds based on previous stage or initialization
@@ -339,7 +341,8 @@ function train_stage_pso(
         beta_constraint = true
         beta_indices = 1:N_beta
         best_params_prev = nothing
-        warm_start = nothing
+        # Use warm_start_override if provided (Step 3 warm-start from θ̂_1)
+        warm_start = warm_start_override
         cached_tau = nothing  # Beta is being optimized in initial stage
         
     else
@@ -465,7 +468,9 @@ function train_stage_pso(
         end
         
         # Evaluate SMM
-        result = parallel_SMM_safe(x_full, false, second_stage, method, false; precomputed_tau=cached_tau, u_draws=u_draws, sample_weights=sample_weights)
+        result = parallel_SMM_safe(x_full, false, second_stage, method, false;
+                                   precomputed_tau=cached_tau, u_draws=u_draws, sample_weights=sample_weights,
+                                   W_override=weight_matrix)
         
         if isnothing(result)
             return Inf

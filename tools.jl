@@ -317,16 +317,19 @@ end
 function parallel_SMM(params, simulation, second_stage, method;
                       precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                      sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                      sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                      W_override::Union{Nothing, AbstractMatrix}=nothing)
     return full_SMM(params, simulation, second_stage, method;
-                    precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights)
+                    precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
+                    W_override=W_override)
 end
 
 
 function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true;
                            precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                            u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                           sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                           sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                           W_override::Union{Nothing, AbstractMatrix}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
@@ -334,7 +337,8 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
 
     try
         result = parallel_SMM(params, simulation, second_stage, method;
-                              precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights)
+                              precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
+                              W_override=W_override)
 
         return result
     catch e
@@ -1169,4 +1173,279 @@ function loss_decomposition(params)
     block_totals = [sum(c[r]) for r in BLOCK_RANGES]
 
     return c, block_totals, sum(c)
+end
+
+
+"""
+    build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)
+
+Assemble the efficient SMM weight matrix W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1}.
+
+Σ_data is block-diagonal with covariance blocks for γ and β loaded from
+w_gamma.npy and w_beta.npy; all other blocks are zero.
+Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1.
+
+Returns W_step3 as Matrix{Float64} and saves intermediate matrices under output_folder/step2/.
+"""
+function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
+                                   K::Int=10_000,
+                                   output_folder::String=".")
+    N_moments = length(empirical_moments)
+
+    # ── Load Σ_data blocks ──────────────────────────────────────────────────
+    Sigma_gamma_data = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
+    Sigma_beta_data  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
+
+    n_gamma_kept = length(BLOCK_RANGES[3])
+    n_beta_kept  = length(BLOCK_RANGES[4])
+
+    @assert size(Sigma_gamma_data) == (n_gamma_kept, n_gamma_kept) """
+    w_gamma.npy must be ($n_gamma_kept, $n_gamma_kept); got $(size(Sigma_gamma_data))
+    """
+    @assert size(Sigma_beta_data) == (n_beta_kept, n_beta_kept) """
+    w_beta.npy must be ($n_beta_kept, $n_beta_kept); got $(size(Sigma_beta_data))
+    """
+    @assert isapprox(Sigma_gamma_data, Sigma_gamma_data'; atol=1e-10) "w_gamma.npy is non-symmetric"
+    @assert isapprox(Sigma_beta_data,  Sigma_beta_data';  atol=1e-10) "w_beta.npy is non-symmetric"
+
+    # Embed into full (N_moments × N_moments) block-diagonal Σ_data
+    Sigma_data = zeros(N_moments, N_moments)
+    Sigma_data[BLOCK_RANGES[3], BLOCK_RANGES[3]] = Sigma_gamma_data
+    Sigma_data[BLOCK_RANGES[4], BLOCK_RANGES[4]] = Sigma_beta_data
+
+    # ── Estimate Σ_sim via K re-seeded SMM evaluations ──────────────────────
+    # Workers call generate_stratified_draws with seed_offset=k and full_SMM.
+    # Draws are generated on-worker to avoid materialising K large matrices on master.
+    println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
+    flush(stdout)
+
+    M_sim_rows = pmap(1:K) do k
+        u_k, w_k = generate_stratified_draws(N_rho, n_good; seed_offset=k)
+        _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
+        moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
+        return moms_flat
+    end
+
+    M_sim = reduce(hcat, M_sim_rows)'  # (K, N_moments)
+    Sigma_sim = cov(M_sim; dims=1)     # full (N_moments × N_moments)
+
+    # ── Combine and invert ───────────────────────────────────────────────────
+    Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
+    Omega = (Omega .+ Omega') ./ 2  # symmetrise against floating-point drift
+
+    # Condition number diagnostics
+    step2_dir = joinpath(output_folder, "step2")
+    mkpath(step2_dir)
+
+    eig_vals = eigvals(Symmetric(Omega))
+    lambda_max = maximum(eig_vals)
+    lambda_min = minimum(eig_vals)
+    kappa = lambda_max / max(lambda_min, 1e-300)
+    println("  Ω condition number: $(round(kappa, sigdigits=4))")
+
+    if kappa > 1e10
+        @warn "Ω is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
+        floor_val = lambda_max / 1e8
+        F = eigen(Symmetric(Omega))
+        clipped = max.(F.values, floor_val)
+        Omega = F.vectors * Diagonal(clipped) * F.vectors'
+        Omega = (Omega .+ Omega') ./ 2
+    end
+
+    open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
+        println(io, "K = $K")
+        println(io, "lambda_max = $lambda_max")
+        println(io, "lambda_min = $lambda_min")
+        println(io, "condition_number = $kappa")
+    end
+
+    W_step3 = inv(Omega)
+
+    # Save intermediate matrices
+    NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"), Sigma_data)
+    NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),  Sigma_sim)
+    NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),      Omega)
+    NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),    W_step3)
+
+    println("  W_step3 saved to $step2_dir")
+    return W_step3
+end
+
+
+"""
+    run_pso_optimization(; kwargs...) -> (best_params, best_fitness)
+
+Unified PSO wrapper for Steps 1 and 3 of three-step SMM.
+
+# Keyword arguments
+- `weight_matrix`: SMM weight matrix passed to full_SMM (default: uses global Weight_matrix_custom)
+- `skip_initial_beta_search`: if true, skip Stage 0 LHS search (use warm_start_params beta)
+- `warm_start_params`: full parameter vector to warm-start Stage 1 PSO (nothing = fresh start)
+- `output_subfolder`: subfolder under output_folder for all stage outputs
+- `max_loop`: number of refinement loops (default 50)
+- `n_particles`, `max_iter_initial`, `max_iter_stage`: PSO configuration
+- `beta_search_method`: "log_grid" or "lhs"
+- `beta_selection_criterion`: "reg_coef" or "score"
+"""
+function run_pso_optimization(;
+    weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
+    skip_initial_beta_search::Bool = false,
+    warm_start_params::Union{Nothing, Vector{Float64}} = nothing,
+    output_subfolder::String = "step1",
+    max_loop::Int = 50,
+    n_particles::Int = 100,
+    max_iter_initial::Int = 200,
+    max_iter_stage::Int = 50,
+    beta_search_method::String = "log_grid",
+    beta_selection_criterion::String = "reg_coef",
+    length_range_beta::Int = 40,
+    method::String = "original"
+)
+    loop_base = joinpath(output_folder, output_subfolder)
+    mkpath(loop_base)
+
+    best_params = nothing
+    best_fitness = Inf
+    stage = 0
+
+    # ── Stage 0: LHS beta search ─────────────────────────────────────────────
+    if !skip_initial_beta_search
+        println("\n" * "="^70)
+        println("[$output_subfolder] STAGE 0: Finding good initial beta values")
+        println("="^70)
+
+        beta_min = 1e-3
+        beta_max = 2.0
+
+        if beta_search_method == "log_grid"
+            beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;
+                                                     log_grid_length=length_range_beta)
+        else
+            beta_candidates = generate_initial_betas("lhs", N_beta, beta_min, beta_max;
+                                                     lhs_n_samples=20000)
+        end
+        println("  Generated $(length(beta_candidates)) beta candidates")
+
+        A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
+        A_init ./= sum(A_init)
+        T_init_nz = vec(T_rs_init)[T_MASK]
+        init_other = vcat([agg_labor_share], agg_industry_share, A_init, T_init_nz)
+        expanding_beta = [vcat(beta, init_other) for beta in beta_candidates]
+
+        results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                                               W_override=weight_matrix), expanding_beta)
+
+        if beta_selection_criterion == "reg_coef"
+            reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
+            reg_distances  = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
+            best_idx = argmin(reg_distances)
+        else
+            scores = [r !== nothing ? r[1][1] : Inf for r in results_]
+            best_idx = argmin(scores)
+        end
+        init_beta = beta_candidates[best_idx]
+        println("  Best initial beta: ", round.(init_beta, digits=6))
+    else
+        @assert warm_start_params !== nothing "skip_initial_beta_search=true requires warm_start_params"
+        init_beta = warm_start_params[1:N_beta]
+        println("\n[$output_subfolder] Skipping Stage 0: using warm_start beta $(round.(init_beta, digits=6))")
+    end
+
+    # ── Stage 1: Full PSO ────────────────────────────────────────────────────
+    println("\n" * "="^70)
+    println("[$output_subfolder] STAGE 1: Initial full PSO")
+    println("="^70)
+
+    best_params, best_fitness, history = train_stage_pso(
+        n_particles, max_iter_initial;
+        init_beta      = init_beta,
+        variable_list  = nothing,
+        last_stage_folder = nothing,
+        alpha          = 0.5,
+        second_stage   = false,
+        method         = method,
+        u_draws        = U_DRAWS,
+        sample_weights = SAMPLE_WEIGHTS,
+        weight_matrix  = weight_matrix,
+        warm_start_override = warm_start_params
+    )
+
+    stage = 0
+    stage0_folder = joinpath(loop_base, string(stage))
+    mkpath(stage0_folder)
+    NPZ.npzwrite(joinpath(stage0_folder, "best_params.npy"), reshape(best_params, :, 1))
+    generate_report(loop_base, string(stage), 1, nothing, best_params, "";
+                    u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+
+    # ── Refinement loops ─────────────────────────────────────────────────────
+    alpha_start, alpha_end = 0.3, 0.9
+
+    for loop in 1:max_loop
+        alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
+        past_loop_folder = loop == 1 ? loop_base : joinpath(loop_base, "epoch_$(loop-1)")
+        loop_folder = joinpath(loop_base, "epoch_$loop")
+        mkpath(loop_folder)
+
+        println("\n[$output_subfolder] LOOP $loop/$max_loop  alpha=$alpha")
+
+        # Sub-stage 1: Productivity
+        alpha_prod = 0.7 + 0.2 * alpha
+        best_params, best_fitness, history = train_stage_pso(
+            n_particles, max_iter_stage;
+            variable_list     = ["productivity"],
+            last_stage_folder = joinpath(past_loop_folder, string(stage)),
+            K=1, alpha=alpha_prod, second_stage=false, method=method,
+            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+        )
+        stage += 1
+        folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+        generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_prod);
+                        u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+
+        # Sub-stage 2: Spatial structure (β, T)
+        best_params, best_fitness, history = train_stage_pso(
+            n_particles, max_iter_stage;
+            variable_list     = ["beta", "T"],
+            last_stage_folder = joinpath(loop_folder, string(stage)),
+            K=1, alpha=alpha, second_stage=false, method=method,
+            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+        )
+        stage += 1
+        folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+        generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
+                        u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+
+        # Sub-stage 3: Technical coefficients
+        best_params, best_fitness, history = train_stage_pso(
+            n_particles, max_iter_stage;
+            variable_list     = ["agg_labor_share_tech", "agg_industry_share_tech"],
+            last_stage_folder = joinpath(loop_folder, string(stage)),
+            K=1, alpha=alpha, second_stage=false, method=method,
+            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+        )
+        stage += 1
+        folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+        generate_report(loop_folder, string(stage), 1,
+                        ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha);
+                        u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+
+        println("  ✓ Loop $loop done. Fitness: $(round(best_fitness, digits=6))")
+
+        # Convergence check
+        if loop > 2
+            prev_folder = joinpath(loop_base, "epoch_$(loop-1)", string(stage - 3))
+            prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:, 1]
+            param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
+            if param_change < 1e-6
+                println("  Convergence: Δparams < 1e-6. Stopping.")
+                break
+            end
+        end
+    end
+
+    run_reporting(loop_base, max_loop; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+    return best_params, best_fitness
 end

@@ -78,7 +78,8 @@ SMM_Spatial_Comovement/
 ├── model_CP.jl                  # Core: solve_network, compute_moments, full_SMM
 ├── tools.jl                     # Optimization helpers, reporting, LHS/Halton grids
 ├── pso_integration.jl           # PSO: parallel_pso_smm, train_stage_pso
-├── main_pso.jl                  # Entry point: PSO optimizer (multi-stage refinement)
+├── main.jl                      # Entry point: three-step efficient SMM (Steps 1–3)
+├── main_pso.jl                  # Legacy entry point: identity-weighted PSO only (unchanged)
 ├── main_NM.jl                   # Entry point: Nelder-Mead optimizer (2-step)
 ├── untargeted_moments.jl        # Validation: 3-model shock simulation + regressions
 ├── run_untargeted_validation.jl # Interface: validate_table2_all_models
@@ -91,13 +92,13 @@ SMM_Spatial_Comovement/
 ### `model_CP.jl` — core model (read this first)
 
 Key functions:
-- `generate_stratified_draws(N_rho)`: CdGM-style stratified uniform draws for Fréchet inverse CDF. Returns `(u_quantiles, weights)`, both length `N_rho`. Deterministic; replaces random draws.
+- `generate_stratified_draws(N_rho, n_good; seed_offset=0)`: CdGM-style stratified uniform draws for Fréchet inverse CDF. Returns `(U, weights)` where `U` is `(N_rho × n_good)`. `seed_offset` shifts the Van der Corput index so that `K` independent draw configurations can be generated without touching the global RNG — required by `build_step3_weight_matrix`.
 - `unpack_params(params)`: splits flat vector into `(β, Ω^L, Ω^s, A, T_full)`. `T_full` is `S×R` with zeros for inactive pairs.
-- `build_tau(beta)`: builds `(R, R)` iceberg cost matrix from distance-bin coefficients using precomputed `DistBin`.
+- `build_tau(beta)`: builds `(R, R_downstream)` iceberg cost matrix from distance-bin coefficients using precomputed `DistBin`.
 - `solve_network(params; return_firm_level, precomputed_tau, u_draws, sample_weights)`: main equilibrium solver. Returns NamedTuple. If `return_firm_level=true`, appends sparse COO firm-level arrays (`firm_exp_rho/s/g/r/val`, `firm_deriv_val`).
 - `compute_moments(network, params)`: extracts all 5 moment blocks from solved network.
 - `fast_weighted_regression(linkages_flat, z_flat, sample_weights)`: analytical weighted OLS with FWL demeaning by sector×downstream-region FE. Returns `N_beta` distance-bin coefficients.
-- `full_SMM(params, ...)`: wrapper returning `(loss, moments_tuple)`.
+- `full_SMM(params, simulation=false, second_stage=false, method="original"; ..., W_override=nothing)`: wrapper returning `(loss, moments_tuple)`. When `W_override` is not nothing it is used instead of the global `Weight_matrix_custom`; existing call sites are unaffected.
 
 **Flat indexing convention** (critical): active `(s, r)` pairs are stored in a flat array of length `n_good`. Global constants `GOOD_S[g]`, `GOOD_R[g]` map index `g` back to `(s, r)`. `SR_TO_GOOD[s, r]` is the reverse map (0 for inactive). `SECTOR_GOOD_INDICES[s]` lists all `g` indices for sector `s`.
 
@@ -108,31 +109,41 @@ Key functions:
 Key utilities:
 - `generate_lhs_beta(n, n_beta, lb, ub)`: LHS samples with sorted draws → monotone β.
 - `generate_stratified_draws` is in `model_CP.jl`, not here.
-- `parallel_SMM_safe(...)`: try-catch wrapper returning `nothing` on failure.
+- `parallel_SMM_safe(...; W_override=nothing)`: try-catch wrapper returning `nothing` on failure. Threads `W_override` to `full_SMM`.
 - `distance_bin(d, n_bins)`: maps distance (km) to bin index 1..N_beta (0 = local, excluded from regression).
 - `generate_report(...)`: saves `dashboard.png`, `report.txt`, `pi_r.npy`, `productivity.npy`.
 - `run_reporting(output_folder, max_loop)`: scans all epoch/stage folders, computes scores, saves `best_simulated_moments.npy`, `best_parameters_list.npy`.
 - `find_last_stage_folder(base_folder)`: locates most recent `best_params.npy`.
 - `find_resume_state(base_folder)`: determines `(resume_loop, resume_substage)` for `--resume` mode.
+- `build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)`: assembles `W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1}`. `Σ_data` is block-diagonal (γ and β blocks from `w_gamma.npy`/`w_beta.npy`; other blocks zero). `Σ_sim` estimated via K pmap evaluations with `seed_offset=k`. Saves `Sigma_data.npy`, `Sigma_sim.npy`, `Omega.npy`, `W_step3.npy`, `diagnostics.txt` to `output_folder/step2/`. Returns `W_step3::Matrix{Float64}`.
+- `run_pso_optimization(; weight_matrix, skip_initial_beta_search, warm_start_params, output_subfolder, max_loop, ...)`: unified PSO wrapper for Steps 1 and 3. Runs Stage 0 LHS search (unless `skip_initial_beta_search=true`), Stage 1 full PSO, and 50-loop refinement. Returns `(best_params, best_fitness)`.
 
 ### `pso_integration.jl` — PSO optimizer
 
 - `parallel_pso_smm(obj, lb, ub; n_particles, max_iter, warm_start_particle, ...)`: core PSO. Always includes `warm_start_particle` as one particle (guarantees monotone improvement). Restarts stagnant particles every 25 iterations when `fitness > 1.5 × g_best`.
-- `train_stage_pso(n_particles, max_iter; variable_list, last_stage_folder, alpha, ...)`: builds bounds around previous best (multiplicative `alpha`), constructs warm start, defines stage-specific objective, calls `parallel_pso_smm`.
+- `train_stage_pso(n_particles, max_iter; variable_list, last_stage_folder, alpha, weight_matrix=nothing, warm_start_override=nothing, ...)`: builds bounds around previous best (multiplicative `alpha`), constructs warm start, defines stage-specific objective, calls `parallel_pso_smm`. `weight_matrix` is forwarded to `parallel_SMM_safe` as `W_override`. `warm_start_override` allows passing a full-parameter warm start when `last_stage_folder=nothing` (used in Step 3 Stage 1).
 - `get_param_start_index(param_name)`: maps `:beta/:agg_labor_share_tech/:agg_industry_share_tech/:productivity/:T` to starting index in flat param vector.
 
-### `main_pso.jl` — optimization pipeline
+### `main.jl` — three-step efficient SMM (primary entry point)
 
-Stages:
-1. **Stage 0** (LHS beta search): 1500 LHS samples of `β`, fixed other params from analytical guess. Selects best by regression-coefficient distance.
+`julia main.jl [industry] [n_coef] [resume] [K_sim]`
+
+Three-step procedure:
+1. **Step 1** (`output_subfolder="step1"`): identity-weighted (uses global `Weight_matrix_custom`) PSO → `θ̂_1`. Includes Stage 0 LHS beta search.
+2. **Step 2**: `build_step3_weight_matrix(θ̂_1; K=K_sim)` → `W_step3`. Outputs saved to `step2/`.
+3. **Step 3** (`output_subfolder="step3"`): efficient-weighted PSO with `W_step3`, warm-started at `θ̂_1`, skips Stage 0. → `θ̂_2`.
+
+Resume logic: if `step2/W_step3.npy` exists, skips Steps 1+2; if only `step1/0/` exists, skips Step 1.
+
+### `main_pso.jl` — legacy entry point (unchanged)
+
+Identity-weighted PSO only. Stages:
+1. **Stage 0** (LHS beta search): 1500 LHS samples of `β`. Selects best by regression-coefficient distance.
 2. **Stage 1** (full PSO, `MAX_ITER_INITIAL=200`): all parameters jointly.
-3. **Refinement loops** (`max_loop=50`, 3 sub-stages each):
-   - Sub-stage 1: productivity `A_r` (tightest alpha, `ε` amplifies errors)
-   - Sub-stage 2: spatial structure `β, T` (medium alpha)
-   - Sub-stage 3: technical coefficients `Ω^L, Ω^s` (standard alpha)
-   - Alpha schedule: `0.3 → 0.9` over loops.
+3. **Refinement loops** (`max_loop=50`, 3 sub-stages each): productivity → spatial → technical.
+   Alpha schedule: `0.3 → 0.9` over loops.
 
-**Weight matrix**: loaded from `weight_vector.npy` (pre-built in Python), applied as `Diagonal(weight_vector)`.
+**Weight matrix**: `Weight_matrix_custom = Diagonal(w_vec)` where `w_vec` has 100× weight on the `reg_coef` block. No longer loaded from `weight_vector.npy`.
 
 ### `main_NM.jl` — Nelder-Mead alternative
 
@@ -165,23 +176,24 @@ baseline_{industry}/
 |----------|------|-------------|
 | `S`, `R` | Int | Number of sectors, total regions |
 | `R_downstream` | Int | Regions with downstream activity |
-| `N_rho` | Int | Varieties per sector (= 100 in production runs) |
+| `N_rho` | Int | Varieties per sector (= 1000 in production runs) |
 | `n_good` | Int | Number of active (sector, region) pairs |
 | `GOOD_S`, `GOOD_R` | Vector{Int} | Sector/region for each good-pair index |
 | `SR_TO_GOOD` | Matrix{Int} | (S, R) → good-pair index (0 if inactive) |
 | `SECTOR_GOOD_INDICES` | Vector{Vector{Int}} | Good-pair indices per sector |
 | `T_MASK` | BitVector | Which entries of `vec(T_rs)` are active |
-| `DistBin` | Matrix{Int} | Precomputed distance bins (R × R) |
+| `DistBin` | Matrix{Int} | Precomputed distance bins (R × R_downstream) |
 | `CLOSEST_PLANT_DIST` | Vector{Float64} | Distance to nearest downstream plant (per upstream region) |
 | `CLOSEST_DOWNSTREAM_REGION` | Vector{Int} | Nearest downstream region (per upstream region) |
-| `U_DRAWS`, `SAMPLE_WEIGHTS` | Vector{Float64} | CdGM stratified draws + weights |
-| `emp_gamma_ls` | Matrix{Float64} | Empirical sourcing shares (S × R) |
+| `U_DRAWS`, `SAMPLE_WEIGHTS` | Matrix/Vector{Float64} | CdGM stratified draws (N_rho×n_good) + weights |
+| `emp_gamma_ls` | Matrix{Float64} | Empirical sourcing shares (R × S, transposed on load) |
 | `emp_pi_r` | Vector{Float64} | Empirical downstream sales shares |
 | `reg_coef` | Vector{Float64} | Empirical regression coefficients (length N_beta) |
 | `empirical_moments` | Matrix{Float64} | Masked empirical moments (1 × N_moments) |
 | `MOMENT_MASK` | BitVector | Which moments to keep (drops sum-to-1 redundancies) |
-| `Weight_matrix_custom` | Diagonal | SMM weight matrix |
+| `Weight_matrix_custom` | Diagonal | Default SMM weight matrix: identity with 100× on reg_coef block |
 | `N_beta` | Int | Number of distance bins (4 or 5) |
+| `BLOCK_RANGES` | NTuple{5} | Index ranges into masked moment vector for each block |
 
 ---
 
@@ -202,27 +214,56 @@ baseline_{industry}/
 | `emp_gamma_ls.npy` | (R, S) | Empirical sourcing shares (transposed on load) |
 | `X_dr.csv` | col `X_dr` | Downstream sales by region (for π_r) |
 | `reg_coef_{4\|5}.npy` | (N_beta,) | Empirical regression coefficients |
-| `weight_vector.npy` | (N_moments,) | SMM diagonal weight vector |
+| `w_gamma.npy` | (n_gamma_kept, n_gamma_kept) | Bootstrap covariance of γ_ls moments (rows/cols in sector-major order matching MOMENT_MASK γ block) |
+| `w_beta.npy` | (N_beta, N_beta) | Bootstrap covariance of regression-coefficient moments (same ordering as reg_coef) |
+
+**Note**: `w_gamma.npy` and `w_beta.npy` are only required when running `main.jl` (three-step SMM). `main_pso.jl` does not use them. The row/column ordering of `w_gamma.npy` must match the γ_ls entries in the masked moment vector: sector-major (`vec(permutedims(emp_gamma_ls))`), active pairs only, with one entry dropped per sector for sum-to-1 (same as `BLOCK_RANGES[3]`).
 
 ---
 
 ## Output structure (`reporting_{industry}/`)
 
+`main.jl` (three-step) nests outputs by step:
+
+```
+step1/                          # Step 1 outputs (identity-weighted)
+  0/                            # Initial PSO stage
+  epoch_{k}/
+    {1,2,3}/                    # Three sub-stages per loop
+      best_params.npy           # Parameter vector (n_params × 1)
+      dashboard.png             # γ_ls, π_r, π_s scatter plots
+      report.txt                # Moment comparison table
+      pi_r.npy
+      productivity.npy
+  theta_hat_1.npy               # θ̂_1 (best_params from last stage of step1)
+  best_simulated_moments.npy
+  best_parameters_list.npy
+step2/                          # Step 2 outputs (weight matrix construction)
+  Sigma_data.npy                # Block-diagonal empirical covariance (N_moments × N_moments)
+  Sigma_sim.npy                 # Full simulated covariance from K evaluations
+  Omega.npy                     # Sigma_data + (1+1/K)*Sigma_sim
+  W_step3.npy                   # inv(Omega) — efficient weight matrix
+  diagnostics.txt               # Condition number log
+step3/                          # Step 3 outputs (efficient-weighted)
+  0/ epoch_{k}/ {1,2,3}/...    # Same layout as step1/
+  theta_hat_2.npy               # θ̂_2 (final efficient estimate)
+simulated_panel_unified.parquet
+suppliers.parquet
+w_srd_r.npy                     # w_{s,r',r}: upstream (s,r') sales share to downstream r
+```
+
+`main_pso.jl` (legacy) writes directly to `reporting_{industry}/` without nesting:
+
 ```
 0/                     # Initial PSO stage
 epoch_{k}/
   {1,2,3}/             # Three sub-stages per loop
-    best_params.npy    # Parameter vector (n_params × 1)
-    dashboard.png      # γ_ls, π_r, π_s scatter plots
-    report.txt         # Moment comparison table
-    pi_r.npy
-    productivity.npy
 best_simulated_moments.npy
 best_parameters_list.npy
 empirical_moments.npy
 simulated_panel_unified.parquet
 suppliers.parquet
-w_srd_r.npy            # w_{s,r',r}: upstream (s,r') sales share to downstream r
+w_srd_r.npy
 ```
 
 ---
@@ -238,4 +279,6 @@ If a change modifies anything documented in this file — file structure, functi
 *Format: date · file(s) changed · description (≤4 sentences)*
 
 <!-- Add entries below in reverse chronological order -->
+
+2026-04-22 · `main.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `claude.md` · Implement three-step efficient SMM. `main.jl` orchestrates Step 1 (identity weight), Step 2 (`build_step3_weight_matrix` via K re-seeded pmap evaluations), and Step 3 (efficient weight, warm-started at θ̂_1). `generate_stratified_draws` gains `seed_offset` kwarg; `full_SMM`/`parallel_SMM_safe`/`train_stage_pso` gain `W_override`/`weight_matrix` kwargs for non-destructive weight injection. `main_pso.jl` is unchanged (legacy).
 
