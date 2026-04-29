@@ -44,7 +44,7 @@ using StatsBase
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
-K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10_000  # K for Σ_sim estimation
+K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 1000  # K for Σ_sim estimation
 
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -288,6 +288,12 @@ if run_step2
 
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
                                          K=K_sim, output_folder=output_folder)
+
+    beta_T_indices = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_1))
+    J_beta_T, J_beta_T_elast = compute_jacobian(theta_hat_1;
+                                                param_indices = beta_T_indices,
+                                                output_folder = output_folder,
+                                                filename      = "jacobian_beta_T.npy")
     println("Step 2 complete. W_step3 saved.")
 else
     println("Step 2 skipped (resume). Loading W_step3...")

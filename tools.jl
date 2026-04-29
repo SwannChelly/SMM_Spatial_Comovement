@@ -1220,10 +1220,10 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     flush(stdout)
 
     M_sim_rows = pmap(1:K) do k
-        u_k, w_k = generate_stratified_draws(N_rho, n_good; seed_offset=k)
+        u_k, w_k = generate_stratified_draws(N_rho, n_good;
+                                             seed_offset=k, randomise=true)
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
-        moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
-        return moms_flat
+        vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
     end
     M_sim = reduce(hcat, M_sim_rows)'  # (K, N_moments)
     Sigma_sim = cov(M_sim; dims=1)     # full (N_moments × N_moments)
@@ -1449,4 +1449,85 @@ function run_pso_optimization(;
 
     run_reporting(loop_base, max_loop; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
     return best_params, best_fitness
+end
+
+
+"""
+    compute_jacobian(theta; param_indices, step_rel, step_abs, u_draws, sample_weights,
+                    output_folder, filename) -> (J, J_elast)
+
+Central finite differences of the masked moment vector w.r.t. selected parameters,
+evaluated at `theta`. Uses fixed `u_draws` to eliminate simulation noise from the FD.
+
+- `param_indices` (nothing → all): columns of J to compute. Restricting cuts cost.
+- Returns `J` (N_moments × n_perturb) and `J_elast` (same shape, elasticities).
+- Saves both plus the index map under `<output_folder>/step2/`.
+- Prints max |elasticity| per moment block — read this for the diagnostic.
+"""
+function compute_jacobian(theta::Vector{Float64};
+                          param_indices::Union{Nothing, Vector{Int}}=nothing,
+                          step_rel::Float64=1e-4,
+                          step_abs::Float64=1e-8,
+                          u_draws::Matrix{Float64}=U_DRAWS,
+                          sample_weights::Vector{Float64}=SAMPLE_WEIGHTS,
+                          output_folder::String=".",
+                          filename::String="jacobian.npy")
+
+    indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
+    n_perturb = length(indices)
+    h = [max(abs(theta[j]) * step_rel, step_abs) for j in indices]
+
+    plus_params  = [copy(theta) for _ in 1:n_perturb]
+    minus_params = [copy(theta) for _ in 1:n_perturb]
+    for (k, j) in enumerate(indices)
+        plus_params[k][j]  += h[k]
+        minus_params[k][j] -= h[k]
+    end
+
+    eval_one = p -> begin
+        _, m = full_SMM(p; u_draws=u_draws, sample_weights=sample_weights)
+        vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+    end
+
+    println("Computing Jacobian: $(2 * n_perturb) evaluations at fixed draws...")
+    plus_results  = pmap(eval_one, plus_params)
+    minus_results = pmap(eval_one, minus_params)
+
+    N_moments = length(plus_results[1])
+    J = zeros(N_moments, n_perturb)
+    for k in 1:n_perturb
+        J[:, k] = (plus_results[k] .- minus_results[k]) ./ (2 * h[k])
+    end
+
+    # Elasticities at theta
+    _, base_moms = full_SMM(theta; u_draws=u_draws, sample_weights=sample_weights)
+    m0 = vcat([vec(base_moms[i]) for i in 1:5]...)[MOMENT_MASK]
+
+    J_elast = zeros(N_moments, n_perturb)
+    for k in 1:n_perturb, kk in 1:N_moments
+        if abs(m0[kk]) > 1e-12 && abs(theta[indices[k]]) > 1e-12
+            J_elast[kk, k] = (theta[indices[k]] / m0[kk]) * J[kk, k]
+        end
+    end
+
+    # Save
+    out_dir = joinpath(output_folder, "step2")
+    mkpath(out_dir)
+    NPZ.npzwrite(joinpath(out_dir, filename), J)
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity.npy")), J_elast)
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_param_indices.npy")),
+                 collect(indices))
+
+    # Block-level diagnostic: how much do the perturbed params move each block?
+    println("\nMax |elasticity| of each moment block w.r.t. perturbed parameters:")
+    for (k, name) in enumerate(BLOCK_NAMES)
+        rng = BLOCK_RANGES[k]
+        if !isempty(rng)
+            max_e  = maximum(abs.(J_elast[rng, :]))
+            mean_e = mean(abs.(J_elast[rng, :]))
+            println("  $(rpad(name, 10)) : max=$(round(max_e, sigdigits=4))  mean=$(round(mean_e, sigdigits=4))")
+        end
+    end
+
+    return J, J_elast
 end

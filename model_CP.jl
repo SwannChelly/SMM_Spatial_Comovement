@@ -138,17 +138,68 @@ function vdc(n::Int)::Float64
     return r
 end
 
-
 """
-    generate_stratified_draws(N_rho, n_good) -> (U, sample_weights)
+    generate_stratified_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG)
+        -> (U, sample_weights)
 
-CdGM-style stratified draws with per-good-pair quasi-random offsets.
+Stratified quantile draws on (0, 1) for the Fréchet inverse-CDF transform in
+`solve_network`. Returns:
+  - `U::Matrix{Float64}`  of shape (N_rho, n_good) — quantiles in (0, 1)
+  - `sample_weights::Vector{Float64}` of length N_rho, positive, sums to 1
 
-Returns:
-- U: Matrix (N_rho × n_good) of uniform quantiles in (0,1)
-- sample_weights: Vector (N_rho,) summing to 1.0
+# Stratification
+
+The unit interval is partitioned into 25 unequal bins, with finer spacing
+above 0.95 to resolve the Fréchet upper tail (where productivity dispersion
+matters most for Ricardian selection). N_rho draws are spread across bins;
+any remainder is loaded onto the tail. Within each bin, draws are placed
+at evenly-spaced midpoints (k - 0.5)/n. The importance-sampling weight
+attached to each draw is (bin width) / (points in bin), normalised to sum
+to 1. These weights are consumed by `solve_network` in CES aggregation.
+
+# Decorrelation across good pairs
+
+Without a per-pair offset every column of U would be identical, which
+would force productivity draws z_{ρ,s,r} to be perfectly correlated across
+(s, r) pairs at each ρ. A per-pair offset rotates within-bin positions
+so the columns are decorrelated.
+
+# Two modes
+
+`randomise=false` (default — used during optimisation):
+    Per-pair offset is `vdc(g)` — the Van der Corput value of the pair
+    index. Deterministic. Identical on every call regardless of the RNG
+    state. This is the *base* sequence: it freezes Monte-Carlo noise so
+    the SMM criterion is a deterministic function of θ, which is a
+    prerequisite for PSO convergence.
+
+`randomise=true` (used for Σ_sim estimation):
+    Per-pair offset is `rand(rng)` — a fresh uniform per pair, drawn
+    from the supplied RNG. Each call returns an independent stratified
+    sample. Used inside `build_step3_weight_matrix`: pass
+    `MersenneTwister(k)` for replication k; cov of the resulting moment
+    vectors is an unbiased estimator of the simulator's variance, valid
+    under standard RQMC theory (Cranley–Patterson rotation within a
+    stratified design preserves the per-replication low-variance
+    property and is independent across replications).
+
+# Arguments
+
+- `N_rho::Int`            : draws per good pair (production: 1000).
+- `n_good::Int`           : number of active (sector, region) pairs.
+- `randomise::Bool=false` : false → VdC offsets (base sequence);
+                            true  → uniform offsets from `rng` (RQMC).
+- `rng::AbstractRNG`      : source of randomness when `randomise=true`.
+                            Pass a freshly seeded RNG per replication
+                            for reproducibility and thread safety.
 """
-function generate_stratified_draws(N_rho::Int, n_good::Int; seed_offset::Int=0)
+function generate_stratified_draws(N_rho::Int, n_good::Int;
+                                   randomise::Bool=false,
+                                   rng::AbstractRNG=Random.GLOBAL_RNG)
+
+    # ── 1. Bin grid (fixed; do not edit without re-validating moment fit) ──
+    # Coarse below 0.5, progressively finer in the tail. The 25-bin design
+    # ensures each bin holds ≥ 1 point even at N_rho = 50.
     bin_edges = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50,
                  0.55, 0.60, 0.65, 0.70, 0.75,
                  0.80, 0.85, 0.90, 0.925, 0.95,
@@ -156,48 +207,68 @@ function generate_stratified_draws(N_rho::Int, n_good::Int; seed_offset::Int=0)
                  0.996, 0.997, 0.998, 0.999, 1.0]
     N_bins = length(bin_edges) - 1
 
-    # Distribute N_rho across bins; extras go to tail bins
+    # ── 2. Allocate N_rho draws across bins ────────────────────────────────
+    # Each bin receives base_per_bin points; the remainder is loaded onto
+    # the highest bins, where Fréchet variance is largest.
     base_per_bin = div(N_rho, N_bins)
-    remainder = mod(N_rho, N_bins)
-    n_per_bin = fill(base_per_bin, N_bins)
+    remainder    = mod(N_rho, N_bins)
+    n_per_bin    = fill(base_per_bin, N_bins)
     for i in 1:remainder
         n_per_bin[N_bins - i + 1] += 1
     end
     @assert sum(n_per_bin) == N_rho
 
-    # Compute sample weights (same for all good pairs)
+    # ── 3. Importance-sampling weights ─────────────────────────────────────
+    # Within a bin, all points carry equal mass; the bin's total mass is its
+    # width. Identical across good pairs because the bin grid is shared.
     sample_weights = Vector{Float64}(undef, N_rho)
     idx = 0
     for b in 1:N_bins
-        lo, hi = bin_edges[b], bin_edges[b+1]
-        width = hi - lo
-        n = n_per_bin[b]
-        for k in 1:n
+        width = bin_edges[b+1] - bin_edges[b]
+        n     = n_per_bin[b]
+        for _ in 1:n
             idx += 1
             sample_weights[idx] = width / n
         end
     end
     sample_weights ./= sum(sample_weights)
 
-    # Generate (N_rho × n_good) draws with per-pair Van der Corput offset
-    # seed_offset shifts vdc index so K independent samples can be drawn
+    # ── 4. Build the (N_rho × n_good) quantile matrix ──────────────────────
+    # For each good pair g, draw a per-pair offset and place stratified
+    # points using that offset to rotate within-bin positions.
     U = Matrix{Float64}(undef, N_rho, n_good)
     for g in 1:n_good
-        offset = vdc(g + seed_offset * n_good)  # Deterministic offset ∈ [0,1) for this good pair
+
+        # Per-pair offset:
+        #   randomise=false → deterministic VdC, base sequence (frozen).
+        #   randomise=true  → fresh uniform from rng (one per replication).
+        offset = randomise ? rand(rng) : vdc(g)
+
         idx = 0
         for b in 1:N_bins
+            # Within each bin, points are first uniformly selected (already low-discrepancy)
             lo, hi = bin_edges[b], bin_edges[b+1]
-            width = hi - lo
-            n = n_per_bin[b]
+            width  = hi - lo
+            n      = n_per_bin[b]
+
             for k in 1:n
                 idx += 1
+
+                # Shifted within-bin midpoint, wrapped onto (0, 1).
+                # The rotation insure that draws are different across sector x region pairs. 
+                # This rotation is the Cranley–Patterson rotation. 
                 frac = mod((k - 0.5)/n + offset, 1.0)
-                # Guard: when wrapping produces exactly 0.0, fall back to unshifted midpoint
+
+                # Numerical guard: a wrapped value of exactly 0.0 maps to
+                # the lower bin edge, which propagates as a degenerate
+                # Fréchet draw. Fall back to the unshifted midpoint
+                # (strictly interior to (0, 1)).
                 if iszero(frac)
                     frac = (k - 0.5) / n
                 end
+
+                # Map within-bin (0, 1) position to (lo, hi).
                 U[idx, g] = lo + frac * width
-                # Midpoint in normalized bin coords, shifted by offset, wrapped
             end
         end
     end
