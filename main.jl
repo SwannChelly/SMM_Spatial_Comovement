@@ -157,12 +157,15 @@ empirical_moments_local = vcat(
 )
 
 moment_mask_local = trues(N_moments_full)
-moment_mask_local[n_labor + 1] = false
+# Remove first industry share. 
+moment_mask_local[n_labor + 1] = false 
+# Remove non active gamma_ls 
 for idx in 1:(S_ * R_full)
     if !T_mask_moment_local[idx]
         moment_mask_local[n_labor + n_industry + idx] = false
     end
 end
+# Remove first active gamma_ls per sector s. 
 for s in 1:S_
     sector_start = (s - 1) * R_full + 1
     sector_end   = s * R_full
@@ -171,6 +174,7 @@ for s in 1:S_
         moment_mask_local[n_labor + n_industry + (s - 1) * R_full + active_positions[1]] = false
     end
 end
+# Remove first pi_r. 
 moment_mask_local[n_labor + n_industry + n_gamma + n_reg + 1] = false
 
 empirical_moments_local = reshape(empirical_moments_local[moment_mask_local], 1, sum(moment_mask_local))
@@ -216,9 +220,9 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = true
+run_step1 = false
 run_step2 = true
-run_step3 = true
+run_step3 = false
 
 if resume
     if isfile(step2_W_path)

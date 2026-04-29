@@ -1225,9 +1225,9 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
         moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
         return moms_flat
     end
-
     M_sim = reduce(hcat, M_sim_rows)'  # (K, N_moments)
     Sigma_sim = cov(M_sim; dims=1)     # full (N_moments × N_moments)
+    
 
     # ── Combine and invert ───────────────────────────────────────────────────
     Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
@@ -1236,6 +1236,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     # Condition number diagnostics
     step2_dir = joinpath(output_folder, "step2")
     mkpath(step2_dir)
+    NPZ.npzwrite(joinpath(step2_dir, "M_sim.npy"),  M_sim)
 
     eig_vals = eigvals(Symmetric(Omega))
     lambda_max = maximum(eig_vals)
