@@ -1221,9 +1221,11 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
 
     M_sim_rows = pmap(1:K) do k
         u_k, w_k = generate_stratified_draws(N_rho, n_good;
-                                             seed_offset=k, randomise=true)
+                                            randomise = true,
+                                            rng       = MersenneTwister(k))
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
-        vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
+        moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
+        return moms_flat
     end
     M_sim = reduce(hcat, M_sim_rows)'  # (K, N_moments)
     Sigma_sim = cov(M_sim; dims=1)     # full (N_moments × N_moments)

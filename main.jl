@@ -41,7 +41,7 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 1000  # K for Σ_sim estimation
