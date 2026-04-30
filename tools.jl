@@ -1228,6 +1228,10 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
         return moms_flat
     end
     M_sim = reduce(hcat, M_sim_rows)'  # (K, N_moments)
+    println("Per-moment std (should be > 0 for all):")
+    display(std(M_sim; dims=1))
+    println("\nRank of Σ_sim: ", rank(cov(M_sim; dims=1)))
+    println("N_moments: ", size(M_sim, 2))
     Sigma_sim = cov(M_sim; dims=1)     # full (N_moments × N_moments)
     
 
@@ -1453,32 +1457,52 @@ function run_pso_optimization(;
     return best_params, best_fitness
 end
 
-
 """
-    compute_jacobian(theta; param_indices, step_rel, step_abs, u_draws, sample_weights,
-                    output_folder, filename) -> (J, J_elast)
+    compute_jacobian(theta; K, param_indices, step_rel, step_abs,
+                    output_folder, filename, base_seed) -> (J, J_elast, J_sd, J_elast_sd)
 
 Central finite differences of the masked moment vector w.r.t. selected parameters,
-evaluated at `theta`. Uses fixed `u_draws` to eliminate simulation noise from the FD.
+averaged across `K` independent stratified-draw replications.
 
-- `param_indices` (nothing → all): columns of J to compute. Restricting cuts cost.
-- Returns `J` (N_moments × n_perturb) and `J_elast` (same shape, elasticities).
-- Saves both plus the index map under `<output_folder>/step2/`.
-- Prints max |elasticity| per moment block — read this for the diagnostic.
+For each replication k = 1..K:
+  - Generate fresh stratified draws via `generate_stratified_draws(...; randomise=true,
+    rng=MersenneTwister(base_seed + k))`.
+  - Compute J_k = ∂m(θ; u_k)/∂θ by central FD using a *single* draw configuration
+    (so the difference is smooth at fixed u_k — same logic as the deterministic loss
+    inside the SMM optimizer).
+
+Returns:
+  - J         : mean Jacobian across replications  (N_moments × n_perturb)
+  - J_elast   : mean elasticity Jacobian            (N_moments × n_perturb)
+  - J_sd      : per-entry s.d. of J across reps     — simulation-noise diagnostic
+  - J_elast_sd: per-entry s.d. of J_elast across reps
+
+Saves J, J_elast, J_sd, J_elast_sd, and the param-index map under
+`<output_folder>/step2/`. Prints per-block max/mean |elasticity| and the
+mean-relative-noise ratio σ/|μ| for entries above a magnitude floor.
+
+# Arguments
+- `theta`         : parameter vector at which to evaluate.
+- `K`             : number of independent draw replications to average (default 20).
+- `param_indices` : `nothing` → all parameters; otherwise restrict to these columns.
+- `step_rel`/`step_abs` : FD step h_j = max(|θ_j|·step_rel, step_abs).
+- `base_seed`     : seed offset; replication k uses `MersenneTwister(base_seed + k)`.
+                    Must not collide with seeds used elsewhere (e.g. Σ_sim).
 """
 function compute_jacobian(theta::Vector{Float64};
-                          param_indices::Union{Nothing, Vector{Int}}=nothing,
-                          step_rel::Float64=1e-4,
-                          step_abs::Float64=1e-8,
-                          u_draws::Matrix{Float64}=U_DRAWS,
-                          sample_weights::Vector{Float64}=SAMPLE_WEIGHTS,
-                          output_folder::String=".",
-                          filename::String="jacobian.npy")
+                          K::Int = 20,
+                          param_indices::Union{Nothing, Vector{Int}} = nothing,
+                          step_rel::Float64 = 1e-3,
+                          step_abs::Float64 = 1e-8,
+                          output_folder::String = ".",
+                          filename::String = "jacobian.npy",
+                          base_seed::Int = 0)
 
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
     h = [max(abs(theta[j]) * step_rel, step_abs) for j in indices]
 
+    # Pre-build perturbed parameter vectors (shared across replications)
     plus_params  = [copy(theta) for _ in 1:n_perturb]
     minus_params = [copy(theta) for _ in 1:n_perturb]
     for (k, j) in enumerate(indices)
@@ -1486,50 +1510,86 @@ function compute_jacobian(theta::Vector{Float64};
         minus_params[k][j] -= h[k]
     end
 
-    eval_one = p -> begin
-        _, m = full_SMM(p; u_draws=u_draws, sample_weights=sample_weights)
-        vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
-    end
+    println("Computing Jacobian: $K replications × $(2 * n_perturb + 1) evaluations each...")
+    flush(stdout)
 
-    println("Computing Jacobian: $(2 * n_perturb) evaluations at fixed draws...")
-    plus_results  = pmap(eval_one, plus_params)
-    minus_results = pmap(eval_one, minus_params)
+    # Each replication produces (J_k, J_elast_k). Distribute over k via pmap;
+    # within a replication, the 2·n_perturb + 1 evaluations are sequential
+    # (same draws u_k, no need to reshuffle between perturbations).
+    rep_results = pmap(1:K) do k
+        u_k, w_k = generate_stratified_draws(N_rho, n_good;
+                                             randomise = true,
+                                             rng       = MersenneTwister(base_seed + k))
 
-    N_moments = length(plus_results[1])
-    J = zeros(N_moments, n_perturb)
-    for k in 1:n_perturb
-        J[:, k] = (plus_results[k] .- minus_results[k]) ./ (2 * h[k])
-    end
-
-    # Elasticities at theta
-    _, base_moms = full_SMM(theta; u_draws=u_draws, sample_weights=sample_weights)
-    m0 = vcat([vec(base_moms[i]) for i in 1:5]...)[MOMENT_MASK]
-
-    J_elast = zeros(N_moments, n_perturb)
-    for k in 1:n_perturb, kk in 1:N_moments
-        if abs(m0[kk]) > 1e-12 && abs(theta[indices[k]]) > 1e-12
-            J_elast[kk, k] = (theta[indices[k]] / m0[kk]) * J[kk, k]
+        eval_one = p -> begin
+            _, m = full_SMM(p; u_draws=u_k, sample_weights=w_k)
+            vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
         end
+
+        plus_results  = [eval_one(p) for p in plus_params]
+        minus_results = [eval_one(p) for p in minus_params]
+        m0_k          = eval_one(theta)
+
+        N_moments = length(m0_k)
+        J_k       = zeros(N_moments, n_perturb)
+        J_elast_k = zeros(N_moments, n_perturb)
+
+        for kk in 1:n_perturb
+            J_k[:, kk] = (plus_results[kk] .- minus_results[kk]) ./ (2 * h[kk])
+        end
+
+        for kk in 1:n_perturb, mm in 1:N_moments
+            if abs(m0_k[mm]) > 1e-12 && abs(theta[indices[kk]]) > 1e-12
+                J_elast_k[mm, kk] = (theta[indices[kk]] / m0_k[mm]) * J_k[mm, kk]
+            end
+        end
+
+        return (J_k, J_elast_k)
     end
 
-    # Save
+    # Stack into 3-D arrays and reduce
+    N_moments = size(rep_results[1][1], 1)
+    J_stack       = Array{Float64}(undef, N_moments, n_perturb, K)
+    J_elast_stack = Array{Float64}(undef, N_moments, n_perturb, K)
+    for k in 1:K
+        J_stack[:, :, k]       = rep_results[k][1]
+        J_elast_stack[:, :, k] = rep_results[k][2]
+    end
+
+    J          = dropdims(mean(J_stack;       dims=3); dims=3)
+    J_elast    = dropdims(mean(J_elast_stack; dims=3); dims=3)
+    J_sd       = K > 1 ? dropdims(std(J_stack;       dims=3); dims=3) : zeros(size(J))
+    J_elast_sd = K > 1 ? dropdims(std(J_elast_stack; dims=3); dims=3) : zeros(size(J_elast))
+
+    # ── Save ────────────────────────────────────────────────────────────────
     out_dir = joinpath(output_folder, "step2")
     mkpath(out_dir)
     NPZ.npzwrite(joinpath(out_dir, filename), J)
-    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity.npy")), J_elast)
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity.npy")),    J_elast)
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_sd.npy")),            J_sd)
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity_sd.npy")), J_elast_sd)
     NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_param_indices.npy")),
                  collect(indices))
 
-    # Block-level diagnostic: how much do the perturbed params move each block?
-    println("\nMax |elasticity| of each moment block w.r.t. perturbed parameters:")
+    # ── Block-level diagnostic ──────────────────────────────────────────────
+    println("\nMean |elasticity| across $K replications, by block:")
+    println("  (noise = mean σ/|μ| over entries with |μ|>1e-3; high → fixed-draw J was unreliable)")
     for (k, name) in enumerate(BLOCK_NAMES)
         rng = BLOCK_RANGES[k]
-        if !isempty(rng)
-            max_e  = maximum(abs.(J_elast[rng, :]))
-            mean_e = mean(abs.(J_elast[rng, :]))
-            println("  $(rpad(name, 10)) : max=$(round(max_e, sigdigits=4))  mean=$(round(mean_e, sigdigits=4))")
-        end
+        isempty(rng) && continue
+        max_e  = maximum(abs.(J_elast[rng, :]))
+        mean_e = mean(abs.(J_elast[rng, :]))
+
+        # Noise ratio: avoid blowing up on near-zero entries
+        block_mu = abs.(J_elast[rng, :])
+        block_sd = J_elast_sd[rng, :]
+        signif   = block_mu .> 1e-3
+        noise_ratio = any(signif) ? mean(block_sd[signif] ./ block_mu[signif]) : NaN
+
+        println("  $(rpad(name, 10)) : max=$(round(max_e, sigdigits=4))  " *
+                "mean=$(round(mean_e, sigdigits=4))  " *
+                "noise=$(isnan(noise_ratio) ? "n/a" : string(round(noise_ratio, sigdigits=3)))")
     end
 
-    return J, J_elast
+    return J, J_elast, J_sd, J_elast_sd
 end

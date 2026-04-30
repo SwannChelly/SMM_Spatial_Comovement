@@ -41,7 +41,7 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 1000  # K for Σ_sim estimation
@@ -290,7 +290,7 @@ if run_step2
                                          K=K_sim, output_folder=output_folder)
 
     beta_T_indices = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_1))
-    J_beta_T, J_beta_T_elast = compute_jacobian(theta_hat_1;
+    J_beta_T, J_beta_T_elast,_ = compute_jacobian(theta_hat_1;
                                                 param_indices = beta_T_indices,
                                                 output_folder = output_folder,
                                                 filename      = "jacobian_beta_T.npy")
