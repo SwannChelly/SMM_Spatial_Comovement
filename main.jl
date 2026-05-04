@@ -287,7 +287,8 @@ if run_step2
     println("="^70)
 
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
-                                         K=K_sim, output_folder=output_folder)
+                                         K=K_sim, output_folder=output_folder,
+                                         gamma_beta_only=true)
 
     beta_T_indices = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_1))# vcat(1:length(theta_hat_1))
     J_beta_T, J_beta_T_elast,_ = compute_jacobian(theta_hat_1;
@@ -307,12 +308,15 @@ if run_step3
     println("STEP 3: Efficient-weighted PSO optimisation")
     println("="^70)
 
+    # A_r, labor share, and industry share are fixed at θ̂_1.
+    # Only β and T are optimised, using the gamma+beta-only weight matrix from step 2.
     theta_hat_2, _ = run_pso_optimization(;
         weight_matrix            = W_step3,
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
-        max_loop                 = 50
+        max_loop                 = 50,
+        gamma_beta_only          = true
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)

@@ -336,16 +336,6 @@ function matrix_report(mat,include_n_zero = true)
     end
 end
 
-function print_(x)
-    return x
-end
-
-
-function add_first_element(v::Vector{Float64})
-    first_element = 1.0 - sum(v)
-    return [first_element; v]
-end
-
 
 function generate_dashboard_report(
     n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,
@@ -451,31 +441,6 @@ function generate_dashboard_report(
                 row.bins, row.empirical, row.simulated))
         end
     end
-end
-
-function save_stage_best_params(params_list,results,loop_folder,stage,K = 1,best_params = nothing)
-    # Collect the results of the calibration and store them. 
-    folder = joinpath(loop_folder, stage)
-    mkpath(folder) 
-    if best_params == nothing
-        score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        valid_indices = findall(!ismissing, score)
-        sorted_indices = sort(valid_indices, by = i -> score[i])
-        top_indices = sorted_indices[1:min(K, length(sorted_indices))]
-        best_params = reduce(hcat,params_list[top_indices])
-    end
-    npzwrite(joinpath(folder, "best_params.npy"), best_params)
-
-end
-
-function load_parameters_dict(folder = nothing,params = nothing)
-    if params == nothing
-        params = NPZ.npzread(joinpath(folder, "best_params.npy")) 
-    end
-    names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
-    vals = unpack_params(params)
-    params_dict = Dict(names .=> vals)
-    return params_dict
 end
 
 
@@ -637,25 +602,6 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     generate_dashboard_report(n, agg_labor_share_, agg_industry_share_, gamma_ls_, reg_, pi_r, best_score,
         folder * "/report.txt", variable, alpha)
-end
-
-
-function run_stage(variable,n,alpha,stage,loop_folder,second_stage)
-    variable_str = isa(variable, String) ? variable : join(variable, ", ")
-    print("Variable is: "*variable_str*", n = "*string(n)*" and stage = "*string(stage)*"\n")
-    best_params = Any[]
-    for K in 1:K_max
-        params_list = generate_halton_grid(n,2000,false,nothing,joinpath(loop_folder,string(stage)),K,variable,alpha)
-        params_list,results = train_stage_one(n,nothing,params_list,second_stage)
-        score = [score[1] != nothing ? score[1][1] : missing for score in results]
-        push!(best_params,params_list[argmin(score)])
-    end
-    stage += 1
-    folder = joinpath(loop_folder, string(stage))
-    mkpath(folder) 
-    npzwrite(joinpath(folder, "best_params.npy"), hcat(best_params...))
-    generate_report(loop_folder,string(stage),n)    
-    return stage
 end
 
 
@@ -1006,41 +952,6 @@ function find_resume_state(base_folder::String)
 end
 
 
-############ Old functions ##############
-
-
-
-function old_generate_halton_grid(n)
-
-
-        """
-
-        Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
-        This Halton grid function doesn't allow for conditions on the parameters. 
-
-        """
-        # beta,theta,nu_s,nu,lambda,epsilon,productivity,T
-        A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-        A ./= sum(A)
-        #A = ones(size(A)[1])
-        #lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = 0.25,0.5,0.8.*agg_industry_share,0.8*A,0.1*ones(S*R)
-        #ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = 1,1,1.2.*agg_industry_share,1.2*A,20*ones(S*R)
-
-        lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T, = ones(5).*2,0.8*agg_labor_share,0.8.*agg_industry_share,A,0.1*ones(S*R)
-        ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T, = ones(5).*20,1.2*agg_labor_share,1.2.*agg_industry_share,10*A,100*ones(S*R)
-
-
-        lb = Any[vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)...]
-        ub = Any[vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)...]
-
-        halton_samples = QuasiMonteCarlo.sample(n, lb, ub, HaltonSample())  # n rows, 8 cols
-        halton_samples =  [halton_samples[:,i] for i in range(1,n)]
-
-        return halton_samples
-        # This will create a vector of 100 tuples, each with 8 parameters
-        #return [(halton_samples[1,i],halton_samples[2,i],halton_samples[3:2+(S),1]/sum(halton_samples[3:2+(S),1]),halton_samples[(S+3):(size(ub_prod)[1]+S+2),i],halton_samples[(size(ub_prod)[1]+(S+3)):(size(ub_prod)[1]+size(lb_T)[1]+S+2),i]) for i in 1:(n-1)]
-end
-
 
 """
     compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, mask)
@@ -1096,7 +1007,8 @@ Returns W_step3 as Matrix{Float64} and saves intermediate matrices under output_
 """
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
-                                   output_folder::String=".")
+                                   output_folder::String=".",
+                                   gamma_beta_only::Bool=false)
     N_moments = length(empirical_moments)
 
     # ── Load Σ_data blocks ──────────────────────────────────────────────────
@@ -1142,45 +1054,95 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     
 
     # ── Combine and invert ───────────────────────────────────────────────────
-    Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
-    Omega = (Omega .+ Omega') ./ 2  # symmetrise against floating-point drift
-
-    # Condition number diagnostics
     step2_dir = joinpath(output_folder, "step2")
     mkpath(step2_dir)
     NPZ.npzwrite(joinpath(step2_dir, "M_sim.npy"),  M_sim)
 
-    eig_vals = eigvals(Symmetric(Omega))
-    lambda_max = maximum(eig_vals)
-    lambda_min = minimum(eig_vals)
-    kappa = lambda_max / max(lambda_min, 1e-300)
-    println("  Ω condition number: $(round(kappa, sigdigits=4))")
+    if gamma_beta_only
+        # Restrict to gamma_ls and reg_coef moment blocks only
+        gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+        Sigma_data_gb = Sigma_data[gb_indices, gb_indices]
+        Sigma_sim_gb  = cov(M_sim[:, gb_indices]; dims=1)
 
-    if kappa > 1e10
-        @warn "Ω is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
-        floor_val = lambda_max / 1e8
-        F = eigen(Symmetric(Omega))
-        clipped = max.(F.values, floor_val)
-        Omega = F.vectors * Diagonal(clipped) * F.vectors'
+        Omega_gb = Sigma_data_gb .+ (1.0 + 1.0/K) .* Sigma_sim_gb
+        Omega_gb = (Omega_gb .+ Omega_gb') ./ 2
+
+        eig_vals = eigvals(Symmetric(Omega_gb))
+        lambda_max = maximum(eig_vals)
+        lambda_min = minimum(eig_vals)
+        kappa = lambda_max / max(lambda_min, 1e-300)
+        println("  Ω_gb condition number (gamma+beta only): $(round(kappa, sigdigits=4))")
+
+        if kappa > 1e10
+            @warn "Ω_gb is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
+            floor_val = lambda_max / 1e8
+            F = eigen(Symmetric(Omega_gb))
+            clipped = max.(F.values, floor_val)
+            Omega_gb = F.vectors * Diagonal(clipped) * F.vectors'
+            Omega_gb = (Omega_gb .+ Omega_gb') ./ 2
+        end
+
+        W_gb = inv(Omega_gb)
+
+        # Embed into full N_moments × N_moments matrix (zeros elsewhere → those moments ignored)
+        W_step3 = zeros(N_moments, N_moments)
+        W_step3[gb_indices, gb_indices] = W_gb
+
+        # Also save the full Omega for reference (as the full combination)
+        Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
         Omega = (Omega .+ Omega') ./ 2
+
+        open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
+            println(io, "K = $K")
+            println(io, "gamma_beta_only = true")
+            println(io, "lambda_max = $lambda_max")
+            println(io, "lambda_min = $lambda_min")
+            println(io, "condition_number = $kappa")
+        end
+
+        NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"), Sigma_data)
+        NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),  Sigma_sim)
+        NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),      Omega)
+        NPZ.npzwrite(joinpath(step2_dir, "Omega_gb.npy"),   Omega_gb)
+        NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),    W_step3)
+        NPZ.npzwrite(joinpath(step2_dir, "W_gb.npy"),       W_gb)
+        println("  W_step3 (gamma+beta only) saved to $step2_dir")
+    else
+        Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
+        Omega = (Omega .+ Omega') ./ 2
+
+        eig_vals = eigvals(Symmetric(Omega))
+        lambda_max = maximum(eig_vals)
+        lambda_min = minimum(eig_vals)
+        kappa = lambda_max / max(lambda_min, 1e-300)
+        println("  Ω condition number: $(round(kappa, sigdigits=4))")
+
+        if kappa > 1e10
+            @warn "Ω is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
+            floor_val = lambda_max / 1e8
+            F = eigen(Symmetric(Omega))
+            clipped = max.(F.values, floor_val)
+            Omega = F.vectors * Diagonal(clipped) * F.vectors'
+            Omega = (Omega .+ Omega') ./ 2
+        end
+
+        open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
+            println(io, "K = $K")
+            println(io, "gamma_beta_only = false")
+            println(io, "lambda_max = $lambda_max")
+            println(io, "lambda_min = $lambda_min")
+            println(io, "condition_number = $kappa")
+        end
+
+        W_step3 = inv(Omega)
+
+        NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"), Sigma_data)
+        NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),  Sigma_sim)
+        NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),      Omega)
+        NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),    W_step3)
+        println("  W_step3 saved to $step2_dir")
     end
 
-    open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
-        println(io, "K = $K")
-        println(io, "lambda_max = $lambda_max")
-        println(io, "lambda_min = $lambda_min")
-        println(io, "condition_number = $kappa")
-    end
-
-    W_step3 = inv(Omega)
-
-    # Save intermediate matrices
-    NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"), Sigma_data)
-    NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),  Sigma_sim)
-    NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),      Omega)
-    NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),    W_step3)
-
-    println("  W_step3 saved to $step2_dir")
     return W_step3
 end
 
@@ -1212,7 +1174,8 @@ function run_pso_optimization(;
     beta_search_method::String = "log_grid",
     beta_selection_criterion::String = "reg_coef",
     length_range_beta::Int = 40,
-    method::String = "original"
+    method::String = "original",
+    gamma_beta_only::Bool = false   # step 3: fix structural params, optimize only beta+T
 )
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
@@ -1292,6 +1255,8 @@ function run_pso_optimization(;
 
     # ── Refinement loops ─────────────────────────────────────────────────────
     alpha_start, alpha_end = 0.3, 0.9
+    # gamma_beta_only: one sub-stage per loop (beta+T only); else: three sub-stages
+    substages_per_loop = gamma_beta_only ? 1 : 3
 
     for loop in 1:max_loop
         alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
@@ -1301,55 +1266,71 @@ function run_pso_optimization(;
 
         println("\n[$output_subfolder] LOOP $loop/$max_loop  alpha=$alpha")
 
-        # Sub-stage 1: Productivity
-        alpha_prod = 0.7 + 0.2 * alpha
-        best_params, best_fitness, history = train_stage_pso(
-            n_particles, max_iter_stage;
-            variable_list     = ["productivity"],
-            last_stage_folder = joinpath(past_loop_folder, string(stage)),
-            K=1, alpha=alpha_prod, second_stage=false, method=method,
-            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
-        )
-        stage += 1
-        folder = joinpath(loop_folder, string(stage)); mkpath(folder)
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-        generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_prod);
-                        u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+        if gamma_beta_only
+            # Only optimise β and T; A_r / labor / industry shares are fixed at warm start
+            best_params, best_fitness, history = train_stage_pso(
+                n_particles, max_iter_stage;
+                variable_list     = ["beta", "T"],
+                last_stage_folder = joinpath(past_loop_folder, string(stage)),
+                K=1, alpha=alpha, second_stage=false, method=method,
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+            )
+            stage += 1
+            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+        else
+            # Sub-stage 1: Productivity
+            alpha_prod = 0.7 + 0.2 * alpha
+            best_params, best_fitness, history = train_stage_pso(
+                n_particles, max_iter_stage;
+                variable_list     = ["productivity"],
+                last_stage_folder = joinpath(past_loop_folder, string(stage)),
+                K=1, alpha=alpha_prod, second_stage=false, method=method,
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+            )
+            stage += 1
+            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_prod);
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
-        # Sub-stage 2: Spatial structure (β, T)
-        best_params, best_fitness, history = train_stage_pso(
-            n_particles, max_iter_stage;
-            variable_list     = ["beta", "T"],
-            last_stage_folder = joinpath(loop_folder, string(stage)),
-            K=1, alpha=alpha, second_stage=false, method=method,
-            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
-        )
-        stage += 1
-        folder = joinpath(loop_folder, string(stage)); mkpath(folder)
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-        generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
-                        u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+            # Sub-stage 2: Spatial structure (β, T)
+            best_params, best_fitness, history = train_stage_pso(
+                n_particles, max_iter_stage;
+                variable_list     = ["beta", "T"],
+                last_stage_folder = joinpath(loop_folder, string(stage)),
+                K=1, alpha=alpha, second_stage=false, method=method,
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+            )
+            stage += 1
+            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
-        # Sub-stage 3: Technical coefficients
-        best_params, best_fitness, history = train_stage_pso(
-            n_particles, max_iter_stage;
-            variable_list     = ["agg_labor_share_tech", "agg_industry_share_tech"],
-            last_stage_folder = joinpath(loop_folder, string(stage)),
-            K=1, alpha=alpha, second_stage=false, method=method,
-            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
-        )
-        stage += 1
-        folder = joinpath(loop_folder, string(stage)); mkpath(folder)
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-        generate_report(loop_folder, string(stage), 1,
-                        ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha);
-                        u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+            # Sub-stage 3: Technical coefficients
+            best_params, best_fitness, history = train_stage_pso(
+                n_particles, max_iter_stage;
+                variable_list     = ["agg_labor_share_tech", "agg_industry_share_tech"],
+                last_stage_folder = joinpath(loop_folder, string(stage)),
+                K=1, alpha=alpha, second_stage=false, method=method,
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+            )
+            stage += 1
+            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            generate_report(loop_folder, string(stage), 1,
+                            ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha);
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+        end
 
         println("  ✓ Loop $loop done. Fitness: $(round(best_fitness, digits=6))")
 
         # Convergence check
         if loop > 2
-            prev_folder = joinpath(loop_base, "epoch_$(loop-1)", string(stage - 3))
+            prev_folder = joinpath(loop_base, "epoch_$(loop-1)", string(stage - substages_per_loop))
             prev_params = NPZ.npzread(joinpath(prev_folder, "best_params.npy"))[:, 1]
             param_change = maximum(abs.(best_params .- prev_params) ./ (abs.(prev_params) .+ 1e-10))
             if param_change < 1e-6
