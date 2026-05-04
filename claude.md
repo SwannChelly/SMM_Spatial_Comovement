@@ -133,7 +133,8 @@ Three-step procedure:
 1. **Step 1** (`output_subfolder="step1"`): identity-weighted (uses global `Weight_matrix_custom`) PSO → `θ̂_1`. Includes Stage 0 LHS beta search.
 2. **Step 2**: `build_step3_weight_matrix(θ̂_1; K=K_sim)` → `W_step3 = (Σ_data + Σ_sim)^{-1}`. Outputs saved to `step2/`.
 3. **Step 3** (`output_subfolder="step3"`): efficient-weighted PSO with `W_step3`, warm-started at `θ̂_1`, skips Stage 0. → `θ̂_2`.
-4. **Inference**: Jacobian `J2` recomputed at `θ̂_2` via `compute_jacobian(...; output_subdir="step3", base_seed=1_000_000)`. Then `compute_smm_inference` produces delta-method SEs, Hansen J-test, and diagnostics. All outputs in `step3/inference/`.
+4. **Inference at θ̂_1**: Jacobian `J1` over all parameters via `compute_jacobian(...; param_indices=nothing, output_subdir="step2")`. Then `compute_smm_inference` with `W=W_step3` and `Ω=Omega` produces delta-method SEs, Hansen J-test, and diagnostics. Outputs in `step2/inference/`.
+4. **Inference at θ̂_2**: Jacobian `J2` over all parameters via `compute_jacobian(...; param_indices=nothing, output_subdir="step3", base_seed=1_000_000)`. Then `compute_smm_inference` with same `W` and `Ω`. Outputs in `step3/inference/`.
 
 Resume logic: if `step2/W_step3.npy` exists, skips Steps 1+2; if only `step1/0/` exists, skips Step 1.
 
@@ -246,25 +247,36 @@ step2/                          # Step 2 outputs (weight matrix construction)
   Omega.npy                     # Sigma_data + Sigma_sim
   W_step3.npy                   # inv(Omega) — efficient weight matrix
   diagnostics.txt               # Condition number log
-  jacobian_beta_T.npy           # Jacobian at θ̂_1 (β and T active params)
-  jacobian_beta_T_elasticity.npy
-  jacobian_beta_T_sd.npy
-  jacobian_beta_T_elasticity_sd.npy
-  jacobian_beta_T_param_indices.npy
+  jacobian_all.npy              # Jacobian at θ̂_1 (all parameters)
+  jacobian_all_elasticity.npy
+  jacobian_all_sd.npy
+  jacobian_all_elasticity_sd.npy
+  jacobian_all_param_indices.npy
+  inference/
+    var_theta_efficient.npy     # (G₁'WG₁)^{-1} at θ̂_1
+    var_theta_sandwich.npy      # sandwich variance at θ̂_1
+    se_theta.npy                # √diag(Var_eff)
+    se_theta_sandwich.npy       # √diag(Var_sandwich)
+    t_stats.npy                 # θ̂_1 / se_theta
+    ci_95.npy                   # (p × 2) 95% confidence intervals
+    se_moments_fitted.npy       # √diag(J · Var_eff · J')
+    se_moment_residuals.npy     # √max(diag(Ω - J · Var_eff · J'), 0)
+    J_stat.txt                  # Hansen J statistic, df, p-value
+    inference_summary.txt       # Human-readable diagnostics
 step3/                          # Step 3 outputs (efficient-weighted)
   0/ epoch_{k}/ {1,2,3}/...    # Same layout as step1/
   theta_hat_2.npy               # θ̂_2 (final efficient estimate)
-  jacobian_beta_T_step3.npy     # Jacobian at θ̂_2 (β and T active params)
-  jacobian_beta_T_step3_elasticity.npy
-  jacobian_beta_T_step3_sd.npy
-  jacobian_beta_T_step3_elasticity_sd.npy
-  jacobian_beta_T_step3_param_indices.npy
+  jacobian_all_step3.npy        # Jacobian at θ̂_2 (all parameters)
+  jacobian_all_step3_elasticity.npy
+  jacobian_all_step3_sd.npy
+  jacobian_all_step3_elasticity_sd.npy
+  jacobian_all_step3_param_indices.npy
   inference/
-    var_theta_efficient.npy     # (G'WG)^{-1}
-    var_theta_sandwich.npy      # sandwich variance
+    var_theta_efficient.npy     # (G₂'WG₂)^{-1} at θ̂_2
+    var_theta_sandwich.npy      # sandwich variance at θ̂_2
     se_theta.npy                # √diag(Var_eff)
     se_theta_sandwich.npy       # √diag(Var_sandwich)
-    t_stats.npy                 # θ̂_active / se_theta
+    t_stats.npy                 # θ̂_2 / se_theta
     ci_95.npy                   # (p × 2) 95% confidence intervals
     se_moments_fitted.npy       # √diag(J · Var_eff · J')
     se_moment_residuals.npy     # √max(diag(Ω - J · Var_eff · J'), 0)
@@ -321,7 +333,9 @@ If a change modifies anything documented in this file — file structure, functi
 
 <!-- Add entries below in reverse chronological order -->
 
-2026-05-04 · `tools.jl`, `main.jl`, `claude.md`, `README.md` · Remove spurious `(1+1/K)` factor from `build_step3_weight_matrix` (was applied in the `gamma_beta_only` branch; default branch already used `Σ_data + Σ_sim` without it), so both branches now compute `Ω = Σ_data + Σ_sim`. Add `output_subdir` kwarg to `compute_jacobian` (default `"step2"`) and recompute the Jacobian at `θ̂_2` with `base_seed=1_000_000` saving to `step3/`. Add `compute_smm_inference` to `tools.jl` producing delta-method SEs (efficient + sandwich), fitted-moment SEs, moment-residual SEs, and Hansen J-test; output written to `step3/inference/`. Wire inference call into `main.jl` after Step 3.
+2026-05-04 · `tools.jl`, `main.jl`, `claude.md`, `README.md` · Extend SMM inference to all parameters and both estimation steps. Jacobian is now computed over all parameters (no `param_indices` restriction) at θ̂_1 (saving to `step2/`) and at θ̂_2 (saving to `step3/`); filenames updated to `jacobian_all.npy` / `jacobian_all_step3.npy`. `compute_smm_inference` is called after each Jacobian — at θ̂_1 with W=W_step3 and Ω into `step2/inference/`, and at θ̂_2 into `step3/inference/`. Hardcoded "Step 3 β and T only" caveat removed from `compute_smm_inference` summary; replaced with a generic Murphy–Topel note. Original commit (same date) also removed the `(1+1/K)` factor and added the inference infrastructure.
+
+2026-04-22 · `main.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `claude.md` · Implement three-step efficient SMM. `main.jl` orchestrates Step 1 (identity weight), Step 2 (`build_step3_weight_matrix` via K re-seeded pmap evaluations), and Step 3 (efficient weight, warm-started at θ̂_1). `generate_stratified_draws` gains `seed_offset` kwarg; `full_SMM`/`parallel_SMM_safe`/`train_stage_pso` gain `W_override`/`weight_matrix` kwargs for non-destructive weight injection. `main_pso.jl` is unchanged (legacy).
 
 2026-04-22 · `main.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `claude.md` · Implement three-step efficient SMM. `main.jl` orchestrates Step 1 (identity weight), Step 2 (`build_step3_weight_matrix` via K re-seeded pmap evaluations), and Step 3 (efficient weight, warm-started at θ̂_1). `generate_stratified_draws` gains `seed_offset` kwarg; `full_SMM`/`parallel_SMM_safe`/`train_stage_pso` gain `W_override`/`weight_matrix` kwargs for non-destructive weight injection. `main_pso.jl` is unchanged (legacy).
 

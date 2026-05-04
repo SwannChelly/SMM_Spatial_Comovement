@@ -1718,11 +1718,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
 
         # Caveats
         println(io, "\n--- Caveats ---")
-        println(io, "  * Step 3 only re-optimized β and T. Standard errors for")
-        println(io, "    agg_labor_share, agg_industry_share, and productivity (fixed at θ̂_1)")
-        println(io, "    are zero in this output. True uncertainty in β, T conditional on θ̂_1")
-        println(io, "    is what is reported. A Murphy–Topel correction would account for")
-        println(io, "    sampling noise in θ̂_1.")
+        println(io, "  * SEs are delta-method conditional on the draws used for Σ_sim estimation.")
+        println(io, "    A Murphy–Topel correction would account for sequential sampling noise")
+        println(io, "    across estimation steps.")
         println(io, "  * Σ_data is non-zero only on the γ_ls and reg_coef blocks. Residual SEs")
         println(io, "    on labor/industry/π_r reflect simulator variance only.")
         if eig_floored
