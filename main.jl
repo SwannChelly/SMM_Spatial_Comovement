@@ -220,9 +220,9 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = true
+run_step1 = false#true
 run_step2 = true
-run_step3 = false
+run_step3 = true
 
 if resume
     if isfile(step2_W_path)
@@ -288,7 +288,7 @@ if run_step2
 
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
                                          K=K_sim, output_folder=output_folder,
-                                         gamma_beta_only=true)
+                                         gamma_beta_only=false)
 
     beta_T_indices = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_1))# vcat(1:length(theta_hat_1))
     J_beta_T, J_beta_T_elast,_ = compute_jacobian(theta_hat_1;
@@ -316,7 +316,7 @@ if run_step3
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
         max_loop                 = 50,
-        gamma_beta_only          = true
+        gamma_beta_only          = false
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)

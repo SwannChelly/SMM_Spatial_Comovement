@@ -1089,7 +1089,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
         W_step3[gb_indices, gb_indices] = W_gb
 
         # Also save the full Omega for reference (as the full combination)
-        Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
+        Omega = Sigma_data .+  Sigma_sim
         Omega = (Omega .+ Omega') ./ 2
 
         open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
@@ -1108,7 +1108,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
         NPZ.npzwrite(joinpath(step2_dir, "W_gb.npy"),       W_gb)
         println("  W_step3 (gamma+beta only) saved to $step2_dir")
     else
-        Omega = Sigma_data .+ (1.0 + 1.0/K) .* Sigma_sim
+        Omega = Sigma_data .+ Sigma_sim
         Omega = (Omega .+ Omega') ./ 2
 
         eig_vals = eigvals(Symmetric(Omega))
