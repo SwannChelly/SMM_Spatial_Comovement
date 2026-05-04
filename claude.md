@@ -317,7 +317,7 @@ After Step 3, `compute_smm_inference` computes delta-method standard errors for 
 
 **Hansen J-test**: `J = r'Wr` where `r = m̂ - m̃(θ̂_2)`, distributed χ²(N_moments − p) under correct specification. A large J (small p-value) indicates moment over-identification failure.
 
-**Caveats**: Step 3 only re-optimizes β and T; A_r, Ω^L, Ω^s are fixed at θ̂_1. SEs are conditional on θ̂_1; a Murphy–Topel correction would propagate Step-1 sampling noise. `Σ_data` is non-zero only on the γ_ls and reg_coef blocks, so residual SEs on labor/industry/π_r reflect simulator variance only.
+**Caveats**: SEs are delta-method conditional on the draws used for Σ_sim estimation. A Murphy–Topel correction would account for sequential sampling noise across estimation steps. `Σ_data` is non-zero only on the γ_ls and reg_coef blocks, so residual SEs on labor/industry/π_r reflect simulator variance only.
 
 ---
 
@@ -333,9 +333,9 @@ If a change modifies anything documented in this file — file structure, functi
 
 <!-- Add entries below in reverse chronological order -->
 
-2026-05-04 · `tools.jl`, `main.jl`, `claude.md`, `README.md` · Extend SMM inference to all parameters and both estimation steps. Jacobian is now computed over all parameters (no `param_indices` restriction) at θ̂_1 (saving to `step2/`) and at θ̂_2 (saving to `step3/`); filenames updated to `jacobian_all.npy` / `jacobian_all_step3.npy`. `compute_smm_inference` is called after each Jacobian — at θ̂_1 with W=W_step3 and Ω into `step2/inference/`, and at θ̂_2 into `step3/inference/`. Hardcoded "Step 3 β and T only" caveat removed from `compute_smm_inference` summary; replaced with a generic Murphy–Topel note. Original commit (same date) also removed the `(1+1/K)` factor and added the inference infrastructure.
+2026-05-04 · `tools.jl` · Fix `TypeError` in `compute_smm_inference`: element-wise `block_omega_sd .> 1e-15` returned a `BitVector` fed into a scalar ternary `?:`; replaced with `ifelse.()` for correct element-wise dispatch.
 
-2026-04-22 · `main.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `claude.md` · Implement three-step efficient SMM. `main.jl` orchestrates Step 1 (identity weight), Step 2 (`build_step3_weight_matrix` via K re-seeded pmap evaluations), and Step 3 (efficient weight, warm-started at θ̂_1). `generate_stratified_draws` gains `seed_offset` kwarg; `full_SMM`/`parallel_SMM_safe`/`train_stage_pso` gain `W_override`/`weight_matrix` kwargs for non-destructive weight injection. `main_pso.jl` is unchanged (legacy).
+2026-05-04 · `tools.jl`, `main.jl`, `claude.md`, `README.md` · Extend SMM inference to all parameters and both estimation steps. Jacobian now computed over all parameters (`param_indices=nothing`) at θ̂_1 (→ `step2/jacobian_all.npy`) and θ̂_2 (→ `step3/jacobian_all_step3.npy`). `compute_smm_inference` called after each — at θ̂_1 with W=W_step3/Ω into `step2/inference/`, at θ̂_2 into `step3/inference/`. Hardcoded "Step 3 β and T only" caveat replaced with a generic Murphy–Topel note. Earlier same-day commit also removed the `(1+1/K)` factor and added the inference infrastructure.
 
 2026-04-22 · `main.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `claude.md` · Implement three-step efficient SMM. `main.jl` orchestrates Step 1 (identity weight), Step 2 (`build_step3_weight_matrix` via K re-seeded pmap evaluations), and Step 3 (efficient weight, warm-started at θ̂_1). `generate_stratified_draws` gains `seed_offset` kwarg; `full_SMM`/`parallel_SMM_safe`/`train_stage_pso` gain `W_override`/`weight_matrix` kwargs for non-destructive weight injection. `main_pso.jl` is unchanged (legacy).
 
