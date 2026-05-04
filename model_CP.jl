@@ -277,6 +277,14 @@ function generate_stratified_draws(N_rho::Int, n_good::Int;
 end
 
 
+
+function generate_mc_draws(N_rho::Int, n_good::Int, rng::AbstractRNG)
+    U = rand(rng, N_rho, n_good)
+    w = fill(1.0 / N_rho, N_rho)
+    return U, w
+end
+
+
 ##################### Helper Functions ###################
 
 """

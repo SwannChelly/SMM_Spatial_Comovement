@@ -41,10 +41,10 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
-K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 1000  # K for Σ_sim estimation
+K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000  # K for Σ_sim estimation
 
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -93,7 +93,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const Weight_matrix       = $(nothing)
 
 T_mask_local         = vec(X_rs_local) .> 0
-T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0
+T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
 @everywhere const T_MASK_MOMENT = $T_mask_moment_local
 
@@ -220,7 +220,7 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = false
+run_step1 = true
 run_step2 = true
 run_step3 = false
 
@@ -289,11 +289,11 @@ if run_step2
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
                                          K=K_sim, output_folder=output_folder)
 
-    beta_T_indices = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_1))
+    beta_T_indices = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_1))# vcat(1:length(theta_hat_1))
     J_beta_T, J_beta_T_elast,_ = compute_jacobian(theta_hat_1;
-                                                param_indices = beta_T_indices,
-                                                output_folder = output_folder,
-                                                filename      = "jacobian_beta_T.npy")
+                                                 param_indices = beta_T_indices,
+                                                 output_folder = output_folder,
+                                                 filename      = "jacobian_beta_T.npy")
     println("Step 2 complete. W_step3 saved.")
 else
     println("Step 2 skipped (resume). Loading W_step3...")
@@ -320,8 +320,10 @@ if run_step3
 end
 
 ############## POST-HOC ANALYSIS ##############
+run_reporting(joinpath(output_folder, "step1"), 28; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
-last_stage_folder = find_last_stage_folder(joinpath(output_folder, "step3"))
+
+last_stage_folder = find_last_stage_folder(joinpath(output_folder, "step1"))
 println("\n" * "="^70)
 println("POST-HOC ANALYSIS FOR $(uppercase(industry))")
 println("="^70)
@@ -352,6 +354,7 @@ for i in 1:n_entries
     r = network.firm_exp_r[i]
     X_lrs_sparse[l, r, s] += network.firm_exp_val[i] * mu * Y_r[r]
 end
+
 for s in 1:S, r_prime in 1:R
     total = sum(X_lrs_sparse[r_prime, :, s])
     if total > 1e-10
@@ -407,3 +410,104 @@ df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
 Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
 
 println("\nPost-hoc analysis complete. Results saved to: $folder")
+
+
+
+
+
+# Test cov matrix
+
+
+using LinearAlgebra, Statistics, Printf
+
+# Center M_sim (already saved to step2/M_sim.npy by build_step3_weight_matrix)
+M_sim = NPZ.npzread(joinpath(output_folder, "step2", "M_sim.npy"))
+Mc = M_sim .- mean(M_sim, dims=1)
+K, N_moments = size(M_sim)
+
+# Per-moment standard deviation
+sds = vec(std(M_sim, dims=1))
+
+# Block-by-block diagnostic
+for (k, name) in enumerate(BLOCK_NAMES)
+    rng = BLOCK_RANGES[k]
+    isempty(rng) && continue
+
+    block = Mc[:, rng]
+    sv = svdvals(block)
+
+    @printf("%-10s  size=%4d  sd: min=%.2e  max=%.2e  median=%.2e  |  sv: max=%.2e  min=%.2e  ratio=%.2e\n",
+            name, length(rng),
+            minimum(sds[rng]), maximum(sds[rng]), median(sds[rng]),
+            maximum(sv), minimum(sv), maximum(sv)/max(minimum(sv), 1e-300))
+end
+
+# Full-matrix singular values: tail behaviour
+sv_full = svdvals(Mc)
+println("\nTop 5 sv: ", round.(sv_full[1:5], sigdigits=3))
+println("Bottom 10 sv: ", round.(sv_full[end-9:end], sigdigits=3))
+println("Number below 1e-12 * sv_max: ", count(sv_full .< 1e-12 * sv_full[1]))
+
+Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
+Sigma_sim  = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_sim.npy"))
+Omega      = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
+
+for (name, M) in [("Sigma_data", Sigma_data), ("Sigma_sim", Sigma_sim), ("Omega", Omega)]
+    sv = svdvals(Symmetric(M))
+    tol = sv[1] * size(M,1) * eps()
+    r = count(sv .> tol)
+    @printf("%-10s  size=%d  rank=%d  sv_max=%.2e  sv_min=%.2e  cond=%.2e  rel_tol=%.2e\n",
+            name, size(M,1), r, sv[1], sv[end], sv[1]/max(sv[end], 1e-300), tol)
+end
+
+# How many moments have ZERO contribution from Sigma_data?
+zero_data_diag = findall(diag(Sigma_data) .< 1e-15)
+println("\nMoments with Σ_data diagonal ≈ 0: ", length(zero_data_diag), " / ", size(Sigma_data,1))
+println("Their indices: ", zero_data_diag)
+
+println("K = ", K)
+println("N_moments = ", N_moments)
+println("Theoretical max rank of Sigma_sim: ", min(K-1, N_moments))
+
+F = eigen(Symmetric(Omega))
+λ = F.values
+V = F.vectors
+
+# Bottom 5 eigenvectors
+for i in 1:5
+    v = V[:, i]
+    println("\nEigenvalue $i: ", round(λ[i], sigdigits=3))
+    # Block decomposition of the eigenvector
+    for (k, name) in enumerate(BLOCK_NAMES)
+        rng = BLOCK_RANGES[k]
+        isempty(rng) && continue
+        mass = sum(v[rng].^2)
+        @printf("  %-10s  ‖v_block‖² = %.4f\n", name, mass)
+    end
+end
+
+w_gamma = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
+w_beta  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
+
+for (name, M) in [("w_gamma", w_gamma), ("w_beta", w_beta)]
+    sv = svdvals(Symmetric(M))
+    @printf("%-10s  size=%d  sv_max=%.2e  sv_min=%.2e  cond=%.2e\n",
+            name, size(M,1), sv[1], sv[end], sv[1]/max(sv[end], 1e-300))
+end
+
+for (k, name) in enumerate(BLOCK_NAMES)
+    rng = BLOCK_RANGES[k]
+    isempty(rng) && continue
+    d = diag(Omega)[rng]
+    @printf("%-10s  diag: min=%.2e  max=%.2e  geomean=%.2e\n",
+            name, minimum(d), maximum(d), exp(mean(log.(max.(d, 1e-300)))))
+end
+
+using Random
+rng = MersenneTwister(1)
+U, w = generate_mc_draws(N_rho, n_good, rng)
+@assert size(U) == (N_rho, n_good)
+@assert all(0 .< U .< 1)
+@assert all(w .≈ 1/N_rho)
+println("U has rank: ", rank(U))     # should equal min(N_rho, n_good)
+println("U column 1 std: ", std(U[:,1]))  # should be ≈ sqrt(1/12) ≈ 0.289

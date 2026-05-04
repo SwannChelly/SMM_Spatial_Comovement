@@ -1,99 +1,6 @@
 using Printf
 
 
-# function generate_halton_grid(n_needed::Int, batchsize::Int=1024,init = false,init_beta = ones(5),last_stage_folder = nothing,K = 1 ,variable = nothing,alpha = 0.1,second_stage = false)
-#     """
-
-#     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
-#     This Halton grid function allows condition on the parameters and is much faster than the previous one. 
-
-#     """
-#     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-#     A ./= sum(A)
-#     if init
-#         return vcat([ones(5),[agg_labor_share],agg_industry_share,A,ones(S*R)]...)
-#     end
-#     if last_stage_folder == nothing
-#         lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T = init_beta.*0.5,0.8*agg_labor_share,0.8.*agg_industry_share,0.01.*A,0.1*ones(S*R)
-#         ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T = init_beta.*2,1.2*agg_labor_share,1.2.*agg_industry_share,A.*10,100*ones(S*R)
-        
-#         lb = vcat(lb_beta,lb_agg_labor_share_tech,lb_agg_industry_share_tech,lb_prod,lb_T)
-#         ub = vcat(ub_beta,ub_agg_labor_share_tech,ub_agg_industry_share_tech,ub_prod,ub_T)
-#         condition = true
-#     else
-#         best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
-#         names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
-#         vals = unpack_params(best_params)
-#         params_dict = Dict(names .=> vals)
-#         lb = (1/alpha).*params_dict[Symbol(variable)]
-#         ub = (alpha).*params_dict[Symbol(variable)]
-#         if variable == "beta"
-#             condition = true
-#         elseif variable == "agg_labor_share_tech"
-#             lb = 0.001
-#             ub = 1
-#             condition = false
-#         else 
-#             condition = false
-#         end
-#         if variable == "T" && second_stage
-#             mask = vec(mask_emp_gamma_ls)
-#             lb = lb[mask.==1]
-#             ub = ub[mask.==1]
-#         end
-#     end
-    
-
-    
-#     d = length(lb)
-#     accepted = Vector{Vector{Float64}}(undef, 0)
-
-#     # Create a Halton point generator in dimension d
-#     hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
-
-#     idx = 1
-#     while length(accepted) < n_needed
-#         # get a batch of raw Halton points
-#         batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
-#         # Each point is in [0,1]^d
-
-#         for raw in batch_raw
-#             # scale each component
-#             scaled = lb .+ (ub .- lb) .* raw
-
-#             # apply your condition
-#             #if (scaled[1] < scaled[4] < scaled[2] < scaled[5] < scaled[3])  # Here we force the exploration of a parameter set where betas are in a specific order.
-#             if condition
-#                 if (scaled[1]  < scaled[2]) & (scaled[2]  < scaled[3]) & (scaled[3]  < scaled[4]) & (scaled[4]  < scaled[5])  # Condition
-#                     push!(accepted, scaled)
-#                     if length(accepted) >= n_needed
-#                         break
-#                     end
-#                 end
-#             else
-#                 push!(accepted, scaled)
-#                     if length(accepted) >= n_needed
-#                         break
-#                 end
-#             end
-#         end
-
-#         idx += batchsize
-#     end
-#     if last_stage_folder != nothing
-#         names = ["beta", "agg_labor_share_tech", "agg_industry_share_tech", "productivity", "T"]
-#         # make sure keys match the dict type
-#         #return accepted,params_dict[:T]
-#         if variable == "T" && second_stage
-#             accepted = [assign_T_with_mask(params_dict[:T],sample) for sample in accepted ]
-#         end
-#         keyfun(x) = isa(first(keys(params_dict)), Symbol) ? Symbol(x) : x
-#         accepted = [ vcat([ (p != variable ? params_dict[keyfun(p)] : k) for p in names ]...) for k in accepted ]
-#         push!(accepted,best_params) # We add the last best parameter. 
-#         return accepted
-#     end
-#     return accepted
-# end
 
 """
     generate_lhs_beta(n_samples, n_beta, lb, ub; seed=42)
@@ -1214,15 +1121,14 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     Sigma_data[BLOCK_RANGES[4], BLOCK_RANGES[4]] = Sigma_beta_data
 
     # ── Estimate Σ_sim via K re-seeded SMM evaluations ──────────────────────
-    # Workers call generate_stratified_draws with seed_offset=k and full_SMM.
-    # Draws are generated on-worker to avoid materialising K large matrices on master.
+    # Workers call generate_mc_draws with different see and full_SMM.
+    # Stratified draws not used. 
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
     flush(stdout)
 
+    # 
     M_sim_rows = pmap(1:K) do k
-        u_k, w_k = generate_stratified_draws(N_rho, n_good;
-                                            randomise = true,
-                                            rng       = MersenneTwister(k))
+        u_k, w_k = generate_mc_draws(N_rho, n_good,MersenneTwister(k))                                             
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
         moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
         return moms_flat
@@ -1490,7 +1396,7 @@ mean-relative-noise ratio σ/|μ| for entries above a magnitude floor.
                     Must not collide with seeds used elsewhere (e.g. Σ_sim).
 """
 function compute_jacobian(theta::Vector{Float64};
-                          K::Int = 20,
+                          K::Int = 50,
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
                           step_rel::Float64 = 1e-3,
                           step_abs::Float64 = 1e-8,
