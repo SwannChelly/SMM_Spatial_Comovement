@@ -115,7 +115,8 @@ Key utilities:
 - `run_reporting(output_folder, max_loop)`: scans all epoch/stage folders, computes scores, saves `best_simulated_moments.npy`, `best_parameters_list.npy`.
 - `find_last_stage_folder(base_folder)`: locates most recent `best_params.npy`.
 - `find_resume_state(base_folder)`: determines `(resume_loop, resume_substage)` for `--resume` mode.
-- `build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)`: assembles `W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1}`. `Σ_data` is block-diagonal (γ and β blocks from `w_gamma.npy`/`w_beta.npy`; other blocks zero). `Σ_sim` estimated via K pmap evaluations with `seed_offset=k`. Saves `Sigma_data.npy`, `Sigma_sim.npy`, `Omega.npy`, `W_step3.npy`, `diagnostics.txt` to `output_folder/step2/`. Returns `W_step3::Matrix{Float64}`.
+- `build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)`: assembles `W_step3 = (Σ_data + Σ_sim)^{-1}`. `Σ_data` is block-diagonal (γ and β blocks from `w_gamma.npy`/`w_beta.npy`; other blocks zero). `Σ_sim` estimated via K pmap evaluations with MC draws seeded by k. Saves `Sigma_data.npy`, `Sigma_sim.npy`, `Omega.npy`, `W_step3.npy`, `diagnostics.txt` to `output_folder/step2/`. Returns `W_step3::Matrix{Float64}`.
+- `compute_smm_inference(theta_hat, J, W, Omega; param_indices, empirical_moments_vec, simulated_moments_vec, output_folder, industry, K_sim)`: computes delta-method standard errors (efficient and sandwich), fitted-moment SEs, moment-residual SEs, and the Hansen J over-identification test. Saves all arrays plus `inference_summary.txt` and `J_stat.txt` to `output_folder/inference/`. Returns a Dict.
 - `run_pso_optimization(; weight_matrix, skip_initial_beta_search, warm_start_params, output_subfolder, max_loop, ...)`: unified PSO wrapper for Steps 1 and 3. Runs Stage 0 LHS search (unless `skip_initial_beta_search=true`), Stage 1 full PSO, and 50-loop refinement. Returns `(best_params, best_fitness)`.
 
 ### `pso_integration.jl` — PSO optimizer
@@ -130,8 +131,9 @@ Key utilities:
 
 Three-step procedure:
 1. **Step 1** (`output_subfolder="step1"`): identity-weighted (uses global `Weight_matrix_custom`) PSO → `θ̂_1`. Includes Stage 0 LHS beta search.
-2. **Step 2**: `build_step3_weight_matrix(θ̂_1; K=K_sim)` → `W_step3`. Outputs saved to `step2/`.
+2. **Step 2**: `build_step3_weight_matrix(θ̂_1; K=K_sim)` → `W_step3 = (Σ_data + Σ_sim)^{-1}`. Outputs saved to `step2/`.
 3. **Step 3** (`output_subfolder="step3"`): efficient-weighted PSO with `W_step3`, warm-started at `θ̂_1`, skips Stage 0. → `θ̂_2`.
+4. **Inference**: Jacobian `J2` recomputed at `θ̂_2` via `compute_jacobian(...; output_subdir="step3", base_seed=1_000_000)`. Then `compute_smm_inference` produces delta-method SEs, Hansen J-test, and diagnostics. All outputs in `step3/inference/`.
 
 Resume logic: if `step2/W_step3.npy` exists, skips Steps 1+2; if only `step1/0/` exists, skips Step 1.
 
@@ -241,12 +243,33 @@ step1/                          # Step 1 outputs (identity-weighted)
 step2/                          # Step 2 outputs (weight matrix construction)
   Sigma_data.npy                # Block-diagonal empirical covariance (N_moments × N_moments)
   Sigma_sim.npy                 # Full simulated covariance from K evaluations
-  Omega.npy                     # Sigma_data + (1+1/K)*Sigma_sim
+  Omega.npy                     # Sigma_data + Sigma_sim
   W_step3.npy                   # inv(Omega) — efficient weight matrix
   diagnostics.txt               # Condition number log
+  jacobian_beta_T.npy           # Jacobian at θ̂_1 (β and T active params)
+  jacobian_beta_T_elasticity.npy
+  jacobian_beta_T_sd.npy
+  jacobian_beta_T_elasticity_sd.npy
+  jacobian_beta_T_param_indices.npy
 step3/                          # Step 3 outputs (efficient-weighted)
   0/ epoch_{k}/ {1,2,3}/...    # Same layout as step1/
   theta_hat_2.npy               # θ̂_2 (final efficient estimate)
+  jacobian_beta_T_step3.npy     # Jacobian at θ̂_2 (β and T active params)
+  jacobian_beta_T_step3_elasticity.npy
+  jacobian_beta_T_step3_sd.npy
+  jacobian_beta_T_step3_elasticity_sd.npy
+  jacobian_beta_T_step3_param_indices.npy
+  inference/
+    var_theta_efficient.npy     # (G'WG)^{-1}
+    var_theta_sandwich.npy      # sandwich variance
+    se_theta.npy                # √diag(Var_eff)
+    se_theta_sandwich.npy       # √diag(Var_sandwich)
+    t_stats.npy                 # θ̂_active / se_theta
+    ci_95.npy                   # (p × 2) 95% confidence intervals
+    se_moments_fitted.npy       # √diag(J · Var_eff · J')
+    se_moment_residuals.npy     # √max(diag(Ω - J · Var_eff · J'), 0)
+    J_stat.txt                  # Hansen J statistic, df, p-value
+    inference_summary.txt       # Human-readable diagnostics
 simulated_panel_unified.parquet
 suppliers.parquet
 w_srd_r.npy                     # w_{s,r',r}: upstream (s,r') sales share to downstream r
@@ -268,6 +291,24 @@ w_srd_r.npy
 
 ---
 
+## Inference
+
+After Step 3, `compute_smm_inference` computes delta-method standard errors for the active parameters (β and T):
+
+**Efficient variance**: `Var_eff = (G'WG)^{-1}` where `G = ∂m(θ̂_2)/∂θ` (Jacobian at θ̂_2), `W = W_step3`.
+
+**Sandwich variance**: `Var_sw = (G'WG)^{-1} · G'WΩW G · (G'WG)^{-1}` where `Ω = Σ_data + Σ_sim`. When `W = Ω^{-1}` (efficient weighting) the two coincide; deviations flag misspecification or a non-efficient weight matrix.
+
+**Fitted-moment SEs**: `√diag(G · Var_eff · G')` — uncertainty in the model-predicted moments at θ̂_2.
+
+**Residual SEs**: `√max(diag(Ω - G · Var_eff · G'), 0)` — per-moment unexplained variance after controlling for parameter uncertainty.
+
+**Hansen J-test**: `J = r'Wr` where `r = m̂ - m̃(θ̂_2)`, distributed χ²(N_moments − p) under correct specification. A large J (small p-value) indicates moment over-identification failure.
+
+**Caveats**: Step 3 only re-optimizes β and T; A_r, Ω^L, Ω^s are fixed at θ̂_1. SEs are conditional on θ̂_1; a Murphy–Topel correction would propagate Step-1 sampling noise. `Σ_data` is non-zero only on the γ_ls and reg_coef blocks, so residual SEs on labor/industry/π_r reflect simulator variance only.
+
+---
+
 ## Keeping claude.md current
 
 If a change modifies anything documented in this file — file structure, function signatures, global constants, parameter vector layout, moment construction, input/output conventions, or the optimization pipeline — **claude.md must be updated in the same step as the code change**. Do not defer the update. The changelog entry alone is not sufficient: the relevant section of the reference documentation must also reflect the new state.
@@ -279,6 +320,8 @@ If a change modifies anything documented in this file — file structure, functi
 *Format: date · file(s) changed · description (≤4 sentences)*
 
 <!-- Add entries below in reverse chronological order -->
+
+2026-05-04 · `tools.jl`, `main.jl`, `claude.md`, `README.md` · Remove spurious `(1+1/K)` factor from `build_step3_weight_matrix` (was applied in the `gamma_beta_only` branch; default branch already used `Σ_data + Σ_sim` without it), so both branches now compute `Ω = Σ_data + Σ_sim`. Add `output_subdir` kwarg to `compute_jacobian` (default `"step2"`) and recompute the Jacobian at `θ̂_2` with `base_seed=1_000_000` saving to `step3/`. Add `compute_smm_inference` to `tools.jl` producing delta-method SEs (efficient + sandwich), fitted-moment SEs, moment-residual SEs, and Hansen J-test; output written to `step3/inference/`. Wire inference call into `main.jl` after Step 3.
 
 2026-04-22 · `main.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `claude.md` · Implement three-step efficient SMM. `main.jl` orchestrates Step 1 (identity weight), Step 2 (`build_step3_weight_matrix` via K re-seeded pmap evaluations), and Step 3 (efficient weight, warm-started at θ̂_1). `generate_stratified_draws` gains `seed_offset` kwarg; `full_SMM`/`parallel_SMM_safe`/`train_stage_pso` gain `W_override`/`weight_matrix` kwargs for non-destructive weight injection. `main_pso.jl` is unchanged (legacy).
 

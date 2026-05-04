@@ -120,22 +120,29 @@ include("main_pso.jl")
 
 ## Calibration Process
 
-The optimization uses a multi-stage Particle Swarm Optimization (PSO) approach:
+`main.jl` implements a three-step efficient SMM estimator:
 
-### Stage 0: Initial Search
-- Grid search over β (trade cost) parameters
-- Find reasonable starting values matching regression coefficients
+### Step 1: Identity-weighted PSO → θ̂_1
+- **Stage 0**: Grid search over β (trade cost) parameters; find reasonable starting values matching regression coefficients
+- **Stage 1**: Optimize all parameters jointly, 200 iterations with all available CPU cores
+- **Refinement Loops (×50)**: each loop has 3 stages targeting parameters by sensitivity: Productivity (A_r), Spatial Structure (β, T), Technical Coefficients (Ω^L, Ω^s)
 
-### Stage 1: Full PSO
-- Optimize all parameters jointly
-- 200 iterations with all available CPU cores
+### Step 2: Build efficient weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}
+- Σ_data assembled from bootstrap covariances `w_gamma.npy` / `w_beta.npy`
+- Σ_sim estimated from K re-seeded simulator evaluations at θ̂_1
+- Jacobian at θ̂_1 computed and saved for diagnostics
 
-### Refinement Loops (×10)
-Each loop contains 3 stages targeting parameters by sensitivity:
+### Step 3: Efficient-weighted PSO → θ̂_2
+- PSO warm-started at θ̂_1, skips Stage 0
+- Optimizes β and T only (A_r, Ω^L, Ω^s fixed at θ̂_1)
+- Output saved to `step3/`
 
-1. **Productivity (A_r)** — High sensitivity (ε ≈ -16 amplifies errors)
-2. **Spatial Structure (β, T)** — Medium sensitivity
-3. **Technical Coefficients (Ω^L, Ω^s)** — Low sensitivity (damped by λ, ν)
+### Step 4: Inference
+- Jacobian recomputed at θ̂_2
+- Delta-method standard errors (efficient and sandwich formulas)
+- Fitted-moment and moment-residual standard errors
+- Hansen J over-identification test
+- All outputs in `step3/inference/`
 
 ---
 
@@ -145,20 +152,39 @@ Results are saved to `reporting_{industry}/`:
 
 ```
 reporting_aero/
-├── 0/                          # Initial stage results
-│   ├── best_params.npy
-│   ├── pso_history.npy
-│   ├── dashboard.png
-│   └── report.txt
-├── epoch_1/                    # Refinement loop 1
-│   ├── 1/, 2/, 3/             # Stages within loop
-├── epoch_2/
-│   └── ...
-├── best_simulated_moments.npy
-├── best_parameters_list.npy
-├── empirical_moments.npy
-├── pso_convergence.png
-└── logs.log
+├── step1/                      # Step 1 outputs (identity-weighted)
+│   ├── 0/                      # Initial PSO stage
+│   ├── epoch_1/ ... epoch_50/  # Refinement loops
+│   ├── theta_hat_1.npy
+│   ├── best_simulated_moments.npy
+│   └── best_parameters_list.npy
+├── step2/                      # Step 2 outputs (weight matrix construction)
+│   ├── Sigma_data.npy
+│   ├── Sigma_sim.npy
+│   ├── Omega.npy               # Σ_data + Σ_sim
+│   ├── W_step3.npy             # inv(Omega)
+│   ├── diagnostics.txt
+│   ├── jacobian_beta_T.npy     # Jacobian at θ̂_1
+│   └── jacobian_beta_T_*.npy   # Elasticity, SD, and param-index companions
+├── step3/                      # Step 3 outputs (efficient-weighted)
+│   ├── 0/ epoch_1/ ...
+│   ├── theta_hat_2.npy
+│   ├── jacobian_beta_T_step3.npy   # Jacobian at θ̂_2
+│   ├── jacobian_beta_T_step3_*.npy
+│   └── inference/              # Step 4: standard errors and tests
+│       ├── var_theta_efficient.npy
+│       ├── var_theta_sandwich.npy
+│       ├── se_theta.npy
+│       ├── se_theta_sandwich.npy
+│       ├── t_stats.npy
+│       ├── ci_95.npy
+│       ├── se_moments_fitted.npy
+│       ├── se_moment_residuals.npy
+│       ├── J_stat.txt
+│       └── inference_summary.txt
+├── simulated_panel_unified.parquet
+├── suppliers.parquet
+└── w_srd_r.npy
 ```
 
 ### Key Output Files

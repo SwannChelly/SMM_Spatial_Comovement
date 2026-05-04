@@ -321,6 +321,61 @@ if run_step3
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
     println("Step 3 complete. θ̂_2 saved.")
+
+    # ── Jacobian at θ̂_2 ──────────────────────────────────────────────────────
+    println("\nComputing Jacobian at θ̂_2 (base_seed=1_000_000 to avoid collision with Σ_sim seeds)...")
+    beta_T_indices_2 = vcat(1:N_beta, (N_beta + R_downstream + S + 2):length(theta_hat_2))
+    J2, J2_elast, J2_sd, J2_elast_sd = compute_jacobian(
+        theta_hat_2;
+        param_indices = beta_T_indices_2,
+        output_folder = output_folder,
+        output_subdir = "step3",
+        filename      = "jacobian_beta_T_step3.npy",
+        K             = 50,
+        step_rel      = 1e-3,
+        step_abs      = 1e-8,
+        base_seed     = 1_000_000
+    )
+
+    # Rank of J2
+    sv_J2  = svdvals(J2)
+    rank_J2 = count(sv_J2 .> sv_J2[1] * 1e-8)
+    println("  Rank of J2: $rank_J2 / $(size(J2, 2))")
+    println("  Per-block max/mean |J2_elast| and noise (J2_elast_sd / |J2_elast|):")
+    for (k, name) in enumerate(BLOCK_NAMES)
+        rng = BLOCK_RANGES[k]
+        isempty(rng) && continue
+        block_mu = abs.(J2_elast[rng, :])
+        block_sd = J2_elast_sd[rng, :]
+        signif   = block_mu .> 1e-3
+        noise_ratio = any(signif) ? mean(block_sd[signif] ./ block_mu[signif]) : NaN
+        if !isnan(noise_ratio) && noise_ratio > 0.10
+            @warn "  $name noise ratio $(round(noise_ratio, sigdigits=3)) > 0.10"
+        end
+        @printf("  %-12s max=%.4e  mean=%.4e  noise=%s\n",
+                name, maximum(block_mu), mean(block_mu),
+                isnan(noise_ratio) ? "n/a" : string(round(noise_ratio, sigdigits=3)))
+    end
+
+    # ── SMM Inference at θ̂_2 ─────────────────────────────────────────────────
+    println("\nRunning SMM inference at θ̂_2...")
+    W_step3_inf = NPZ.npzread(joinpath(output_folder, "step2", "W_step3.npy"))
+    Omega_inf   = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
+
+    _, sim_moments_2 = full_SMM(theta_hat_2; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+    sim_vec_2 = vcat([vec(sim_moments_2[i]) for i in 1:5]...)[MOMENT_MASK]
+
+    emp_vec = vec(empirical_moments)   # already masked (MOMENT_MASK applied at load time)
+
+    inference = compute_smm_inference(
+        theta_hat_2, J2, W_step3_inf, Omega_inf;
+        param_indices         = beta_T_indices_2,
+        empirical_moments_vec = emp_vec,
+        simulated_moments_vec = sim_vec_2,
+        output_folder         = joinpath(output_folder, "step3"),
+        industry              = industry,
+        K_sim                 = K_sim
+    )
 end
 
 ############## POST-HOC ANALYSIS ##############

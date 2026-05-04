@@ -997,7 +997,7 @@ end
 """
     build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)
 
-Assemble the efficient SMM weight matrix W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1}.
+Assemble the efficient SMM weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}.
 
 Σ_data is block-diagonal with covariance blocks for γ and β loaded from
 w_gamma.npy and w_beta.npy; all other blocks are zero.
@@ -1064,7 +1064,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
         Sigma_data_gb = Sigma_data[gb_indices, gb_indices]
         Sigma_sim_gb  = cov(M_sim[:, gb_indices]; dims=1)
 
-        Omega_gb = Sigma_data_gb .+ (1.0 + 1.0/K) .* Sigma_sim_gb
+        Omega_gb = Sigma_data_gb .+ Sigma_sim_gb
         Omega_gb = (Omega_gb .+ Omega_gb') ./ 2
 
         eig_vals = eigvals(Symmetric(Omega_gb))
@@ -1384,7 +1384,7 @@ Returns:
   - J_elast_sd: per-entry s.d. of J_elast across reps
 
 Saves J, J_elast, J_sd, J_elast_sd, and the param-index map under
-`<output_folder>/step2/`. Prints per-block max/mean |elasticity| and the
+`<output_folder>/<output_subdir>/`. Prints per-block max/mean |elasticity| and the
 mean-relative-noise ratio σ/|μ| for entries above a magnitude floor.
 
 # Arguments
@@ -1394,6 +1394,7 @@ mean-relative-noise ratio σ/|μ| for entries above a magnitude floor.
 - `step_rel`/`step_abs` : FD step h_j = max(|θ_j|·step_rel, step_abs).
 - `base_seed`     : seed offset; replication k uses `MersenneTwister(base_seed + k)`.
                     Must not collide with seeds used elsewhere (e.g. Σ_sim).
+- `output_subdir` : subfolder under output_folder for saved files (default "step2").
 """
 function compute_jacobian(theta::Vector{Float64};
                           K::Int = 50,
@@ -1402,7 +1403,8 @@ function compute_jacobian(theta::Vector{Float64};
                           step_abs::Float64 = 1e-8,
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
-                          base_seed::Int = 0)
+                          base_seed::Int = 0,
+                          output_subdir::String = "step2")
 
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
@@ -1468,7 +1470,7 @@ function compute_jacobian(theta::Vector{Float64};
     J_elast_sd = K > 1 ? dropdims(std(J_elast_stack; dims=3); dims=3) : zeros(size(J_elast))
 
     # ── Save ────────────────────────────────────────────────────────────────
-    out_dir = joinpath(output_folder, "step2")
+    out_dir = joinpath(output_folder, output_subdir)
     mkpath(out_dir)
     NPZ.npzwrite(joinpath(out_dir, filename), J)
     NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity.npy")),    J_elast)
@@ -1498,4 +1500,254 @@ function compute_jacobian(theta::Vector{Float64};
     end
 
     return J, J_elast, J_sd, J_elast_sd
+end
+
+
+"""
+    compute_smm_inference(theta_hat, J, W, Omega;
+                          param_indices, empirical_moments_vec,
+                          simulated_moments_vec, output_folder,
+                          industry, K_sim)
+        -> Dict
+
+Compute parameter SEs (efficient + sandwich), fitted-moment SEs,
+moment-residual SEs, and Hansen J-test.
+
+# Arguments
+- `theta_hat`             : Vector{Float64}, full parameter vector
+- `J`                     : Matrix{Float64} (N_moments × p_active), Jacobian at θ̂_2
+- `W`                     : Matrix{Float64} (N_moments × N_moments), weight matrix
+- `Omega`                 : Matrix{Float64} (N_moments × N_moments), Σ_data + Σ_sim
+- `param_indices`         : Vector{Int}, indices of active parameters in theta_hat
+- `empirical_moments_vec` : Vector{Float64}, masked empirical moments
+- `simulated_moments_vec` : Vector{Float64}, masked simulated moments at theta_hat
+- `output_folder`         : String, outputs go to `output_folder/inference/`
+- `industry`              : String, industry label for summary header (default "")
+- `K_sim`                 : Int, number of simulator replications used for Σ_sim (default 0)
+
+# Saves (under output_folder/inference/)
+- `var_theta_efficient.npy`   : (G'WG)^{-1}
+- `var_theta_sandwich.npy`    : (G'WG)^{-1} G'WΩWG (G'WG)^{-1}
+- `se_theta.npy`              : √diag(Var_eff)
+- `se_theta_sandwich.npy`     : √diag(Var_sandwich)
+- `t_stats.npy`               : θ̂_active ./ se_theta
+- `ci_95.npy`                 : (p × 2) matrix of [lower, upper]
+- `se_moments_fitted.npy`     : √diag(J · Var_eff · J')
+- `se_moment_residuals.npy`   : √max(diag(Ω - J · Var_eff · J'), 0)
+- `J_stat.txt`                : Hansen J statistic, df, p-value
+- `inference_summary.txt`     : human-readable diagnostics
+"""
+function compute_smm_inference(theta_hat::Vector{Float64},
+                               J::Matrix{Float64},
+                               W::Matrix{Float64},
+                               Omega::Matrix{Float64};
+                               param_indices::Vector{Int},
+                               empirical_moments_vec::Vector{Float64},
+                               simulated_moments_vec::Vector{Float64},
+                               output_folder::String = ".",
+                               industry::String = "",
+                               K_sim::Int = 0)
+
+    inf_dir = joinpath(output_folder, "inference")
+    mkpath(inf_dir)
+
+    G = J   # (N_moments × p_active)
+    p = size(G, 2)
+    N_mom = size(G, 1)
+
+    # ── 1. GtWG and its inverse ──────────────────────────────────────────────
+    GtWG = Symmetric(G' * W * G)
+    eig_floored = false
+    floor_val   = 0.0
+
+    GtWG_inv = try
+        F = cholesky(GtWG)
+        inv(F)
+    catch
+        @warn "GtWG is not positive-definite; applying eigenvalue floor."
+        F = eigen(GtWG)
+        floor_val   = F.values[end] * 1e-10
+        λ_floored   = max.(F.values, floor_val)
+        eig_floored = true
+        Symmetric(F.vectors * Diagonal(1.0 ./ λ_floored) * F.vectors')
+    end
+    GtWG_inv = (Matrix(GtWG_inv) .+ Matrix(GtWG_inv)') ./ 2
+
+    # ── 2. Variances ────────────────────────────────────────────────────────
+    Var_eff      = GtWG_inv
+    middle       = G' * W * Omega * W * G
+    Var_sandwich = Var_eff * middle * Var_eff
+    Var_sandwich = (Var_sandwich .+ Var_sandwich') ./ 2
+
+    # ── 3. Parameter SEs, t-stats, CIs ──────────────────────────────────────
+    se_eff  = sqrt.(max.(diag(Var_eff),      0.0))
+    se_sw   = sqrt.(max.(diag(Var_sandwich), 0.0))
+    theta_active = theta_hat[param_indices]
+    t_stats = theta_active ./ se_eff
+    ci_95   = hcat(theta_active .- 1.96 .* se_eff,
+                   theta_active .+ 1.96 .* se_eff)
+
+    # ── 4. Fitted-moment and residual SEs ────────────────────────────────────
+    Var_m = G * Var_eff * G'
+    Var_m = (Var_m .+ Var_m') ./ 2
+    se_m_fitted = sqrt.(max.(diag(Var_m), 0.0))
+
+    Var_r_diag = diag(Omega) .- diag(Var_m)
+    n_clipped   = count(Var_r_diag .< 0.0)
+    if n_clipped > 0
+        @warn "Clipping $n_clipped negative residual variances to 0."
+    end
+    se_m_resid = sqrt.(max.(Var_r_diag, 0.0))
+
+    # ── 5. Hansen J-test ─────────────────────────────────────────────────────
+    r = empirical_moments_vec .- simulated_moments_vec
+    J_stat = (r' * W * r)[1]
+    df     = N_mom - p
+    pval   = df > 0 ? (1.0 - cdf(Chisq(df), J_stat)) : NaN
+
+    # ── 6. Save arrays ───────────────────────────────────────────────────────
+    NPZ.npzwrite(joinpath(inf_dir, "var_theta_efficient.npy"),  Var_eff)
+    NPZ.npzwrite(joinpath(inf_dir, "var_theta_sandwich.npy"),   Var_sandwich)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta.npy"),             se_eff)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_sandwich.npy"),    se_sw)
+    NPZ.npzwrite(joinpath(inf_dir, "t_stats.npy"),              t_stats)
+    NPZ.npzwrite(joinpath(inf_dir, "ci_95.npy"),                ci_95)
+    NPZ.npzwrite(joinpath(inf_dir, "se_moments_fitted.npy"),    se_m_fitted)
+    NPZ.npzwrite(joinpath(inf_dir, "se_moment_residuals.npy"),  se_m_resid)
+
+    # ── 7. Identification diagnostics ────────────────────────────────────────
+    eig_GtWG     = eigvals(GtWG)
+    sv_G         = svdvals(G)
+    cond_GtWG    = maximum(eig_GtWG) / max(minimum(eig_GtWG), 1e-300)
+    rank_G       = count(sv_G .> sv_G[1] * 1e-8)
+
+    # ── 8. Write J_stat.txt ──────────────────────────────────────────────────
+    open(joinpath(inf_dir, "J_stat.txt"), "w") do io
+        println(io, "Hansen J-test")
+        println(io, "  J statistic : $(round(J_stat, sigdigits=6))")
+        println(io, "  df          : $df")
+        @printf(io, "  p-value     : %.6f\n", isnan(pval) ? -1.0 : pval)
+        if isnan(pval)
+            println(io, "  verdict     : df ≤ 0 — model is exactly identified")
+        elseif pval < 0.05
+            println(io, "  verdict     : REJECT H0 at α=0.05 — moment over-identification")
+        else
+            println(io, "  verdict     : fail to reject H0 at α=0.05")
+        end
+    end
+
+    # ── 9. Write inference_summary.txt ───────────────────────────────────────
+    open(joinpath(inf_dir, "inference_summary.txt"), "w") do io
+        # Header
+        println(io, "="^72)
+        println(io, "SMM INFERENCE SUMMARY")
+        println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
+        println(io, "  θ̂_2 source : $(joinpath(output_folder, "theta_hat_2.npy"))")
+        println(io, "  K_sim      : $(K_sim == 0 ? "(not recorded)" : string(K_sim))")
+        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS UTC"))")
+        println(io, "="^72)
+
+        # Identification
+        println(io, "\n--- Identification check ---")
+        λ_min_GtWG = minimum(eig_GtWG)
+        λ_max_GtWG = maximum(eig_GtWG)
+        warn_eig = λ_min_GtWG < 1e-8 * λ_max_GtWG ? "  *** WARNING: near-singular ***" : ""
+        warn_cond = cond_GtWG > 1e10 ? "  *** WARNING: ill-conditioned ***" : ""
+        @printf(io, "  λ_min(G'WG)       = %.4e%s\n", λ_min_GtWG, warn_eig)
+        @printf(io, "  λ_max(G'WG)       = %.4e\n",   λ_max_GtWG)
+        @printf(io, "  cond(G'WG)        = %.4e%s\n", cond_GtWG, warn_cond)
+        @printf(io, "  rank(G)           = %d / %d\n", rank_G, p)
+        if eig_floored
+            @printf(io, "  Eigenvalue floor applied: %.4e\n", floor_val)
+        end
+
+        # Parameter table
+        println(io, "\n--- Parameter estimates (active parameters) ---")
+        header = @sprintf("  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                          "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi")
+        println(io, header)
+        println(io, "  " * "-"^(length(header)-2))
+        for i in 1:p
+            ratio = se_eff[i] > 0 ? se_sw[i] / se_eff[i] : NaN
+            @printf(io, "  %-6d  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                    param_indices[i],
+                    theta_active[i], se_eff[i], se_sw[i],
+                    isnan(ratio) ? -999.0 : ratio,
+                    t_stats[i],
+                    ci_95[i, 1], ci_95[i, 2])
+        end
+
+        # Sandwich vs efficient ratio
+        println(io, "\n--- Sandwich/efficient SE ratio (mean close to 1 ⟹ W ≈ Ω^{-1}) ---")
+        ratios = [se_eff[i] > 0 ? se_sw[i] / se_eff[i] : NaN for i in 1:p]
+        valid  = filter(!isnan, ratios)
+        @printf(io, "  Mean ratio: %.4f  |  Max ratio: %.4f\n",
+                isempty(valid) ? NaN : mean(valid),
+                isempty(valid) ? NaN : maximum(valid))
+
+        # Per-block residual SEs
+        println(io, "\n--- Per-block moment residual SEs ---")
+        println(io, "  (residual share ≈ 0 ⟹ moment well-fit; ≈ 1 ⟹ weakly used)")
+        for (k, name) in enumerate(BLOCK_NAMES)
+            rng = BLOCK_RANGES[k]
+            isempty(rng) && continue
+            block_resid = se_m_resid[rng]
+            block_omega_sd = sqrt.(max.(diag(Omega)[rng], 0.0))
+            resid_share = block_omega_sd .> 1e-15 ? block_resid ./ block_omega_sd : fill(NaN, length(rng))
+            @printf(io, "  %-12s  mean_resid_SE=%.4e  max_resid_SE=%.4e  mean_share=%.4f\n",
+                    name,
+                    mean(block_resid),
+                    maximum(block_resid),
+                    mean(resid_share))
+        end
+
+        # Hansen J
+        println(io, "\n--- Hansen J-test ---")
+        @printf(io, "  J statistic : %.6f\n", J_stat)
+        @printf(io, "  df          : %d\n",   df)
+        if isnan(pval)
+            println(io, "  p-value     : N/A (df ≤ 0 — exactly identified)")
+        else
+            @printf(io, "  p-value     : %.6f\n", pval)
+            if pval < 0.05
+                println(io, "  verdict     : REJECT H0 at α=0.05")
+            else
+                println(io, "  verdict     : fail to reject H0 at α=0.05")
+            end
+        end
+
+        # Caveats
+        println(io, "\n--- Caveats ---")
+        println(io, "  * Step 3 only re-optimized β and T. Standard errors for")
+        println(io, "    agg_labor_share, agg_industry_share, and productivity (fixed at θ̂_1)")
+        println(io, "    are zero in this output. True uncertainty in β, T conditional on θ̂_1")
+        println(io, "    is what is reported. A Murphy–Topel correction would account for")
+        println(io, "    sampling noise in θ̂_1.")
+        println(io, "  * Σ_data is non-zero only on the γ_ls and reg_coef blocks. Residual SEs")
+        println(io, "    on labor/industry/π_r reflect simulator variance only.")
+        if eig_floored
+            @printf(io, "  * Eigenvalue floor of %.4e was applied to GtWG during inversion.\n",
+                    floor_val)
+            println(io, "    Efficient and sandwich variances may diverge as a result.")
+        end
+
+        println(io, "\n" * "="^72)
+    end
+
+    println("Inference complete. Results saved to: $inf_dir")
+    println("  Hansen J: stat=$(round(J_stat, sigdigits=5)), df=$df, p=$(isnan(pval) ? "N/A" : round(pval, digits=4))")
+
+    return Dict(
+        "Var_eff"       => Var_eff,
+        "Var_sandwich"  => Var_sandwich,
+        "se_eff"        => se_eff,
+        "se_sw"         => se_sw,
+        "t_stats"       => t_stats,
+        "ci_95"         => ci_95,
+        "se_m_fitted"   => se_m_fitted,
+        "se_m_resid"    => se_m_resid,
+        "J_stat"        => J_stat,
+        "df"            => df,
+        "pval"          => pval,
+    )
 end
