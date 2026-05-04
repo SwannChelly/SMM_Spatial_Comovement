@@ -1227,26 +1227,45 @@ function run_pso_optimization(;
         println("\n[$output_subfolder] Skipping Stage 0: using warm_start beta $(round.(init_beta, digits=6))")
     end
 
-    # ── Stage 1: Full PSO ────────────────────────────────────────────────────
+    # ── Stage 1: PSO ─────────────────────────────────────────────────────────
     println("\n" * "="^70)
-    println("[$output_subfolder] STAGE 1: Initial full PSO")
+    println("[$output_subfolder] STAGE 1: Initial PSO")
     println("="^70)
 
-    best_params, best_fitness, history = train_stage_pso(
-        n_particles, max_iter_initial;
-        init_beta      = init_beta,
-        variable_list  = nothing,
-        last_stage_folder = nothing,
-        alpha          = 0.5,
-        second_stage   = false,
-        method         = method,
-        u_draws        = U_DRAWS,
-        sample_weights = SAMPLE_WEIGHTS,
-        weight_matrix  = weight_matrix,
-        warm_start_override = warm_start_params
-    )
-
     stage = 0
+
+    if gamma_beta_only
+        # Save warm_start_params as a seed folder so train_stage_pso can treat
+        # it as a "previous stage" and restrict optimisation to beta+T only.
+        @assert warm_start_params !== nothing "gamma_beta_only=true requires warm_start_params"
+        seed_folder = joinpath(loop_base, "seed")
+        mkpath(seed_folder)
+        NPZ.npzwrite(joinpath(seed_folder, "best_params.npy"), reshape(warm_start_params, :, 1))
+
+        println("[$output_subfolder] gamma_beta_only: optimising β+T only (A_r/labor/industry fixed at θ̂_1)")
+        best_params, best_fitness, history = train_stage_pso(
+            n_particles, max_iter_initial;
+            variable_list     = ["beta", "T"],
+            last_stage_folder = seed_folder,
+            K=1, alpha=0.5, second_stage=false, method=method,
+            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+        )
+    else
+        best_params, best_fitness, history = train_stage_pso(
+            n_particles, max_iter_initial;
+            init_beta      = init_beta,
+            variable_list  = nothing,
+            last_stage_folder = nothing,
+            alpha          = 0.5,
+            second_stage   = false,
+            method         = method,
+            u_draws        = U_DRAWS,
+            sample_weights = SAMPLE_WEIGHTS,
+            weight_matrix  = weight_matrix,
+            warm_start_override = warm_start_params
+        )
+    end
+
     stage0_folder = joinpath(loop_base, string(stage))
     mkpath(stage0_folder)
     NPZ.npzwrite(joinpath(stage0_folder, "best_params.npy"), reshape(best_params, :, 1))
