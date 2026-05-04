@@ -1693,7 +1693,7 @@ function compute_smm_inference(theta_hat::Vector{Float64},
             isempty(rng) && continue
             block_resid = se_m_resid[rng]
             block_omega_sd = sqrt.(max.(diag(Omega)[rng], 0.0))
-            resid_share = block_omega_sd .> 1e-15 ? block_resid ./ block_omega_sd : fill(NaN, length(rng))
+            resid_share = ifelse.(block_omega_sd .> 1e-15, block_resid ./ max.(block_omega_sd, 1e-15), fill(NaN, length(rng)))
             @printf(io, "  %-12s  mean_resid_SE=%.4e  max_resid_SE=%.4e  mean_share=%.4f\n",
                     name,
                     mean(block_resid),
