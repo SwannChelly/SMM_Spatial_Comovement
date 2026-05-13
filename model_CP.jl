@@ -302,15 +302,24 @@ Returns:
 function unpack_params(params)
     beta = params[1:N_beta]
     Omega_L = params[N_beta + 1]
-    Omega_s = params[(N_beta + 2):(N_beta + 1 + S)] / sum(params[(N_beta + 2):(N_beta + 1 + S)])
+    Omega_s = params[(N_beta + 2):(N_beta + 1 + S)] /
+              sum(params[(N_beta + 2):(N_beta + 1 + S)])
     A = params[(N_beta + S + 2):(N_beta + R_downstream + S + 1)]
-    T_reduced = params[(N_beta + R_downstream + S + 2):end]
+    A = A ./ A[1]
 
-    # Expand reduced T back to full S*R vector using T_MASK
+    T_reduced = params[(N_beta + R_downstream + S + 2):end]
     T_full = zeros(S * R)
     T_full[T_MASK] = T_reduced
+    T_mat = reshape(T_full, S, R)
 
-    return beta, Omega_L, Omega_s, A, T_full
+    for s in 1:S
+        ref_r = T_REF_REGION[s]
+        if ref_r > 0 && T_mat[s, ref_r] > 0
+            T_mat[s, :] ./= T_mat[s, ref_r]
+        end
+    end
+
+    return beta, Omega_L, Omega_s, A, vec(T_mat)
 end
 
 

@@ -41,7 +41,7 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000  # K for Σ_sim estimation
@@ -83,7 +83,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(1000)
+@everywhere const N_rho               = $(2000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
@@ -118,6 +118,22 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 @everywhere const W_RS_FLAT            = $W_RS_FLAT_local
 
 @everywhere const emp_gamma_ls   = $(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
+
+# Reference region per sector: largest empirical sourcing share among active regions
+T_REF_REGION_local = Vector{Int}(undef, S_)
+for s in 1:S_
+    idxs = SECTOR_GOOD_INDICES_local[s]
+    if !isempty(idxs)
+        regions_s = GOOD_R_local[idxs]
+        gamma_vals = [emp_gamma_ls[r, s] for r in regions_s]  
+        T_REF_REGION_local[s] = regions_s[argmax(gamma_vals)]
+    else
+        T_REF_REGION_local[s] = 0
+    end
+end
+@everywhere const T_REF_REGION = $T_REF_REGION_local
+
+
 X_dr_local = CSV.read(joinpath(input_folder, "X_dr.csv"), DataFrame).X_dr
 X_dr_local = X_dr_local[N_downstream_per_region_local .!= 0]
 emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
@@ -126,17 +142,21 @@ emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const reg_coef       = $(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")))
 @everywhere const N_beta         = $(length(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))))
 
-# Gravity-based T initialisation
+
+
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
-    idxs = SECTOR_GOOD_INDICES[s]
+    idxs = SECTOR_GOOD_INDICES_local[s]
     for g in idxs
-        l = GOOD_R[g]
+        l = GOOD_R_local[g]
         T_gravity[s, l] = max(emp_gamma_ls[l, s] * (w_rs_local[l]^theta), 1e-12)
     end
-    vals = T_gravity[s, GOOD_R[SECTOR_GOOD_INDICES[s]]]
-    m = maximum(vals)
-    if m > 0; T_gravity[s, GOOD_R[SECTOR_GOOD_INDICES[s]]] ./= m; end
+    ref_r = T_REF_REGION_local[s]
+    ref_val = T_gravity[s, ref_r]
+    if ref_val > 0
+        regions_s = GOOD_R_local[SECTOR_GOOD_INDICES_local[s]]
+        T_gravity[s, regions_s] ./= ref_val
+    end
 end
 @everywhere const T_rs_init = $(T_gravity)
 
@@ -222,7 +242,7 @@ step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
 run_step1 = false#true
 run_step2 = true
-run_step3 = true
+run_step3 = false
 
 if resume
     if isfile(step2_W_path)
@@ -261,7 +281,7 @@ if run_step1
         skip_initial_beta_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
-        max_loop                 = 50
+        max_loop                 = 5
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -334,12 +354,12 @@ if run_step3
     # A_r, labor share, and industry share are fixed at θ̂_1.
     # Only β and T are optimised, using the gamma+beta-only weight matrix from step 2.
     theta_hat_2, _ = run_pso_optimization(;
-        weight_matrix            = W_step3,
+        weight_matrix            = nothing,
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
         max_loop                 = 50,
-        gamma_beta_only          = false
+        gamma_beta_only          = true
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
