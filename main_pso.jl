@@ -134,6 +134,21 @@ println("  n_good: $n_good_local good (sector, region) pairs")
 # Load empirical moments
 #@everywhere const emp_pi_r_labor = $(NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy")))
 @everywhere const emp_gamma_ls = $(permutedims(NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))))
+
+# Reference region per sector: largest empirical sourcing share among active regions
+T_REF_REGION_local = Vector{Int}(undef, S_)
+for s in 1:S_
+    idxs = SECTOR_GOOD_INDICES_local[s]
+    if !isempty(idxs)
+        regions_s = GOOD_R_local[idxs]
+        gamma_vals = [emp_gamma_ls[r, s] for r in regions_s]
+        T_REF_REGION_local[s] = regions_s[argmax(gamma_vals)]
+    else
+        T_REF_REGION_local[s] = 0
+    end
+end
+@everywhere const T_REF_REGION = $T_REF_REGION_local
+
 X_dr_local = CSV.read(joinpath(input_folder,"X_dr.csv"), DataFrame).X_dr
 X_dr_local = X_dr_local[N_downstream_per_region.!=0]
 emp_pi_r_local = X_dr_local./sum(X_dr_local)
@@ -196,16 +211,11 @@ for idx in 1:(S_ * R_full)
     end
 end
 
-# Step B: drop the first *active* entry per sector (sum-to-1 redundancy).
-# Must come after Step A so we identify the first active r correctly.
+# Step B: drop reference-region gamma_ls per sector (sum-to-1 redundancy, aligned with T normalization).
 for s in 1:S_
-    sector_start = (s - 1) * R_full + 1
-    sector_end   = s * R_full
-    sector_slice = T_mask_moment_local[sector_start:sector_end]
-    active_positions = findall(sector_slice)   # indices within this sector's R_full block
-    if !isempty(active_positions)
-        first_active = active_positions[1]
-        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + first_active] = false
+    ref_r = T_REF_REGION_local[s]
+    if ref_r > 0
+        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + ref_r] = false
     end
 end
 

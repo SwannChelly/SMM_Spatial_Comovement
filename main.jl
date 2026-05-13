@@ -185,13 +185,11 @@ for idx in 1:(S_ * R_full)
         moment_mask_local[n_labor + n_industry + idx] = false
     end
 end
-# Remove first active gamma_ls per sector s. 
+# Remove reference-region gamma_ls per sector (sum-to-1 redundancy, aligned with T normalization).
 for s in 1:S_
-    sector_start = (s - 1) * R_full + 1
-    sector_end   = s * R_full
-    active_positions = findall(T_mask_moment_local[sector_start:sector_end])
-    if !isempty(active_positions)
-        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + active_positions[1]] = false
+    ref_r = T_REF_REGION_local[s]
+    if ref_r > 0
+        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + ref_r] = false
     end
 end
 # Remove first pi_r. 
@@ -234,6 +232,27 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 @everywhere const CLOSEST_DOWNSTREAM_REGION = $(closest_downstream_region_local)
 
 println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
+
+# Indices of identified parameters to use in Jacobian/inference.
+# Excludes the S+2 flat directions created by internal normalizations in unpack_params:
+#   - Ω^s[1]  (position N_beta+2)         : Omega_s ./= sum(Omega_s)
+#   - A[1]    (position N_beta+S+2)        : A ./= A[1]
+#   - T[s, T_REF_REGION[s]] for each s    : T_mat[s,:] ./= T_mat[s, ref_r]
+_excluded = Set{Int}()
+push!(_excluded, N_beta + 2)
+push!(_excluded, N_beta + S_ + 2)
+T_param_offset = N_beta + 1 + S_ + R_down_
+for s in 1:S_
+    ref_r = T_REF_REGION_local[s]
+    ref_r == 0 && continue
+    flat_pos = (ref_r - 1) * S_ + s   # column-major index in vec(T_rs), shape (S, R)
+    if T_mask_local[flat_pos]
+        t_idx = count(T_mask_local[1:flat_pos])
+        push!(_excluded, T_param_offset + t_idx)
+    end
+end
+jacobian_param_indices = [i for i in 1:(N_beta + 1 + S_ + R_down_ + sum(T_mask_local)) if i ∉ _excluded]
+println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
 
 ############## Determine resume state ##############
 
@@ -310,10 +329,10 @@ if run_step2
                                          K=K_sim, output_folder=output_folder,
                                          gamma_beta_only=false)
 
-    # Jacobian at θ̂_1 — all parameters
+    # Jacobian at θ̂_1 — identified parameters only
     J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
         theta_hat_1;
-        param_indices = nothing,
+        param_indices = jacobian_param_indices,
         output_folder = output_folder,
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
@@ -331,7 +350,7 @@ if run_step2
 
     compute_smm_inference(
         theta_hat_1, J1, W_step3, Omega_step2;
-        param_indices         = collect(1:length(theta_hat_1)),
+        param_indices         = jacobian_param_indices,
         empirical_moments_vec = emp_vec,
         simulated_moments_vec = sim_vec_1,
         output_folder         = joinpath(output_folder, "step2"),
@@ -370,7 +389,7 @@ if run_step3
     println("\nComputing Jacobian at θ̂_2 (base_seed=1_000_000 to avoid collision with Σ_sim seeds)...")
     J2, J2_elast, J2_sd, J2_elast_sd = compute_jacobian(
         theta_hat_2;
-        param_indices = nothing,
+        param_indices = jacobian_param_indices,
         output_folder = output_folder,
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
@@ -411,7 +430,7 @@ if run_step3
 
     compute_smm_inference(
         theta_hat_2, J2, W_step3_inf, Omega_inf;
-        param_indices         = collect(1:length(theta_hat_2)),
+        param_indices         = jacobian_param_indices,
         empirical_moments_vec = emp_vec,
         simulated_moments_vec = sim_vec_2,
         output_folder         = joinpath(output_folder, "step3"),

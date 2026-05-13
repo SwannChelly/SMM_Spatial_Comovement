@@ -67,7 +67,7 @@ params = [β_1..β_{N_beta} | Ω^L | Ω^s_1..Ω^s_S | A_1..A_{R_downstream} | T_
 4. Regression coefficients: P(supplier) on distance-bin dummies + log-productivity (N_beta moments)
 5. Regional employment/sales shares `π_r` (R_downstream moments)
 
-Sum-to-1 redundancies are dropped via `MOMENT_MASK` (one per share-constrained block).
+Sum-to-1 redundancies are dropped via `MOMENT_MASK` (one per share-constrained block). For the γ_ls block, the dropped moment per sector `s` is the entry at `T_REF_REGION[s]` (the region with the largest empirical sourcing share), which is the same region used to normalize `T_mat[s,:]` in `unpack_params`.
 
 ---
 
@@ -133,8 +133,8 @@ Three-step procedure:
 1. **Step 1** (`output_subfolder="step1"`): identity-weighted (uses global `Weight_matrix_custom`) PSO → `θ̂_1`. Includes Stage 0 LHS beta search.
 2. **Step 2**: `build_step3_weight_matrix(θ̂_1; K=K_sim)` → `W_step3 = (Σ_data + Σ_sim)^{-1}`. Outputs saved to `step2/`.
 3. **Step 3** (`output_subfolder="step3"`): efficient-weighted PSO with `W_step3`, warm-started at `θ̂_1`, skips Stage 0. → `θ̂_2`.
-4. **Inference at θ̂_1**: Jacobian `J1` over all parameters via `compute_jacobian(...; param_indices=nothing, output_subdir="step2")`. Then `compute_smm_inference` with `W=W_step3` and `Ω=Omega` produces delta-method SEs, Hansen J-test, and diagnostics. Outputs in `step2/inference/`.
-4. **Inference at θ̂_2**: Jacobian `J2` over all parameters via `compute_jacobian(...; param_indices=nothing, output_subdir="step3", base_seed=1_000_000)`. Then `compute_smm_inference` with same `W` and `Ω`. Outputs in `step3/inference/`.
+4. **Inference at θ̂_1**: Jacobian `J1` over identified parameters via `compute_jacobian(...; param_indices=jacobian_param_indices, output_subdir="step2")`. Then `compute_smm_inference` with `W=W_step3` and `Ω=Omega` produces delta-method SEs, Hansen J-test, and diagnostics. Outputs in `step2/inference/`.
+4. **Inference at θ̂_2**: Jacobian `J2` over identified parameters via `compute_jacobian(...; param_indices=jacobian_param_indices, output_subdir="step3", base_seed=1_000_000)`. Then `compute_smm_inference` with same `W` and `Ω`. Outputs in `step3/inference/`.
 
 Resume logic: if `step2/W_step3.npy` exists, skips Steps 1+2; if only `step1/0/` exists, skips Step 1.
 
@@ -317,6 +317,8 @@ After Step 3, `compute_smm_inference` computes delta-method standard errors for 
 
 **Hansen J-test**: `J = r'Wr` where `r = m̂ - m̃(θ̂_2)`, distributed χ²(N_moments − p) under correct specification. A large J (small p-value) indicates moment over-identification failure.
 
+**Identified parameters only**: The Jacobian is computed over identified parameters only, excluding the S+2 directions made flat by internal normalizations in `unpack_params` (first Ω^s, A_1, and T[s, T_REF_REGION[s]] for each s). `jacobian_param_indices` (built once in `main.jl` after constants are distributed) carries these indices and is passed to both `compute_jacobian` and `compute_smm_inference`.
+
 **Caveats**: SEs are delta-method conditional on the draws used for Σ_sim estimation. A Murphy–Topel correction would account for sequential sampling noise across estimation steps. `Σ_data` is non-zero only on the γ_ls and reg_coef blocks, so residual SEs on labor/industry/π_r reflect simulator variance only.
 
 ---
@@ -332,6 +334,8 @@ If a change modifies anything documented in this file — file structure, functi
 *Format: date · file(s) changed · description (≤4 sentences)*
 
 <!-- Add entries below in reverse chronological order -->
+
+2026-05-13 · `main.jl`, `main_pso.jl`, `claude.md` · Align MOMENT_MASK γ_ls drop with T_REF_REGION normalization and restrict Jacobian to identified parameters. MOMENT_MASK now drops `γ_{ls}` at `T_REF_REGION[s]` (largest empirical sourcing share) instead of the first active region, matching the `T_mat[s,:] ./= T_mat[s, ref_r]` normalization in `unpack_params`. `main_pso.jl` gains the same `T_REF_REGION` computation. `jacobian_param_indices` excludes the S+2 flat directions (first Ω^s, A_1, T at ref region per sector); `compute_jacobian` and `compute_smm_inference` now receive these indices instead of `nothing`/`collect(1:p)`.
 
 2026-05-04 · `tools.jl` · Fix `TypeError` in `compute_smm_inference`: element-wise `block_omega_sd .> 1e-15` returned a `BitVector` fed into a scalar ternary `?:`; replaced with `ifelse.()` for correct element-wise dispatch.
 
