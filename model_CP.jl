@@ -870,10 +870,15 @@ Compute loss between empirical and simulated moments.
 - "normalize": Difference scaled by sqrt of moment group size
 - "hybrid": Percentage deviation for non-zero, absolute for zeros
 """
-function loss_function(simulated_moments, emp, W, method="original")
+function loss_function(simulated_moments, emp, W, method="original";
+                       moment_indices::Union{Nothing, Vector{Int}} = nothing)
 
     if method isa Bool
         method = method ? "normalize" : "original"
+    end
+
+    if moment_indices !== nothing && method == "log"
+        error("moment_indices subsetting is not compatible with method=\"log\"")
     end
 
     square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))
@@ -882,6 +887,12 @@ function loss_function(simulated_moments, emp, W, method="original")
     sim_flat    = sim_flat[MOMENT_MASK]
     square_size = square_size[MOMENT_MASK]
     emp_flat    = vec(emp)
+
+    if moment_indices !== nothing
+        sim_flat    = sim_flat[moment_indices]
+        square_size = square_size[moment_indices]
+        emp_flat    = emp_flat[moment_indices]
+    end
 
     N = length(sim_flat)
 
@@ -923,6 +934,9 @@ function loss_function(simulated_moments, emp, W, method="original")
     end
 
     W = isnothing(W) ? I(N) : W
+    if moment_indices !== nothing && !isa(W, UniformScaling)
+        W = W[moment_indices, moment_indices]
+    end
     return err * W * err'
 end
 
@@ -936,7 +950,8 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
                   precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                   u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                   sample_weights::Union{Nothing, Vector{Float64}}=nothing,
-                  W_override::Union{Nothing, AbstractMatrix}=nothing)
+                  W_override::Union{Nothing, AbstractMatrix}=nothing,
+                  moment_blocks::Union{Nothing, Vector{Int}}=nothing)
 
     simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
                             u_draws=u_draws, sample_weights=sample_weights)
@@ -951,9 +966,12 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
         moments = simulated_moments
     end
     
+    moment_indices = moment_blocks === nothing ? nothing :
+        vcat([collect(BLOCK_RANGES[b]) for b in moment_blocks]...)
+
     if simulation
         return simulated_moments
     else
-        return loss_function(moments, emp, W, method), simulated_moments
+        return loss_function(moments, emp, W, method; moment_indices=moment_indices), simulated_moments
     end
 end
