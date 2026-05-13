@@ -359,7 +359,8 @@ if run_step3
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
         max_loop                 = 50,
-        gamma_beta_only          = true
+        gamma_beta_only          = true,
+        moments_loss_gamma_beta  = true
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)

@@ -225,10 +225,11 @@ function parallel_SMM(params, simulation, second_stage, method;
                       precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                       sample_weights::Union{Nothing, Vector{Float64}}=nothing,
-                      W_override::Union{Nothing, AbstractMatrix}=nothing)
+                      W_override::Union{Nothing, AbstractMatrix}=nothing,
+                      moment_blocks::Union{Nothing, Vector{Int}}=nothing)
     return full_SMM(params, simulation, second_stage, method;
                     precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
-                    W_override=W_override)
+                    W_override=W_override, moment_blocks=moment_blocks)
 end
 
 
@@ -236,7 +237,8 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
                            precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                            u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                            sample_weights::Union{Nothing, Vector{Float64}}=nothing,
-                           W_override::Union{Nothing, AbstractMatrix}=nothing)
+                           W_override::Union{Nothing, AbstractMatrix}=nothing,
+                           moment_blocks::Union{Nothing, Vector{Int}}=nothing)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
@@ -245,7 +247,7 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
     try
         result = parallel_SMM(params, simulation, second_stage, method;
                               precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
-                              W_override=W_override)
+                              W_override=W_override, moment_blocks=moment_blocks)
 
         return result
     catch e
@@ -1175,10 +1177,13 @@ function run_pso_optimization(;
     beta_selection_criterion::String = "reg_coef",
     length_range_beta::Int = 40,
     method::String = "original",
-    gamma_beta_only::Bool = false   # step 3: fix structural params, optimize only beta+T
+    gamma_beta_only::Bool = false,          # step 3: fix structural params, optimize only beta+T
+    moments_loss_gamma_beta::Bool = false   # step 3: compute loss on gamma_ls + reg_coef moments only
 )
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
+
+    moment_blocks = moments_loss_gamma_beta ? [3, 4] : nothing
 
     best_params = nothing
     best_fitness = Inf
@@ -1248,7 +1253,8 @@ function run_pso_optimization(;
             variable_list     = ["beta", "T"],
             last_stage_folder = seed_folder,
             K=1, alpha=0.5, second_stage=false, method=method,
-            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+            moment_blocks=moment_blocks
         )
     else
         best_params, best_fitness, history = train_stage_pso(
@@ -1262,7 +1268,8 @@ function run_pso_optimization(;
             u_draws        = U_DRAWS,
             sample_weights = SAMPLE_WEIGHTS,
             weight_matrix  = weight_matrix,
-            warm_start_override = warm_start_params
+            warm_start_override = warm_start_params,
+            moment_blocks  = moment_blocks
         )
     end
 
@@ -1292,7 +1299,8 @@ function run_pso_optimization(;
                 variable_list     = ["beta", "T"],
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
                 K=1, alpha=alpha, second_stage=false, method=method,
-                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                moment_blocks=moment_blocks
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1307,7 +1315,8 @@ function run_pso_optimization(;
                 variable_list     = ["productivity"],
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
                 K=1, alpha=alpha_prod, second_stage=false, method=method,
-                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                moment_blocks=moment_blocks
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1321,7 +1330,8 @@ function run_pso_optimization(;
                 variable_list     = ["beta", "T"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K=1, alpha=alpha, second_stage=false, method=method,
-                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                moment_blocks=moment_blocks
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1335,7 +1345,8 @@ function run_pso_optimization(;
                 variable_list     = ["agg_labor_share_tech", "agg_industry_share_tech"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K=1, alpha=alpha, second_stage=false, method=method,
-                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                moment_blocks=moment_blocks
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
