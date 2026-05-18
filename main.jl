@@ -259,9 +259,9 @@ println("Jacobian will cover $(length(jacobian_param_indices)) identified parame
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
-run_step3 = false
+run_step3 = true
 
 if resume
     if isfile(step2_W_path)
@@ -300,7 +300,7 @@ if run_step1
         skip_initial_beta_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
-        max_loop                 = 5
+        max_loop                 = 10
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -377,7 +377,7 @@ if run_step3
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
-        max_loop                 = 50,
+        max_loop                 = 10,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true
     )
