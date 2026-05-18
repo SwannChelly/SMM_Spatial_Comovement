@@ -1,0 +1,24 @@
+ERROR: SystemError: opening file "/home/onyxia/work/SMM_Spatial_Comovement/SMM_Spatial_Comovement/main.jl": No such file or directory
+Stacktrace:
+ [1] include(mod::Module, _path::String)
+   @ Base ./Base.jl:306
+ [2] exec_options(opts::Base.JLOptions)
+   @ Base ./client.jl:317
+ [3] _start()
+   @ Base ./client.jl:550
+
+Usage:
+ kill [options] <pid> [...]
+
+Options:
+ <pid> [...]            send signal to every <pid> listed
+ -<signal>, -s, --signal <signal>
+                        specify the <signal> to be sent
+ -q, --queue <value>    integer value to be sent with the signal
+ -l, --list=[<signal>]  list all signal names, or convert one to a name
+ -L, --table            list all signal names in a nice table
+
+ -h, --help     display this help and exit
+ -V, --version  output version information and exit
+
+For more details see kill(1).

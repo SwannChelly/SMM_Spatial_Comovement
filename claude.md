@@ -115,7 +115,7 @@ Key utilities:
 - `run_reporting(output_folder, max_loop)`: scans all epoch/stage folders, computes scores, saves `best_simulated_moments.npy`, `best_parameters_list.npy`.
 - `find_last_stage_folder(base_folder)`: locates most recent `best_params.npy`.
 - `find_resume_state(base_folder)`: determines `(resume_loop, resume_substage)` for `--resume` mode.
-- `build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)`: assembles `W_step3 = (Σ_data + Σ_sim)^{-1}`. `Σ_data` is block-diagonal (γ and β blocks from `w_gamma.npy`/`w_beta.npy`; other blocks zero). `Σ_sim` estimated via K pmap evaluations with MC draws seeded by k. Saves `Sigma_data.npy`, `Sigma_sim.npy`, `Omega.npy`, `W_step3.npy`, `diagnostics.txt` to `output_folder/step2/`. Returns `W_step3::Matrix{Float64}`.
+- `build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)`: assembles `W_step3 = (Σ_data + Σ_sim)^{-1}` restricted to γ_ls and reg_coef moments. `Σ_data` loaded from `Sigma.npy` (joint bootstrap covariance of γ+β, size `n_gamma_kept + n_beta_kept`). `Σ_sim` estimated via K pmap evaluations with MC draws seeded by k, restricted to the same indices. The returned `W_step3` is `N_moments × N_moments` with zeros outside the γ+β sub-block. Saves `Sigma_data.npy`, `Sigma_sim.npy`, `Omega.npy`, `Omega_gb.npy`, `W_step3.npy`, `W_gb.npy`, `diagnostics.txt` to `output_folder/step2/`.
 - `compute_smm_inference(theta_hat, J, W, Omega; param_indices, empirical_moments_vec, simulated_moments_vec, output_folder, industry, K_sim)`: computes delta-method standard errors (efficient and sandwich), fitted-moment SEs, moment-residual SEs, and the Hansen J over-identification test. Saves all arrays plus `inference_summary.txt` and `J_stat.txt` to `output_folder/inference/`. Returns a Dict.
 - `run_pso_optimization(; weight_matrix, skip_initial_beta_search, warm_start_params, output_subfolder, max_loop, ...)`: unified PSO wrapper for Steps 1 and 3. Runs Stage 0 LHS search (unless `skip_initial_beta_search=true`), Stage 1 full PSO, and 50-loop refinement. Returns `(best_params, best_fitness)`.
 
@@ -217,8 +217,7 @@ baseline_{industry}/
 | `emp_gamma_ls.npy` | (R, S) | Empirical sourcing shares (transposed on load) |
 | `X_dr.csv` | col `X_dr` | Downstream sales by region (for π_r) |
 | `reg_coef_{4\|5}.npy` | (N_beta,) | Empirical regression coefficients |
-| `w_gamma.npy` | (n_gamma_kept, n_gamma_kept) | Bootstrap covariance of γ_ls moments (rows/cols in sector-major order matching MOMENT_MASK γ block) |
-| `w_beta.npy` | (N_beta, N_beta) | Bootstrap covariance of regression-coefficient moments (same ordering as reg_coef) |
+| `Sigma.npy` | (n_gamma_kept+N_beta, n_gamma_kept+N_beta) | Joint bootstrap covariance of γ_ls and reg_coef moments (γ block first, then β block, same ordering as BLOCK_RANGES[3] then BLOCK_RANGES[4]) |
 
 **Note**: `w_gamma.npy` and `w_beta.npy` are only required when running `main.jl` (three-step SMM). `main_pso.jl` does not use them. The row/column ordering of `w_gamma.npy` must match the γ_ls entries in the masked moment vector: sector-major (`vec(permutedims(emp_gamma_ls))`), active pairs only, with one entry dropped per sector for sum-to-1 (same as `BLOCK_RANGES[3]`).
 

@@ -994,160 +994,92 @@ function loss_decomposition(params)
 
     return c, block_totals, sum(c)
 end
-
-
 """
     build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)
 
-Assemble the efficient SMM weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}.
+Assemble the efficient SMM weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}
+over γ_ls and reg_coef moments only.
 
-Σ_data is block-diagonal with covariance blocks for γ and β loaded from
-w_gamma.npy and w_beta.npy; all other blocks are zero.
-Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1.
+Σ_data is loaded from Sigma.npy — the joint bootstrap covariance of γ_ls
+and reg_coef moments (ordering: γ block first, then β block, matching
+BLOCK_RANGES[3] followed by BLOCK_RANGES[4]).
+Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1,
+restricted to the same moment indices.
 
-Returns W_step3 as Matrix{Float64} and saves intermediate matrices under output_folder/step2/.
+Returns W_step3 of size (n_gamma_kept + N_beta, n_gamma_kept + N_beta).
 """
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
-                                   output_folder::String=".",
-                                   gamma_beta_only::Bool=false)
+                                   output_folder::String=".")
     N_moments = length(empirical_moments)
 
-    # ── Load Σ_data blocks ──────────────────────────────────────────────────
-    Sigma_gamma_data = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
-    Sigma_beta_data  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
+    # ── Gamma+beta moment indices in the masked vector ───────────────────────
+    gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+    n_gb = length(gb_indices)
 
-    n_gamma_kept = length(BLOCK_RANGES[3])
-    n_beta_kept  = length(BLOCK_RANGES[4])
+    # ── Load Σ_data: joint bootstrap covariance of γ+β ──────────────────────
+    Sigma_data = NPZ.npzread(joinpath(input_folder, "Sigma_beta_gamma.npy"))
 
-    @assert size(Sigma_gamma_data) == (n_gamma_kept, n_gamma_kept) """
-    w_gamma.npy must be ($n_gamma_kept, $n_gamma_kept); got $(size(Sigma_gamma_data))
+    @assert size(Sigma_data) == (n_gb, n_gb) """
+    Sigma.npy must be ($n_gb, $n_gb); got $(size(Sigma_data))
     """
-    @assert size(Sigma_beta_data) == (n_beta_kept, n_beta_kept) """
-    w_beta.npy must be ($n_beta_kept, $n_beta_kept); got $(size(Sigma_beta_data))
-    """
-    @assert isapprox(Sigma_gamma_data, Sigma_gamma_data'; atol=1e-10) "w_gamma.npy is non-symmetric"
-    @assert isapprox(Sigma_beta_data,  Sigma_beta_data';  atol=1e-10) "w_beta.npy is non-symmetric"
+    @assert isapprox(Sigma_data, Sigma_data'; atol=1e-10) "Sigma.npy is non-symmetric"
 
-    # Embed into full (N_moments × N_moments) block-diagonal Σ_data
-    Sigma_data = zeros(N_moments, N_moments)
-    Sigma_data[BLOCK_RANGES[3], BLOCK_RANGES[3]] = Sigma_gamma_data
-    Sigma_data[BLOCK_RANGES[4], BLOCK_RANGES[4]] = Sigma_beta_data
-
-    # ── Estimate Σ_sim via K re-seeded SMM evaluations ──────────────────────
-    # Workers call generate_mc_draws with different see and full_SMM.
-    # Stratified draws not used. 
+    # ── Estimate Σ_sim via K re-seeded SMM evaluations ───────────────────────
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
     flush(stdout)
 
-    # 
     M_sim_rows = pmap(1:K) do k
-        u_k, w_k = generate_mc_draws(N_rho, n_good,MersenneTwister(k))                                             
+        u_k, w_k = generate_mc_draws(N_rho, n_good, MersenneTwister(k))
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
         moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
-        return moms_flat
+        return moms_flat[gb_indices]
     end
-    M_sim = reduce(hcat, M_sim_rows)'  # (K, N_moments)
-    println("Per-moment std (should be > 0 for all):")
-    display(std(M_sim; dims=1))
-    println("\nRank of Σ_sim: ", rank(cov(M_sim; dims=1)))
-    println("N_moments: ", size(M_sim, 2))
-    Sigma_sim = cov(M_sim; dims=1)     # full (N_moments × N_moments)
-    
+    M_sim = reduce(hcat, M_sim_rows)'   # (K, n_gb)
+
+    Sigma_sim = cov(M_sim; dims=1)
 
     # ── Combine and invert ───────────────────────────────────────────────────
-    step2_dir = joinpath(output_folder, "step2")
-    mkpath(step2_dir)
-    NPZ.npzwrite(joinpath(step2_dir, "M_sim.npy"),  M_sim)
+    Omega = Sigma_data .+ Sigma_sim
+    Omega = (Omega .+ Omega') ./ 2
 
-    if gamma_beta_only
-        # Restrict to gamma_ls and reg_coef moment blocks only
-        gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
-        Sigma_data_gb = Sigma_data[gb_indices, gb_indices]
-        Sigma_sim_gb  = cov(M_sim[:, gb_indices]; dims=1)
+    eig_vals = eigvals(Symmetric(Omega))
+    lambda_max = maximum(eig_vals)
+    lambda_min = minimum(eig_vals)
+    kappa = lambda_max / max(lambda_min, 1e-300)
+    println("  Ω condition number: $(round(kappa, sigdigits=4))")
 
-        Omega_gb = Sigma_data_gb .+ Sigma_sim_gb
-        Omega_gb = (Omega_gb .+ Omega_gb') ./ 2
-
-        eig_vals = eigvals(Symmetric(Omega_gb))
-        lambda_max = maximum(eig_vals)
-        lambda_min = minimum(eig_vals)
-        kappa = lambda_max / max(lambda_min, 1e-300)
-        println("  Ω_gb condition number (gamma+beta only): $(round(kappa, sigdigits=4))")
-
-        if kappa > 1e10
-            @warn "Ω_gb is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
-            floor_val = lambda_max / 1e8
-            F = eigen(Symmetric(Omega_gb))
-            clipped = max.(F.values, floor_val)
-            Omega_gb = F.vectors * Diagonal(clipped) * F.vectors'
-            Omega_gb = (Omega_gb .+ Omega_gb') ./ 2
-        end
-
-        W_gb = inv(Omega_gb)
-
-        # Embed into full N_moments × N_moments matrix (zeros elsewhere → those moments ignored)
-        W_step3 = zeros(N_moments, N_moments)
-        W_step3[gb_indices, gb_indices] = W_gb
-
-        # Also save the full Omega for reference (as the full combination)
-        Omega = Sigma_data .+  Sigma_sim
+    if kappa > 1e10
+        @warn "Ω is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
+        floor_val = lambda_max / 1e8
+        F = eigen(Symmetric(Omega))
+        clipped = max.(F.values, floor_val)
+        Omega = F.vectors * Diagonal(clipped) * F.vectors'
         Omega = (Omega .+ Omega') ./ 2
-
-        open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
-            println(io, "K = $K")
-            println(io, "gamma_beta_only = true")
-            println(io, "lambda_max = $lambda_max")
-            println(io, "lambda_min = $lambda_min")
-            println(io, "condition_number = $kappa")
-        end
-
-        NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"), Sigma_data)
-        NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),  Sigma_sim)
-        NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),      Omega)
-        NPZ.npzwrite(joinpath(step2_dir, "Omega_gb.npy"),   Omega_gb)
-        NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),    W_step3)
-        NPZ.npzwrite(joinpath(step2_dir, "W_gb.npy"),       W_gb)
-        println("  W_step3 (gamma+beta only) saved to $step2_dir")
-    else
-        Omega = Sigma_data .+ Sigma_sim
-        Omega = (Omega .+ Omega') ./ 2
-
-        eig_vals = eigvals(Symmetric(Omega))
-        lambda_max = maximum(eig_vals)
-        lambda_min = minimum(eig_vals)
-        kappa = lambda_max / max(lambda_min, 1e-300)
-        println("  Ω condition number: $(round(kappa, sigdigits=4))")
-
-        if kappa > 1e10
-            @warn "Ω is ill-conditioned (κ=$kappa). Applying eigenvalue floor at λ_max/1e8."
-            floor_val = lambda_max / 1e8
-            F = eigen(Symmetric(Omega))
-            clipped = max.(F.values, floor_val)
-            Omega = F.vectors * Diagonal(clipped) * F.vectors'
-            Omega = (Omega .+ Omega') ./ 2
-        end
-
-        open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
-            println(io, "K = $K")
-            println(io, "gamma_beta_only = false")
-            println(io, "lambda_max = $lambda_max")
-            println(io, "lambda_min = $lambda_min")
-            println(io, "condition_number = $kappa")
-        end
-
-        W_step3 = inv(Omega)
-
-        NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"), Sigma_data)
-        NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),  Sigma_sim)
-        NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),      Omega)
-        NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),    W_step3)
-        println("  W_step3 saved to $step2_dir")
     end
 
+    W_step3 = inv(Omega)
+
+    # ── Save ─────────────────────────────────────────────────────────────────
+    step2_dir = joinpath(output_folder, "step2")
+    mkpath(step2_dir)
+
+    NPZ.npzwrite(joinpath(step2_dir, "M_sim.npy"),      M_sim)
+    NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"),  Sigma_data)
+    NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),   Sigma_sim)
+    NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),       Omega)
+    NPZ.npzwrite(joinpath(step2_dir, "W_step3.npy"),     W_step3)
+
+    open(joinpath(step2_dir, "diagnostics.txt"), "w") do io
+        println(io, "K = $K")
+        println(io, "lambda_max = $lambda_max")
+        println(io, "lambda_min = $lambda_min")
+        println(io, "condition_number = $kappa")
+    end
+
+    println("  W_step3 ($n_gb × $n_gb) saved to $step2_dir")
     return W_step3
 end
-
 
 """
     run_pso_optimization(; kwargs...) -> (best_params, best_fitness)

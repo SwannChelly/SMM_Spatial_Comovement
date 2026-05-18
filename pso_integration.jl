@@ -50,7 +50,7 @@ function parallel_pso_smm(
     c2::Float64 = 2.5,
     beta_constraint::Bool = true,
     beta_indices::UnitRange = 1:N_beta,  # Changed from 1:5
-    verbose::Bool = true
+    verbose::Bool = false
 )
     
     d = length(lb)

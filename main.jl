@@ -41,7 +41,7 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000  # K for Σ_sim estimation
@@ -61,8 +61,9 @@ mkpath(output_folder)
 coefs                         = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
 distances_local               = NPZ.npzread(joinpath(input_folder, "distances.npy"))
 filter_N_upstream_local       = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
-w_rs_local                    = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-regional_wages_local          = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
+w_rs_local                    = NPZ.npzread(joinpath(input_folder, "w_rs.npy")) # Upstream average wage. 
+#w_rs_local .= ifelse.(w_rs_local .!= 0, w_rs_local ./ w_rs_local, w_rs_local)
+regional_wages_local          = NPZ.npzread(joinpath(input_folder, "regional_wages.npy")) # Downstream region average wage for downstream firms. 
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
 agg_industry_share_local      = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
 domestic_share_local          = NPZ.npzread(joinpath(input_folder, "domestic_share.npy"))
@@ -259,9 +260,9 @@ println("Jacobian will cover $(length(jacobian_param_indices)) identified parame
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = true#true
-run_step2 = true
-run_step3 = true
+run_step1 = false#true
+run_step2 = false
+run_step3 = false
 
 if resume
     if isfile(step2_W_path)
@@ -326,8 +327,7 @@ if run_step2
     println("="^70)
 
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
-                                         K=K_sim, output_folder=output_folder,
-                                         gamma_beta_only=false)
+                                         K=K_sim, output_folder=output_folder)
 
     # Jacobian at θ̂_1 — identified parameters only
     J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
@@ -373,7 +373,7 @@ if run_step3
     # A_r, labor share, and industry share are fixed at θ̂_1.
     # Only β and T are optimised, using the gamma+beta-only weight matrix from step 2.
     theta_hat_2, _ = run_pso_optimization(;
-        weight_matrix            = nothing,
+        weight_matrix            = W_step3,
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
