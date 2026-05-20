@@ -143,8 +143,6 @@ emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const reg_coef       = $(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")))
 @everywhere const N_beta         = $(length(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))))
 
-
-
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
     idxs = SECTOR_GOOD_INDICES_local[s]
@@ -274,7 +272,7 @@ if run_step1
         skip_initial_beta_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
-        max_loop                 = 50
+        max_loop                 = 2
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -315,7 +313,7 @@ if run_step2
         output_folder = output_folder,
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
-        K             = 100,
+        K             = 2,
         step_rel      = 1e-3,
         step_abs      = 1e-8,
         base_seed     = 0
@@ -365,7 +363,7 @@ if run_step3
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
-        max_loop                 = 50,
+        max_loop                 = 2,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true
     )
