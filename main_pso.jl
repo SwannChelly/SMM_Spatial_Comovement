@@ -371,8 +371,9 @@ if full_run
     println("  mean = $(mean(T_init_nonzero))")
 
 
-    init_other = vcat([agg_labor_share], agg_industry_share, A, T_init_nonzero)
-    expanding_beta = [vcat(beta, init_other) for beta in beta_candidates]
+    # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
+    init_other_prefix = vcat([agg_labor_share], agg_industry_share, A)
+    expanding_beta = [vcat(init_other_prefix, beta, T_init_nonzero) for beta in beta_candidates]
 
     println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
     results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_beta)

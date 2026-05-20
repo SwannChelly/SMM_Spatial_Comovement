@@ -1144,8 +1144,9 @@ function run_pso_optimization(;
         A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A_init ./= sum(A_init)
         T_init_nz = vec(T_rs_init)[T_MASK]
-        init_other = vcat([agg_labor_share], agg_industry_share, A_init, T_init_nz)
-        expanding_beta = [vcat(beta, init_other) for beta in beta_candidates]
+        # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
+        init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
+        expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
 
         results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                                                W_override=weight_matrix), expanding_beta)
