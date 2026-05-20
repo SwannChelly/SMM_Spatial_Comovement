@@ -324,23 +324,24 @@ function train_stage_pso(
         
         T_init_nz = vec(T_rs_init)[T_MASK]   # Only non-zero T values
         lb = vcat(
-            init_beta .* 0.5,
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
+            init_beta .* 0.5,
             0.1 * T_init_nz
         )
 
         ub = vcat(
-            init_beta .* 1.5,
             1.2*agg_labor_share,
             1.2 .* agg_industry_share,
             A .* 1.2,
+            init_beta .* 1.5,
             10 * T_init_nz
         )
-        
+
         beta_constraint = true
-        beta_indices = 1:N_beta
+        beta_start = 1 + S + R_downstream + 1   # beta follows Ω^L, Ω^s, A in new layout
+        beta_indices = beta_start:(beta_start + N_beta - 1)
         best_params_prev = nothing
         # Use warm_start_override if provided (Step 3 warm-start from θ̂_1)
         warm_start = warm_start_override
@@ -349,7 +350,7 @@ function train_stage_pso(
     else
         # Continue from previous stage - load best params
         best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K]
-        names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
+        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :beta, :T]
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
         # T from unpack_params is full S*R; reduce to only non-zero entries for optimization
@@ -531,19 +532,19 @@ end
     get_param_start_index(param_name)
 
 Get starting index of a parameter in the full parameter vector.
-Structure: [beta(5), labor_share(1), industry_share(S), productivity(R_downstream), T(S*R)]
+Structure: [Ω^L(1), Ω^s(S), A(R_downstream), beta(N_beta), T(sum(T_MASK))]
 """
 function get_param_start_index(param_name::Symbol)
-    if param_name == :beta
+    if param_name == :agg_labor_share_tech
         return 1
-    elseif param_name == :agg_labor_share_tech
-        return N_beta + 1
     elseif param_name == :agg_industry_share_tech
-        return N_beta + 2
+        return 2
     elseif param_name == :productivity
-        return N_beta + 2 + S
+        return 2 + S
+    elseif param_name == :beta
+        return 2 + S + R_downstream
     elseif param_name == :T
-        return N_beta + 2 + S + R_downstream
+        return 2 + S + R_downstream + N_beta
     else
         error("Unknown parameter name: $param_name")
     end

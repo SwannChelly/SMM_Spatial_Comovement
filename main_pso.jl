@@ -158,7 +158,8 @@ emp_pi_r_local = X_dr_local./sum(X_dr_local)
 @everywhere const N_beta = $(length(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))))
 
 # Build full empirical moments (no [2:end] drops — MOMENT_MASK handles that)
-empirical_moments_local = [[agg_labor_share], vec(agg_industry_share), emp_gamma_ls, reg_coef, emp_pi_r]
+# Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
+empirical_moments_local = [[agg_labor_share], vec(agg_industry_share), emp_pi_r, reg_coef, emp_gamma_ls]
 empirical_moments_local = vcat([vec(empirical_moments_local[i]) for i in 1:(length(empirical_moments_local))]...)
 
 
@@ -199,15 +200,19 @@ n_industry = length(vec(agg_industry_share))       # S
 n_gamma = length(vec(emp_gamma_ls))                 # R_full * S
 n_reg = length(reg_coef)                            # N_beta
 n_pi = length(emp_pi_r)                             # R_downstream
-N_moments_full = n_labor + n_industry + n_gamma + n_reg + n_pi
+N_moments_full = n_labor + n_industry + n_pi + n_reg + n_gamma
 
 # Build MOMENT_MASK: true = keep, false = drop (sum-to-1 redundancies)
+# Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
 moment_mask_local = trues(N_moments_full)
 moment_mask_local[n_labor + 1] = false                          # first industry share
+# Drop first pi_r (sum-to-1 redundancy).
+moment_mask_local[n_labor + n_industry + 1] = false
+# reg_coef block: no masking needed.
 # Step A: drop all inactive (zero) gamma_ls entries.
 for idx in 1:(S_ * R_full)
     if !T_mask_moment_local[idx]
-        moment_mask_local[n_labor + n_industry + idx] = false
+        moment_mask_local[n_labor + n_industry + n_pi + n_reg + idx] = false
     end
 end
 
@@ -215,11 +220,9 @@ end
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
     if ref_r > 0
-        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + ref_r] = false
+        moment_mask_local[n_labor + n_industry + n_pi + n_reg + (s - 1) * R_full + ref_r] = false
     end
 end
-
-moment_mask_local[n_labor + n_industry + n_gamma + n_reg + 1] = false  # first pi_r
 
 # Apply mask to empirical moments
 empirical_moments_local = reshape(empirical_moments_local[moment_mask_local], 1, sum(moment_mask_local))
@@ -242,10 +245,10 @@ Weight vector length $(length(weight_vector_local)) != N_moments $(sum(moment_ma
 
 # Block ranges for loss decomposition (must come after MOMENT_MASK)
 BLOCK_RANGES_local = compute_block_ranges(
-    n_labor, n_industry, n_gamma, n_reg, n_pi, moment_mask_local
+    n_labor, n_industry, n_pi, n_reg, n_gamma, moment_mask_local
 )
 @everywhere const BLOCK_RANGES = $BLOCK_RANGES_local
-@everywhere const BLOCK_NAMES = ("labor", "industry", "gamma_ls", "reg_coef", "pi_r")
+@everywhere const BLOCK_NAMES = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
 
 Weight_matrix_custom_local = I(length(weight_vector_local))#Diagonal(weight_vector_local)#I(length(weight_vector_local))
 w_vec = ones(N_moments)

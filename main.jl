@@ -161,34 +161,35 @@ n_industry = length(vec(agg_industry_share_local))
 n_gamma    = length(vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))))
 n_reg      = length(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")))
 n_pi       = length(emp_pi_r_local)
-N_moments_full = n_labor + n_industry + n_gamma + n_reg + n_pi
+N_moments_full = n_labor + n_industry + n_pi + n_reg + n_gamma
 
 empirical_moments_local = vcat(
     [agg_labor_share],
     vec(agg_industry_share_local),
-    vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))),
+    emp_pi_r_local,
     NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")),
-    emp_pi_r_local
+    vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
 )
 
 moment_mask_local = trues(N_moments_full)
-# Remove first industry share. 
-moment_mask_local[n_labor + 1] = false 
-# Remove non active gamma_ls 
+# Remove first industry share.
+moment_mask_local[n_labor + 1] = false
+# Remove first pi_r (sum-to-1 redundancy).
+moment_mask_local[n_labor + n_industry + 1] = false
+# reg_coef block: no masking needed.
+# Remove non-active gamma_ls entries.
 for idx in 1:(S_ * R_full)
     if !T_mask_moment_local[idx]
-        moment_mask_local[n_labor + n_industry + idx] = false
+        moment_mask_local[n_labor + n_industry + n_pi + n_reg + idx] = false
     end
 end
 # Remove reference-region gamma_ls per sector (sum-to-1 redundancy, aligned with T normalization).
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
     if ref_r > 0
-        moment_mask_local[n_labor + n_industry + (s - 1) * R_full + ref_r] = false
+        moment_mask_local[n_labor + n_industry + n_pi + n_reg + (s - 1) * R_full + ref_r] = false
     end
 end
-# Remove first pi_r. 
-moment_mask_local[n_labor + n_industry + n_gamma + n_reg + 1] = false
 
 empirical_moments_local = reshape(empirical_moments_local[moment_mask_local], 1, sum(moment_mask_local))
 N_moments = sum(moment_mask_local)
@@ -197,9 +198,9 @@ N_moments = sum(moment_mask_local)
 @everywhere const empirical_moments  = $(empirical_moments_local)
 @everywhere const K_max              = $(50)
 
-BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, moment_mask_local)
+BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, moment_mask_local)
 @everywhere const BLOCK_RANGES = $BLOCK_RANGES_local
-@everywhere const BLOCK_NAMES  = ("labor", "industry", "gamma_ls", "reg_coef", "pi_r")
+@everywhere const BLOCK_NAMES  = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
 
 w_vec = ones(N_moments)
 w_vec[BLOCK_RANGES_local[4]] .= 100.0
@@ -230,14 +231,15 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 
 # Indices of identified parameters to use in Jacobian/inference.
 # Excludes the S+2 flat directions created by internal normalizations:
-#   - Ω^s[1]  (position N_beta+2)         : Omega_s ./= sum(Omega_s)
-#   - A[1]    (position N_beta+S+2)        : A ./= A[1]
-#   - T[s, T_REF_REGION[s]] for each s    : T_mat[s,:] ./= T_mat[s, ref_r] (most important regions in empirical gamma_ls)
+#   - Ω^s[1]  (position 2)           : Omega_s ./= sum(Omega_s)
+#   - A[1]    (position S+2)          : A ./= A[1]
+#   - T[s, T_REF_REGION[s]] for each s: T_mat[s,:] ./= T_mat[s, ref_r] (most important regions in empirical gamma_ls)
+# New parameter layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_beta) | T(sum(T_MASK))]
 
 _excluded = Set{Int}()
-push!(_excluded, N_beta + 2)
-push!(_excluded, N_beta + S_ + 2)
-T_param_offset = N_beta + 1 + S_ + R_down_
+push!(_excluded, 2)              # Ω^s[1]: position 2 in new layout
+push!(_excluded, S_ + 2)         # A[1]:   position S+2 in new layout
+T_param_offset = 1 + S_ + R_down_ + N_beta
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
     ref_r == 0 && continue
@@ -247,7 +249,7 @@ for s in 1:S_
         push!(_excluded, T_param_offset + t_idx)
     end
 end
-jacobian_param_indices = [i for i in 1:(N_beta + 1 + S_ + R_down_ + sum(T_mask_local)) if i ∉ _excluded]
+jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_beta + sum(T_mask_local)) if i ∉ _excluded]
 println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
 
 ############## Determine step to run ##############
@@ -325,7 +327,7 @@ if run_step2
     sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
     emp_vec   = vec(empirical_moments)
 
-    gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+    gb_indices = vcat(collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[4]))
 
     # Restrict Jacobian to gamma+beta moment rows
     J_gb = J1[gb_indices, :]
@@ -547,7 +549,7 @@ _, sim_moments_1 = full_SMM(theta_hat_1; u_draws=U_DRAWS, sample_weights=SAMPLE_
 sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
 emp_vec   = vec(empirical_moments)
 
-gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+gb_indices = vcat(collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[4]))
 
 # Restrict Jacobian to gamma+beta moment rows
 J_gb = J1[gb_indices, :]

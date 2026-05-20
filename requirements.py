@@ -120,9 +120,9 @@ def unpack_simulated_moments(sim_moments, empirical_moments):
     keys = [
         "agg_labor_share",
         "agg_industry_share",
-        "emp_gamma_ls",
+        "emp_pi_r",
         "reg_coef",
-        "emp_pi_r"
+        "emp_gamma_ls",
     ]
 
     sizes = [m.size for m in empirical_moments]
@@ -136,13 +136,13 @@ def unpack_simulated_moments(sim_moments, empirical_moments):
 
 
 def unpack_params(params, S=9, R_downstream=35, N_beta=5):
-    beta = params[0:N_beta]
-    labor_share_tech = params[N_beta]
-    input_share_tech = params[N_beta+1 : N_beta+1+S]
+    labor_share_tech = params[0]
+    input_share_tech = params[1:1+S]
     input_share_tech = input_share_tech / np.sum(input_share_tech)
-    productivity_ = params[N_beta+1+S : N_beta+1+S+R_downstream]
-    T_ = params[N_beta+1+S+R_downstream:]
-    
+    productivity_ = params[1+S:1+S+R_downstream]
+    beta = params[1+S+R_downstream:1+S+R_downstream+N_beta]
+    T_ = params[1+S+R_downstream+N_beta:]
+
     return {
         "beta": beta,
         "labor_share_tech": labor_share_tech,

@@ -288,26 +288,27 @@ end
 ##################### Helper Functions ###################
 
 """
-    unpack_params(params) -> (β, Ω^L, Ω^s, A, T)
+    unpack_params(params) -> (Ω^L, Ω^s, A, β, T)
 
 Unpack parameter vector into model components (paper notation).
 
+Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_beta) | T(sum(T_MASK))]
+
 Returns:
-- β (beta): Trade cost parameters for distance bins [N_beta elements]
 - Ω^L (Omega_L): Labor share in production [scalar]
 - Ω^s (Omega_s): Sectoral input shares [S elements, normalized to sum to 1]
 - A: Downstream firm productivity by region [R_downstream elements]
+- β (beta): Trade cost parameters for distance bins [N_beta elements]
 - T: Fréchet scale parameters [S × R elements, full vector with zeros for masked entries]
 """
 function unpack_params(params)
-    beta = params[1:N_beta]
-    Omega_L = params[N_beta + 1]
-    Omega_s = params[(N_beta + 2):(N_beta + 1 + S)] /
-              sum(params[(N_beta + 2):(N_beta + 1 + S)])
-    A = params[(N_beta + S + 2):(N_beta + R_downstream + S + 1)]
+    Omega_L = params[1]
+    Omega_s = params[2:(1 + S)] / sum(params[2:(1 + S)])
+    A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
+    beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_beta)]
 
-    T_reduced = params[(N_beta + R_downstream + S + 2):end]
+    T_reduced = params[(S + R_downstream + 2 + N_beta):end]
     T_full = zeros(S * R)
     T_full[T_MASK] = T_reduced
     T_mat = reshape(T_full, S, R)
@@ -319,7 +320,7 @@ function unpack_params(params)
         end
     end
 
-    return beta, Omega_L, Omega_s, A, vec(T_mat)
+    return Omega_L, Omega_s, A, beta, vec(T_mat)
 end
 
 
@@ -384,7 +385,7 @@ function solve_network(params; return_firm_level=false,
     # ─────────────────────────────────────────────────────────────────────────
     # Unpack parameters (paper notation)
     # ─────────────────────────────────────────────────────────────────────────
-    beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
+    Omega_L, Omega_s_vec, A_vec, beta, T_vec = unpack_params(params)
 
     # Build trade cost matrix τ_{r'r} — identical across sectors
     tau = precomputed_tau === nothing ? build_tau(beta) : precomputed_tau
@@ -698,13 +699,13 @@ Compute targeted moments from solved network for SMM estimation.
 # Moments (matching empirical_moments structure):
 1. Aggregate labor share: Σ_r w_r·L_r / Σ_r C_r
 2. Sectoral input shares: X_s / X
-3. Sourcing shares γ_{ls}: Share of sector s inputs from region l
+3. Regional employment shares π_r
 4. Regression coefficients: Elasticity of supplier probability to distance
-5. Regional employment shares π_r
+5. Sourcing shares γ_{ls}: Share of sector s inputs from region l
 """
 function compute_moments(network, params)
 
-    beta, Omega_L, Omega_s_vec, A_vec, T_vec = unpack_params(params)
+    Omega_L, Omega_s_vec, A_vec, beta, T_vec = unpack_params(params)
 
     X_ls_flat = network.X_ls_flat
     c_tilde_r = network.c_tilde_r
@@ -777,11 +778,11 @@ function compute_moments(network, params)
     pi_r = Y_r[active]/sum(Y_r[active])
     
     return (
-        agg_labor_share = [agg_labor_share],
+        agg_labor_share   = [agg_labor_share],
         agg_industry_share = vec(agg_industry_share),  # Full S elements (mask handles [2:end])
-        gamma_ls = gamma_ls,
-        reg_coef = reg_coef,
-        pi_r = pi_r                                     # Full R_downstream (mask handles [2:end])
+        pi_r              = pi_r,                       # block 3 — Full R_downstream (mask handles [2:end])
+        reg_coef          = reg_coef,                   # block 4
+        gamma_ls          = gamma_ls,                   # block 5 — Full (mask handles inactive/ref entries)
     )
 end
 

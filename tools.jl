@@ -90,18 +90,18 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
     A ./= sum(A)
     if init
-        return vcat([ones(N_beta), [agg_labor_share], agg_industry_share, A, ones(S*R)]...)
+        return vcat([[agg_labor_share], agg_industry_share, A, ones(N_beta), ones(S*R)]...)
     end
     if last_stage_folder == nothing
         lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_beta.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
         ub_beta, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T = init_beta.*2, 1.2*agg_labor_share, 1.2.*agg_industry_share, A.*10, 100*ones(S*R)
-        
-        lb = vcat(lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T)
-        ub = vcat(ub_beta, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T)
+
+        lb = vcat(lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_beta, lb_T)
+        ub = vcat(ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_beta, ub_T)
         condition = true
     else
         best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
-        names = [:beta, :agg_labor_share_tech, :agg_industry_share_tech, :productivity, :T]
+        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :beta, :T]
         vals = unpack_params(best_params)
         params_dict = Dict(names .=> vals)
         
@@ -165,7 +165,8 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
 
             # apply your condition
             if condition
-                betas = scaled[1:N_beta]
+                beta_start = 1 + S + R_downstream + 1
+                betas = scaled[beta_start:(beta_start + N_beta - 1)]
                 if issorted(betas)
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
@@ -184,7 +185,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
     end
     
     if last_stage_folder != nothing
-        names = ["beta", "agg_labor_share_tech", "agg_industry_share_tech", "productivity", "T"]
+        names = ["agg_labor_share_tech", "agg_industry_share_tech", "productivity", "beta", "T"]
         variable_list = isa(variable, String) ? [variable] : variable
         
         if "T" in variable_list && second_stage
@@ -547,10 +548,10 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     # ── Extract empirical & simulated vectors ──
 
     emp_gamma = vec(emp_gamma_ls)
-    sim_gamma = vec(results[best_index][2][3])
+    sim_gamma = vec(results[best_index][2][5])
 
     emp_pi = vec(emp_pi_r)
-    sim_pi_r = vec(results[best_index][2][5])
+    sim_pi_r = vec(results[best_index][2][3])
 
     emp_pi_sA = agg_industry_share
     sim_pi_sA = results[best_index][2][2]
@@ -577,8 +578,8 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     # ── Save numpy arrays ──
 
-    npzwrite(joinpath(folder, "pi_r.npy"), results[best_index][2][5])
-    npzwrite(joinpath(folder, "productivity.npy"), unpack_params(best_params)[4])
+    npzwrite(joinpath(folder, "pi_r.npy"), results[best_index][2][3])
+    npzwrite(joinpath(folder, "productivity.npy"), unpack_params(best_params)[3])
 
     # ── Text report (unchanged) ──
 
@@ -589,7 +590,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     agg_industry_share_ = [emp_pi_sA,sim_pi_sA]
 
     gamma_emp_result = matrix_report(emp_gamma_ls)
-    gamma_sim_result = matrix_report(results[best_index][2][3])
+    gamma_sim_result = matrix_report(results[best_index][2][5])
     gamma_ls_ = [gamma_emp_result, gamma_sim_result]
 
     reg_emp = reg_coef
@@ -597,7 +598,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     reg_ = [reg_emp, reg_sim]
 
     pi_r_emp_result = matrix_report(emp_pi, false)
-    pi_r_sim_result = matrix_report(results[best_index][2][5])
+    pi_r_sim_result = matrix_report(results[best_index][2][3])
     pi_r = [pi_r_emp_result, pi_r_sim_result]
 
     best_score = results[best_index][1][1]
@@ -956,14 +957,15 @@ end
 
 
 """
-    compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, mask)
+    compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask)
 
 Compute indices into masked moment vector for each moment block.
+Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
 Returns tuple of 5 index vectors (one per block).
 """
 
-function compute_block_ranges(n_labor, n_industry, n_gamma, n_reg, n_pi, mask)
-    cuts = cumsum([0, n_labor, n_industry, n_gamma, n_reg, n_pi])
+function compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask)
+    cuts = cumsum([0, n_labor, n_industry, n_pi, n_reg, n_gamma])
 
     masked_ranges = ntuple(5) do k
         base    = count(mask[1 : cuts[k]])
@@ -1002,7 +1004,7 @@ over γ_ls and reg_coef moments only.
 
 Σ_data is loaded from Sigma.npy — the joint bootstrap covariance of γ_ls
 and reg_coef moments (ordering: γ block first, then β block, matching
-BLOCK_RANGES[3] followed by BLOCK_RANGES[4]).
+BLOCK_RANGES[5] followed by BLOCK_RANGES[4]).
 Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1,
 restricted to the same moment indices.
 
@@ -1014,7 +1016,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     N_moments = length(empirical_moments)
 
     # ── Gamma+beta moment indices in the masked vector ───────────────────────
-    gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+    gb_indices = vcat(collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[4]))
     n_gb = length(gb_indices)
 
     # ── Load Σ_data: joint bootstrap covariance of γ+β ──────────────────────
@@ -1160,7 +1162,8 @@ function run_pso_optimization(;
         println("  Best initial beta: ", round.(init_beta, digits=6))
     else
         @assert warm_start_params !== nothing "skip_initial_beta_search=true requires warm_start_params"
-        init_beta = warm_start_params[1:N_beta]
+        beta_start_idx = S + R_downstream + 2   # new layout: [Ω^L | Ω^s(S) | A(Rd) | β | T]
+        init_beta = warm_start_params[beta_start_idx:(beta_start_idx + N_beta - 1)]
         println("\n[$output_subfolder] Skipping Stage 0: using warm_start beta $(round.(init_beta, digits=6))")
     end
 
