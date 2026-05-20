@@ -1128,7 +1128,7 @@ function run_pso_optimization(;
         println("="^70)
 
         beta_min = 1e-3
-        beta_max = 2.0
+        beta_max = 100
 
         if beta_search_method == "log_grid"
             beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;

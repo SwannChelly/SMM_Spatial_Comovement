@@ -41,16 +41,16 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
+industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
-resume   = length(ARGS) >= 3 && ARGS[3] == "resume"
-K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000  # K for Σ_sim estimation
+K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 100000
+0  # K for Σ_sim estimation
 
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
 end
 
-println("Industry: $industry | n_coef: $n_coef | K_sim: $K_sim | resume: $resume")
+println("Industry: $industry | n_coef: $n_coef | K_sim: $K_sim")
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$industry"
@@ -152,12 +152,6 @@ for s in 1:S_
         l = GOOD_R_local[g]
         T_gravity[s, l] = max(emp_gamma_ls[l, s] * (w_rs_local[l]^theta), 1e-12)
     end
-    ref_r = T_REF_REGION_local[s]
-    ref_val = T_gravity[s, ref_r]
-    if ref_val > 0
-        regions_s = GOOD_R_local[SECTOR_GOOD_INDICES_local[s]]
-        T_gravity[s, regions_s] ./= ref_val
-    end
 end
 @everywhere const T_rs_init = $(T_gravity)
 
@@ -235,10 +229,11 @@ closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_loca
 println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 
 # Indices of identified parameters to use in Jacobian/inference.
-# Excludes the S+2 flat directions created by internal normalizations in unpack_params:
+# Excludes the S+2 flat directions created by internal normalizations:
 #   - Ω^s[1]  (position N_beta+2)         : Omega_s ./= sum(Omega_s)
 #   - A[1]    (position N_beta+S+2)        : A ./= A[1]
-#   - T[s, T_REF_REGION[s]] for each s    : T_mat[s,:] ./= T_mat[s, ref_r]
+#   - T[s, T_REF_REGION[s]] for each s    : T_mat[s,:] ./= T_mat[s, ref_r] (most important regions in empirical gamma_ls)
+
 _excluded = Set{Int}()
 push!(_excluded, N_beta + 2)
 push!(_excluded, N_beta + S_ + 2)
@@ -255,41 +250,17 @@ end
 jacobian_param_indices = [i for i in 1:(N_beta + 1 + S_ + R_down_ + sum(T_mask_local)) if i ∉ _excluded]
 println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
 
-############## Determine resume state ##############
+############## Determine step to run ##############
 
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = false#true
-run_step2 = false
-run_step3 = false
-
-if resume
-    if isfile(step2_W_path)
-        # Step 2 complete — check if step3 has output
-        step3_folder = joinpath(output_folder, "step3")
-        if isdir(step3_folder) && isdir(joinpath(step3_folder, "0"))
-            run_step1 = false
-            run_step2 = false
-            run_step3 = true  # resume step 3
-            println("Resuming: Step 1+2 done. Resuming Step 3.")
-        else
-            run_step1 = false
-            run_step2 = false
-            run_step3 = true
-            println("Resuming: Steps 1+2 done. Starting Step 3.")
-        end
-    elseif isdir(step1_folder) && isdir(joinpath(step1_folder, "0"))
-        run_step1 = false  # step1 done
-        run_step2 = true
-        run_step3 = true
-        println("Resuming: Step 1 done. Running Steps 2+3.")
-    else
-        println("Resume requested but no completed step found. Running all steps.")
-    end
-end
+run_step1 = true#true
+run_step2 = true
+run_step3 = true
 
 ############## STEP 1 — Identity-weighted optimisation ##############
+# Full optimisation to fixe un-bootstrapable parameters. 
 
 if run_step1
     println("\n" * "="^70)
@@ -297,11 +268,11 @@ if run_step1
     println("="^70)
 
     theta_hat_1, _ = run_pso_optimization(;
-        weight_matrix            = nothing,   # uses global Weight_matrix_custom
+        weight_matrix            = nothing,   
         skip_initial_beta_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
-        max_loop                 = 10
+        max_loop                 = 50
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -314,12 +285,18 @@ end
 
 step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
 theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
+
 if ndims(theta_hat_1) > 1
     theta_hat_1 = theta_hat_1[:, 1]
 end
 println("θ̂_1 loaded from: $step1_last")
 
 ############## STEP 2 — Build efficient weight matrix ##############
+# W_step3 is the weight matrix for the second optimisation. 
+# Second optimisation only estimate T_{sr} and \beta_k. Therefore, the weight matrix is restricted to those parameters. 
+# We also build the Jacobian 
+#   - Used for inference. 
+#   - Used to analyse if selecting only (T,\beta) is going to have an important effect on other moments. 
 
 if run_step2
     println("\n" * "="^70)
@@ -336,7 +313,7 @@ if run_step2
         output_folder = output_folder,
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
-        K             = 50,
+        K             = 100,
         step_rel      = 1e-3,
         step_abs      = 1e-8,
         base_seed     = 0
@@ -348,15 +325,24 @@ if run_step2
     sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
     emp_vec   = vec(empirical_moments)
 
-    compute_smm_inference(
-        theta_hat_1, J1, W_step3, Omega_step2;
-        param_indices         = jacobian_param_indices,
-        empirical_moments_vec = emp_vec,
-        simulated_moments_vec = sim_vec_1,
-        output_folder         = joinpath(output_folder, "step2"),
-        industry              = industry,
-        K_sim                 = K_sim
-    )
+    gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+
+    # Restrict Jacobian to gamma+beta moment rows
+    J_gb = J1[gb_indices, :]
+
+    # Restrict moment vectors
+    sim_vec_gb = sim_vec_1[gb_indices]
+    emp_vec_gb = emp_vec[gb_indices]
+
+    # compute_smm_inference(
+    #     theta_hat_1, J_gb, W_step3, Omega_step2;
+    #     param_indices         = jacobian_param_indices,
+    #     empirical_moments_vec = emp_vec_gb,
+    #     simulated_moments_vec = sim_vec_gb,
+    #     output_folder         = joinpath(output_folder, "step2"),
+    #     industry              = industry,
+    #     K_sim                 = K_sim
+    # )
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
     println("Step 2 skipped (resume). Loading W_step3...")
@@ -377,7 +363,7 @@ if run_step3
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
-        max_loop                 = 10,
+        max_loop                 = 50,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true
     )
@@ -498,7 +484,7 @@ npzwrite(joinpath(folder, "suppliers.npy"), suppliers)
 
 sirens = Int[]; sectors = Int[]; ze2010 = Int[]; ze2010_downstream = Int[]
 share = Float64[]; downstream_purchase = Float64[]
-intermediate_derivative = Float64[]; productivity = Float64[]
+intermediate_derivative = Float64[]; productivity = Float64[] ; sample_weight_vec = Float64[]
 siren_map = Dict{Tuple{Int,Int,Int}, Int}()
 siren_counter = 0
 for g in 1:n_good
@@ -521,23 +507,65 @@ for i in 1:n_entries
     push!(downstream_purchase, Y_r[r] * mu)
     push!(intermediate_derivative, network.firm_deriv_val[i])
     push!(productivity, network.z_flat[rho, g])
+    push!(sample_weight_vec, network.sample_weights[rho])
 end
 df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
                ze2010_downstream=ze2010_downstream, share=share,
                downstream_purchase=downstream_purchase,
                intermediate_derivative=intermediate_derivative,
-               productivity=productivity)
+               productivity=productivity,sample_weight = sample_weight_vec)
 Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
 
 println("\nPost-hoc analysis complete. Results saved to: $folder")
 
 
-
-
-
 # Test cov matrix
 
+println("\n" * "="^70)
+println("STEP 2: Building efficient weight matrix (K=$K_sim)")
+println("="^70)
 
+W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
+                                        K=K_sim, output_folder=output_folder)
+
+# Jacobian at θ̂_1 — identified parameters only
+J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
+    theta_hat_1;
+    param_indices = jacobian_param_indices,
+    output_folder = output_folder,
+    output_subdir = "step2",
+    filename      = "jacobian_all.npy",
+    K             = 100,
+    step_rel      = 1e-3,
+    step_abs      = 1e-8,
+    base_seed     = 0
+)
+
+# Inference at θ̂_1 using efficient weight W_step3 and Ω from step2/
+Omega_step2 = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
+_, sim_moments_1 = full_SMM(theta_hat_1; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
+emp_vec   = vec(empirical_moments)
+
+gb_indices = vcat(collect(BLOCK_RANGES[3]), collect(BLOCK_RANGES[4]))
+
+# Restrict Jacobian to gamma+beta moment rows
+J_gb = J1[gb_indices, :]
+
+# Restrict moment vectors
+sim_vec_gb = sim_vec_1[gb_indices]
+emp_vec_gb = emp_vec[gb_indices]
+
+compute_smm_inference(
+    theta_hat_1, J_gb, W_step3, Omega_step2;
+    param_indices         = jacobian_param_indices,
+    empirical_moments_vec = emp_vec_gb,
+    simulated_moments_vec = sim_vec_gb,
+    output_folder         = joinpath(output_folder, "step2"),
+    industry              = industry,
+    K_sim                 = K_sim
+)
+println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 using LinearAlgebra, Statistics, Printf
 
 # Center M_sim (already saved to step2/M_sim.npy by build_step3_weight_matrix)
