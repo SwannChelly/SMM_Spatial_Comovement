@@ -93,7 +93,7 @@ if test
     emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
     emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
     reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
-    empirical_moments = [[agg_labor_share],agg_industry_share[2:end],emp_gamma_ls,reg_coef,emp_pi_r]
+    empirical_moments = [[agg_labor_share],agg_industry_share[2:end],emp_pi_r,reg_coef,emp_gamma_ls]
     empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
     empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
 
@@ -827,9 +827,9 @@ function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Fl
     return (
         moments.agg_labor_share,
         moments.agg_industry_share,
-        moments.gamma_ls,
+        moments.pi_r,
         moments.reg_coef,
-        moments.pi_r
+        moments.gamma_ls
     )
 end
 
@@ -905,9 +905,9 @@ function loss_function(simulated_moments, emp, W, method="original";
 
     elseif method == "log"
         # Block boundaries in the masked moment vector:
-        #   [1 : n_good]              labor share + industry shares + gamma_ls → log
-        #   [n_good+1 : n_good+N_beta] reg_coef (negative, level deviation)   → level
-        #   [n_good+N_beta+1 : end]   pi_r                                     → log
+        #   [1 : n_good]              labor share + industry shares + pi_r → log
+        #   [n_good+1 : n_good+N_beta] reg_coef (negative, level deviation) → level
+        #   [n_good+N_beta+1 : end]   gamma_ls                              → log
         eps = 1e-12
         err = zeros(N)
 
@@ -960,7 +960,7 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
     if second_stage
         emp = empirical_moments_reduced
         W = Weight_matrix
-        moments = [simulated_moments[3][mask_emp_gamma_ls .!= 0]]
+        moments = [simulated_moments[5][mask_emp_gamma_ls .!= 0]]
     else
         emp = empirical_moments
         W = W_override !== nothing ? W_override : Weight_matrix_custom
