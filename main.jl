@@ -43,8 +43,12 @@ using StatsBase
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
-K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 100000
-0  # K for Σ_sim estimation
+K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 100000 # K for Σ_sim estimation
+K = 10
+run_step1 = true#true
+run_step2 = true
+run_step3 = true
+
 
 if !(n_coef in [4, 5])
     error("n_coef must be 4 or 5, got: $n_coef")
@@ -255,9 +259,6 @@ println("Jacobian will cover $(length(jacobian_param_indices)) identified parame
 step1_folder = joinpath(output_folder, "step1")
 step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
-run_step1 = true#true
-run_step2 = true
-run_step3 = true
 
 ############## STEP 1 — Identity-weighted optimisation ##############
 # Full optimisation to fixe un-bootstrapable parameters. 
@@ -313,7 +314,7 @@ if run_step2
         output_folder = output_folder,
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
-        K             = 2,
+        K             = K,
         step_rel      = 1e-3,
         step_abs      = 1e-8,
         base_seed     = 0
@@ -535,7 +536,7 @@ J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
     output_folder = output_folder,
     output_subdir = "step2",
     filename      = "jacobian_all.npy",
-    K             = 100,
+    K             = K,
     step_rel      = 1e-3,
     step_abs      = 1e-8,
     base_seed     = 0
