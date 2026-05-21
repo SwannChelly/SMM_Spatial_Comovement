@@ -1135,7 +1135,9 @@ function run_pso_optimization(;
 
         beta_min = 1e-3
         beta_max = 100
-
+        if n_coef == 1
+            length_range_beta = 10000
+        end
         if beta_search_method == "log_grid"
             beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;
                                                      log_grid_length=length_range_beta)

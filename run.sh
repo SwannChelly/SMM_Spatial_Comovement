@@ -27,7 +27,7 @@ N_COEF="${2:-4}"
 RESUME="${3:-}"
 K_SIM="${4:-}"
 
-if [ "$N_COEF" != "4" ] && [ "$N_COEF" != "5" ]; then
+if [ "$N_COEF" != "4" ] && [ "$N_COEF" != "5" ] && [ "$N_COEF" != "1" ]; then
     echo "Error: n_coef must be 4 or 5, got: $N_COEF"
     exit 1
 fi

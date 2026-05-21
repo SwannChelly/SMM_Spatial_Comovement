@@ -42,7 +42,7 @@ using StatsBase
 ############## Parse arguments ##############
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
-n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
+n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 100000 # K for Σ_sim estimation
 
 K = 2
@@ -64,6 +64,7 @@ mkpath(output_folder)
 
 ############## Load and distribute constants ##############
 include("load_parameters.jl")
+NPZ.npzwrite(joinpath(output_folder, "n_reg_coef.npy"), n_coef)
 
 ############## Determine step to run ##############
 
