@@ -43,8 +43,8 @@ using StatsBase
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"  # Default to "aero" if no argument
 n_coef = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4  # Default to 4 coefficients
 resume = length(ARGS) >= 3 && ARGS[3] == "resume"
-if !(n_coef in [4, 5])
-    error("n_coef must be 4 or 5, got: $n_coef")
+if !(n_coef in [1, 4, 5])
+    error("n_coef must be 1, 4 or 5, got: $n_coef")
 end
 println("Using $n_coef regression coefficients (reg_coef_$n_coef.npy)")
 
@@ -154,8 +154,13 @@ X_dr_local = X_dr_local[N_downstream_per_region.!=0]
 emp_pi_r_local = X_dr_local./sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r = $(emp_pi_r_local)  # Full vector; MOMENT_MASK handles [2:end]
-@everywhere const reg_coef = $(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy")))
-@everywhere const N_beta = $(length(NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))))
+if n_coef == 1
+    reg_coef_local_pso = [coefs[3, "value"]]
+else
+    reg_coef_local_pso = NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))
+end
+@everywhere const reg_coef = $reg_coef_local_pso
+@everywhere const N_beta = $(length(reg_coef_local_pso))
 
 # Build full empirical moments (no [2:end] drops — MOMENT_MASK handles that)
 # Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
@@ -283,6 +288,11 @@ closest_plant_dist_local = vec(minimum(distances_downstream_local, dims=2))
 closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_local, dims=2), 2))
 @everywhere const CLOSEST_PLANT_DIST = $(closest_plant_dist_local)
 @everywhere const CLOSEST_DOWNSTREAM_REGION = $(closest_downstream_region_local)
+
+log_dist_downstream_local = log.(max.(distances_downstream_local, 1.0))
+log_closest_dist_local    = log.(max.(closest_plant_dist_local, 1.0))
+@everywhere const LOG_DIST_DOWNSTREAM = $log_dist_downstream_local
+@everywhere const LOG_CLOSEST_DIST    = $log_closest_dist_local
 
 # PSO Configuration
 N_PARTICLES = 100   # Use all available cores except one 

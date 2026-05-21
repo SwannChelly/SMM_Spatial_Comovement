@@ -119,8 +119,13 @@ X_dr_local = X_dr_local[N_downstream_per_region_local .!= 0]
 emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full  = $(emp_pi_r_local)
 @everywhere const emp_pi_r       = $(emp_pi_r_local)
-@everywhere const reg_coef       = $(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")))
-@everywhere const N_beta         = $(length(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))))
+if n_coef == 1
+    reg_coef_local = [coefs[3, "value"]]
+else
+    reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))
+end
+@everywhere const reg_coef       = $reg_coef_local
+@everywhere const N_beta         = $(length(reg_coef_local))
 
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
@@ -136,7 +141,7 @@ end
 n_labor    = 1
 n_industry = length(vec(agg_industry_share_local))
 n_gamma    = length(vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))))
-n_reg      = length(NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")))
+n_reg      = length(reg_coef_local)
 n_pi       = length(emp_pi_r_local)
 N_moments_full = n_labor + n_industry + n_pi + n_reg + n_gamma
 
@@ -144,7 +149,7 @@ empirical_moments_local = vcat(
     [agg_labor_share],
     vec(agg_industry_share_local),
     emp_pi_r_local,
-    NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy")),
+    reg_coef_local,
     vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
 )
 
@@ -203,6 +208,11 @@ closest_plant_dist_local        = vec(minimum(distances_downstream_local, dims=2
 closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_local, dims=2), 2))
 @everywhere const CLOSEST_PLANT_DIST        = $(closest_plant_dist_local)
 @everywhere const CLOSEST_DOWNSTREAM_REGION = $(closest_downstream_region_local)
+
+LOG_DIST_DOWNSTREAM_local = log.(max.(distances_downstream_local, 1.0))
+LOG_CLOSEST_DIST_local    = log.(max.(closest_plant_dist_local, 1.0))
+@everywhere const LOG_DIST_DOWNSTREAM = $LOG_DIST_DOWNSTREAM_local
+@everywhere const LOG_CLOSEST_DIST    = $LOG_CLOSEST_DIST_local
 
 println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 

@@ -335,10 +335,17 @@ Returns matrix of size (R, R). Trade costs are identical across sectors.
 """
 function build_tau(beta)
     tau = ones(R, R_downstream)
-    for r_prime in 1:R, r_d in 1:R_downstream
-        b = DistBin[r_prime, r_d]
-        if b > 0
-            tau[r_prime, r_d] += beta[b]
+    if N_beta == 1
+        # Power-law: τ_{r',r} = max(d, 1)^α = exp(α · log(max(d, 1)))
+        for r_prime in 1:R, r_d in 1:R_downstream
+            tau[r_prime, r_d] = exp(beta[1] * LOG_DIST_DOWNSTREAM[r_prime, r_d])
+        end
+    else
+        for r_prime in 1:R, r_d in 1:R_downstream
+            b = DistBin[r_prime, r_d]
+            if b > 0
+                tau[r_prime, r_d] += beta[b]
+            end
         end
     end
     return tau
@@ -649,8 +656,12 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
         s = GOOD_S[g]
         r = GOOD_R[g]
         dr = CLOSEST_DOWNSTREAM_REGION[r]
-        b = DistBin[r, dr]
         group_id = (s - 1) * R_downstream + dr
+        if N_beta == 1
+            log_dist = LOG_CLOSEST_DIST[r]
+        else
+            b = DistBin[r, dr]
+        end
 
         for rho in 1:N_rho
             idx += 1
@@ -658,8 +669,12 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
             w[idx] = sample_weights[rho]
             fe_group[idx] = group_id
 
-            if b > 0 && b <= N_beta
-                X[idx, b] = 1.0
+            if N_beta == 1
+                X[idx, 1] = log_dist
+            else
+                if b > 0 && b <= N_beta
+                    X[idx, b] = 1.0
+                end
             end
             X[idx, n_regressors] = log(z_flat[rho, g])
         end

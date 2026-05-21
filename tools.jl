@@ -33,13 +33,15 @@ Supports n_beta = 4 (pattern [i,j,k,k]) or n_beta = 5 (pattern [i,j,k,k,k]).
 function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::Int)
     range_beta = exp.(range(log(lb), stop=log(ub), length=length_range))
 
-    if n_beta == 4
+    if n_beta == 1
+        expanding_beta = [[x] for x in range_beta]
+    elseif n_beta == 4
         expanding_beta = [
             [i, j, k,k]
             for i in range_beta
             for j in range_beta
             for k in range_beta
-            if i <= j <= k 
+            if i <= j <= k
         ]
     elseif n_beta == 5
         expanding_beta = [
@@ -290,6 +292,8 @@ function distance_bin(d, n_bins=N_beta)
         else
             return 0
         end
+    elseif n_bins == 1
+        return 0
     else
         error("Unsupported number of distance bins: $n_bins")
     end

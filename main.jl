@@ -52,8 +52,8 @@ run_step2 = true
 run_step3 = false
 
 
-if !(n_coef in [4, 5])
-    error("n_coef must be 4 or 5, got: $n_coef")
+if !(n_coef in [1, 4, 5])
+    error("n_coef must be 1, 4 or 5, got: $n_coef")
 end
 
 println("Industry: $industry | n_coef: $n_coef | K_sim: $K_sim")
