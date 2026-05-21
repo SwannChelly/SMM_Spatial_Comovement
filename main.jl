@@ -41,13 +41,15 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 100000 # K for Σ_sim estimation
-K = 10
+
+K = 5
+
 run_step1 = true#true
-run_step2 = true
-run_step3 = true
+run_step2 = false
+run_step3 = false
 
 
 if !(n_coef in [4, 5])
@@ -82,7 +84,7 @@ if run_step1
         skip_initial_beta_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
-        max_loop                 = 2
+        max_loop                 = K
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -123,7 +125,7 @@ if run_step2
         output_folder = output_folder,
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
-        K             = K,
+        K             = 50,
         step_rel      = 1e-3,
         step_abs      = 1e-8,
         base_seed     = 0
@@ -173,7 +175,7 @@ if run_step3
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
-        max_loop                 = 2,
+        max_loop                 = K,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true
     )
@@ -236,7 +238,7 @@ if run_step3
 end
 
 ############## POST-HOC ANALYSIS ##############
-run_reporting(joinpath(output_folder, "step1"), 28; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
 
 last_stage_folder = find_last_stage_folder(joinpath(output_folder, "step1"))

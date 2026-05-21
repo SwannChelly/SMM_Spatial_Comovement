@@ -70,7 +70,35 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 @everywhere const SR_TO_GOOD           = $SR_TO_GOOD_local
 @everywhere const W_RS_FLAT            = $W_RS_FLAT_local
 
-@everywhere const emp_gamma_ls   = $(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
+
+# ── Gamma threshold: drop small sourcing-share pairs from active set ─────
+# Insert after X_rs_local is loaded, BEFORE T_mask_local computation.
+gamma_threshold = 0.005   # (s,r) pairs with γ_{rs} < threshold are zeroed out
+
+emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
+# Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
+
+n_dropped = 0
+for s in 1:S_
+    sector_sum_before = sum(emp_gamma_ls_local[:, s])
+    for r in 1:R_full
+        if 0 < emp_gamma_ls_local[r, s] < gamma_threshold
+            emp_gamma_ls_local[r, s] = 0.0
+            X_rs_local[s, r] = 0.0      # remove from T_MASK active set
+            global n_dropped += 1
+            n_dropped += 1
+        end
+    end
+    # Renormalize survivors to preserve sector total
+    sector_sum_after = sum(emp_gamma_ls_local[:, s])
+    if sector_sum_after > 1e-15 && sector_sum_before > 1e-15
+        emp_gamma_ls_local[:, s] .*= sector_sum_before / sector_sum_after
+    end
+end
+println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
+# ──────────────────────────────────────────────────────────────────────────
+@everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)#$(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
+
 
 # Reference region per sector: largest empirical sourcing share among active regions
 T_REF_REGION_local = Vector{Int}(undef, S_)
