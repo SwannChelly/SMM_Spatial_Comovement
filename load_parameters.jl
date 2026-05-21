@@ -86,7 +86,6 @@ for s in 1:S_
             emp_gamma_ls_local[r, s] = 0.0
             X_rs_local[s, r] = 0.0      # remove from T_MASK active set
             global n_dropped += 1
-            n_dropped += 1
         end
     end
     # Renormalize survivors to preserve sector total
