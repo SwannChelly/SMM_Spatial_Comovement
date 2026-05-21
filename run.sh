@@ -16,7 +16,7 @@ set -e
 if [ -z "$1" ]; then
     echo "Usage: $0 <industry> [n_coef] [resume] [K_sim]"
     echo "  industry : aero, auto, car, both"
-    echo "  n_coef   : 4 or 5 (default: 4)"
+    echo "  n_coef   : 1 or 4 or 5 (default: 4)"
     echo "  resume   : pass 'resume' to resume from last checkpoint"
     echo "  K_sim    : number of replications for Σ_sim (default: 10000)"
     exit 1
@@ -54,16 +54,16 @@ run_industry() {
     local reporting_folder="reporting_${ind}"
     local log_file="${reporting_folder}/logs.log"
     local baseline_folder="baseline_${ind}"
-    local reg_coef_file="${baseline_folder}/reg_coef_${ncoef}.npy"
+    #local reg_coef_file="${baseline_folder}/reg_coef_${ncoef}.npy"
 
     if [ ! -d "$baseline_folder" ]; then
         echo "Error: Baseline data folder not found at $baseline_folder"
         return 1
     fi
-    if [ ! -f "$reg_coef_file" ]; then
-        echo "Error: Regression coefficient file not found at $reg_coef_file"
-        return 1
-    fi
+    #if [ ! -f "$reg_coef_file" ]; then
+    #    echo "Error: Regression coefficient file not found at $reg_coef_file"
+    #    return 1
+    #fi
 
     mkdir -p "$reporting_folder"
 
