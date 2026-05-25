@@ -1020,11 +1020,16 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     N_moments = length(empirical_moments)
 
     # ── Gamma+beta moment indices in the masked vector ───────────────────────
-    gb_indices = vcat(collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[4]))
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
     n_gb = length(gb_indices)
 
     # ── Load Σ_data: joint bootstrap covariance of γ+β ──────────────────────
-    Sigma_data = NPZ.npzread(joinpath(input_folder, "Sigma_beta_gamma.npy"))
+    if N_beta == 1
+        print("Loading Sigma_beta_gamma_1" )
+        Sigma_data = NPZ.npzread(joinpath(input_folder, "Sigma_beta_gamma_1.npy"))
+    else
+        Sigma_data = NPZ.npzread(joinpath(input_folder, "Sigma_beta_gamma.npy"))
+    end
 
     @assert size(Sigma_data) == (n_gb, n_gb) """
     Sigma.npy must be ($n_gb, $n_gb); got $(size(Sigma_data))
@@ -1035,8 +1040,12 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
     flush(stdout)
 
+
+
     M_sim_rows = pmap(1:K) do k
-        u_k, w_k = generate_mc_draws(N_rho, n_good, MersenneTwister(k))
+        u_k, w_k = generate_stratified_draws(N_rho, n_good;
+                                      randomise=true,
+                                      rng=MersenneTwister(k))
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
         moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
         return moms_flat[gb_indices]

@@ -125,7 +125,7 @@ else
     reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))
 end
 @everywhere const reg_coef       = $reg_coef_local
-@everywhere const N_beta         = $(length(reg_coef_local))
+@everywhere const N_beta         = $(n_coef)
 
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
