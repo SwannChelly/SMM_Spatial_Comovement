@@ -57,7 +57,7 @@ params = [β_1..β_{N_beta} | Ω^L | Ω^s_1..Ω^s_S | A_1..A_{R_downstream} | T_
 - `N_beta ∈ {4, 5}`: distance-bin trade cost coefficients (monotone: β_1 ≤ … ≤ β_K)
 - `Ω^L`: aggregate labor share in production
 - `Ω^s`: sectoral input shares (sum-normalized internally)
-- `A_r`: downstream productivity by region
+- `A_r`: downstream productivity by region (normalized by `A[A_REF_REGION]`, where `A_REF_REGION = argmax(emp_pi_r)` is the downstream region with the largest empirical sales share)
 - `T_{sr}`: Fréchet scale for active (sector, region) pairs only (sparse, indexed by `T_MASK`)
 
 ### Targeted moments
@@ -316,7 +316,7 @@ After Step 3, `compute_smm_inference` computes delta-method standard errors for 
 
 **Hansen J-test**: `J = r'Wr` where `r = m̂ - m̃(θ̂_2)`, distributed χ²(N_moments − p) under correct specification. A large J (small p-value) indicates moment over-identification failure.
 
-**Identified parameters only**: The Jacobian is computed over identified parameters only, excluding the S+2 directions made flat by internal normalizations in `unpack_params` (first Ω^s, A_1, and T[s, T_REF_REGION[s]] for each s). `jacobian_param_indices` (built once in `main.jl` after constants are distributed) carries these indices and is passed to both `compute_jacobian` and `compute_smm_inference`.
+**Identified parameters only**: The Jacobian is computed over identified parameters only, excluding the S+2 directions made flat by internal normalizations in `unpack_params` (first Ω^s, `A[A_REF_REGION]`, and T[s, T_REF_REGION[s]] for each s). `jacobian_param_indices` (built once in `main.jl` after constants are distributed) carries these indices and is passed to both `compute_jacobian` and `compute_smm_inference`.
 
 **Caveats**: SEs are delta-method conditional on the draws used for Σ_sim estimation. A Murphy–Topel correction would account for sequential sampling noise across estimation steps. `Σ_data` is non-zero only on the γ_ls and reg_coef blocks, so residual SEs on labor/industry/π_r reflect simulator variance only.
 
@@ -333,6 +333,8 @@ If a change modifies anything documented in this file — file structure, functi
 *Format: date · file(s) changed · description (≤4 sentences)*
 
 <!-- Add entries below in reverse chronological order -->
+
+2026-05-25 · `model_CP.jl`, `load_parameters.jl`, `tools.jl`, `main_pso.jl`, `claude.md` · Normalize A by argmax(emp_pi_r) instead of A[1]. `A_REF_REGION = argmax(emp_pi_r_local)` is defined and broadcast as a global constant in `load_parameters.jl` after `emp_pi_r_local` is computed. `unpack_params` now divides by `A[A_REF_REGION]` with a positivity assert. `jacobian_param_indices` excludes position `S+1+A_REF_REGION` instead of the hardcoded `S+2`. Improves Jacobian conditioning when the first downstream region has low empirical sales share.
 
 2026-05-13 · `main.jl`, `main_pso.jl`, `claude.md` · Align MOMENT_MASK γ_ls drop with T_REF_REGION normalization and restrict Jacobian to identified parameters. MOMENT_MASK now drops `γ_{ls}` at `T_REF_REGION[s]` (largest empirical sourcing share) instead of the first active region, matching the `T_mat[s,:] ./= T_mat[s, ref_r]` normalization in `unpack_params`. `main_pso.jl` gains the same `T_REF_REGION` computation. `jacobian_param_indices` excludes the S+2 flat directions (first Ω^s, A_1, T at ref region per sector); `compute_jacobian` and `compute_smm_inference` now receive these indices instead of `nothing`/`collect(1:p)`.
 

@@ -1158,6 +1158,7 @@ function run_pso_optimization(;
 
         A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A_init ./= sum(A_init)
+        # Note: unpack_params renormalizes A by A[A_REF_REGION], so the sum-normalization here only sets scale.
         T_init_nz = vec(T_rs_init)[T_MASK]
         # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
         init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)

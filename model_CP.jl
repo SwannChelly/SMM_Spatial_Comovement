@@ -305,7 +305,8 @@ function unpack_params(params)
     Omega_L = params[1]
     Omega_s = params[2:(1 + S)] / sum(params[2:(1 + S)])
     A = params[(S + 2):(S + R_downstream + 1)]
-    A = A ./ A[1]
+    @assert A[A_REF_REGION] > 0 "A[A_REF_REGION]=$(A[A_REF_REGION]) must be positive"
+    A = A ./ A[A_REF_REGION]
     beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_beta)]
 
     T_reduced = params[(S + R_downstream + 2 + N_beta):end]
