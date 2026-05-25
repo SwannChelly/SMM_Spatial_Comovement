@@ -119,6 +119,12 @@ X_dr_local = X_dr_local[N_downstream_per_region_local .!= 0]
 emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full  = $(emp_pi_r_local)
 @everywhere const emp_pi_r       = $(emp_pi_r_local)
+
+# Reference downstream region for A normalization: largest empirical sales share
+A_REF_REGION_local = argmax(emp_pi_r_local)
+println("A_REF_REGION = $A_REF_REGION_local (π_r = $(emp_pi_r_local[A_REF_REGION_local]))")
+@everywhere const A_REF_REGION = $A_REF_REGION_local
+
 if n_coef == 1
     reg_coef_local = [coefs[3, "value"]]
 else
@@ -219,13 +225,13 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 # Indices of identified parameters to use in Jacobian/inference.
 # Excludes the S+2 flat directions created by internal normalizations:
 #   - Ω^s[1]  (position 2)           : Omega_s ./= sum(Omega_s)
-#   - A[1]    (position S+2)          : A ./= A[1]
+#   - A[A_REF_REGION] (position S+1+A_REF_REGION) : A ./= A[A_REF_REGION]
 #   - T[s, T_REF_REGION[s]] for each s: T_mat[s,:] ./= T_mat[s, ref_r] (most important regions in empirical gamma_ls)
 # New parameter layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_beta) | T(sum(T_MASK))]
 
 _excluded = Set{Int}()
 push!(_excluded, 2)              # Ω^s[1]: position 2 in new layout
-push!(_excluded, S_ + 2)         # A[1]:   position S+2 in new layout
+push!(_excluded, S_ + 1 + A_REF_REGION_local)  # A[A_REF_REGION]: position S+1+ref in new layout
 T_param_offset = 1 + S_ + R_down_ + N_beta
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
