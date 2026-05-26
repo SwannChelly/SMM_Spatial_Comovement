@@ -311,7 +311,9 @@ function train_stage_pso(
     sample_weights::Union{Nothing, Vector{Float64}} = nothing,
     weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
     warm_start_override::Union{Nothing, Vector{Float64}} = nothing,
-    moment_blocks::Union{Nothing, Vector{Int}} = nothing
+    moment_blocks::Union{Nothing, Vector{Int}} = nothing,
+    analytical::Bool = false,
+    n_quad::Int = 200
 )
     
     # Build bounds based on previous stage or initialization
@@ -469,10 +471,11 @@ function train_stage_pso(
             x_full = x_stage
         end
         
-        # Evaluate SMM
+        # Evaluate SMM (or analytical GMM)
         result = parallel_SMM_safe(x_full, false, second_stage, method, false;
                                    precomputed_tau=cached_tau, u_draws=u_draws, sample_weights=sample_weights,
-                                   W_override=weight_matrix, moment_blocks=moment_blocks)
+                                   W_override=weight_matrix, moment_blocks=moment_blocks,
+                                   analytical=analytical, n_quad=n_quad)
         
         if isnothing(result)
             return Inf

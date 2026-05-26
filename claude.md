@@ -334,6 +334,44 @@ If a change modifies anything documented in this file — file structure, functi
 
 <!-- Add entries below in reverse chronological order -->
 
+2026-05-26 · `model_analytical.jl` (new), `main_gmm.jl` (new), `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `load_parameters.jl`, `pkg.jl`, `run.sh`, `claude.md` · Implement closed-form GMM estimation. `model_analytical.jl` provides `compute_moments_analytical`: blocks {Ω^L, Ω^s, π_r, γ_ls} use exact EK closed-form formulas (Φ_{s,dr} → P_sr → P_r → c_r → Y_r); block reg_coef uses 200-node Gauss-Legendre quadrature on the Fréchet CDF with analytical supplier probabilities. `GAMMA_FACTOR[s] = Γ((θ+1-ν_s)/θ)^{1/(1-ν_s)}` precomputed in `load_parameters.jl`. `full_SMM` gains `analytical=false` kwarg (backward-compatible); `parallel_SMM_safe`, `train_stage_pso`, `run_pso_optimization`, and `compute_jacobian` all propagate `analytical` and `n_quad`. `main_gmm.jl` is the new entry point: W_eff = Σ_data^{-1} (Σ_sim=0 by construction), Jacobian uses K=1 (deterministic), SEs are exact delta-method without Murphy-Topel correction. `run.sh` gains `--mode=gmm` and `--n_quad` flags. `build_step3_weight_matrix` marked deprecated for GMM mode. New packages: `SpecialFunctions.jl`, `FastGaussQuadrature.jl`.
+
+---
+
+## GMM analytical mode
+
+`main_gmm.jl` provides closed-form moment evaluation, replacing the SMM simulation
+of N_ρ firms by Eaton-Kortum analytical formulas:
+
+| Block | Method | Key formula |
+|-------|--------|-------------|
+| Ω^L | Exact | Labor share from c̃_r, Y_r |
+| Ω^s | Exact | X_s/X from γ_{r'sdr} × expenditure |
+| π_r | Exact | Y_r / Σ Y_r |
+| γ_ls | Exact | T_{r's}(wτ)^{-θ}/Φ_{s,dr} × exp_sdr |
+| reg_coef | Quadrature | Gauss-Legendre n_quad nodes on Fréchet CDF |
+
+**Consequences:**
+- Σ_sim = 0 by construction → W_eff = Σ_data^{-1} directly
+- Jacobian via finite differences with K=1 (deterministic, no simulation noise)
+- No Murphy-Topel correction needed
+- ~100× faster per moment evaluation vs SMM at N_ρ=2000
+
+**Entry points:**
+- `julia main_gmm.jl aero 4` — GMM (n_quad=200)
+- `julia main_gmm.jl aero 4 "" "" 500` — GMM (n_quad=500, high accuracy)
+- `./run.sh aero 4 "" "" --mode=gmm` — via shell script
+
+**Key constants added to `load_parameters.jl`:**
+- `GAMMA_FACTOR[s] = Γ((θ+1-ν_s)/θ)^{1/(1-ν_s)}` — price index normalization factor
+
+**Validation:**
+- Use `test_analytical_vs_simulated(params; N_rho_test=10_000)` to verify analytical
+  moments against high-accuracy SMM. Expected: max relative error < 1e-3 for
+  {Ω^L, Ω^s, π_r, γ_ls} and < 1e-2 for reg_coef.
+
+---
+
 2026-05-13 · `main.jl`, `main_pso.jl`, `claude.md` · Align MOMENT_MASK γ_ls drop with T_REF_REGION normalization and restrict Jacobian to identified parameters. MOMENT_MASK now drops `γ_{ls}` at `T_REF_REGION[s]` (largest empirical sourcing share) instead of the first active region, matching the `T_mat[s,:] ./= T_mat[s, ref_r]` normalization in `unpack_params`. `main_pso.jl` gains the same `T_REF_REGION` computation. `jacobian_param_indices` excludes the S+2 flat directions (first Ω^s, A_1, T at ref region per sector); `compute_jacobian` and `compute_smm_inference` now receive these indices instead of `nothing`/`collect(1:p)`.
 
 2026-05-04 · `tools.jl` · Fix `TypeError` in `compute_smm_inference`: element-wise `block_omega_sd .> 1e-15` returned a `BitVector` fed into a scalar ternary `?:`; replaced with `ifelse.()` for correct element-wise dispatch.

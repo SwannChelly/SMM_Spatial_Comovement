@@ -958,19 +958,35 @@ end
 
 
 """
-    full_SMM(params, simulation=false, second_stage=false, method="original")
+    full_SMM(params, simulation=false, second_stage=false, method="original";
+             analytical=false, n_quad=200, ...)
 
 Full SMM evaluation: compute loss and return moments.
+
+When `analytical=true`, uses compute_moments_analytical (closed-form EK formulas
++ Gauss-Legendre quadrature for reg_coef). The simulation/u_draws/sample_weights
+kwargs are ignored in analytical mode.
 """
 function full_SMM(params, simulation=false, second_stage=false, method="original";
                   precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                   u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                   sample_weights::Union{Nothing, Vector{Float64}}=nothing,
                   W_override::Union{Nothing, AbstractMatrix}=nothing,
-                  moment_blocks::Union{Nothing, Vector{Int}}=nothing)
+                  moment_blocks::Union{Nothing, Vector{Int}}=nothing,
+                  analytical::Bool=false,
+                  n_quad::Int=200)
 
-    simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
-                            u_draws=u_draws, sample_weights=sample_weights)
+    if analytical
+        moms_nt = compute_moments_analytical(params; n_quad=n_quad)
+        simulated_moments = (moms_nt.agg_labor_share,
+                             moms_nt.agg_industry_share,
+                             moms_nt.pi_r,
+                             moms_nt.reg_coef,
+                             moms_nt.gamma_ls)
+    else
+        simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
+                                u_draws=u_draws, sample_weights=sample_weights)
+    end
 
     if second_stage
         emp = empirical_moments_reduced
@@ -981,7 +997,7 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
         W = W_override !== nothing ? W_override : Weight_matrix_custom
         moments = simulated_moments
     end
-    
+
     moment_indices = moment_blocks === nothing ? nothing :
         vcat([collect(BLOCK_RANGES[b]) for b in moment_blocks]...)
 

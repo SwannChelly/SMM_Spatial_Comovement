@@ -42,6 +42,18 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 2.5)
 @everywhere const theta               = $(1.768)
+
+# Γ((θ+1-ν_s)/θ)^{1/(1-ν_s)} — constant factor in EK closed-form price index P_sr.
+# Precomputed once; used by compute_prices_analytical in model_analytical.jl.
+# Requires θ+1 > ν_s (checked here); for current calibration 2.768 > 2.5 ✓
+begin
+    _nu_s_local  = ones(S_) .* 2.5
+    _theta_local = 1.768
+    @assert all(_theta_local + 1 .> _nu_s_local) "ν_s must be < θ+1 for closed-form P_sr"
+    import SpecialFunctions
+    _gamma_factor_local = [SpecialFunctions.gamma((_theta_local + 1 - _nu_s_local[s]) / _theta_local)^(1 / (1 - _nu_s_local[s])) for s in 1:S_]
+    @everywhere const GAMMA_FACTOR = $_gamma_factor_local
+end
 @everywhere const delta_r             = $(ones(R_full))
 @everywhere const Weight_matrix       = $(nothing)
 
