@@ -229,10 +229,13 @@ function parallel_SMM(params, simulation, second_stage, method;
                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                       sample_weights::Union{Nothing, Vector{Float64}}=nothing,
                       W_override::Union{Nothing, AbstractMatrix}=nothing,
-                      moment_blocks::Union{Nothing, Vector{Int}}=nothing)
+                      moment_blocks::Union{Nothing, Vector{Int}}=nothing,
+                      analytical::Bool=false,
+                      n_quad::Int=200)
     return full_SMM(params, simulation, second_stage, method;
                     precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
-                    W_override=W_override, moment_blocks=moment_blocks)
+                    W_override=W_override, moment_blocks=moment_blocks,
+                    analytical=analytical, n_quad=n_quad)
 end
 
 
@@ -241,7 +244,9 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
                            u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                            sample_weights::Union{Nothing, Vector{Float64}}=nothing,
                            W_override::Union{Nothing, AbstractMatrix}=nothing,
-                           moment_blocks::Union{Nothing, Vector{Int}}=nothing)
+                           moment_blocks::Union{Nothing, Vector{Int}}=nothing,
+                           analytical::Bool=false,
+                           n_quad::Int=200)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
@@ -250,7 +255,8 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
     try
         result = parallel_SMM(params, simulation, second_stage, method;
                               precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
-                              W_override=W_override, moment_blocks=moment_blocks)
+                              W_override=W_override, moment_blocks=moment_blocks,
+                              analytical=analytical, n_quad=n_quad)
 
         return result
     catch e
@@ -1003,6 +1009,10 @@ end
 """
     build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)
 
+DEPRECATED for GMM mode. In analytical GMM (main_gmm.jl), use W = inv(Σ_data) directly;
+Σ_sim = 0 by construction so no simulation replications are needed.
+This function remains for legacy SMM mode (main.jl).
+
 Assemble the efficient SMM weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}
 over γ_ls and reg_coef moments only.
 
@@ -1125,7 +1135,9 @@ function run_pso_optimization(;
     length_range_beta::Int = 40,
     method::String = "original",
     gamma_beta_only::Bool = false,          # step 3: fix structural params, optimize only beta+T
-    moments_loss_gamma_beta::Bool = false   # step 3: compute loss on gamma_ls + reg_coef moments only
+    moments_loss_gamma_beta::Bool = false,  # step 3: compute loss on gamma_ls + reg_coef moments only
+    analytical::Bool = false,              # GMM mode: closed-form moments (no simulation)
+    n_quad::Int = 200                      # quadrature nodes for reg_coef block in analytical mode
 )
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
@@ -1143,7 +1155,7 @@ function run_pso_optimization(;
         println("="^70)
 
         beta_min = 1e-3
-        beta_max = 100
+        beta_max = 10
         if n_coef == 1
             length_range_beta = 10000
         end
@@ -1158,14 +1170,14 @@ function run_pso_optimization(;
 
         A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A_init ./= sum(A_init)
-        # Note: unpack_params renormalizes A by A[A_REF_REGION], so the sum-normalization here only sets scale.
         T_init_nz = vec(T_rs_init)[T_MASK]
         # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
         init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
         expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
 
         results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
-                                               W_override=weight_matrix), expanding_beta)
+                                               W_override=weight_matrix,
+                                               analytical=analytical, n_quad=n_quad), expanding_beta)
 
         if beta_selection_criterion == "reg_coef"
             reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
@@ -1206,7 +1218,7 @@ function run_pso_optimization(;
             last_stage_folder = seed_folder,
             K=1, alpha=0.5, second_stage=false, method=method,
             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-            moment_blocks=moment_blocks
+            moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
         )
     else
         best_params, best_fitness, history = train_stage_pso(
@@ -1221,7 +1233,9 @@ function run_pso_optimization(;
             sample_weights = SAMPLE_WEIGHTS,
             weight_matrix  = weight_matrix,
             warm_start_override = warm_start_params,
-            moment_blocks  = moment_blocks
+            moment_blocks  = moment_blocks,
+            analytical     = analytical,
+            n_quad         = n_quad
         )
     end
 
@@ -1252,7 +1266,7 @@ function run_pso_optimization(;
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
                 K=1, alpha=alpha, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1268,7 +1282,7 @@ function run_pso_optimization(;
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
                 K=1, alpha=alpha_prod, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1283,7 +1297,7 @@ function run_pso_optimization(;
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K=1, alpha=alpha, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1298,7 +1312,7 @@ function run_pso_optimization(;
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K=1, alpha=alpha, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -1367,7 +1381,9 @@ function compute_jacobian(theta::Vector{Float64};
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
                           base_seed::Int = 0,
-                          output_subdir::String = "step2")
+                          output_subdir::String = "step2",
+                          analytical::Bool = false,
+                          n_quad::Int = 200)
 
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
@@ -1388,13 +1404,21 @@ function compute_jacobian(theta::Vector{Float64};
     # within a replication, the 2·n_perturb + 1 evaluations are sequential
     # (same draws u_k, no need to reshuffle between perturbations).
     rep_results = pmap(1:K) do k
-        u_k, w_k = generate_stratified_draws(N_rho, n_good;
-                                             randomise = true,
-                                             rng       = MersenneTwister(base_seed + k))
-
-        eval_one = p -> begin
-            _, m = full_SMM(p; u_draws=u_k, sample_weights=w_k)
-            vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+        if analytical
+            # Analytical mode: deterministic, no simulation draws needed.
+            # We still loop K times for API compatibility; K=1 is recommended.
+            eval_one = p -> begin
+                _, m = full_SMM(p; analytical=true, n_quad=n_quad)
+                vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+            end
+        else
+            u_k, w_k = generate_stratified_draws(N_rho, n_good;
+                                                 randomise = true,
+                                                 rng       = MersenneTwister(base_seed + k))
+            eval_one = p -> begin
+                _, m = full_SMM(p; u_draws=u_k, sample_weights=w_k)
+                vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+            end
         end
 
         plus_results  = [eval_one(p) for p in plus_params]

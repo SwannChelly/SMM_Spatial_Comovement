@@ -154,12 +154,6 @@ X_dr_local = X_dr_local[N_downstream_per_region.!=0]
 emp_pi_r_local = X_dr_local./sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r = $(emp_pi_r_local)  # Full vector; MOMENT_MASK handles [2:end]
-
-# Reference downstream region for A normalization: largest empirical sales share
-A_REF_REGION_local = argmax(emp_pi_r_local)
-println("A_REF_REGION = $A_REF_REGION_local (π_r = $(emp_pi_r_local[A_REF_REGION_local]))")
-@everywhere const A_REF_REGION = $A_REF_REGION_local
-
 if n_coef == 1
     reg_coef_local_pso = [coefs[3, "value"]]
 else
@@ -377,7 +371,6 @@ if full_run
     # Use initial guess for other parameters
     A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
     A ./= sum(A)
-    # Note: unpack_params renormalizes A by A[A_REF_REGION], so the sum-normalization here only sets scale.
 
     # Extract only active entries (respect sparsity mask)
     T_init_nonzero = vec(T_rs_init)[T_mask_local]
