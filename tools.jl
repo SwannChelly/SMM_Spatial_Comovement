@@ -1155,7 +1155,7 @@ function run_pso_optimization(;
         println("="^70)
 
         beta_min = 1e-3
-        beta_max = 100
+        beta_max = 10
         if n_coef == 1
             length_range_beta = 10000
         end
