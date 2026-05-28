@@ -219,7 +219,14 @@ if run_step3
     sim_vec_2 = vcat([vec(sim_moments_2[i]) for i in 1:5]...)[MOMENT_MASK]
     emp_vec   = vec(empirical_moments)
 
-    J2_gb = J2[gb_indices, :]
+    # Step 3 only identifies β and T parameters (A_r/labor/industry fixed at θ̂_1).
+    # Restrict Jacobian columns to β+T to ensure G'WG is full-rank (order condition).
+    # β starts at raw position 1 + S_ + R_down_ + 1; everything after is T.
+    beta_T_start_raw  = 1 + S_ + R_down_ + 1
+    gb_param_cols     = findall(i -> i >= beta_T_start_raw, jacobian_param_indices)
+    gb_param_indices_step3 = jacobian_param_indices[gb_param_cols]
+
+    J2_gb = J2[gb_indices, gb_param_cols]
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
@@ -227,12 +234,16 @@ if run_step3
     gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
     gb_block_names  = ("reg_coef", "gamma_ls")
 
+    println("Step-3 inference: J2_gb is $(size(J2_gb,1))×$(size(J2_gb,2)) " *
+            "($(N_gb) β+γ moments × $(length(gb_param_indices_step3)) β+T params). " *
+            "Order condition: $(N_gb) ≥ $(length(gb_param_indices_step3)) → $(N_gb >= length(gb_param_indices_step3) ? "satisfied" : "VIOLATED").")
+
     # Omega = Sigma_data (Sigma_sim = 0 in GMM mode)
     Omega_gmm = Sigma_data_gb
 
     compute_smm_inference(
         theta_hat_2, J2_gb, W_eff, Omega_gmm;
-        param_indices         = jacobian_param_indices,
+        param_indices         = gb_param_indices_step3,
         empirical_moments_vec = emp_vec_gb,
         simulated_moments_vec = sim_vec_gb,
         output_folder         = joinpath(output_folder, "step3"),
