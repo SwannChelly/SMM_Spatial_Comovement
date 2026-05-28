@@ -1016,13 +1016,13 @@ This function remains for legacy SMM mode (main.jl).
 Assemble the efficient SMM weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}
 over γ_ls and reg_coef moments only.
 
-Σ_data is loaded from Sigma.npy — the joint bootstrap covariance of γ_ls
-and reg_coef moments (ordering: γ block first, then β block, matching
-BLOCK_RANGES[5] followed by BLOCK_RANGES[4]).
+Σ_data is loaded from Sigma_beta_gamma.npy — the joint bootstrap covariance of
+reg_coef and γ_ls moments (ordering: β block first, then γ block, matching
+BLOCK_RANGES[4] followed by BLOCK_RANGES[5]).
 Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1,
 restricted to the same moment indices.
 
-Returns W_step3 of size (n_gamma_kept + N_beta, n_gamma_kept + N_beta).
+Returns W_step3 of size (N_beta + n_gamma_kept, N_beta + n_gamma_kept).
 """
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
@@ -1142,7 +1142,7 @@ function run_pso_optimization(;
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
 
-    moment_blocks = moments_loss_gamma_beta ? [3, 4] : nothing
+    moment_blocks = moments_loss_gamma_beta ? [4, 5] : nothing   # reg_coef + gamma_ls (β+γ)
 
     best_params = nothing
     best_fitness = Inf
@@ -1533,7 +1533,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                simulated_moments_vec::Vector{Float64},
                                output_folder::String = ".",
                                industry::String = "",
-                               K_sim::Int = 0)
+                               K_sim::Int = 0,
+                               block_ranges = BLOCK_RANGES,
+                               block_names  = BLOCK_NAMES)
 
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
@@ -1675,17 +1677,15 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         # Per-block residual SEs
         println(io, "\n--- Per-block moment residual SEs ---")
         println(io, "  (residual share ≈ 0 ⟹ moment well-fit; ≈ 1 ⟹ weakly used)")
-        for (k, name) in enumerate(BLOCK_NAMES)
-            rng = BLOCK_RANGES[k]
+        for (name, rng) in zip(block_names, block_ranges)
             isempty(rng) && continue
             block_resid = se_m_resid[rng]
             block_omega_sd = sqrt.(max.(diag(Omega)[rng], 0.0))
-            resid_share = ifelse.(block_omega_sd .> 1e-15, block_resid ./ max.(block_omega_sd, 1e-15), fill(NaN, length(rng)))
+            resid_share = ifelse.(block_omega_sd .> 1e-15,
+                                  block_resid ./ max.(block_omega_sd, 1e-15),
+                                  fill(NaN, length(rng)))
             @printf(io, "  %-12s  mean_resid_SE=%.4e  max_resid_SE=%.4e  mean_share=%.4f\n",
-                    name,
-                    mean(block_resid),
-                    maximum(block_resid),
-                    mean(resid_share))
+                    name, mean(block_resid), maximum(block_resid), mean(resid_share))
         end
 
         # Hansen J

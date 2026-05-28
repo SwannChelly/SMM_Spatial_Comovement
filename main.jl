@@ -138,7 +138,10 @@ if run_step2
     sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
     emp_vec   = vec(empirical_moments)
 
-    gb_indices = vcat(collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[4]))
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))   # β then γ
+    n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
+    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
+    gb_block_names  = ("reg_coef", "gamma_ls")
 
     # Restrict Jacobian to gamma+beta moment rows
     J_gb = J1[gb_indices, :]
@@ -154,7 +157,9 @@ if run_step2
     #     simulated_moments_vec = sim_vec_gb,
     #     output_folder         = joinpath(output_folder, "step2"),
     #     industry              = industry,
-    #     K_sim                 = K_sim
+    #     K_sim                 = K_sim,
+    #     block_ranges          = gb_block_ranges,
+    #     block_names           = gb_block_names
     # )
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
@@ -227,14 +232,26 @@ if run_step3
     sim_vec_2 = vcat([vec(sim_moments_2[i]) for i in 1:5]...)[MOMENT_MASK]
     emp_vec   = vec(empirical_moments)
 
+    # Restrict to β+γ moments (β then γ) for inference
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
+    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
+    gb_block_names  = ("reg_coef", "gamma_ls")
+
+    J2_gb      = J2[gb_indices, :]
+    sim_vec_gb = sim_vec_2[gb_indices]
+    emp_vec_gb = emp_vec[gb_indices]
+
     compute_smm_inference(
-        theta_hat_2, J2, W_step3_inf, Omega_inf;
+        theta_hat_2, J2_gb, W_step3_inf, Omega_inf;
         param_indices         = jacobian_param_indices,
-        empirical_moments_vec = emp_vec,
-        simulated_moments_vec = sim_vec_2,
+        empirical_moments_vec = emp_vec_gb,
+        simulated_moments_vec = sim_vec_gb,
         output_folder         = joinpath(output_folder, "step3"),
         industry              = industry,
-        K_sim                 = K_sim
+        K_sim                 = K_sim,
+        block_ranges          = gb_block_ranges,
+        block_names           = gb_block_names
     )
 end
 
@@ -360,7 +377,10 @@ _, sim_moments_1 = full_SMM(theta_hat_1; u_draws=U_DRAWS, sample_weights=SAMPLE_
 sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
 emp_vec   = vec(empirical_moments)
 
-gb_indices = vcat(collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[4]))
+gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))   # β then γ
+n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
+gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
+gb_block_names  = ("reg_coef", "gamma_ls")
 
 # Restrict Jacobian to gamma+beta moment rows
 J_gb = J1[gb_indices, :]
@@ -376,7 +396,9 @@ compute_smm_inference(
     simulated_moments_vec = sim_vec_gb,
     output_folder         = joinpath(output_folder, "step2"),
     industry              = industry,
-    K_sim                 = K_sim
+    K_sim                 = K_sim,
+    block_ranges          = gb_block_ranges,
+    block_names           = gb_block_names
 )
 println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 using LinearAlgebra, Statistics, Printf

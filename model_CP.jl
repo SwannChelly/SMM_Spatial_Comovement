@@ -951,7 +951,12 @@ function loss_function(simulated_moments, emp, W, method="original";
 
     W = isnothing(W) ? I(N) : W
     if moment_indices !== nothing && !isa(W, UniformScaling)
-        W = W[moment_indices, moment_indices]
+        # If W is already restricted to the selected moments (e.g. W_step3 over β+γ,
+        # size == length(moment_indices)), use it as-is — err is subset to the same
+        # moments in the same (β-then-γ) order. Otherwise subset a full-size W.
+        if size(W, 1) != length(moment_indices)
+            W = W[moment_indices, moment_indices]
+        end
     end
     return err * W * err'
 end
