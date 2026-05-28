@@ -92,66 +92,77 @@ end
 
 Distance-bin regression coefficients via deterministic Gauss-Legendre quadrature.
 
-For each active (r', s) pair at n_quad nodes in the Fréchet CDF:
-  z_k = T_{r's}^{1/θ} × (-log(1-u_k))^{-1/θ}
-  y_k = exp(z_k^{-θ} × (A_{r's,dr} - Φ_{s,dr}) × (w_{r's}τ_{r'dr})^θ)
-      = P(firm at z_k beats all other competitors for closest downstream dr | 1 draw/region)
+Regressand (Eq. B6): the whole-industry extensive margin
+    ρ̃_{r's}(z) = 1 − ∏_{dr=1}^{R_downstream} (1 − ρ_{r'dr s}(z))
+where ρ_{r'dr s}(z) = exp(z^{-θ} · coef_dr) is the per-destination win probability
+and coef_dr = T_{r's} − Φ_{s,dr}·(w_{r's}τ_{r'dr})^θ ≤ 0.
+
+Regressors (distance-bin dummies or log distance) and FE group are keyed on the
+nearest downstream region CLOSEST_DOWNSTREAM_REGION[r_p], matching Eq. (1) and
+fast_weighted_regression. Only the dependent variable changes: from the single
+closest-destination win probability to the product across all downstream regions.
 
 After weighted FWL demeaning by (sector × closest downstream), WLS gives β_{1..N_beta}.
 
-The z-variation in y_k captures the productivity gradient; the distance-bin variation
-captures the τ effect on supplier probability, consistent with LPM on 0/1 linkages.
+Caveat: ρ̃_{r's}(z) assumes conditional independence across destinations. The SMM
+linkages_flat realises the true win-anywhere event with shared competitor draws
+(positively correlated), so the product over-states the extensive margin (FKG/Harris).
+Expect max_rel_err ≈ 1e-2 vs. simulated moments, not machine zero.
 """
 function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
     FT = eltype(Phi)
 
-    # Gauss-Legendre nodes/weights on (-1,1), mapped to (0,1)
     nodes_raw, weights_raw = gausslegendre(n_quad)
-    u_nodes  = (nodes_raw  .+ 1) ./ 2
-    gl_wts   = weights_raw ./ 2   # Jacobian of (-1,1)→(0,1)
+    u_nodes = (nodes_raw .+ 1) ./ 2
+    gl_wts  = weights_raw ./ 2
 
     N_total = n_good * n_quad
-    n_reg   = N_beta + 1  # distance bins + log(z)
-
+    n_reg   = N_beta + 1
     y        = Vector{FT}(undef, N_total)
     X        = zeros(FT, N_total, n_reg)
     w_arr    = Vector{Float64}(undef, N_total)
     fe_group = Vector{Int}(undef, N_total)
 
+    coef = Vector{FT}(undef, R_downstream)   # reused buffer, no per-g allocation
+
     idx = 0
     for g in 1:n_good
-        s    = GOOD_S[g]
-        r_p  = GOOD_R[g]
-        dr   = CLOSEST_DOWNSTREAM_REGION[r_p]
-        gid  = (s - 1) * R_downstream + dr
+        s     = GOOD_S[g]
+        r_p   = GOOD_R[g]
+        T_val = T_mat[s, r_p]
+        w_val = W_RS_FLAT[g]
 
-        T_val  = T_mat[s, r_p]
-        w_val  = W_RS_FLAT[g]
-        tau_val = tau[r_p, dr]
-
-        # EK term for (r', s) supplying dr
-        A_rsd  = T_val * (w_val * tau_val)^(-theta)
-        phi_dr = Phi[s, dr]
-
-        # Exponent coefficient (negative, so y_k = exp(negative × z_k^{-θ}) ∈ (0,1))
-        exp_coef = (A_rsd - phi_dr) * (w_val * tau_val)^theta
-
-        scale = T_val^(1/theta)
-
+        # Regressors / FE keyed on the nearest downstream region (matches Eq. (1)
+        # and fast_weighted_regression). Unchanged.
+        dr0 = CLOSEST_DOWNSTREAM_REGION[r_p]
+        gid = (s - 1) * R_downstream + dr0
         if N_beta == 1
             log_dist = LOG_CLOSEST_DIST[r_p]
         else
-            b = DistBin[r_p, dr]
+            b = DistBin[r_p, dr0]
         end
+
+        # Per-destination exponent coefficient; coef_dr ≤ 0 (Φ_{s,dr}(wτ)^θ ≥ T_{r's}).
+        @inbounds for dr in 1:R_downstream
+            coef[dr] = T_val - Phi[s, dr] * (w_val * tau[r_p, dr])^theta
+        end
+
+        scale = T_val^(1/theta)
 
         for k in 1:n_quad
             idx += 1
-            u_k = u_nodes[k]
-            # Guard against u_k == 1 (→ z = ∞)
-            u_k = min(u_k, 1.0 - 1e-14)
-            z_k = scale * (-log(1.0 - u_k))^(-1.0/theta)
+            u_k  = min(u_nodes[k], 1.0 - 1e-14)
+            z_k  = scale * (-log(1.0 - u_k))^(-1.0/theta)
+            zinv = z_k^(-theta)
 
-            y[idx]        = exp(z_k^(-theta) * exp_coef)
+            # Extensive margin (Eq. B6): 1 - ∏_dr (1 - ρ_{r'dr s}(z)).
+            # Log-space accumulation for stability; xdr ≤ 0 so exp(xdr) ∈ (0,1].
+            logprod = zero(FT)
+            @inbounds for dr in 1:R_downstream
+                xdr = zinv * coef[dr]
+                logprod += log1p(-exp(xdr))   # log(1 - ρ_dr); -Inf ⇒ certain win
+            end
+            y[idx]        = -expm1(logprod)   # 1 - exp(logprod)
             w_arr[idx]    = gl_wts[k]
             fe_group[idx] = gid
 
