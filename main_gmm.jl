@@ -223,6 +223,10 @@ if run_step3
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
+    n_reg_loc = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
+    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
+    gb_block_names  = ("reg_coef", "gamma_ls")
+
     # Omega = Sigma_data (Sigma_sim = 0 in GMM mode)
     Omega_gmm = Sigma_data_gb
 
@@ -233,7 +237,9 @@ if run_step3
         simulated_moments_vec = sim_vec_gb,
         output_folder         = joinpath(output_folder, "step3"),
         industry              = industry,
-        K_sim                 = 0   # no simulation noise
+        K_sim                 = 0,
+        block_ranges          = gb_block_ranges,
+        block_names           = gb_block_names
     )
 
     # Add note to inference summary
