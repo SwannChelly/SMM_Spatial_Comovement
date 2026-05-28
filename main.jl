@@ -45,9 +45,9 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000 # K for Σ_sim estimation
 
-K = 5
+K = 10
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
 run_step3 = false
 
