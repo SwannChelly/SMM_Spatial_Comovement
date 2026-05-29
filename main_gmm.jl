@@ -270,34 +270,34 @@ run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weigh
 println("\nGMM estimation complete. Results in: $output_folder")
 
 
-beta_min = 1e-3
-beta_max = 10
-if n_coef == 1
-    length_range_beta = 10000
-end
-beta_search_method= "log_grid"
-if beta_search_method == "log_grid"
-    beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;
-                                                log_grid_length=length_range_beta)
-else
-    beta_candidates = generate_initial_betas("lhs", N_beta, beta_min, beta_max;
-                                                lhs_n_samples=20000)
-end
-println("  Generated $(length(beta_candidates)) beta candidates")
+# beta_min = 1e-3
+# beta_max = 10
+# if n_coef == 1
+#     length_range_beta = 10000
+# end
+# beta_search_method= "log_grid"
+# if beta_search_method == "log_grid"
+#     beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;
+#                                                 log_grid_length=length_range_beta)
+# else
+#     beta_candidates = generate_initial_betas("lhs", N_beta, beta_min, beta_max;
+#                                                 lhs_n_samples=20000)
+# end
+# println("  Generated $(length(beta_candidates)) beta candidates")
 
-A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
-A_init ./= sum(A_init)
-T_init_nz = vec(T_rs_init)[T_MASK]
-# New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
-init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
-expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
-
-
-results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,W_override=Weight_matrix_custom,analytical=true, n_quad=200), expanding_beta[1,:])
+# A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
+# A_init ./= sum(A_init)
+# T_init_nz = vec(T_rs_init)[T_MASK]
+# # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
+# init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
+# expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
 
 
-scores = [r !== nothing ? r[1][1] : Inf for r in results_]
-best_idx = argmin(scores)
+# results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,W_override=Weight_matrix_custom,analytical=true, n_quad=200), expanding_beta[1,:])
 
-init_beta = beta_candidates[best_idx]
-println("  Best initial beta: ", round.(init_beta, digits=6))
+
+# scores = [r !== nothing ? r[1][1] : Inf for r in results_]
+# best_idx = argmin(scores)
+
+# init_beta = beta_candidates[best_idx]
+# println("  Best initial beta: ", round.(init_beta, digits=6))

@@ -160,7 +160,10 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
             logprod = zero(FT)
             @inbounds for dr in 1:R_downstream
                 xdr = zinv * coef[dr]
-                logprod += log1p(-exp(xdr))   # log(1 - ρ_dr); -Inf ⇒ certain win
+                @inbounds for dr in 1:R_downstream
+                    xdr = zinv * coef[dr]
+                    logprod += log1p(max(-exp(xdr), -1.0))   # log(1 - ρ_dr); clamp guards FP overshoot past -1
+                end   # log(1 - ρ_dr); -Inf ⇒ certain win
             end
             y[idx]        = -expm1(logprod)   # 1 - exp(logprod)
             w_arr[idx]    = gl_wts[k]
