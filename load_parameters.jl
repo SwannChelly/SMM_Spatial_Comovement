@@ -86,7 +86,7 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Insert after X_rs_local is loaded, BEFORE T_mask_local computation.
 gamma_threshold = 0.02   # (s,r) pairs with γ_{rs} < threshold are zeroed out
-
+NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
 
