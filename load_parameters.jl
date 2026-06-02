@@ -57,6 +57,47 @@ end
 @everywhere const delta_r             = $(ones(R_full))
 @everywhere const Weight_matrix       = $(nothing)
 
+# ── Gamma threshold: drop small sourcing-share pairs from active set ─────
+# Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
+gamma_threshold = 0.02   # (s,r) pairs with γ_{rs} < threshold are zeroed out
+NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
+emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
+# Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
+
+n_dropped = 0
+if gamma_threshold != 0
+    for s in 1:S_
+        sector_sum_before = sum(emp_gamma_ls_local[:, s])
+        for r in 1:R_full
+            if 0 < emp_gamma_ls_local[r, s] <= gamma_threshold
+                emp_gamma_ls_local[r, s] = 0.0
+                X_rs_local[s, r] = 0.0      # remove from T_MASK active set
+                global n_dropped += 1
+            end
+        end
+        # Renormalize survivors to preserve sector total
+        sector_sum_after = sum(emp_gamma_ls_local[:, s])
+        if sector_sum_after > 1e-15 && sector_sum_before > 1e-15
+            emp_gamma_ls_local[:, s] .*= sector_sum_before / sector_sum_after
+        end
+        # Diagnostic: sectors collapsed to ≤ 1 surviving upstream region
+        n_surv = count(>(0), @view emp_gamma_ls_local[:, s])
+        if n_surv == 0
+            error("γ-threshold: sector $s has NO surviving upstream region ⇒ " *
+                  "X_s[s]=0, γ_ls=0/0 (NaN moment, NaN Jacobian column). " *
+                  "Lower the threshold or drop this sector.")
+        elseif n_surv == 1
+            @warn "γ-threshold: sector $s reduced to a SINGLE upstream region. " *
+                  "It is the ref region (dropped as sum-to-1 redundant), so the " *
+                  "sector contributes zero γ_ls moments and T[s,·] has no free " *
+                  "parameter."
+        end
+    end
+end
+println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
+@everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)
+# ──────────────────────────────────────────────────────────────────────────
+
 T_mask_local         = vec(X_rs_local) .> 0
 T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
@@ -82,35 +123,6 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 @everywhere const SR_TO_GOOD           = $SR_TO_GOOD_local
 @everywhere const W_RS_FLAT            = $W_RS_FLAT_local
 
-
-# ── Gamma threshold: drop small sourcing-share pairs from active set ─────
-# Insert after X_rs_local is loaded, BEFORE T_mask_local computation.
-gamma_threshold = 0.02   # (s,r) pairs with γ_{rs} < threshold are zeroed out
-NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
-emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
-# Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
-
-n_dropped = 0
-if gamma_threshold != 0
-    for s in 1:S_
-        sector_sum_before = sum(emp_gamma_ls_local[:, s])
-        for r in 1:R_full
-            if 0 < emp_gamma_ls_local[r, s] <= gamma_threshold
-                emp_gamma_ls_local[r, s] = 0.0
-                X_rs_local[s, r] = 0.0      # remove from T_MASK active set
-                global n_dropped += 1
-            end
-        end
-        # Renormalize survivors to preserve sector total
-        sector_sum_after = sum(emp_gamma_ls_local[:, s])
-        if sector_sum_after > 1e-15 && sector_sum_before > 1e-15
-            emp_gamma_ls_local[:, s] .*= sector_sum_before / sector_sum_after
-        end
-    end
-end
-println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
-# ──────────────────────────────────────────────────────────────────────────
-@everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)#$(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
 
 
 # Reference region per sector: largest empirical sourcing share among active regions
@@ -154,7 +166,7 @@ end
 # Moment block sizes + MOMENT_MASK
 n_labor    = 1
 n_industry = length(vec(agg_industry_share_local))
-n_gamma    = length(vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))))
+n_gamma    = length(vec(emp_gamma_ls_local))
 n_reg      = length(reg_coef_local)
 n_pi       = length(emp_pi_r_local)
 N_moments_full = n_labor + n_industry + n_pi + n_reg + n_gamma
@@ -164,7 +176,7 @@ empirical_moments_local = vcat(
     vec(agg_industry_share_local),
     emp_pi_r_local,
     reg_coef_local,
-    vec(permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy"))))
+    vec(emp_gamma_ls_local)        # thresholded+renormalized, consistent with loss residuals
 )
 
 moment_mask_local = trues(N_moments_full)
