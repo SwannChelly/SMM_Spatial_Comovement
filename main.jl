@@ -45,9 +45,9 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000 # K for Σ_sim estimation
 
-K = 5
+K = 2
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
 run_step3 = false
 
@@ -150,17 +150,17 @@ if run_step2
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
-    # compute_smm_inference(
-    #     theta_hat_1, J_gb, W_step3, Omega_step2;
-    #     param_indices         = jacobian_param_indices,
-    #     empirical_moments_vec = emp_vec_gb,
-    #     simulated_moments_vec = sim_vec_gb,
-    #     output_folder         = joinpath(output_folder, "step2"),
-    #     industry              = industry,
-    #     K_sim                 = K_sim,
-    #     block_ranges          = gb_block_ranges,
-    #     block_names           = gb_block_names
-    # )
+    compute_smm_inference(
+         theta_hat_1, J_gb, W_step3, Omega_step2;
+         param_indices         = jacobian_param_indices,
+         empirical_moments_vec = emp_vec_gb,
+         simulated_moments_vec = sim_vec_gb,
+         output_folder         = joinpath(output_folder, "step2"),
+         industry              = industry,
+         K_sim                 = K_sim,
+         block_ranges          = gb_block_ranges,
+         block_names           = gb_block_names
+    )
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
     println("Step 2 skipped (resume). Loading W_step3...")

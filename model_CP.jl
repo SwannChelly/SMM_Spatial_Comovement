@@ -430,7 +430,7 @@ function solve_network(params; return_firm_level=false,
         z_flat = zeros(N_rho, n_good)
         for g in 1:n_good
             T_sr = T[GOOD_S[g], GOOD_R[g]]
-            scale = T_sr^(1/theta)
+            scale = max(T_sr, eps(Float64))^(1/theta)
             for rho in 1:N_rho
                 z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
             end
