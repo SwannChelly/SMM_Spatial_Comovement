@@ -129,7 +129,7 @@ if run_step2
         K             = 50,
         step_rel      = 1e-3,
         step_abs      = 1e-8,
-        base_seed     = 0
+        base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
     )
 
     # Inference at θ̂_1 using efficient weight W_step3 and Ω from step2/
@@ -143,16 +143,18 @@ if run_step2
     gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
     gb_block_names  = ("reg_coef", "gamma_ls")
 
-    # Restrict Jacobian to gamma+beta moment rows
-    J_gb = J1[gb_indices, :]
+    # Restrict Jacobian columns to β+T (the only params β+γ moments identify)
+    beta_T_start = 1 + S + R_downstream + 1                       # first β raw index
+    gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
+    gb_param_idx = jacobian_param_indices[gb_cols]
 
-    # Restrict moment vectors
+    J_gb       = J1[gb_indices, gb_cols]                          # β+γ rows × β+T cols
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
     compute_smm_inference(
          theta_hat_1, J_gb, W_step3, Omega_step2;
-         param_indices         = jacobian_param_indices,
+         param_indices         = gb_param_idx,
          empirical_moments_vec = emp_vec_gb,
          simulated_moments_vec = sim_vec_gb,
          output_folder         = joinpath(output_folder, "step2"),
@@ -238,13 +240,18 @@ if run_step3
     gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
     gb_block_names  = ("reg_coef", "gamma_ls")
 
-    J2_gb      = J2[gb_indices, :]
+    # Restrict Jacobian columns to β+T (the only params β+γ moments identify)
+    beta_T_start = 1 + S + R_downstream + 1                       # first β raw index
+    gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
+    gb_param_idx = jacobian_param_indices[gb_cols]
+
+    J2_gb      = J2[gb_indices, gb_cols]                          # β+γ rows × β+T cols
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
     compute_smm_inference(
         theta_hat_2, J2_gb, W_step3_inf, Omega_inf;
-        param_indices         = jacobian_param_indices,
+        param_indices         = gb_param_idx,
         empirical_moments_vec = emp_vec_gb,
         simulated_moments_vec = sim_vec_gb,
         output_folder         = joinpath(output_folder, "step3"),
@@ -347,150 +354,3 @@ df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
 Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
 
 println("\nPost-hoc analysis complete. Results saved to: $folder")
-
-
-# Test cov matrix
-
-println("\n" * "="^70)
-println("STEP 2: Building efficient weight matrix (K=$K_sim)")
-println("="^70)
-
-W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
-                                        K=K_sim, output_folder=output_folder)
-
-# Jacobian at θ̂_1 — identified parameters only
-J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
-    theta_hat_1;
-    param_indices = jacobian_param_indices,
-    output_folder = output_folder,
-    output_subdir = "step2",
-    filename      = "jacobian_all.npy",
-    K             = K,
-    step_rel      = 1e-3,
-    step_abs      = 1e-8,
-    base_seed     = 0
-)
-
-# Inference at θ̂_1 using efficient weight W_step3 and Ω from step2/
-Omega_step2 = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
-_, sim_moments_1 = full_SMM(theta_hat_1; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
-emp_vec   = vec(empirical_moments)
-
-gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))   # β then γ
-n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
-gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
-gb_block_names  = ("reg_coef", "gamma_ls")
-
-# Restrict Jacobian to gamma+beta moment rows
-J_gb = J1[gb_indices, :]
-
-# Restrict moment vectors
-sim_vec_gb = sim_vec_1[gb_indices]
-emp_vec_gb = emp_vec[gb_indices]
-
-compute_smm_inference(
-    theta_hat_1, J_gb, W_step3, Omega_step2;
-    param_indices         = jacobian_param_indices,
-    empirical_moments_vec = emp_vec_gb,
-    simulated_moments_vec = sim_vec_gb,
-    output_folder         = joinpath(output_folder, "step2"),
-    industry              = industry,
-    K_sim                 = K_sim,
-    block_ranges          = gb_block_ranges,
-    block_names           = gb_block_names
-)
-println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
-using LinearAlgebra, Statistics, Printf
-
-# Center M_sim (already saved to step2/M_sim.npy by build_step3_weight_matrix)
-M_sim = NPZ.npzread(joinpath(output_folder, "step2", "M_sim.npy"))
-Mc = M_sim .- mean(M_sim, dims=1)
-K, N_moments = size(M_sim)
-
-# Per-moment standard deviation
-sds = vec(std(M_sim, dims=1))
-
-# Block-by-block diagnostic
-for (k, name) in enumerate(BLOCK_NAMES)
-    rng = BLOCK_RANGES[k]
-    isempty(rng) && continue
-
-    block = Mc[:, rng]
-    sv = svdvals(block)
-
-    @printf("%-10s  size=%4d  sd: min=%.2e  max=%.2e  median=%.2e  |  sv: max=%.2e  min=%.2e  ratio=%.2e\n",
-            name, length(rng),
-            minimum(sds[rng]), maximum(sds[rng]), median(sds[rng]),
-            maximum(sv), minimum(sv), maximum(sv)/max(minimum(sv), 1e-300))
-end
-
-# Full-matrix singular values: tail behaviour
-sv_full = svdvals(Mc)
-println("\nTop 5 sv: ", round.(sv_full[1:5], sigdigits=3))
-println("Bottom 10 sv: ", round.(sv_full[end-9:end], sigdigits=3))
-println("Number below 1e-12 * sv_max: ", count(sv_full .< 1e-12 * sv_full[1]))
-
-Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
-Sigma_sim  = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_sim.npy"))
-Omega      = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
-
-for (name, M) in [("Sigma_data", Sigma_data), ("Sigma_sim", Sigma_sim), ("Omega", Omega)]
-    sv = svdvals(Symmetric(M))
-    tol = sv[1] * size(M,1) * eps()
-    r = count(sv .> tol)
-    @printf("%-10s  size=%d  rank=%d  sv_max=%.2e  sv_min=%.2e  cond=%.2e  rel_tol=%.2e\n",
-            name, size(M,1), r, sv[1], sv[end], sv[1]/max(sv[end], 1e-300), tol)
-end
-
-# How many moments have ZERO contribution from Sigma_data?
-zero_data_diag = findall(diag(Sigma_data) .< 1e-15)
-println("\nMoments with Σ_data diagonal ≈ 0: ", length(zero_data_diag), " / ", size(Sigma_data,1))
-println("Their indices: ", zero_data_diag)
-
-println("K = ", K)
-println("N_moments = ", N_moments)
-println("Theoretical max rank of Sigma_sim: ", min(K-1, N_moments))
-
-F = eigen(Symmetric(Omega))
-λ = F.values
-V = F.vectors
-
-# Bottom 5 eigenvectors
-for i in 1:5
-    v = V[:, i]
-    println("\nEigenvalue $i: ", round(λ[i], sigdigits=3))
-    # Block decomposition of the eigenvector
-    for (k, name) in enumerate(BLOCK_NAMES)
-        rng = BLOCK_RANGES[k]
-        isempty(rng) && continue
-        mass = sum(v[rng].^2)
-        @printf("  %-10s  ‖v_block‖² = %.4f\n", name, mass)
-    end
-end
-
-w_gamma = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
-w_beta  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
-
-for (name, M) in [("w_gamma", w_gamma), ("w_beta", w_beta)]
-    sv = svdvals(Symmetric(M))
-    @printf("%-10s  size=%d  sv_max=%.2e  sv_min=%.2e  cond=%.2e\n",
-            name, size(M,1), sv[1], sv[end], sv[1]/max(sv[end], 1e-300))
-end
-
-for (k, name) in enumerate(BLOCK_NAMES)
-    rng = BLOCK_RANGES[k]
-    isempty(rng) && continue
-    d = diag(Omega)[rng]
-    @printf("%-10s  diag: min=%.2e  max=%.2e  geomean=%.2e\n",
-            name, minimum(d), maximum(d), exp(mean(log.(max.(d, 1e-300)))))
-end
-
-using Random
-rng = MersenneTwister(1)
-U, w = generate_mc_draws(N_rho, n_good, rng)
-@assert size(U) == (N_rho, n_good)
-@assert all(0 .< U .< 1)
-@assert all(w .≈ 1/N_rho)
-println("U has rank: ", rank(U))     # should equal min(N_rho, n_good)
-println("U column 1 std: ", std(U[:,1]))  # should be ≈ sqrt(1/12) ≈ 0.289

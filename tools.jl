@@ -1033,18 +1033,43 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
     n_gb = length(gb_indices)
 
-    # ── Load Σ_data: joint bootstrap covariance of γ+β ──────────────────────
-    if N_beta == 1
-        print("Loading Sigma_beta_gamma_1" )
-        Sigma_data = NPZ.npzread(joinpath(input_folder, "Sigma_beta_gamma_1.npy"))
+    # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
+    sigma_file = N_beta == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
+    Sigma_full = NPZ.npzread(joinpath(input_folder, sigma_file))
+
+    # ── Reconcile file size with the (possibly thresholded) active set ───────
+    # The on-disk Σ was bootstrapped on the PRE-threshold active set. If a
+    # gamma_threshold pruned (s,r) pairs, n_gb shrank → drop matching β+γ
+    # rows/cols. β block (1:N_beta) is never pruned.
+    X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
+    T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
+    T_mask_moment_new = vec(permutedims(reshape(collect(T_MASK), S, R)))     # thresholded
+
+    keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
+    for s in 1:S
+        ref_r = T_REF_REGION[s]
+        ref_r > 0 && (keep_old[(s - 1) * R + ref_r] = false)
+    end
+    gamma_old_positions = findall(keep_old)                                  # γ order of Σ file
+    survive  = T_mask_moment_new[gamma_old_positions]
+    keep_idx = vcat(collect(1:N_beta), N_beta .+ findall(survive))
+
+    n_gb_old = N_beta + length(gamma_old_positions)
+    if size(Sigma_full, 1) == n_gb
+        Sigma_data = Sigma_full                                              # already regenerated
+    elseif size(Sigma_full, 1) == n_gb_old
+        Sigma_data = Sigma_full[keep_idx, keep_idx]                          # full file → subset
+        @assert size(Sigma_data, 1) == N_beta + count(survive)
+        @assert size(Sigma_data, 1) == n_gb "subset $(size(Sigma_data,1)) != n_gb=$n_gb"
+        # NOTE: subset is Cov(raw γ); loss uses renormalized γ (factor c_s≈sum_before/
+        # sum_after). Raw subset over-weights γ rows by ~c_s^2 → T SEs ~c_s too tight.
+        # For exact inference, regenerate Sigma_beta_gamma with the threshold applied.
     else
-        Sigma_data = NPZ.npzread(joinpath(input_folder, "Sigma_beta_gamma.npy"))
+        error("Sigma_beta_gamma size $(size(Sigma_full,1)) matches neither n_gb=$n_gb " *
+              "nor pre-threshold n_gb_old=$n_gb_old. Regenerate it.")
     end
 
-    @assert size(Sigma_data) == (n_gb, n_gb) """
-    Sigma.npy must be ($n_gb, $n_gb); got $(size(Sigma_data))
-    """
-    @assert isapprox(Sigma_data, Sigma_data'; atol=1e-10) "Sigma.npy is non-symmetric"
+    @assert isapprox(Sigma_data, Sigma_data'; atol=1e-10) "Sigma is non-symmetric"
 
     # ── Estimate Σ_sim via K re-seeded SMM evaluations ───────────────────────
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
@@ -1455,6 +1480,13 @@ function compute_jacobian(theta::Vector{Float64};
     J_elast    = dropdims(mean(J_elast_stack; dims=3); dims=3)
     J_sd       = K > 1 ? dropdims(std(J_stack;       dims=3); dims=3) : zeros(size(J))
     J_elast_sd = K > 1 ? dropdims(std(J_elast_stack; dims=3); dims=3) : zeros(size(J_elast))
+
+    if !all(isfinite, J)
+        bad = findall(!isfinite, J)
+        error("Non-finite Jacobian: $(length(bad)) entries, first at " *
+              "(moment,param)=$(bad[1:min(end,10)]). Likely a 0/0 moment " *
+              "(collapsed sector) or a clamped tiny-T column.")
+    end
 
     # ── Save ────────────────────────────────────────────────────────────────
     out_dir = joinpath(output_folder, output_subdir)
