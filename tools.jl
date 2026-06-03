@@ -1596,21 +1596,21 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     GtWG_inv = (Matrix(GtWG_inv) .+ Matrix(GtWG_inv)') ./ 2
 
     # ── 2. Variances ────────────────────────────────────────────────────────
-    Var_eff      = GtWG_inv
+    Var_eff      = GtWG_inv # Efficient variance. 
     middle       = G' * W * Omega * W * G
-    Var_sandwich = Var_eff * middle * Var_eff
+    Var_sandwich = Var_eff * middle * Var_eff # Sandwich variance
     Var_sandwich = (Var_sandwich .+ Var_sandwich') ./ 2
 
     # ── 3. Parameter SEs, t-stats, CIs ──────────────────────────────────────
     se_eff  = sqrt.(max.(diag(Var_eff),      0.0))
     se_sw   = sqrt.(max.(diag(Var_sandwich), 0.0))
     theta_active = theta_hat[param_indices]
-    t_stats = theta_active ./ se_eff
-    ci_95   = hcat(theta_active .- 1.96 .* se_eff,
-                   theta_active .+ 1.96 .* se_eff)
+    t_stats = theta_active ./ se_sw
+    ci_95   = hcat(theta_active .- 1.96 .* se_sw,
+                   theta_active .+ 1.96 .* se_sw)
 
     # ── 4. Fitted-moment and residual SEs ────────────────────────────────────
-    Var_m = G * Var_eff * G'
+    Var_m = G * Var_sandwich * G'
     Var_m = (Var_m .+ Var_m') ./ 2
     se_m_fitted = sqrt.(max.(diag(Var_m), 0.0))
 
