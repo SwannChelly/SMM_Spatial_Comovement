@@ -48,8 +48,8 @@ K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000 # K for Σ_sim estima
 K = 5
 
 run_step1 = false#true
-run_step2 = false
-run_step3 = true
+run_step2 = true
+run_step3 = false
 
 
 if !(n_coef in [1, 4, 5])
@@ -151,9 +151,10 @@ if run_step2
     J_gb       = J1[gb_indices, gb_cols]                          # β+γ rows × β+T cols
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
+    Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_cols]    
 
     compute_smm_inference(
-         theta_hat_1, J_gb, W_step3, Omega_step2;
+         theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
          param_indices         = gb_param_idx,
          empirical_moments_vec = emp_vec_gb,
          simulated_moments_vec = sim_vec_gb,
@@ -168,6 +169,7 @@ else
     println("Step 2 skipped (resume). Loading W_step3...")
     W_step3 = NPZ.npzread(step2_W_path)
 end
+
 
 ############## STEP 3 — Efficient-weighted optimisation ##############
 
