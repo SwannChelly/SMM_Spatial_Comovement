@@ -1045,13 +1045,14 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
     T_mask_moment_new = vec(permutedims(reshape(collect(T_MASK), S, R)))     # thresholded
 
+    # In the old mask, remove reference regions. 
     keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
     for s in 1:S
         ref_r = T_REF_REGION[s]
         ref_r > 0 && (keep_old[(s - 1) * R + ref_r] = false)
     end
-    gamma_old_positions = findall(keep_old)                                  # γ order of Σ file
-    survive  = T_mask_moment_new[gamma_old_positions]
+    gamma_old_positions = findall(keep_old)                                  # Get indices of the old set (without reference regions)
+    survive  = T_mask_moment_new[gamma_old_positions]                        # Get indices of the new set and remove reference regions
     keep_idx = vcat(collect(1:N_beta), N_beta .+ findall(survive))
 
     n_gb_old = N_beta + length(gamma_old_positions)

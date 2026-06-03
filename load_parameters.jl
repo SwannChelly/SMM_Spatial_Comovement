@@ -59,17 +59,33 @@ end
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.02   # (s,r) pairs with γ_{rs} < threshold are zeroed out
+gamma_threshold = 0.01   # (s,r) pairs with γ_{rs} < threshold are zeroed out
 NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
+
+# ── Pre-threshold diagnostic: active regions above / below the cut, per sector ──
+# Computed on the pristine matrix, before any pair is zeroed.
+#   active = γ > 0 ; below = 0 < γ ≤ threshold (dropped) ; above = γ > threshold (kept)
+println("\nGamma threshold = $gamma_threshold — active regions per sector:")
+@printf("  %-8s %8s %8s %8s\n", "sector", "active", "above", "below")
+total_active = 0; total_below = 0
+for s in 1:S_
+    col      = @view emp_gamma_ls_local[:, s]
+    n_active = count(>(0), col)
+    n_below  = count(x -> 0 < x/sum(col) <= gamma_threshold, col)
+    n_above  = n_active - n_below
+    global total_active += n_active; global total_below += n_below
+    @printf("  %-8d %8d %8d %8d\n", s, n_active, n_above, n_below)
+end
+@printf("  %-8s %8d %8d %8d\n", "TOTAL", total_active, total_active - total_below, total_below)
 
 n_dropped = 0
 if gamma_threshold != 0
     for s in 1:S_
         sector_sum_before = sum(emp_gamma_ls_local[:, s])
         for r in 1:R_full
-            if 0 < emp_gamma_ls_local[r, s] <= gamma_threshold
+            if 0 < emp_gamma_ls_local[r, s]/sum(emp_gamma_ls_local[:,s]) <= gamma_threshold
                 emp_gamma_ls_local[r, s] = 0.0
                 X_rs_local[s, r] = 0.0      # remove from T_MASK active set
                 global n_dropped += 1
