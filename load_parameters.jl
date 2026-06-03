@@ -85,7 +85,7 @@ if gamma_threshold != 0
     for s in 1:S_
         sector_sum_before = sum(emp_gamma_ls_local[:, s])
         for r in 1:R_full
-            if 0 < emp_gamma_ls_local[r, s]/sum(emp_gamma_ls_local[:,s]) <= gamma_threshold
+            if 0 < emp_gamma_ls_local[r, s]/sector_sum_before <= gamma_threshold
                 emp_gamma_ls_local[r, s] = 0.0
                 X_rs_local[s, r] = 0.0      # remove from T_MASK active set
                 global n_dropped += 1

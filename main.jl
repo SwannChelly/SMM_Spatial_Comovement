@@ -47,9 +47,9 @@ K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000 # K for Σ_sim estima
 
 K = 5
 
-run_step1 = true#true
-run_step2 = true
-run_step3 = false
+run_step1 = false#true
+run_step2 = false
+run_step3 = true
 
 
 if !(n_coef in [1, 4, 5])

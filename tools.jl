@@ -1402,7 +1402,7 @@ mean-relative-noise ratio σ/|μ| for entries above a magnitude floor.
 function compute_jacobian(theta::Vector{Float64};
                           K::Int = 50,
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
-                          step_rel::Float64 = 1e-3,
+                          step_rel::Float64 = 1e-2,
                           step_abs::Float64 = 1e-8,
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
