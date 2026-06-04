@@ -1637,6 +1637,57 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     NPZ.npzwrite(joinpath(inf_dir, "se_moments_fitted.npy"),    se_m_fitted)
     NPZ.npzwrite(joinpath(inf_dir, "se_moment_residuals.npy"),  se_m_resid)
 
+    # ── 6b. γ_ls fitted-moment plot with SE bars (first dashboard panel) ─────
+    # The subsystem passed here is β+γ in β-then-γ order, so the γ block is
+    # whichever of `block_ranges` is named "gamma_ls". We index emp/sim/SE by
+    # that *local* range — NOT global BLOCK_RANGES[5], which would be wrong.
+    # Points and error bars all share this ordering, so they stay aligned.
+    gam_pos = findfirst(==("gamma_ls"), collect(block_names))
+    if gam_pos !== nothing && !isempty(block_ranges[gam_pos])
+        try
+            grng     = block_ranges[gam_pos]
+            emp_gam  = empirical_moments_vec[grng]
+            sim_gam  = simulated_moments_vec[grng]
+            se_gam   = se_m_fitted[grng]
+
+            # Keep moments with a positive empirical value (mirrors the dashboard,
+            # which drops the structural zeros). Filter all three jointly so the
+            # error bars stay attached to their points.
+            keep = emp_gam .> 0
+            xf   = emp_gam[keep]
+            yf   = sim_gam[keep]
+            ef   = se_gam[keep]
+
+            if !isempty(xf)
+                lo = min(minimum(xf), minimum(yf .- ef)) * 0.9
+                hi = max(maximum(xf), maximum(yf .+ ef)) * 1.1
+
+                pγ = scatter(xf, yf;
+                    yerror            = ef,
+                    markersize        = 4,
+                    alpha             = 0.6,
+                    markerstrokecolor = :black,
+                    markerstrokewidth = 0.5,
+                    color             = RGB(0.247, 0.404, 0.667),
+                    label             = "",
+                    xlabel            = "Empirical γ_ls",
+                    ylabel            = "Simulated γ_ls",
+                    title             = "γ_ls: fitted vs empirical (±1 SE)",
+                    xlims             = (lo, hi),
+                    ylims             = (lo, hi),
+                    grid              = true,
+                    gridalpha         = 0.5,
+                    gridstyle         = :dash)
+                plot!(pγ, [lo, hi], [lo, hi]; color=:black, label="45°", linewidth=1)
+                savefig(pγ, joinpath(inf_dir, "gamma_ls_fitted_se.png"))
+                println("  γ_ls fitted-moment SE plot saved to: " *
+                        joinpath(inf_dir, "gamma_ls_fitted_se.png"))
+            end
+        catch e
+            @warn "γ_ls fitted-moment plot failed; continuing." exception=e
+        end
+    end
+
     # ── 7. Identification diagnostics ────────────────────────────────────────
     eig_GtWG     = eigvals(GtWG)
     sv_G         = svdvals(G)
