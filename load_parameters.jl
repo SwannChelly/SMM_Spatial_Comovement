@@ -18,7 +18,7 @@ coefs                         = CSV.read(joinpath(input_folder, "stats.csv"), Da
 distances_local               = NPZ.npzread(joinpath(input_folder, "distances.npy"))
 filter_N_upstream_local       = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
 w_rs_local                    = NPZ.npzread(joinpath(input_folder, "w_rs.npy")) # Upstream average wage.
-#w_rs_local .= ifelse.(w_rs_local .!= 0, w_rs_local ./ w_rs_local, w_rs_local)
+w_rs_local .= ifelse.(w_rs_local .!= 0, w_rs_local ./ w_rs_local, w_rs_local)
 regional_wages_local          = NPZ.npzread(joinpath(input_folder, "regional_wages.npy")) # Downstream region average wage for downstream firms.
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
 agg_industry_share_local      = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
@@ -317,6 +317,7 @@ local_index_of_full = Dict{Int,Int}()   # full-γ-slot (1..S*R_full) → local �
 for slot in 1:(S_ * R_full)
     full_pos = gamma_full_offset + slot
     if moment_mask_local[full_pos]
+        global local_counter
         local_counter += 1
         local_index_of_full[slot] = local_counter
     end

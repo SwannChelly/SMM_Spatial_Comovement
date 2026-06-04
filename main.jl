@@ -43,7 +43,7 @@ using StatsBase
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
-n_tau    = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : n_coef  # trade-cost param count; default = moment count
+n_tau    = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 1  # trade-cost param count; default = moment count
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000   # K for Σ_sim estimation
 
 K = 5
