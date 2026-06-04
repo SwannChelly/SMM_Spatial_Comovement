@@ -1568,7 +1568,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                industry::String = "",
                                K_sim::Int = 0,
                                block_ranges = BLOCK_RANGES,
-                               block_names  = BLOCK_NAMES)
+                               block_names  = BLOCK_NAMES,
+                               gamma_ref_map = nothing,   # NEW: per-sector γ ref reconstruction
+                               Var_m_full   = nothing)    # optional override; default uses local Var_m
 
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
@@ -1642,6 +1644,8 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     # whichever of `block_ranges` is named "gamma_ls". We index emp/sim/SE by
     # that *local* range — NOT global BLOCK_RANGES[5], which would be wrong.
     # Points and error bars all share this ordering, so they stay aligned.
+    # ── 6b. γ_ls fitted-moment plot with SE bars (first dashboard panel) ─────
+    # Subsystem is β+γ in β-then-γ order; γ block = whichever block is "gamma_ls".
     gam_pos = findfirst(==("gamma_ls"), collect(block_names))
     if gam_pos !== nothing && !isempty(block_ranges[gam_pos])
         try
@@ -1650,26 +1654,55 @@ function compute_smm_inference(theta_hat::Vector{Float64},
             sim_gam  = simulated_moments_vec[grng]
             se_gam   = se_m_fitted[grng]
 
-            # Keep moments with a positive empirical value (mirrors the dashboard,
-            # which drops the structural zeros). Filter all three jointly so the
-            # error bars stay attached to their points.
+            # γ-block submatrix of the fitted-moment covariance (sandwich-based),
+            # in LOCAL γ coordinates (1:length(grng)). Needed for ref-region SE,
+            # which is a quadratic form over a sector's retained γ moments and so
+            # depends on their COVARIANCES, not just their marginal SEs.
+            Var_gam = Var_m[grng, grng]
+
+            # Retained (non-reference) points: empirical x, fitted y, ±1 SE.
             keep = emp_gam .> 0
-            xf   = emp_gam[keep]
-            yf   = sim_gam[keep]
-            ef   = se_gam[keep]
+            x_ret = emp_gam[keep]
+            y_ret = sim_gam[keep]
+            e_ret = se_gam[keep]
 
-            if !isempty(xf)
-                lo = min(minimum(xf), minimum(yf .- ef)) * 0.9
-                hi = max(maximum(xf), maximum(yf .+ ef)) * 1.1
+            # Reference-region points reconstructed from the within-sector
+            # adding-up constraint γ_ref,s = c_s − Σ_{l≠ref} γ_ls.
+            x_ref = Float64[]; y_ref = Float64[]; e_ref = Float64[]
+            if gamma_ref_map !== nothing
+                for entry in gamma_ref_map
+                    pos = entry.local_positions          # local γ indices for sector s
+                    # guard: positions must lie inside this γ block
+                    (isempty(pos) || maximum(pos) > length(grng)) && continue
+                    # fitted reference share from the constraint
+                    y_r = entry.c_s - sum(sim_gam[pos])
+                    # Var(γ_ref) = 1' Var_gam[pos,pos] 1  (includes covariances)
+                    v_r = sum(@view Var_gam[pos, pos])
+                    se_r = sqrt(max(v_r, 0.0))
+                    # only plot if the empirical reference share is positive
+                    entry.emp_ref <= 0 && continue
+                    push!(x_ref, entry.emp_ref)
+                    push!(y_ref, y_r)
+                    push!(e_ref, se_r)
+                end
+            end
 
-                pγ = scatter(xf, yf;
-                    yerror            = ef,
+            # Combined axis limits over both retained and reference points.
+            all_x = vcat(x_ret, x_ref)
+            all_lo_y = vcat(y_ret .- e_ret, y_ref .- e_ref)
+            all_hi_y = vcat(y_ret .+ e_ret, y_ref .+ e_ref)
+            if !isempty(all_x)
+                lo = min(minimum(all_x), minimum(all_lo_y)) * 0.9
+                hi = max(maximum(all_x), maximum(all_hi_y)) * 1.1
+
+                pγ = scatter(x_ret, y_ret;
+                    yerror            = e_ret,
                     markersize        = 4,
                     alpha             = 0.6,
                     markerstrokecolor = :black,
                     markerstrokewidth = 0.5,
                     color             = RGB(0.247, 0.404, 0.667),
-                    label             = "",
+                    label             = "Non-reference",
                     xlabel            = "Empirical γ_ls",
                     ylabel            = "Simulated γ_ls",
                     title             = "γ_ls: fitted vs empirical (±1 SE)",
@@ -1678,10 +1711,26 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                     grid              = true,
                     gridalpha         = 0.5,
                     gridstyle         = :dash)
+
+                if !isempty(x_ref)
+                    # Distinct colour/marker so the reconstructed reference points
+                    # (different statistical object) are visually separable.
+                    scatter!(pγ, x_ref, y_ref;
+                        yerror            = e_ref,
+                        markersize        = 5,
+                        markershape       = :diamond,
+                        alpha             = 0.7,
+                        markerstrokecolor = :black,
+                        markerstrokewidth = 0.5,
+                        color             = RGB(0.75, 0.30, 0.20),
+                        label             = "Reference (reconstructed)")
+                end
+
                 plot!(pγ, [lo, hi], [lo, hi]; color=:black, label="45°", linewidth=1)
                 savefig(pγ, joinpath(inf_dir, "gamma_ls_fitted_se.png"))
                 println("  γ_ls fitted-moment SE plot saved to: " *
-                        joinpath(inf_dir, "gamma_ls_fitted_se.png"))
+                        joinpath(inf_dir, "gamma_ls_fitted_se.png") *
+                        " ($(length(x_ref)) reference points reconstructed)")
             end
         catch e
             @warn "γ_ls fitted-moment plot failed; continuing." exception=e

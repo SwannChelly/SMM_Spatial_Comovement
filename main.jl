@@ -162,7 +162,8 @@ if run_step2
          industry              = industry,
          K_sim                 = K_sim,
          block_ranges          = gb_block_ranges,
-         block_names           = gb_block_names
+         block_names           = gb_block_names,
+         gamma_ref_map_local   = GAMMA_REF_MAP
     )
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
@@ -260,7 +261,8 @@ if run_step3
         industry              = industry,
         K_sim                 = K_sim,
         block_ranges          = gb_block_ranges,
-        block_names           = gb_block_names
+        block_names           = gb_block_names,
+         gamma_ref_map_local   = GAMMA_REF_MAP
     )
 end
 

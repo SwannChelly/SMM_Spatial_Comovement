@@ -280,3 +280,56 @@ for s in 1:S_
 end
 jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_beta + sum(T_mask_local)) if i ∉ _excluded]
 println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
+
+
+# ── γ_ls reference-region reconstruction map (for inference plotting) ────────
+# Each retained γ moment in BLOCK_RANGES[5] corresponds to one active (s,r) pair
+# that is NOT the sector's reference region. For every sector we record, in the
+# *local* coordinates of the γ block, the positions of its retained regions, so
+# the dropped reference share can be rebuilt as c_s − Σ γ_retained and its SE as
+# 1' Var_γ 1 over those positions.
+#
+# c_s = domestic_share[s]  (the per-sector total the γ shares sum to).
+gamma_block_local = collect(BLOCK_RANGES_local[5])   # global masked indices of γ block
+gamma_block_start = isempty(gamma_block_local) ? 0 : first(gamma_block_local)
+
+# Walk the *unmasked* γ layout (sector-major, region-minor, length S*R_full) and,
+# for each kept entry, find its running position within the masked γ block.
+gamma_ref_map_local = Vector{NamedTuple{(:sector, :local_positions, :c_s, :emp_ref),
+                                        Tuple{Int, Vector{Int}, Float64, Float64}}}()
+
+# offset of the γ block within the FULL (unmasked) moment vector
+gamma_full_offset = n_labor + n_industry + n_pi + n_reg
+local_counter = 0   # position within the masked γ block (1-based)
+
+# Precompute, for each unmasked γ slot, whether it is kept and its local index.
+local_index_of_full = Dict{Int,Int}()   # full-γ-slot (1..S*R_full) → local γ position
+for slot in 1:(S_ * R_full)
+    full_pos = gamma_full_offset + slot
+    if moment_mask_local[full_pos]
+        local_counter += 1
+        local_index_of_full[slot] = local_counter
+    end
+end
+
+for s in 1:S_
+    ref_r = T_REF_REGION_local[s]
+    ref_r == 0 && continue                         # sector has no active region
+    # retained regions of sector s = active, non-reference
+    local_positions = Int[]
+    for r in 1:R_full
+        slot = (s - 1) * R_full + r
+        if haskey(local_index_of_full, slot)       # kept (active & not ref)
+            push!(local_positions, local_index_of_full[slot])
+        end
+    end
+    isempty(local_positions) && continue           # ref was the only region: no free γ, skip
+    c_s     = domestic_share_local[s]
+    emp_ref = emp_gamma_ls_local[ref_r, s]         # already thresholded+renormalized
+    push!(gamma_ref_map_local,
+          (sector = s, local_positions = local_positions, c_s = c_s, emp_ref = emp_ref))
+end
+
+@everywhere const GAMMA_REF_MAP = $gamma_ref_map_local
+println("γ reference-region map built for $(length(gamma_ref_map_local)) sectors " *
+        "(used for inference reference-point SEs).")
