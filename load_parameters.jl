@@ -18,8 +18,12 @@ coefs                         = CSV.read(joinpath(input_folder, "stats.csv"), Da
 distances_local               = NPZ.npzread(joinpath(input_folder, "distances.npy"))
 filter_N_upstream_local       = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
 w_rs_local                    = NPZ.npzread(joinpath(input_folder, "w_rs.npy")) # Upstream average wage.
-w_rs_local .= ifelse.(w_rs_local .!= 0, w_rs_local ./ w_rs_local, w_rs_local)
 regional_wages_local          = NPZ.npzread(joinpath(input_folder, "regional_wages.npy")) # Downstream region average wage for downstream firms.
+
+# Comment if you want to use wage information. Care to comment or uncomment both so there is not too much difference between 
+# upstream prices and downstream wages (would shift Omega_L to 1)
+w_rs_local .= ifelse.(w_rs_local .!= 0, w_rs_local ./ w_rs_local, w_rs_local)
+regional_wages_local .= ifelse.(regional_wages_local .!= 0, regional_wages_local ./ regional_wages_local, regional_wages_local)
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
 agg_industry_share_local      = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
 domestic_share_local          = NPZ.npzread(joinpath(input_folder, "domestic_share.npy"))
@@ -40,7 +44,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(2000)
+@everywhere const N_rho               = $(4000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)

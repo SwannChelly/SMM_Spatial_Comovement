@@ -48,9 +48,9 @@ K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000   # K for Σ_sim esti
 
 K = 5
 
-run_step1 = true#true
-run_step2 = true
-run_step3 = true
+run_step1 = false#true
+run_step2 = false
+run_step3 = false
 run_step4 = true
 
 
@@ -194,6 +194,7 @@ if run_step3
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
+        output_subdir = "step3",
         max_loop                 = K,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true
@@ -216,7 +217,6 @@ if run_step4
     if ndims(theta_hat_1) > 1
         theta_hat_1 = theta_hat_1[:, 1]
     end
-    println("θ̂_1 loaded from: $step1_last")
 
     # ── Jacobian at θ̂_2 — all parameters ────────────────────────────────────
     println("\nComputing Jacobian at θ̂_2 (base_seed=1_000_000 to avoid collision with Σ_sim seeds)...")
@@ -254,7 +254,7 @@ if run_step4
 
     # ── SMM Inference at θ̂_2 ─────────────────────────────────────────────────
     println("\nRunning SMM inference at θ̂_2...")
-    W_step3_inf = NPZ.npzread(joinpath(output_folder, "step2", "W_step3.npy"))
+    W_step3 = NPZ.npzread(joinpath(output_folder, "step2", "W_step3.npy"))
     Omega_inf   = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
 
     _, sim_moments_2 = full_SMM(theta_hat_2; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
@@ -289,7 +289,7 @@ if run_step4
             "df = $(n_gb_moments - n_gb_params)")
 
     compute_smm_inference(
-        theta_hat_2, J2_gb, W_step3_inf, Omega_inf;
+        theta_hat_2, J2_gb, W_step3, Omega_inf;
         param_indices         = gb_param_idx,
         empirical_moments_vec = emp_vec_gb,
         simulated_moments_vec = sim_vec_gb,
@@ -303,6 +303,14 @@ if run_step4
         moment_labels = MOMENT_LABELS[gb_indices])    # NEW: names for kept moments (rows of J)
     
 end
+
+
+
+
+W_step3  == W_step3_inf
+
+G = J2_gb
+GtWG = inv(G'*W_step3*G)
 
 ############## POST-HOC ANALYSIS ##############
 run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
