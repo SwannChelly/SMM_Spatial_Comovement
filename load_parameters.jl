@@ -175,8 +175,9 @@ end
 # N_TAU: number of trade-cost parameters (length of β in unpack_params/build_tau).
 # For standard runs n_tau == n_coef so N_TAU == N_REG; the split enables N_TAU=1
 # (power-law τ = d^α) with N_REG=4 (four binned reg-coef moments, over-identified).
-@everywhere const N_REG = $(n_coef)
-@everywhere const N_TAU = $(n_tau)
+n_reg = length(reg_coef_local)   # actual moment count from loaded data
+@everywhere N_REG = $(n_reg)
+@everywhere N_TAU = $(n_tau)
 
 T_gravity = zeros(S_, R_full)
 for s in 1:S_

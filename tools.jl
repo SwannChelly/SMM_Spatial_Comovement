@@ -1215,8 +1215,16 @@ function run_pso_optimization(;
             scores = [r !== nothing ? r[1][1] : Inf for r in results_]
             best_idx = argmin(scores)
         end
-        init_beta = beta_candidates[best_idx]
-        println("  Best initial beta: ", round.(init_beta, digits=6))
+        init_beta  = beta_candidates[best_idx]
+        tau_label  = N_TAU == 1 ? "alpha" : "beta"
+        println("  Best initial $tau_label (trade-cost params, length $N_TAU): ",
+                round.(init_beta, digits=6))
+        if beta_selection_criterion == "reg_coef"
+            println("  Simulated reg_coef at best $tau_label: ",
+                    round.(reg_coefs_sim[best_idx], digits=6))
+            println("  Empirical  reg_coef:                  ",
+                    round.(reg_coef, digits=6))
+        end
     else
         @assert warm_start_params !== nothing "skip_initial_beta_search=true requires warm_start_params"
         beta_start_idx = S + R_downstream + 2   # new layout: [Ω^L | Ω^s(S) | A(Rd) | β(N_TAU) | T]
