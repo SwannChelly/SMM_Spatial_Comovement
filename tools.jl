@@ -1570,7 +1570,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                block_ranges = BLOCK_RANGES,
                                block_names  = BLOCK_NAMES,
                                gamma_ref_map = nothing,   # NEW: per-sector γ ref reconstruction
-                               Var_m_full   = nothing)    # optional override; default uses local Var_m
+                               Var_m_full   = nothing,
+                               param_labels  = nothing,   # NEW: names for active params (cols of J)
+                               moment_labels = nothing)    # NEW: names for kept moments (rows of J))    # optional override; default uses local Var_m
 
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
@@ -1785,20 +1787,30 @@ function compute_smm_inference(theta_hat::Vector{Float64},
 
         # Parameter table
         println(io, "\n--- Parameter estimates (active parameters) ---")
-        header = @sprintf("  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
-                          "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi")
+        _has_plab = param_labels !== nothing && length(param_labels) == p
+        header = _has_plab ?
+            @sprintf("  %-22s  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                     "param", "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi") :
+            @sprintf("  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                     "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi")
         println(io, header)
         println(io, "  " * "-"^(length(header)-2))
         for i in 1:p
             ratio = se_eff[i] > 0 ? se_sw[i] / se_eff[i] : NaN
-            @printf(io, "  %-6d  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
-                    param_indices[i],
-                    theta_active[i], se_eff[i], se_sw[i],
-                    isnan(ratio) ? -999.0 : ratio,
-                    t_stats[i],
-                    ci_95[i, 1], ci_95[i, 2])
+            if _has_plab
+                @printf(io, "  %-22s  %-6d  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                        param_labels[i], param_indices[i],
+                        theta_active[i], se_eff[i], se_sw[i],
+                        isnan(ratio) ? -999.0 : ratio, t_stats[i],
+                        ci_95[i, 1], ci_95[i, 2])
+            else
+                @printf(io, "  %-6d  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                        param_indices[i],
+                        theta_active[i], se_eff[i], se_sw[i],
+                        isnan(ratio) ? -999.0 : ratio, t_stats[i],
+                        ci_95[i, 1], ci_95[i, 2])
+            end
         end
-
         # Sandwich vs efficient ratio
         println(io, "\n--- Sandwich/efficient SE ratio (mean close to 1 ⟹ W ≈ Ω^{-1}) ---")
         ratios = [se_eff[i] > 0 ? se_sw[i] / se_eff[i] : NaN for i in 1:p]
@@ -1819,6 +1831,17 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                   fill(NaN, length(rng)))
             @printf(io, "  %-12s  mean_resid_SE=%.4e  max_resid_SE=%.4e  mean_share=%.4f\n",
                     name, mean(block_resid), maximum(block_resid), mean(resid_share))
+        end
+        # Per-moment residual SEs (only if labels provided and lengths match)
+        if moment_labels !== nothing && length(moment_labels) == length(se_m_resid)
+            println(io, "\n--- Per-moment residual SE (labelled) ---")
+            omega_sd = sqrt.(max.(diag(Omega), 0.0))
+            for i in 1:length(se_m_resid)
+                share = omega_sd[i] > 1e-15 ? se_m_resid[i] / omega_sd[i] : NaN
+                @printf(io, "  %-22s  resid_SE=%.4e  omega_SD=%.4e  share=%.4f\n",
+                        moment_labels[i], se_m_resid[i], omega_sd[i],
+                        isnan(share) ? -999.0 : share)
+            end
         end
 
         # Hansen J

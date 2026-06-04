@@ -333,3 +333,84 @@ end
 @everywhere const GAMMA_REF_MAP = $gamma_ref_map_local
 println("γ reference-region map built for $(length(gamma_ref_map_local)) sectors " *
         "(used for inference reference-point SEs).")
+
+# ── Human-readable labels for moments and parameters (for inference reports) ─
+# Two SEPARATE axes:
+#   • MOMENT_LABELS : one per kept moment, in MOMENT_MASK order (= rows of J,
+#     = order of empirical_moments / simulated vectors). Blocks: labor, industry,
+#     pi_r, reg_coef, gamma_ls — each already ref/sum-to-1-dropped.
+#   • PARAM_LABELS  : one per identified parameter, in jacobian_param_indices
+#     order (= columns of J). Layout [Ω^L | Ω^s | A | β | T], minus the S+2
+#     normalized-out directions.
+# Sector/ZE names come from filter_N_upstream.csv when present; otherwise we
+# fall back to integer ids so a missing CSV never aborts the run.
+
+
+filter_N_upstream_df = CSV.read(joinpath(input_folder,"filter_N_upstream.csv"),DataFrame)
+# --- sector (A129) and downstream-region (ze2010) name maps -----------------
+_sector_names = String[string(s) for s in unique(filter_N_upstream_df.A129)]                 # default: "1".."S"
+_ze_names = [@sprintf("%04d", r) for r in unique(filter_N_upstream_df.ze2010)]          # default: "1".."R"
+let csv_path = joinpath(input_folder, "filter_N_upstream.csv")
+    if isfile(csv_path)
+        _fdf = CSV.read(csv_path, DataFrame)
+        if "A129" in names(_fdf)
+            _a = sort(unique(_fdf.A129))
+            length(_a) == S_ && (_sector_names = string.(_a))   # sorted, 1-indexed
+        end
+        if "ze2010" in names(_fdf)
+            _z = sort(unique(_fdf.ze2010))
+            length(_z) == R_full && (_ze_names = string.(_z))
+        end
+    else
+        @warn "filter_N_upstream.csv not found; moment/param labels use integer ids."
+    end
+end
+
+# --- MOMENT_LABELS: walk the FULL moment layout, keep where MOMENT_MASK is true
+_moment_labels = String[]
+# block 1: labor (1 moment, kept unless masked)
+moment_mask_local[1] && push!(_moment_labels, "labor")
+# block 2: industry shares Ω^s_1..Ω^s_S  (first one dropped by mask)
+for s in 1:S_
+    full_pos = n_labor + s
+    moment_mask_local[full_pos] && push!(_moment_labels, "Omega_s[$(_sector_names[s])]")
+end
+# block 3: pi_r over downstream regions (first dropped)
+for (j, r) in enumerate(downstream_regions_local)
+    full_pos = n_labor + n_industry + j
+    moment_mask_local[full_pos] && push!(_moment_labels, "pi_r[$(_ze_names[r])]")
+end
+# block 4: reg_coef (β-distance bins), never masked
+for b in 1:n_reg
+    full_pos = n_labor + n_industry + n_pi + b
+    moment_mask_local[full_pos] &&
+        push!(_moment_labels, n_reg == 1 ? "reg_coef" : "reg_coef[$b]")
+end
+# block 5: gamma_ls, sector-major region-minor, active & non-ref kept
+for s in 1:S_, r in 1:R_full
+    slot     = (s - 1) * R_full + r       # index into vec(permutedims(emp_gamma_ls))
+    full_pos = n_labor + n_industry + n_pi + n_reg + slot
+    moment_mask_local[full_pos] &&
+        push!(_moment_labels, "gamma[$(_sector_names[s])-$(_ze_names[r])]")
+end
+@assert length(_moment_labels) == N_moments "moment-label count $(length(_moment_labels)) != N_moments=$N_moments"
+@everywhere const MOMENT_LABELS = $_moment_labels
+
+# --- PARAM_LABELS: full param layout, then restrict to jacobian_param_indices
+# Layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_beta) | T(active, sector-major)]
+_param_labels_full = String[]
+push!(_param_labels_full, "Omega_L")
+for s in 1:S_;            push!(_param_labels_full, "Omega_s[$(_sector_names[s])]"); end
+for r in 1:R_down_;       push!(_param_labels_full, "A[$(_ze_names[downstream_regions_local[r]])]"); end
+for b in 1:N_beta;        push!(_param_labels_full, N_beta == 1 ? "beta" : "beta_$b"); end
+# T entries follow vec(T_rs) column-major over (S,R) restricted to T_MASK.
+# Recover (s,r) for each active T slot in the same order T_reduced is laid out.
+for flat_pos in findall(T_mask_local)             # column-major: r outer, s inner
+    s = ((flat_pos - 1) % S_) + 1
+    r = ((flat_pos - 1) ÷ S_) + 1
+    push!(_param_labels_full, "T[$(_sector_names[s])-$(_ze_names[r])]")
+end
+@assert length(_param_labels_full) == 1 + S_ + R_down_ + N_beta + sum(T_mask_local)
+_param_labels = _param_labels_full[jacobian_param_indices]
+@everywhere const PARAM_LABELS = $_param_labels
+println("Built $(length(_moment_labels)) moment labels and $(length(_param_labels)) parameter labels.")

@@ -45,11 +45,12 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000 # K for Σ_sim estimation
 
-K = 20
+K = 5
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
-run_step3 = false
+run_step3 = true
+run_step4 = true
 
 
 if !(n_coef in [1, 4, 5])
@@ -163,7 +164,7 @@ if run_step2
          K_sim                 = K_sim,
          block_ranges          = gb_block_ranges,
          block_names           = gb_block_names,
-         gamma_ref_map_local   = GAMMA_REF_MAP
+         gamma_ref_map   = GAMMA_REF_MAP
     )
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
@@ -193,6 +194,22 @@ if run_step3
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
     println("Step 3 complete. θ̂_2 saved.")
+end
+
+
+
+if run_step4
+
+
+    ############## Load θ̂_1 ##############
+
+    step3_last = joinpath(output_folder, "step3")
+    theta_hat_2 = NPZ.npzread(joinpath(step3_last, "theta_hat_2.npy"))
+
+    if ndims(theta_hat_1) > 1
+        theta_hat_1 = theta_hat_1[:, 1]
+    end
+    println("θ̂_1 loaded from: $step1_last")
 
     # ── Jacobian at θ̂_2 — all parameters ────────────────────────────────────
     println("\nComputing Jacobian at θ̂_2 (base_seed=1_000_000 to avoid collision with Σ_sim seeds)...")
@@ -262,8 +279,10 @@ if run_step3
         K_sim                 = K_sim,
         block_ranges          = gb_block_ranges,
         block_names           = gb_block_names,
-         gamma_ref_map_local   = GAMMA_REF_MAP
-    )
+        gamma_ref_map   = GAMMA_REF_MAP,
+        param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
+        moment_labels = MOMENT_LABELS[gb_indices])    # NEW: names for kept moments (rows of J)
+    
 end
 
 ############## POST-HOC ANALYSIS ##############
