@@ -4,6 +4,7 @@
 
 | Date | Files | Summary |
 |------|-------|---------|
+| 2026-06-04 | `load_parameters.jl`, `model_CP.jl`, `model_analytical.jl`, `tools.jl`, `pso_integration.jl`, `main.jl`, `main_gmm.jl`, `main_pso.jl`, `CLAUDE.md` | Decouple trade-cost parametrization (`N_TAU`) from reg_coef moment count (`N_REG`). Replaces single `N_beta` with two constants: `N_REG = n_coef` (reg_coef moment count, moment axis) and `N_TAU = n_tau` (β-parameter count, parameter axis). Default `n_tau = n_coef` preserves all existing behavior. Target config `N_TAU=1, N_REG=4`: power-law τ=d^α (one α param) with four binned regression moments (over-identified, df=3 on reg_coef). `build_tau`/`unpack_params`/PSO β-slices key off `N_TAU`; `fast_weighted_regression`/`compute_regression_quadrature`/`distance_bin`/`BLOCK_RANGES[4]`/`Sigma_beta_gamma` file selection key off `N_REG`. Two runtime asserts added in main.jl and main_gmm.jl: (1) Ω size == `N_REG + n_γ`; (2) β/α label count in `gb_cols` == `N_TAU`. New arg: `julia main.jl aero 4 1` → N_REG=4, N_TAU=1. `PARAM_LABELS` β entry is "alpha" when N_TAU==1. |
 | 2026-06-02 | `main.jl`, `tools.jl`, `load_parameters.jl`, `CLAUDE.md` | Fix β+γ inference singularity and reconcile gamma_threshold cascade. `main.jl`: inference Jacobian now restricted to β+T COLUMNS (not just β+γ rows) at θ̂_1 and θ̂_2 → G'WG full-rank, exactly identified (df=0); Step-2 Jacobian `base_seed` 0→2_000_000 (decorrelate from Σ_sim draws); deleted duplicate end-of-file Step-2/diagnostic block that overwrote K=50 artifacts with K=2. `tools.jl`: `build_step3_weight_matrix` reconciles `Sigma_beta_gamma` size to the (possibly thresholded) active set with a three-way guard (regenerated / pre-threshold-subset / error), no-op when threshold=0; `compute_jacobian` gains an `all(isfinite)` guard naming the offending (moment,param). `load_parameters.jl`: gamma threshold block moved above `T_mask_local = vec(X_rs_local) .> 0` so pruned pairs are excluded from T_MASK/n_good; `empirical_moments` γ block now sourced from `emp_gamma_ls_local` (thresholded+renormalized, consistent with reporting and Hansen-J); one-upstream-region diagnostic (error on 0 survivors, warn on 1). GMM Σ reordering (γ-first) left as a separate task. |
 | 2026-05-28 | `model_analytical.jl` | `compute_regression_quadrature` regressand changed from closest-destination win probability to the whole-industry extensive margin ρ̃_{r's}(z) = 1 − ∏_dr (1 − ρ_{r'dr s}(z)) (Eq. B6), aligning the analytical `reg_coef` with the SMM `linkages_flat`; FWL/WLS design unchanged. |
 | 2026-05-28 | `main_gmm.jl` | Fix step-3 GMM inference order-condition failure. `J2_gb` was 251×278 (β+γ rows, all-param cols), making `G'WG` rank-251 against 278 columns → singular, df = −27, meaningless SEs. Fix: restrict Jacobian columns to β+T only (`gb_param_cols = findall(i -> i >= beta_T_start_raw, jacobian_param_indices)`), passing `gb_param_indices_step3` as `param_indices` to `compute_smm_inference`. `jacobian_all_step3.npy` still holds the full-column diagnostic Jacobian. |
@@ -34,7 +35,7 @@ Moments are ordered as five blocks in the masked vector (`MOMENT_MASK` applied):
 | 1 | `agg_labor_share` | Aggregate labor share |
 | 2 | `agg_industry_share` | Industry shares π_s |
 | 3 | `pi_r` | Regional market shares |
-| 4 | `reg_coef` | Distance-bin regression coefficients (β, N_beta entries); GMM (quadrature): regressand is the extensive margin ρ̃_{r's}(z) = 1 − ∏_dr (1 − ρ_{r'dr s}(z)) (Eq. B6, whole-industry), regressors/FE keyed on nearest downstream region |
+| 4 | `reg_coef` | Distance-bin regression coefficients (`N_REG` entries); GMM (quadrature): regressand is the extensive margin ρ̃_{r's}(z) = 1 − ∏_dr (1 − ρ_{r'dr s}(z)) (Eq. B6, whole-industry), regressors/FE keyed on nearest downstream region. `N_REG` is the moment count (= `n_coef` arg); independent of `N_TAU`. |
 | 5 | `gamma_ls` | Location-specific linkage shares γ_ls |
 
 `BLOCK_RANGES` is a 5-tuple of index ranges into the masked vector, one per block.
@@ -57,10 +58,10 @@ This ordering applies everywhere: `Sigma_beta_gamma.npy`, `W_step3`, `Omega`, `g
 
 | File | Shape | Description |
 |------|-------|-------------|
-| `Sigma_beta_gamma.npy` | `(N_beta + n_gamma_kept, N_beta + n_gamma_kept)` | Joint bootstrap covariance of β+γ moments, **β block first then γ block** (`BLOCK_RANGES[4]` then `BLOCK_RANGES[5]`) |
-| `Sigma_beta_gamma_1.npy` | same, for `N_beta==1` case | Same ordering |
+| `Sigma_beta_gamma.npy` | `(N_REG + n_gamma_kept, N_REG + n_gamma_kept)` | Joint bootstrap covariance of β+γ **moments**, **β block first then γ block** (`BLOCK_RANGES[4]` then `BLOCK_RANGES[5]`). β-block dimension is `N_REG` (moment count), independent of `N_TAU`. |
+| `Sigma_beta_gamma_1.npy` | same, for `N_REG==1` case | Same ordering |
 | `w_gamma.npy` | `(n_gamma_kept, n_gamma_kept)` | Bootstrap covariance of γ_ls moments (fallback) |
-| `w_beta.npy` | `(N_beta, N_beta)` | Bootstrap covariance of β moments (fallback) |
+| `w_beta.npy` | `(N_REG, N_REG)` | Bootstrap covariance of β moments (fallback) |
 
 ---
 
@@ -71,9 +72,11 @@ This ordering applies everywhere: `Sigma_beta_gamma.npy`, `W_step3`, `Omega`, `g
 Assembles the efficient SMM weight matrix `W_step3 = (Σ_data + Σ_sim)^{-1}` over
 β and γ moments only.
 
-- Loads `Sigma_beta_gamma.npy` (or `Sigma_beta_gamma_1.npy` for `N_beta==1`). Σ_data is the joint bootstrap covariance of reg_coef and γ_ls moments, **ordering: β block first, then γ block** (`BLOCK_RANGES[4]` followed by `BLOCK_RANGES[5]`).
+- File selection keyed on `N_REG` (moment count): `Sigma_beta_gamma_1.npy` for `N_REG==1`, `Sigma_beta_gamma.npy` for `N_REG∈{4,5}`. Independent of `N_TAU`.
+- Σ_data is the joint bootstrap covariance of reg_coef and γ_ls moments, **ordering: β block first, then γ block** (`BLOCK_RANGES[4]` followed by `BLOCK_RANGES[5]`). β-block dimension = `N_REG`.
 - Estimates Σ_sim from K re-seeded `full_SMM` evaluations at `theta_hat_1`, restricted to `gb_indices` (β then γ).
-- Returns `W_step3` of size `(N_beta + n_gamma_kept) × (N_beta + n_gamma_kept)`.
+- Returns `W_step3` of size `(N_REG + n_gamma_kept) × (N_REG + n_gamma_kept)`.
+- Assert: `size(Sigma_data,1) == N_REG + count(survive)` (not `N_TAU`).
 
 ### `tools.jl` — `compute_smm_inference`
 
@@ -137,13 +140,30 @@ index the restricted vector correctly. `loss_function` leaves a pre-restricted W
 
 ---
 
+## Two-constant parameter layout
+
+`N_REG` and `N_TAU` are independent constants set in `load_parameters.jl`:
+
+| Constant | Meaning | Axis | Set by | Used in |
+|----------|---------|------|--------|---------|
+| `N_REG` | reg_coef moment count | moment | `n_coef` arg | `fast_weighted_regression`, `compute_regression_quadrature`, `distance_bin`, `BLOCK_RANGES[4]`, Σ_data file selection |
+| `N_TAU` | trade-cost parameter count | parameter | `n_tau` arg (default = `n_coef`) | `build_tau`, `unpack_params`, PSO β-slice, `PARAM_LABELS` β section, `get_param_start_index(:T)` |
+
+Standard runs: `n_tau` unset → `N_TAU = N_REG = n_coef` (no behavior change).
+Over-identified run: `n_tau=1, n_coef=4` → `N_TAU=1` (power-law α), `N_REG=4` (four binned moments), df=3 on reg_coef block.
+
+---
+
 ## Usage
 
 ```bash
 # SMM (simulation-based)
-julia main.jl auto 1        # industry=auto, n_coef=1
+julia main.jl auto 1        # N_REG=1, N_TAU=1 (default: n_tau=n_coef)
+julia main.jl aero 4        # N_REG=4, N_TAU=4 (bin parametrization, exactly identified on reg_coef)
+julia main.jl aero 4 1      # N_REG=4, N_TAU=1 (power-law τ=d^α, over-identified df=3)
 
 # Analytical GMM
-julia main_gmm.jl aero 4    # industry=aero, n_coef=4, n_quad=200 (default)
-julia main_gmm.jl aero 4 resume 200 500   # n_quad=500
+julia main_gmm.jl aero 4          # N_REG=4, N_TAU=4, n_quad=200
+julia main_gmm.jl aero 4 1        # N_REG=4, N_TAU=1 (over-identified)
+julia main_gmm.jl aero 4 1 200 500  # N_REG=4, N_TAU=1, n_quad=500
 ```

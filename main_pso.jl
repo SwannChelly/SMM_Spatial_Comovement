@@ -160,7 +160,9 @@ else
     reg_coef_local_pso = NPZ.npzread(joinpath(input_folder,"reg_coef_"*string(n_coef)*".npy"))
 end
 @everywhere const reg_coef = $reg_coef_local_pso
-@everywhere const N_beta = $(length(reg_coef_local_pso))
+# In main_pso.jl (legacy), N_TAU == N_REG == length(reg_coef) (no decoupling).
+@everywhere const N_REG = $(length(reg_coef_local_pso))
+@everywhere const N_TAU = $(length(reg_coef_local_pso))
 
 # Build full empirical moments (no [2:end] drops — MOMENT_MASK handles that)
 # Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
@@ -203,7 +205,7 @@ end
 n_labor = 1
 n_industry = length(vec(agg_industry_share))       # S
 n_gamma = length(vec(emp_gamma_ls))                 # R_full * S
-n_reg = length(reg_coef)                            # N_beta
+n_reg = length(reg_coef)                            # == N_REG
 n_pi = length(emp_pi_r)                             # R_downstream
 N_moments_full = n_labor + n_industry + n_pi + n_reg + n_gamma
 
@@ -356,12 +358,12 @@ if full_run
     print(beta_max_informed)
     # Generate beta candidates using selected method
     if BETA_SEARCH_METHOD == "log_grid"
-        beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min_informed, beta_max_informed;
+        beta_candidates = generate_initial_betas("log_grid", N_TAU, beta_min_informed, beta_max_informed;
                                                   log_grid_length=length_range_beta)
         println("Generated $(length(beta_candidates)) log-grid beta combinations")
     elseif BETA_SEARCH_METHOD == "lhs"
         N_LHS_SAMPLES = 20000
-        beta_candidates = generate_initial_betas("lhs", N_beta, beta_min_informed, beta_max_informed;
+        beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min_informed, beta_max_informed;
                                                   lhs_n_samples=N_LHS_SAMPLES)
         println("Generated $(length(beta_candidates)) LHS beta samples")
     else
@@ -390,7 +392,7 @@ if full_run
 
     # Find best beta using selected criterion
     if BETA_SELECTION_CRITERION == "reg_coef"
-        reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
+        reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_]
         #reg_coefs_sim = filter(row -> all(diff(row) .< 0), reg_coefs_sim)
         reg_distances = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
         best_idx = argmin(reg_distances)
@@ -403,7 +405,7 @@ if full_run
     init_beta = beta_candidates[best_idx]
 
     println("Best initial beta: ", round.(init_beta, digits=6))
-    println("Related regression coefficients are: ", round.([r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_][best_idx], digits=6))
+    println("Related regression coefficients are: ", round.([r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_][best_idx], digits=6))
 
     ############## PSO-BASED OPTIMIZATION ##############
 

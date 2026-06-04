@@ -43,7 +43,8 @@ using StatsBase
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
-K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000 # K for Σ_sim estimation
+n_tau    = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : n_coef  # trade-cost param count; default = moment count
+K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000   # K for Σ_sim estimation
 
 K = 5
 
@@ -56,8 +57,11 @@ run_step4 = true
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")
 end
+if !(n_tau in [1, 4, 5])
+    error("n_tau must be 1, 4 or 5, got: $n_tau")
+end
 
-println("Industry: $industry | n_coef: $n_coef | K_sim: $K_sim")
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim")
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$industry"
@@ -149,10 +153,13 @@ if run_step2
     gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
     gb_param_idx = jacobian_param_indices[gb_cols]
 
+    n_beta_labels_s2 = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_cols])
+    @assert n_beta_labels_s2 == N_TAU "Step-2 inference: expected $N_TAU β/α labels in gb_cols, found $n_beta_labels_s2"
+
     J_gb       = J1[gb_indices, gb_cols]                          # β+γ rows × β+T cols
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
-    Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_cols]    
+    Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_cols]
 
     compute_smm_inference(
          theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
@@ -265,9 +272,21 @@ if run_step4
     gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
     gb_param_idx = jacobian_param_indices[gb_cols]
 
+    # Correctness check: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
+    @assert size(Omega_inf, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_inf size $(size(Omega_inf,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+    # Correctness check: exactly N_TAU β/α labels must appear in the restricted param columns.
+    n_beta_labels = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_cols])
+    @assert n_beta_labels == N_TAU "Expected $N_TAU β/α labels in gb_cols, found $n_beta_labels — beta_T_start misaligned with N_TAU"
+
     J2_gb      = J2[gb_indices, gb_cols]                          # β+γ rows × β+T cols
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
+
+    n_gb_moments = length(gb_indices)
+    n_gb_params  = length(gb_param_idx)
+    println("Step-3 inference: J2_gb is $(n_gb_moments)×$(n_gb_params) " *
+            "($(n_gb_moments) β+γ moments × $(n_gb_params) β+T params). " *
+            "df = $(n_gb_moments - n_gb_params)")
 
     compute_smm_inference(
         theta_hat_2, J2_gb, W_step3_inf, Omega_inf;

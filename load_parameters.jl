@@ -4,7 +4,11 @@
 #   n_coef        (Int)    — number of regression coefficients (4 or 5)
 #
 # After include(), the following locals are available in the calling scope:
-#   N_moments, n_good_local, jacobian_param_indices, BLOCK_RANGES_local, N_beta
+#   N_moments, n_good_local, jacobian_param_indices, BLOCK_RANGES_local
+#
+# Expects n_tau to be defined in the calling scope (defaults to n_coef).
+#   N_REG = n_coef  — reg_coef moment count (number of distance-bin regression moments)
+#   N_TAU = n_tau   — trade-cost parameter count (length of the β vector in unpack_params/build_tau)
 #
 # All @everywhere const values are broadcast to workers here.
 
@@ -166,8 +170,13 @@ if n_coef == 1
 else
     reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))
 end
-@everywhere const reg_coef       = $reg_coef_local
-@everywhere const N_beta         = $(n_coef)
+@everywhere const reg_coef = $reg_coef_local
+# N_REG: number of reg_coef moments (distance-bin regression coefficients).
+# N_TAU: number of trade-cost parameters (length of β in unpack_params/build_tau).
+# For standard runs n_tau == n_coef so N_TAU == N_REG; the split enables N_TAU=1
+# (power-law τ = d^α) with N_REG=4 (four binned reg-coef moments, over-identified).
+@everywhere const N_REG = $(n_coef)
+@everywhere const N_TAU = $(n_tau)
 
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
@@ -263,12 +272,12 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 #   - Ω^s[1]  (position 2)           : Omega_s ./= sum(Omega_s)
 #   - A[1]    (position S+2)          : A ./= A[1]
 #   - T[s, T_REF_REGION[s]] for each s: T_mat[s,:] ./= T_mat[s, ref_r] (most important regions in empirical gamma_ls)
-# New parameter layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_beta) | T(sum(T_MASK))]
+# New parameter layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_TAU) | T(sum(T_MASK))]
 
 _excluded = Set{Int}()
 push!(_excluded, 2)              # Ω^s[1]: position 2 in new layout
 push!(_excluded, S_ + 2)         # A[1]:   position S+2 in new layout
-T_param_offset = 1 + S_ + R_down_ + N_beta
+T_param_offset = 1 + S_ + R_down_ + N_TAU
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
     ref_r == 0 && continue
@@ -278,7 +287,7 @@ for s in 1:S_
         push!(_excluded, T_param_offset + t_idx)
     end
 end
-jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_beta + sum(T_mask_local)) if i ∉ _excluded]
+jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_TAU + sum(T_mask_local)) if i ∉ _excluded]
 println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
 
 
@@ -397,12 +406,12 @@ end
 @everywhere const MOMENT_LABELS = $_moment_labels
 
 # --- PARAM_LABELS: full param layout, then restrict to jacobian_param_indices
-# Layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_beta) | T(active, sector-major)]
+# Layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_TAU) | T(active, sector-major)]
 _param_labels_full = String[]
 push!(_param_labels_full, "Omega_L")
 for s in 1:S_;            push!(_param_labels_full, "Omega_s[$(_sector_names[s])]"); end
 for r in 1:R_down_;       push!(_param_labels_full, "A[$(_ze_names[downstream_regions_local[r]])]"); end
-for b in 1:N_beta;        push!(_param_labels_full, N_beta == 1 ? "beta" : "beta_$b"); end
+for b in 1:N_TAU;         push!(_param_labels_full, N_TAU == 1 ? "alpha" : "beta_$b"); end
 # T entries follow vec(T_rs) column-major over (S,R) restricted to T_MASK.
 # Recover (s,r) for each active T slot in the same order T_reduced is laid out.
 for flat_pos in findall(T_mask_local)             # column-major: r outer, s inner
@@ -410,7 +419,7 @@ for flat_pos in findall(T_mask_local)             # column-major: r outer, s inn
     r = ((flat_pos - 1) ÷ S_) + 1
     push!(_param_labels_full, "T[$(_sector_names[s])-$(_ze_names[r])]")
 end
-@assert length(_param_labels_full) == 1 + S_ + R_down_ + N_beta + sum(T_mask_local)
+@assert length(_param_labels_full) == 1 + S_ + R_down_ + N_TAU + sum(T_mask_local)
 _param_labels = _param_labels_full[jacobian_param_indices]
 @everywhere const PARAM_LABELS = $_param_labels
 println("Built $(length(_moment_labels)) moment labels and $(length(_param_labels)) parameter labels.")

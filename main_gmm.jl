@@ -49,6 +49,7 @@ using StatsBase
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
+n_tau    = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : n_coef  # trade-cost param count; default = moment count
 n_quad   = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 200
 
 K = 5   # PSO loops
@@ -56,8 +57,11 @@ K = 5   # PSO loops
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")
 end
+if !(n_tau in [1, 4, 5])
+    error("n_tau must be 1, 4 or 5, got: $n_tau")
+end
 
-println("GMM mode | Industry: $industry | n_coef: $n_coef | n_quad: $n_quad")
+println("GMM mode | Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | n_quad: $n_quad")
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_gmm_$industry"
@@ -117,18 +121,21 @@ println("="^70)
 step2_folder = joinpath(output_folder, "step2")
 mkpath(step2_folder)
 
-# Load empirical covariance matrices
+# Load empirical covariance matrices.
+# File selection keyed on N_REG (the moment count, not τ-parameter count N_TAU).
+# The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment).
+sigma_file_gmm = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
 Sigma_data_full = try
-    NPZ.npzread(joinpath(input_folder, "Sigma.npy"))
+    NPZ.npzread(joinpath(input_folder, sigma_file_gmm))
 catch
-    # Fall back to block-diagonal from w_gamma + w_beta
-    w_gamma = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
+    # Fall back to block-diagonal from w_gamma + w_beta (β-then-γ ordering)
     w_beta  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
-    n_gam   = size(w_gamma, 1)
+    w_gamma = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
     n_b     = size(w_beta, 1)
-    S_full  = zeros(n_gam + n_b, n_gam + n_b)
-    S_full[1:n_gam, 1:n_gam]                   = w_gamma
-    S_full[(n_gam+1):end, (n_gam+1):end]       = w_beta
+    n_gam   = size(w_gamma, 1)
+    S_full  = zeros(n_b + n_gam, n_b + n_gam)
+    S_full[1:n_b, 1:n_b]                   = w_beta
+    S_full[(n_b+1):end, (n_b+1):end]       = w_gamma
     S_full
 end
 
@@ -226,6 +233,12 @@ if run_step3
     gb_param_cols     = findall(i -> i >= beta_T_start_raw, jacobian_param_indices)
     gb_param_indices_step3 = jacobian_param_indices[gb_param_cols]
 
+    # Correctness check 1: Σ_data leading β-block must be N_REG × N_REG (moments).
+    @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+    # Correctness check 2: exactly N_TAU β/α labels in gb_param_cols.
+    n_beta_labels_gmm = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_param_cols])
+    @assert n_beta_labels_gmm == N_TAU "Expected $N_TAU β/α labels in gb_param_cols, found $n_beta_labels_gmm — beta_T_start misaligned with N_TAU"
+
     J2_gb = J2[gb_indices, gb_param_cols]
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
@@ -277,10 +290,10 @@ println("\nGMM estimation complete. Results in: $output_folder")
 # end
 # beta_search_method= "log_grid"
 # if beta_search_method == "log_grid"
-#     beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;
+#     beta_candidates = generate_initial_betas("log_grid", N_TAU, beta_min, beta_max;
 #                                                 log_grid_length=length_range_beta)
 # else
-#     beta_candidates = generate_initial_betas("lhs", N_beta, beta_min, beta_max;
+#     beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min, beta_max;
 #                                                 lhs_n_samples=20000)
 # end
 # println("  Generated $(length(beta_candidates)) beta candidates")

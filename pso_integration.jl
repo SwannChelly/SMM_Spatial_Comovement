@@ -49,7 +49,7 @@ function parallel_pso_smm(
     c1::Float64 = 1.5,
     c2::Float64 = 2.5,
     beta_constraint::Bool = true,
-    beta_indices::UnitRange = 1:N_beta,  # Changed from 1:5
+    beta_indices::UnitRange = 1:N_TAU,
     verbose::Bool = false
 )
     
@@ -343,7 +343,7 @@ function train_stage_pso(
 
         beta_constraint = true
         beta_start = 1 + S + R_downstream + 1   # beta follows Ω^L, Ω^s, A in new layout
-        beta_indices = beta_start:(beta_start + N_beta - 1)
+        beta_indices = beta_start:(beta_start + N_TAU - 1)
         best_params_prev = nothing
         # Use warm_start_override if provided (Step 3 warm-start from θ̂_1)
         warm_start = warm_start_override
@@ -398,7 +398,7 @@ function train_stage_pso(
         if beta_constraint
             beta_idx_in_var = findfirst(==("beta"), var_list)
             beta_start = beta_idx_in_var == 1 ? 1 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(beta_idx_in_var-1)]) + 1
-            beta_indices = beta_start:(beta_start + N_beta - 1)  # Changed from + 4
+            beta_indices = beta_start:(beta_start + N_TAU - 1)
         else
             beta_indices = 1:0
         end
@@ -535,7 +535,7 @@ end
     get_param_start_index(param_name)
 
 Get starting index of a parameter in the full parameter vector.
-Structure: [Ω^L(1), Ω^s(S), A(R_downstream), beta(N_beta), T(sum(T_MASK))]
+Structure: [Ω^L(1), Ω^s(S), A(R_downstream), beta(N_TAU), T(sum(T_MASK))]
 """
 function get_param_start_index(param_name::Symbol)
     if param_name == :agg_labor_share_tech
@@ -547,7 +547,7 @@ function get_param_start_index(param_name::Symbol)
     elseif param_name == :beta
         return 2 + S + R_downstream
     elseif param_name == :T
-        return 2 + S + R_downstream + N_beta
+        return 2 + S + R_downstream + N_TAU
     else
         error("Unknown parameter name: $param_name")
     end

@@ -88,7 +88,7 @@ end
 
 
 """
-    compute_regression_quadrature(T_mat, tau, Phi; n_quad=200) -> Vector (N_beta,)
+    compute_regression_quadrature(T_mat, tau, Phi; n_quad=200) -> Vector (N_REG,)
 
 Distance-bin regression coefficients via deterministic Gauss-Legendre quadrature.
 
@@ -102,7 +102,7 @@ nearest downstream region CLOSEST_DOWNSTREAM_REGION[r_p], matching Eq. (1) and
 fast_weighted_regression. Only the dependent variable changes: from the single
 closest-destination win probability to the product across all downstream regions.
 
-After weighted FWL demeaning by (sector × closest downstream), WLS gives β_{1..N_beta}.
+After weighted FWL demeaning by (sector × closest downstream), WLS gives β_{1..N_REG}.
 
 Caveat: ρ̃_{r's}(z) assumes conditional independence across destinations. The SMM
 linkages_flat realises the true win-anywhere event with shared competitor draws
@@ -117,7 +117,7 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
     gl_wts  = weights_raw ./ 2
 
     N_total = n_good * n_quad
-    n_reg   = N_beta + 1
+    n_reg   = N_REG + 1
     y        = Vector{FT}(undef, N_total)
     X        = zeros(FT, N_total, n_reg)
     w_arr    = Vector{Float64}(undef, N_total)
@@ -136,7 +136,7 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
         # and fast_weighted_regression). Unchanged.
         dr0 = CLOSEST_DOWNSTREAM_REGION[r_p]
         gid = (s - 1) * R_downstream + dr0
-        if N_beta == 1
+        if N_REG == 1
             log_dist = LOG_CLOSEST_DIST[r_p]
         else
             b = DistBin[r_p, dr0]
@@ -169,10 +169,10 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
             w_arr[idx]    = gl_wts[k]
             fe_group[idx] = gid
 
-            if N_beta == 1
+            if N_REG == 1
                 X[idx, 1] = log_dist
             else
-                if b > 0 && b <= N_beta
+                if b > 0 && b <= N_REG
                     X[idx, b] = FT(1.0)
                 end
             end
@@ -199,7 +199,7 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
     yw  = sqrt_w .* y
     coefs = Xw \ yw
 
-    return coefs[1:N_beta]
+    return coefs[1:N_REG]
 end
 
 

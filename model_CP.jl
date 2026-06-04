@@ -292,13 +292,13 @@ end
 
 Unpack parameter vector into model components (paper notation).
 
-Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_beta) | T(sum(T_MASK))]
+Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T(sum(T_MASK))]
 
 Returns:
 - Ω^L (Omega_L): Labor share in production [scalar]
 - Ω^s (Omega_s): Sectoral input shares [S elements, normalized to sum to 1]
 - A: Downstream firm productivity by region [R_downstream elements]
-- β (beta): Trade cost parameters for distance bins [N_beta elements]
+- β (beta): Trade cost parameters [N_TAU elements; 1 = power-law α, >1 = bin coefficients]
 - T: Fréchet scale parameters [S × R elements, full vector with zeros for masked entries]
 """
 function unpack_params(params)
@@ -306,9 +306,9 @@ function unpack_params(params)
     Omega_s = params[2:(1 + S)] / sum(params[2:(1 + S)])
     A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
-    beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_beta)]
+    beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)]
 
-    T_reduced = params[(S + R_downstream + 2 + N_beta):end]
+    T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
     T_full = zeros(S * R)
     T_full[T_MASK] = T_reduced
     T_mat = reshape(T_full, S, R)
@@ -335,7 +335,7 @@ Returns matrix of size (R, R). Trade costs are identical across sectors.
 """
 function build_tau(beta)
     tau = ones(R, R_downstream)
-    if N_beta == 1
+    if N_TAU == 1
         # Power-law: τ_{r',r} = max(d, 1)^α = exp(α · log(max(d, 1)))
         for r_prime in 1:R, r_d in 1:R_downstream
             tau[r_prime, r_d] = exp(beta[1] * LOG_DIST_DOWNSTREAM[r_prime, r_d])
@@ -343,7 +343,7 @@ function build_tau(beta)
     else
         for r_prime in 1:R, r_d in 1:R_downstream
             b = DistBin[r_prime, r_d]
-            if b > 0
+            if b > 0 && b <= N_TAU
                 tau[r_prime, r_d] += beta[b]
             end
         end
@@ -641,7 +641,7 @@ Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
 function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
 
-    n_regressors = N_beta + 1  # distance bins + log_productivity
+    n_regressors = N_REG + 1  # distance bins + log_productivity
 
     # All good pairs are valid (n_good entries, each with N_rho varieties)
     N_valid = n_good * N_rho
@@ -657,7 +657,7 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
         r = GOOD_R[g]
         dr = CLOSEST_DOWNSTREAM_REGION[r]
         group_id = (s - 1) * R_downstream + dr
-        if N_beta == 1
+        if N_REG == 1
             log_dist = LOG_CLOSEST_DIST[r]
         else
             b = DistBin[r, dr]
@@ -669,10 +669,10 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
             w[idx] = sample_weights[rho]
             fe_group[idx] = group_id
 
-            if N_beta == 1
+            if N_REG == 1
                 X[idx, 1] = log_dist
             else
-                if b > 0 && b <= N_beta
+                if b > 0 && b <= N_REG
                     X[idx, b] = 1.0
                 end
             end
@@ -700,7 +700,7 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
     yw = sqrt_w .* y
     coefs = Xw \ yw
 
-    return coefs[1:N_beta]
+    return coefs[1:N_REG]
 end
 
 
@@ -921,16 +921,16 @@ function loss_function(simulated_moments, emp, W, method="original";
     elseif method == "log"
         # Block boundaries in the masked moment vector:
         #   [1 : n_good]              labor share + industry shares + pi_r → log
-        #   [n_good+1 : n_good+N_beta] reg_coef (negative, level deviation) → level
-        #   [n_good+N_beta+1 : end]   gamma_ls                              → log
+        #   [n_good+1 : n_good+N_REG] reg_coef (negative, level deviation) → level
+        #   [n_good+N_REG+1 : end]   gamma_ls                              → log
         eps = 1e-12
         err = zeros(N)
 
         # Log blocks: all strictly positive moments
         log_end   = n_good
         reg_start = n_good + 1
-        reg_end   = n_good + N_beta
-        pi_start  = n_good + N_beta + 1
+        reg_end   = n_good + N_REG
+        pi_start  = n_good + N_REG + 1
 
         err[1:log_end] = log.(max.(emp_flat[1:log_end], eps)) .-
                          log.(max.(sim_flat[1:log_end], eps))

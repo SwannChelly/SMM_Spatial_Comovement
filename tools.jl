@@ -92,7 +92,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
     A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
     A ./= sum(A)
     if init
-        return vcat([[agg_labor_share], agg_industry_share, A, ones(N_beta), ones(S*R)]...)
+        return vcat([[agg_labor_share], agg_industry_share, A, ones(N_TAU), ones(S*R)]...)
     end
     if last_stage_folder == nothing
         lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_beta.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
@@ -168,7 +168,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
             # apply your condition
             if condition
                 beta_start = 1 + S + R_downstream + 1
-                betas = scaled[beta_start:(beta_start + N_beta - 1)]
+                betas = scaled[beta_start:(beta_start + N_TAU - 1)]
                 if issorted(betas)
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
@@ -270,7 +270,7 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
 end
 
 
-function distance_bin(d, n_bins=N_beta)
+function distance_bin(d, n_bins=N_REG)
     if n_bins == 5
         if 20 < d <= 50
             return 1
@@ -406,12 +406,12 @@ function generate_dashboard_report(
     )
 
 
-    bin_labels = if N_beta == 5
+    bin_labels = if N_REG == 5
         ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
-    elseif N_beta == 4
-        ["]50,100]", "]100,150]", "]150,200]", ">200"]  # Example for 4 bins
+    elseif N_REG == 4
+        ["]50,100]", "]100,150]", "]150,200]", ">200"]
     else
-        ["Bin $i" for i in 1:N_beta]
+        ["Bin $i" for i in 1:N_REG]
     end
 
     reg_df = DataFrame(
@@ -1022,7 +1022,7 @@ BLOCK_RANGES[4] followed by BLOCK_RANGES[5]).
 Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1,
 restricted to the same moment indices.
 
-Returns W_step3 of size (N_beta + n_gamma_kept, N_beta + n_gamma_kept).
+Returns W_step3 of size (N_REG + n_gamma_kept, N_REG + n_gamma_kept).
 """
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
@@ -1034,18 +1034,20 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     n_gb = length(gb_indices)
 
     # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
-    sigma_file = N_beta == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
+    # File selection keyed on N_REG (the moment count, not the τ-parameter count N_TAU).
+    # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
+    sigma_file = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
     Sigma_full = NPZ.npzread(joinpath(input_folder, sigma_file))
 
     # ── Reconcile file size with the (possibly thresholded) active set ───────
     # The on-disk Σ was bootstrapped on the PRE-threshold active set. If a
     # gamma_threshold pruned (s,r) pairs, n_gb shrank → drop matching β+γ
-    # rows/cols. β block (1:N_beta) is never pruned.
+    # rows/cols. β block (1:N_REG) is never pruned.
     X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
     T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
     T_mask_moment_new = vec(permutedims(reshape(collect(T_MASK), S, R)))     # thresholded
 
-    # In the old mask, remove reference regions. 
+    # In the old mask, remove reference regions.
     keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
     for s in 1:S
         ref_r = T_REF_REGION[s]
@@ -1053,14 +1055,14 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     end
     gamma_old_positions = findall(keep_old)                                  # Get indices of the old set (without reference regions)
     survive  = T_mask_moment_new[gamma_old_positions]                        # Get indices of the new set and remove reference regions
-    keep_idx = vcat(collect(1:N_beta), N_beta .+ findall(survive))
+    keep_idx = vcat(collect(1:N_REG), N_REG .+ findall(survive))
 
-    n_gb_old = N_beta + length(gamma_old_positions)
+    n_gb_old = N_REG + length(gamma_old_positions)
     if size(Sigma_full, 1) == n_gb
         Sigma_data = Sigma_full                                              # already regenerated
     elseif size(Sigma_full, 1) == n_gb_old
         Sigma_data = Sigma_full[keep_idx, keep_idx]                          # full file → subset
-        @assert size(Sigma_data, 1) == N_beta + count(survive)
+        @assert size(Sigma_data, 1) == N_REG + count(survive) "Sigma subset row count $(size(Sigma_data,1)) != N_REG+count(survive)=$(N_REG+count(survive))"
         @assert size(Sigma_data, 1) == n_gb "subset $(size(Sigma_data,1)) != n_gb=$n_gb"
         # NOTE: subset is Cov(raw γ); loss uses renormalized γ (factor c_s≈sum_before/
         # sum_after). Raw subset over-weights γ rows by ~c_s^2 → T SEs ~c_s too tight.
@@ -1182,14 +1184,14 @@ function run_pso_optimization(;
 
         beta_min = 1e-3
         beta_max = 10
-        if n_coef == 1
+        if N_TAU == 1
             length_range_beta = 10000
         end
         if beta_search_method == "log_grid"
-            beta_candidates = generate_initial_betas("log_grid", N_beta, beta_min, beta_max;
+            beta_candidates = generate_initial_betas("log_grid", N_TAU, beta_min, beta_max;
                                                      log_grid_length=length_range_beta)
         else
-            beta_candidates = generate_initial_betas("lhs", N_beta, beta_min, beta_max;
+            beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min, beta_max;
                                                      lhs_n_samples=20000)
         end
         println("  Generated $(length(beta_candidates)) beta candidates")
@@ -1197,7 +1199,7 @@ function run_pso_optimization(;
         A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A_init ./= sum(A_init)
         T_init_nz = vec(T_rs_init)[T_MASK]
-        # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
+        # New layout: [Ω^L | Ω^s | A | β(N_TAU) | T] — beta is inserted between A and T
         init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
         expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
 
@@ -1206,7 +1208,7 @@ function run_pso_optimization(;
                                                analytical=analytical, n_quad=n_quad), expanding_beta)
 
         if beta_selection_criterion == "reg_coef"
-            reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_beta) for r in results_]
+            reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_]
             reg_distances  = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
             best_idx = argmin(reg_distances)
         else
@@ -1217,8 +1219,8 @@ function run_pso_optimization(;
         println("  Best initial beta: ", round.(init_beta, digits=6))
     else
         @assert warm_start_params !== nothing "skip_initial_beta_search=true requires warm_start_params"
-        beta_start_idx = S + R_downstream + 2   # new layout: [Ω^L | Ω^s(S) | A(Rd) | β | T]
-        init_beta = warm_start_params[beta_start_idx:(beta_start_idx + N_beta - 1)]
+        beta_start_idx = S + R_downstream + 2   # new layout: [Ω^L | Ω^s(S) | A(Rd) | β(N_TAU) | T]
+        init_beta = warm_start_params[beta_start_idx:(beta_start_idx + N_TAU - 1)]
         println("\n[$output_subfolder] Skipping Stage 0: using warm_start beta $(round.(init_beta, digits=6))")
     end
 
