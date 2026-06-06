@@ -155,26 +155,20 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
             z_k  = scale * (-log(1.0 - u_k))^(-1.0/theta)
             zinv = z_k^(-theta)
 
-            # Extensive margin (Eq. B6): 1 - ∏_dr (1 - ρ_{r'dr s}(z)).
-            # Log-space accumulation for stability; xdr ≤ 0 so exp(xdr) ∈ (0,1].
+            # Extensive margin (Eq. B6): 1 − ∏_dr (1 − ρ_{r'dr s}(z)),
+            # ρ_dr = exp(zinv·coef_dr), coef_dr ≤ 0 ⇒ ρ_dr ∈ (0,1].
             logprod = zero(FT)
             @inbounds for dr in 1:R_downstream
-                xdr = zinv * coef[dr]
-                @inbounds for dr in 1:R_downstream
-                    xdr = zinv * coef[dr]
-                    logprod += log1p(max(-exp(xdr), -1.0))   # log(1 - ρ_dr); clamp guards FP overshoot past -1
-                end   # log(1 - ρ_dr); -Inf ⇒ certain win
+                logprod += log1p(max(-exp(zinv * coef[dr]), -one(FT)))  # log(1 − ρ_dr); clamp guards FP coef>0
             end
-            y[idx]        = -expm1(logprod)   # 1 - exp(logprod)
+            y[idx]        = -expm1(logprod)   # 1 − ∏(1 − ρ_dr)
             w_arr[idx]    = gl_wts[k]
             fe_group[idx] = gid
 
             if N_REG == 1
                 X[idx, 1] = log_dist
             else
-                if b > 0 && b <= N_REG
-                    X[idx, b] = FT(1.0)
-                end
+                (b > 0 && b <= N_REG) && (X[idx, b] = FT(1.0))
             end
             X[idx, n_reg] = log(z_k)
         end

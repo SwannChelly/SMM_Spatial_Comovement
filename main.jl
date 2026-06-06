@@ -3,6 +3,7 @@
 # Step 1: identity-weighted PSO → θ̂_1
 # Step 2: build W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1} at θ̂_1
 # Step 3: efficient-weighted PSO → θ̂_2, warm-started at θ̂_1
+# ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 # Legacy entry point: main_pso.jl (unchanged, identity weights only)
 
 using Distributed
@@ -36,6 +37,7 @@ using StatsBase
 
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
+@everywhere include("model_analytical.jl")
 @everywhere include("pso_integration.jl")
 @everywhere include("run_untargeted_validation.jl")
 
@@ -46,11 +48,11 @@ n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 n_tau    = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 1  # trade-cost param count; default = moment count
 K_sim    = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10000   # K for Σ_sim estimation
 
-K = 5
+K = 10
 
-run_step1 = false#true
-run_step2 = false
-run_step3 = false
+run_step1 = true#true
+run_step2 = true
+run_step3 = true
 run_step4 = true
 
 
@@ -171,7 +173,10 @@ if run_step2
          K_sim                 = K_sim,
          block_ranges          = gb_block_ranges,
          block_names           = gb_block_names,
-         gamma_ref_map   = GAMMA_REF_MAP
+         gamma_ref_map   = GAMMA_REF_MAP,
+         param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
+         moment_labels = MOMENT_LABELS[gb_indices]    # NEW: names for kept moments (rows of J)
+
     )
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
@@ -181,6 +186,61 @@ end
 
 
 ############## STEP 3 — Efficient-weighted optimisation ##############
+
+
+using LinearAlgebra
+# requires compute_prices_analytical → include("model_analytical.jl") first
+# and FIX the doubled-loop bug there before trusting any reg_coef output (not used here)
+
+"""
+Per-sector eigen-screen of the T-block of the γ-moment Jacobian at `params` (use θ̂_1).
+M^s = Σ_dr ω_dr (diag(g_dr) − g_dr g_dr'), restricted to FREE (non-ref) active regions.
+Returns, per sector: smallest eigenpair, plus each region's marginal share and its
+curvature contribution diag(M) = Σ_dr ω_dr γ(1−γ).  Cost ~ Σ_s n_L^2 · R_downstream.
+"""
+function screen_T_identification(params)
+    Ω_L, Ω_s, A, β, T_vec = unpack_params(params)
+    T_mat = reshape(T_vec, S, R)
+    τ     = build_tau(β)
+    pr    = compute_prices_analytical(Ω_L, Ω_s, A, T_mat, τ)
+    P_sr, P_r, c_r, Y_r, mu, Φ = pr.P_sr, pr.P_r, pr.c_r, pr.Y_r, pr.mu, pr.Phi
+
+    out = NamedTuple[]
+    for s in 1:S
+        gidx = SECTOR_GOOD_INDICES[s]; isempty(gidx) && continue
+        regs = SECTOR_GOOD_REGIONS[s]; nL = length(regs)
+
+        # downstream weights ω_dr ∝ sector-s nominal input purchase of region dr
+        w = [Ω_s[s]*(P_sr[s,dr]/P_r[dr])^(1-nu)*(P_r[dr]/c_r[dr])^(1-lambda)*
+             (1-Ω_L)*mu*Y_r[dr] for dr in 1:R_downstream]
+        ω = w ./ sum(w)
+
+        # bilateral shares g[l,dr] = T_l (w_l τ_{l,dr})^{-θ} / Φ_{s,dr}
+        G = Matrix{Float64}(undef, nL, R_downstream)
+        for (li,l) in enumerate(regs), dr in 1:R_downstream
+            g = SR_TO_GOOD[s,l]
+            G[li,dr] = T_mat[s,l]*(W_RS_FLAT[g]*τ[l,dr])^(-theta)/Φ[s,dr]
+        end
+
+        M = zeros(nL,nL)
+        for dr in 1:R_downstream
+            gd = @view G[:,dr]; M .+= ω[dr] .* (Diagonal(gd) .- gd*gd')
+        end
+        γ_marg = G*ω; curv = diag(M)
+
+        ref  = T_REF_REGION[s]
+        free = findall(!=(ref), regs); isempty(free) && continue
+        F = eigen(Symmetric(M[free,free]))
+        push!(out, (sector=s, regions=regs[free],
+                    gamma_marg=γ_marg[free], curvature=curv[free],
+                    eval_min=F.values[1], eval_max=F.values[end],
+                    evec_min=F.vectors[:,1]))
+        println(F.values[1]/F.values[end])
+    end
+    return out
+end
+
+screen = screen_T_identification(theta_hat_1)
 
 if run_step3
     println("\n" * "="^70)
@@ -194,7 +254,6 @@ if run_step3
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
-        output_subdir = "step3",
         max_loop                 = K,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true
@@ -202,6 +261,8 @@ if run_step3
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
     println("Step 3 complete. θ̂_2 saved.")
+
+    screen = screen_T_identification(theta_hat_2)
 end
 
 
@@ -306,11 +367,6 @@ end
 
 
 
-
-W_step3  == W_step3_inf
-
-G = J2_gb
-GtWG = inv(G'*W_step3*G)
 
 ############## POST-HOC ANALYSIS ##############
 run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)

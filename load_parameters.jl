@@ -67,7 +67,7 @@ end
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.025   # (s,r) pairs with γ_{rs} < threshold are zeroed out
+gamma_threshold = 0.05   # (s,r) pairs with γ_{rs} < threshold are zeroed out
 NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
@@ -241,7 +241,7 @@ BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_ga
 @everywhere const BLOCK_NAMES  = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
 
 w_vec = ones(N_moments)
-w_vec[BLOCK_RANGES_local[4]] .= 100.0
+#w_vec[BLOCK_RANGES_local[4]] .= 100.0
 Weight_matrix_custom_local = Diagonal(w_vec)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
