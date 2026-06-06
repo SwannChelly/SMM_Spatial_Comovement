@@ -1,13 +1,15 @@
 ##### Closed-form GMM estimation — main_gmm.jl #####
 # Drop-in replacement for main.jl using analytical EK moments.
 # Three-step GMM:
-#   Step 1: identity-weighted PSO with analytical moments
-#   Step 2: W_eff = Σ_data^{-1}  (Σ_sim = 0 by construction)
-#   Step 3: efficient-weighted PSO (β+T only), warm-started at θ̂_1
+#   Step 1: identity-weighted PSO with analytical moments → θ̂_1
+#   Step 2: W_eff = Σ_data^{-1} (Σ_sim = 0 by construction) + θ̂_1 inference
+#   Step 3: efficient-weighted PSO (β+T only), warm-started at θ̂_1 → θ̂_2
+#   Step 4: Jacobian at θ̂_2 + GMM inference (separable from Step 3)
 #
 # Usage:
-#   julia main_gmm.jl aero 4          # n_quad=200 (default)
-#   julia main_gmm.jl aero 4 resume 200 500   # n_quad=500 (high accuracy)
+#   julia main_gmm.jl aero 4            # N_REG=4, N_TAU=4, n_quad=200
+#   julia main_gmm.jl aero 4 1          # N_REG=4, N_TAU=1 (over-identified)
+#   julia main_gmm.jl aero 4 1 200 500  # N_REG=4, N_TAU=1, n_quad=500
 
 using Distributed
 using Dates
@@ -54,6 +56,11 @@ n_quad   = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 200
 
 K = 5   # PSO loops
 
+run_step1 = true
+run_step2 = true
+run_step3 = true
+run_step4 = true
+
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")
 end
@@ -71,12 +78,13 @@ mkpath(output_folder)
 include("load_parameters.jl")
 NPZ.npzwrite(joinpath(output_folder, "n_reg_coef.npy"), n_coef)
 
-run_step1 = true
-run_step3 = true
+############## Determine step to run ##############
+
+step1_folder = joinpath(output_folder, "step1")
+step2_W_path = joinpath(output_folder, "step2", "W_eff.npy")
 
 ############## STEP 1 — Identity-weighted GMM ##############
 
-step1_folder = joinpath(output_folder, "step1")
 mkpath(step1_folder)
 
 if run_step1
@@ -97,10 +105,7 @@ if run_step1
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
     println("Step 1 complete. θ̂_1 saved.")
 else
-    step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
-    theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
-    ndims(theta_hat_1) > 1 && (theta_hat_1 = theta_hat_1[:, 1])
-    println("Step 1 skipped. θ̂_1 loaded from: $step1_last")
+    println("Step 1 skipped (resume).")
 end
 
 ############## Load θ̂_1 ##############
@@ -110,77 +115,124 @@ theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
 ndims(theta_hat_1) > 1 && (theta_hat_1 = theta_hat_1[:, 1])
 println("θ̂_1 loaded from: $step1_last")
 
-############## STEP 2 — Efficient weight matrix (W = Σ_data^{-1}) ##############
+############## STEP 2 — Efficient weight matrix (W = Σ_data^{-1}) + θ̂_1 inference ##############
 # In GMM mode, Σ_sim = 0 by construction → W_eff = Σ_data^{-1} directly.
-# No simulation replication needed.
+# No simulation replication needed. Also runs θ̂_1 inference for comparability with main.jl.
 
-println("\n" * "="^70)
-println("STEP 2: Building efficient weight matrix W = Σ_data^{-1}")
-println("="^70)
+if run_step2
+    println("\n" * "="^70)
+    println("STEP 2: Building efficient weight matrix W = Σ_data^{-1}")
+    println("="^70)
 
-step2_folder = joinpath(output_folder, "step2")
-mkpath(step2_folder)
+    step2_folder = joinpath(output_folder, "step2")
+    mkpath(step2_folder)
 
-# Load empirical covariance matrices.
-# File selection keyed on N_REG (the moment count, not τ-parameter count N_TAU).
-# The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment).
-sigma_file_gmm = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
-Sigma_data_full = try
-    NPZ.npzread(joinpath(input_folder, sigma_file_gmm))
-catch
-    # Fall back to block-diagonal from w_gamma + w_beta (β-then-γ ordering)
-    w_beta  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
-    w_gamma = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
-    n_b     = size(w_beta, 1)
-    n_gam   = size(w_gamma, 1)
-    S_full  = zeros(n_b + n_gam, n_b + n_gam)
-    S_full[1:n_b, 1:n_b]                   = w_beta
-    S_full[(n_b+1):end, (n_b+1):end]       = w_gamma
-    S_full
+    # Load empirical covariance matrices.
+    # File selection keyed on N_REG (the moment count, not τ-parameter count N_TAU).
+    sigma_file_gmm = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
+    Sigma_data_full = try
+        NPZ.npzread(joinpath(input_folder, sigma_file_gmm))
+    catch
+        # Fall back to block-diagonal from w_gamma + w_beta (β-then-γ ordering)
+        w_beta  = NPZ.npzread(joinpath(input_folder, "w_beta.npy"))
+        w_gamma = NPZ.npzread(joinpath(input_folder, "w_gamma.npy"))
+        n_b   = size(w_beta, 1)
+        n_gam = size(w_gamma, 1)
+        S_full = zeros(n_b + n_gam, n_b + n_gam)
+        S_full[1:n_b, 1:n_b]             = w_beta
+        S_full[(n_b+1):end, (n_b+1):end] = w_gamma
+        S_full
+    end
+
+    # β-then-γ ordering (invariant: BLOCK_RANGES[4] then BLOCK_RANGES[5])
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    N_gb = length(gb_indices)
+
+    Sigma_data_gb = Sigma_data_full[1:N_gb, 1:N_gb]
+
+    # Optional regularization if near-singular
+    F_gb = eigen(Symmetric(Sigma_data_gb))
+    λ_gb = F_gb.values
+    if minimum(λ_gb) < 0 || λ_gb[end] / max(λ_gb[1], 1e-300) > 1e10
+        @warn "Σ_data ill-conditioned (cond=$(round(λ_gb[end]/max(λ_gb[1],1e-300), sigdigits=3))). Adding floor."
+        floor_val = λ_gb[end] / 1e8
+        Sigma_data_gb = F_gb.vectors * Diagonal(max.(λ_gb, floor_val)) * F_gb.vectors'
+    end
+
+    W_eff = Matrix(inv(Symmetric(Sigma_data_gb)))
+
+    NPZ.npzwrite(joinpath(step2_folder, "Sigma_data_gb.npy"), Sigma_data_gb)
+    NPZ.npzwrite(joinpath(step2_folder, "W_eff.npy"), W_eff)
+    println("  W_eff ($(N_gb)×$(N_gb)) saved to step2/.")
+
+    # Jacobian at θ̂_1 (analytical, K=1 deterministic)
+    println("\nComputing Jacobian at θ̂_1 (analytical, K=1)...")
+    J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
+        theta_hat_1;
+        param_indices = jacobian_param_indices,
+        output_folder = output_folder,
+        output_subdir = "step2",
+        filename      = "jacobian_all.npy",
+        K             = 1,
+        step_rel      = 1e-4,
+        step_abs      = 1e-9,
+        base_seed     = 0,
+        analytical    = true,
+        n_quad        = n_quad
+    )
+
+    # Inference at θ̂_1 (GMM: Ω = Σ_data, K_sim = 0)
+    _, sim_moments_1 = full_SMM(theta_hat_1; analytical=true, n_quad=n_quad)
+    sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
+    emp_vec   = vec(empirical_moments)
+
+    n_reg_loc = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
+    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
+    gb_block_names  = ("reg_coef", "gamma_ls")
+
+    # Restrict Jacobian columns to β+T (the only params β+γ moments identify)
+    beta_T_start = 1 + S + R_downstream + 1                       # first β raw index
+    gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
+    gb_param_idx = jacobian_param_indices[gb_cols]
+
+    n_beta_labels_s2 = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_cols])
+    @assert n_beta_labels_s2 == N_TAU "Step-2 inference: expected $N_TAU β/α labels in gb_cols, found $n_beta_labels_s2"
+
+    # Correctness check: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
+    Omega_gmm = Sigma_data_gb
+    @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+
+    J1_gb      = J1[gb_indices, gb_cols]
+    sim_vec_gb = sim_vec_1[gb_indices]
+    emp_vec_gb = emp_vec[gb_indices]
+
+    compute_smm_inference(
+        theta_hat_1, J1_gb, W_eff, Omega_gmm;
+        param_indices         = gb_param_idx,
+        empirical_moments_vec = emp_vec_gb,
+        simulated_moments_vec = sim_vec_gb,
+        output_folder         = joinpath(output_folder, "step2"),
+        industry              = industry,
+        K_sim                 = 0,
+        block_ranges          = gb_block_ranges,
+        block_names           = gb_block_names,
+        gamma_ref_map         = GAMMA_REF_MAP,
+        param_labels          = PARAM_LABELS[gb_cols],
+        moment_labels         = MOMENT_LABELS[gb_indices]
+    )
+
+    println("Step 2 complete. W_eff, Jacobian, and θ̂_1 inference saved.")
+else
+    println("Step 2 skipped (resume). Loading W_eff...")
+    W_eff = NPZ.npzread(step2_W_path)
+
+    # Recompute gb_indices / Sigma_data_gb for use in later steps
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    N_gb = length(gb_indices)
+    Sigma_data_gb = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data_gb.npy"))
 end
 
-# The gamma+beta moment block indices (matching load_parameters.jl BLOCK_RANGES ordering)
-gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
-N_gb = length(gb_indices)
-
-# Extract Σ_data restricted to gamma+beta moments
-Sigma_data_gb = Sigma_data_full[1:N_gb, 1:N_gb]
-
-# Optional regularization if near-singular
-F_gb = eigen(Symmetric(Sigma_data_gb))
-λ_gb = F_gb.values
-if minimum(λ_gb) < 0 || λ_gb[end] / max(λ_gb[1], 1e-300) > 1e10
-    @warn "Σ_data ill-conditioned (cond=$(round(λ_gb[end]/max(λ_gb[1],1e-300), sigdigits=3))). Adding floor."
-    floor_val = λ_gb[end] / 1e8
-    Sigma_data_gb = F_gb.vectors * Diagonal(max.(λ_gb, floor_val)) * F_gb.vectors'
-end
-
-W_eff = Matrix(inv(Symmetric(Sigma_data_gb)))
-
-NPZ.npzwrite(joinpath(step2_folder, "Sigma_data_gb.npy"), Sigma_data_gb)
-NPZ.npzwrite(joinpath(step2_folder, "W_eff.npy"), W_eff)
-println("  W_eff ($(N_gb)×$(N_gb)) saved to step2/.")
-
-# Jacobian at θ̂_1 using analytical moments
-println("\nComputing Jacobian at θ̂_1 (analytical, K=1 evaluation per perturbation)...")
-J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
-    theta_hat_1;
-    param_indices = jacobian_param_indices,
-    output_folder = output_folder,
-    output_subdir = "step2",
-    filename      = "jacobian_all.npy",
-    K             = 1,           # analytical is deterministic: 1 replication suffices
-    step_rel      = 1e-4,
-    step_abs      = 1e-9,
-    base_seed     = 0,
-    analytical    = true,
-    n_quad        = n_quad
-)
-
-println("Step 2 complete. W_eff and Jacobian saved.")
-
-############## STEP 3 — Efficient-weighted GMM ##############
-
+############## STEP 3 — Efficient-weighted GMM (β+T optimisation only) ##############
 
 step3_folder = joinpath(output_folder, "step3")
 mkpath(step3_folder)
@@ -204,9 +256,22 @@ if run_step3
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
     println("Step 3 complete. θ̂_2 saved.")
+else
+    println("Step 3 skipped (resume).")
+end
 
-    # Jacobian at θ̂_2
-    println("\nComputing Jacobian at θ̂_2 (analytical)...")
+############## STEP 4 — Jacobian at θ̂_2 + GMM inference ##############
+
+if run_step4
+    println("\n" * "="^70)
+    println("STEP 4: Jacobian at θ̂_2 + GMM inference")
+    println("="^70)
+
+    theta_hat_2 = NPZ.npzread(joinpath(output_folder, "step3", "theta_hat_2.npy"))
+    ndims(theta_hat_2) > 1 && (theta_hat_2 = theta_hat_2[:, 1])
+
+    # Full-column Jacobian at θ̂_2 (saved for diagnostics, as in main.jl)
+    println("\nComputing Jacobian at θ̂_2 (analytical, K=1)...")
     J2, J2_elast, J2_sd, J2_elast_sd = compute_jacobian(
         theta_hat_2;
         param_indices = jacobian_param_indices,
@@ -221,52 +286,79 @@ if run_step3
         n_quad        = n_quad
     )
 
-    # Inference: GMM SEs are exact delta-method (Σ_sim = 0)
+    # Rank diagnostic + per-block noise report (mirroring main.jl Step 4)
+    sv_J2   = svdvals(J2)
+    rank_J2 = count(sv_J2 .> sv_J2[1] * 1e-8)
+    println("  Rank of J2: $rank_J2 / $(size(J2, 2))")
+    println("  Per-block max/mean |J2_elast| and noise (J2_elast_sd / |J2_elast|):")
+    for (k, name) in enumerate(BLOCK_NAMES)
+        rng = BLOCK_RANGES[k]
+        isempty(rng) && continue
+        block_mu = abs.(J2_elast[rng, :])
+        block_sd = J2_elast_sd[rng, :]
+        signif   = block_mu .> 1e-3
+        noise_ratio = any(signif) ? mean(block_sd[signif] ./ block_mu[signif]) : NaN
+        if !isnan(noise_ratio) && noise_ratio > 0.10
+            @warn "  $name noise ratio $(round(noise_ratio, sigdigits=3)) > 0.10"
+        end
+        @printf("  %-12s max=%.4e  mean=%.4e  noise=%s\n",
+                name, maximum(block_mu), mean(block_mu),
+                isnan(noise_ratio) ? "n/a" : string(round(noise_ratio, sigdigits=3)))
+    end
+
+    # GMM inference at θ̂_2 (Σ_sim = 0, Ω = Σ_data)
+    println("\nRunning GMM inference at θ̂_2...")
+    W_eff     = NPZ.npzread(joinpath(output_folder, "step2", "W_eff.npy"))
+    Sigma_data_gb = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data_gb.npy"))
+
     _, sim_moments_2 = full_SMM(theta_hat_2; analytical=true, n_quad=n_quad)
     sim_vec_2 = vcat([vec(sim_moments_2[i]) for i in 1:5]...)[MOMENT_MASK]
     emp_vec   = vec(empirical_moments)
 
-    # Step 3 only identifies β and T parameters (A_r/labor/industry fixed at θ̂_1).
-    # Restrict Jacobian columns to β+T to ensure G'WG is full-rank (order condition).
-    # β starts at raw position 1 + S_ + R_down_ + 1; everything after is T.
-    beta_T_start_raw  = 1 + S_ + R_down_ + 1
-    gb_param_cols     = findall(i -> i >= beta_T_start_raw, jacobian_param_indices)
-    gb_param_indices_step3 = jacobian_param_indices[gb_param_cols]
-
-    # Correctness check 1: Σ_data leading β-block must be N_REG × N_REG (moments).
-    @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
-    # Correctness check 2: exactly N_TAU β/α labels in gb_param_cols.
-    n_beta_labels_gmm = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_param_cols])
-    @assert n_beta_labels_gmm == N_TAU "Expected $N_TAU β/α labels in gb_param_cols, found $n_beta_labels_gmm — beta_T_start misaligned with N_TAU"
-
-    J2_gb = J2[gb_indices, gb_param_cols]
-    sim_vec_gb = sim_vec_2[gb_indices]
-    emp_vec_gb = emp_vec[gb_indices]
-
-    n_reg_loc = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
+    # β-then-γ ordering (invariant)
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
     gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
     gb_block_names  = ("reg_coef", "gamma_ls")
 
-    println("Step-3 inference: J2_gb is $(size(J2_gb,1))×$(size(J2_gb,2)) " *
-            "($(N_gb) β+γ moments × $(length(gb_param_indices_step3)) β+T params). " *
-            "Order condition: $(N_gb) ≥ $(length(gb_param_indices_step3)) → $(N_gb >= length(gb_param_indices_step3) ? "satisfied" : "VIOLATED").")
+    # Restrict Jacobian columns to β+T (ensures G'WG full-rank, order condition)
+    beta_T_start = 1 + S + R_downstream + 1                       # first β raw index
+    gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
+    gb_param_idx = jacobian_param_indices[gb_cols]
 
-    # Omega = Sigma_data (Sigma_sim = 0 in GMM mode)
+    # Correctness check 1: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
     Omega_gmm = Sigma_data_gb
+    @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+    # Correctness check 2: exactly N_TAU β/α labels in the restricted param columns.
+    n_beta_labels = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_cols])
+    @assert n_beta_labels == N_TAU "Expected $N_TAU β/α labels in gb_cols, found $n_beta_labels — beta_T_start misaligned with N_TAU"
+
+    J2_gb      = J2[gb_indices, gb_cols]
+    sim_vec_gb = sim_vec_2[gb_indices]
+    emp_vec_gb = emp_vec[gb_indices]
+
+    N_gb = length(gb_indices)
+    n_gb_params = length(gb_param_idx)
+    println("Step-4 inference: J2_gb is $(N_gb)×$(n_gb_params) " *
+            "($(N_gb) β+γ moments × $(n_gb_params) β+T params). " *
+            "df = $(N_gb - n_gb_params)")
 
     compute_smm_inference(
         theta_hat_2, J2_gb, W_eff, Omega_gmm;
-        param_indices         = gb_param_indices_step3,
+        param_indices         = gb_param_idx,
         empirical_moments_vec = emp_vec_gb,
         simulated_moments_vec = sim_vec_gb,
         output_folder         = joinpath(output_folder, "step3"),
         industry              = industry,
         K_sim                 = 0,
         block_ranges          = gb_block_ranges,
-        block_names           = gb_block_names
+        block_names           = gb_block_names,
+        gamma_ref_map         = GAMMA_REF_MAP,
+        param_labels          = PARAM_LABELS[gb_cols],
+        moment_labels         = MOMENT_LABELS[gb_indices]
     )
 
-    # Add note to inference summary
+    # Add GMM-mode note to inference summary
     note_path = joinpath(output_folder, "step3", "inference", "gmm_note.txt")
     open(note_path, "w") do io
         println(io, "GMM mode: closed-form EK moments (n_quad=$n_quad for reg_coef).")
@@ -274,43 +366,10 @@ if run_step3
         println(io, "SEs are exact delta-method without Murphy-Topel correction.")
         println(io, "Jacobian computed analytically (single FD replication, K=1).")
     end
-    println("Step 3 inference complete. Results in step3/inference/.")
+    println("Step 4 inference complete. Results in step3/inference/.")
 end
 
 ############## POST-HOC REPORTING ##############
 run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
 println("\nGMM estimation complete. Results in: $output_folder")
-
-
-# beta_min = 1e-3
-# beta_max = 10
-# if n_coef == 1
-#     length_range_beta = 10000
-# end
-# beta_search_method= "log_grid"
-# if beta_search_method == "log_grid"
-#     beta_candidates = generate_initial_betas("log_grid", N_TAU, beta_min, beta_max;
-#                                                 log_grid_length=length_range_beta)
-# else
-#     beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min, beta_max;
-#                                                 lhs_n_samples=20000)
-# end
-# println("  Generated $(length(beta_candidates)) beta candidates")
-
-# A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
-# A_init ./= sum(A_init)
-# T_init_nz = vec(T_rs_init)[T_MASK]
-# # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
-# init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
-# expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
-
-
-# results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,W_override=Weight_matrix_custom,analytical=true, n_quad=200), expanding_beta[1,:])
-
-
-# scores = [r !== nothing ? r[1][1] : Inf for r in results_]
-# best_idx = argmin(scores)
-
-# init_beta = beta_candidates[best_idx]
-# println("  Best initial beta: ", round.(init_beta, digits=6))
