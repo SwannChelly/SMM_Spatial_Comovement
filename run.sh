@@ -2,56 +2,65 @@
 #
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
-# Usage (SMM, legacy):
-#   ./run.sh <industry> [n_coef] [resume] [K_sim]
+# Usage (SMM):
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N]
+#
+# Examples:
 #   ./run.sh aero
-#   ./run.sh aero 4
-#   ./run.sh aero 4 resume 10000
-#   ./run.sh both 5
-#
-# Usage (GMM, recommended for inference):
-#   ./run.sh aero 4 "" "" --mode=gmm           # n_quad=200 (default)
-#   ./run.sh aero 4 "" "" --mode=gmm --n_quad=500
-#
+#   ./run.sh aero --n_coef=4
+#   ./run.sh aero --n_coef=4 --mode=gmm
+#   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm
+#   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm --n_quad=500
+#   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [n_coef] [resume] [K_sim] [--mode=smm|gmm] [--n_quad=N]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N]"
     echo "  industry : aero, auto, car, both"
-    echo "  n_coef   : 1 or 4 or 5 (default: 4)"
-    echo "  resume   : pass 'resume' to resume from last checkpoint"
-    echo "  K_sim    : replications for Σ_sim (SMM only, default: 10000)"
+    echo "  --n_coef : number of regression moments: 1, 4, or 5 (default: 4)"
+    echo "  --n_tau  : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
     echo "  --mode   : smm (default) or gmm (analytical, faster, exact SEs)"
     echo "  --n_quad : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
     exit 1
 fi
 
 INDUSTRY="$1"
-N_COEF="${2:-4}"
-RESUME="${3:-}"
-K_SIM="${4:-}"
+shift
+
+# Defaults
+N_COEF="4"
+N_TAU=""       # empty = default to n_coef inside Julia
 MODE="smm"
 N_QUAD="200"
 
-# Parse named flags from remaining args
 for arg in "$@"; do
     case "$arg" in
-        --mode=*) MODE="${arg#--mode=}" ;;
+        --n_coef=*) N_COEF="${arg#--n_coef=}" ;;
+        --n_tau=*)  N_TAU="${arg#--n_tau=}" ;;
+        --mode=*)   MODE="${arg#--mode=}" ;;
         --n_quad=*) N_QUAD="${arg#--n_quad=}" ;;
+        *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
 
-if [ "$N_COEF" != "4" ] && [ "$N_COEF" != "5" ] && [ "$N_COEF" != "1" ]; then
-    echo "Error: n_coef must be 1, 4 or 5, got: $N_COEF"
-    exit 1
-fi
+# If n_tau not set, default to n_coef
+N_TAU="${N_TAU:-$N_COEF}"
+
+# Validate
+for val in "$N_COEF" "$N_TAU"; do
+    if [ "$val" != "1" ] && [ "$val" != "4" ] && [ "$val" != "5" ]; then
+        echo "Error: n_coef and n_tau must be 1, 4, or 5 (got: $val)"
+        exit 1
+    fi
+done
 
 if [ "$MODE" = "gmm" ]; then
     JULIA_SCRIPT="SMM_Spatial_Comovement/main_gmm.jl"
 else
     JULIA_SCRIPT="SMM_Spatial_Comovement/main.jl"
 fi
+
 if [ ! -f "$JULIA_SCRIPT" ]; then
     echo "Error: $JULIA_SCRIPT not found"
     exit 1
@@ -65,14 +74,9 @@ add_timestamp() {
 
 run_industry() {
     local ind="$1"
-    local ncoef="$2"
-    local resume_arg="$3"
-    local k_sim_arg="$4"
-    local use_nohup="$5"
-    local mode="$6"
-    local n_quad_arg="$7"
+    local use_nohup="$2"
 
-    if [ "$mode" = "gmm" ]; then
+    if [ "$MODE" = "gmm" ]; then
         local reporting_folder="reporting_gmm_${ind}"
     else
         local reporting_folder="reporting_${ind}"
@@ -87,14 +91,15 @@ run_industry() {
 
     mkdir -p "$reporting_folder"
 
-    if [ "$mode" = "gmm" ]; then
-        local args="$ind $ncoef \"\" \"\" $n_quad_arg"
-        echo "Starting GMM (analytical) for industry: $ind (n_coef=$ncoef, n_quad=$n_quad_arg)"
+    # Build Julia argument string
+    # main.jl    : industry n_coef n_tau
+    # main_gmm.jl: industry n_coef n_tau n_quad
+    if [ "$MODE" = "gmm" ]; then
+        local args="$ind $N_COEF $N_TAU $N_QUAD"
+        echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD)"
     else
-        local args="$ind $ncoef"
-        [ -n "$resume_arg" ] && args="$args $resume_arg"
-        [ -n "$k_sim_arg" ]  && args="$args $k_sim_arg"
-        echo "Starting SMM for industry: $ind (n_coef=$ncoef)"
+        local args="$ind $N_COEF $N_TAU"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU)"
     fi
     echo "Logs: $log_file"
 
@@ -113,12 +118,12 @@ sleep 1
 
 if [ "$INDUSTRY" = "both" ]; then
     echo "Running aero then auto sequentially (mode=$MODE)"
-    run_industry "aero" "$N_COEF" "$RESUME" "$K_SIM" "no" "$MODE" "$N_QUAD"
+    run_industry "aero" "no"
     echo "--- aero completed ---"
-    run_industry "auto" "$N_COEF" "$RESUME" "$K_SIM" "no" "$MODE" "$N_QUAD"
+    run_industry "auto" "no"
     echo "--- auto completed ---"
 else
-    run_industry "$INDUSTRY" "$N_COEF" "$RESUME" "$K_SIM" "yes" "$MODE" "$N_QUAD"
+    run_industry "$INDUSTRY" "yes"
     echo ""
     if [ "$MODE" = "gmm" ]; then
         echo "Monitor: tail -f reporting_gmm_${INDUSTRY}/logs.log"

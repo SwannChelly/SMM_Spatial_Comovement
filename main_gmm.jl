@@ -50,10 +50,9 @@ using StatsBase
 ############## Parse arguments ##############
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
-n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
-n_tau    = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : n_coef  # trade-cost param count; default = moment count
-n_quad   = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 200
-
+n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
+n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
+n_quad   = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 200
 K = 5   # PSO loops
 
 run_step1 = true
@@ -206,8 +205,15 @@ if run_step2
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
+    # Step-1 weight matrix: θ̂_1 was estimated with the IDENTITY-weighted criterion
+    # (run_pso_optimization called with weight_matrix=nothing → Weight_matrix_custom),
+    # NOT with W_eff = Σ_data^{-1}. Inference at θ̂_1 must use that same W, otherwise
+    # Var_eff = (G'W G)^{-1} describes the efficient estimator θ̂_1 is not.
+    # The sandwich form (G'WG)^{-1} G'WΩWG (G'WG)^{-1} is the only valid variance here.
+    W_step1 = Matrix(Weight_matrix_custom[gb_indices, gb_indices])
+
     compute_smm_inference(
-        theta_hat_1, J1_gb, W_eff, Omega_gmm;
+        theta_hat_1, J1_gb, W_step1, Omega_gmm;
         param_indices         = gb_param_idx,
         empirical_moments_vec = emp_vec_gb,
         simulated_moments_vec = sim_vec_gb,
