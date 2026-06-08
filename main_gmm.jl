@@ -376,6 +376,7 @@ if run_step4
 end
 
 ############## POST-HOC REPORTING ##############
-run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+              analytical=true, n_quad=n_quad)
 
 println("\nGMM estimation complete. Results in: $output_folder")
