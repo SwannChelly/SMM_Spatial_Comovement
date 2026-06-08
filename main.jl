@@ -369,7 +369,8 @@ end
 
 
 ############## POST-HOC ANALYSIS ##############
-run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+              analytical=false)
 
 
 last_stage_folder = find_last_stage_folder(joinpath(output_folder, "step1"))

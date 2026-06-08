@@ -307,7 +307,9 @@ end
 
 function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original";
                         u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                        sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                        sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                        analytical::Bool=false,
+                        n_quad::Int=200)
     # Backward compatibility: convert Bool to String
     if method isa Bool
         method = method ? "normalize" : "original"
@@ -318,7 +320,8 @@ function train_stage_one(n, init_beta, params_list = nothing, second_stage = fal
         params_list = generate_halton_grid(n,2000,false,init_beta)
     end
     f = params -> parallel_SMM_safe(params, false, second_stage, method, true;
-                                    u_draws=u_draws, sample_weights=sample_weights)
+                                    u_draws=u_draws, sample_weights=sample_weights,
+                                    analytical=analytical, n_quad=n_quad)
     results = pmap(f, params_list)
     return params_list,results
 end
@@ -537,7 +540,9 @@ end
 
 function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="";
                          u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                         sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                         sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                         analytical::Bool=false,
+                         n_quad::Int=200)
 
     folder = joinpath(loop_folder, stage)
     mkpath(folder)
@@ -546,19 +551,23 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
         best_params = NPZ.npzread(joinpath(folder, "best_params.npy"))
         params_list = [best_params[:, K] for K in 1:K_max]
         params_list, results = train_stage_one(n, nothing, params_list, false;
-                                               u_draws=u_draws, sample_weights=sample_weights)
+                                               u_draws=u_draws, sample_weights=sample_weights,
+                                               analytical=analytical, n_quad=n_quad)
         score = [score[1] != nothing ? score[1][1] : missing for score in results]
         best_index = argmin(score)
         best_params = best_params[:, best_index]
     else
-        results = [full_SMM(best_params; u_draws=u_draws, sample_weights=sample_weights)]
+        results = [full_SMM(best_params; u_draws=u_draws, sample_weights=sample_weights,
+                            analytical=analytical, n_quad=n_quad)]
         best_index = 1
     end
 
     # ── Extract empirical & simulated vectors ──
-
-    emp_gamma = vec(emp_gamma_ls)
-    sim_gamma = vec(results[best_index][2][5])
+    # Use the same masked gamma subset as the optimizer and compute_smm_inference:
+    # apply MOMENT_MASK to the raw simulated blocks, then index BLOCK_RANGES[5].
+    sim_flat_masked = vcat([vec(results[best_index][2][i]) for i in 1:length(results[best_index][2])]...)[MOMENT_MASK]
+    emp_gamma = empirical_moments[collect(BLOCK_RANGES[5])]
+    sim_gamma = sim_flat_masked[collect(BLOCK_RANGES[5])]
 
     emp_pi = vec(emp_pi_r)
     sim_pi_r = vec(results[best_index][2][3])
@@ -599,8 +608,8 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     agg_industry_share_ = [emp_pi_sA,sim_pi_sA]
 
-    gamma_emp_result = matrix_report(emp_gamma_ls)
-    gamma_sim_result = matrix_report(results[best_index][2][5])
+    gamma_emp_result = matrix_report(emp_gamma, false)
+    gamma_sim_result = matrix_report(sim_gamma, false)
     gamma_ls_ = [gamma_emp_result, gamma_sim_result]
 
     reg_emp = reg_coef
@@ -715,7 +724,9 @@ Compute scores by dynamically finding all stage folders.
 """
 function compute_scores_modular(output_folder::String, second_stage::Bool, max_loop::Union{Int, Nothing}=nothing;
                                 u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                                sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                                sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                                analytical::Bool=false,
+                                n_quad::Int=200)
     top_score = Float64[]
     min_distances = Float64[]
     best_simulated_moments = Vector{Vector{Float64}}()
@@ -742,7 +753,8 @@ function compute_scores_modular(output_folder::String, second_stage::Bool, max_l
 
         params_list_stage = [best_params_stage]
         params_list_stage, results = train_stage_one(1, nothing, params_list_stage, second_stage;
-                                                      u_draws=u_draws, sample_weights=sample_weights)
+                                                      u_draws=u_draws, sample_weights=sample_weights,
+                                                      analytical=analytical, n_quad=n_quad)
         
         score = [s[1] !== nothing ? s[1][1] : Inf for s in results]
         push!(top_score, minimum(score))
@@ -796,14 +808,17 @@ Run full reporting: compute scores, create plots, save results.
 function run_reporting(output_folder::String, max_loop::Union{Int, Nothing}=nothing;
                        save_plots::Bool=true,
                        u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                       sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                       sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                       analytical::Bool=false,
+                       n_quad::Int=200)
 
     folder = output_folder * "/"
 
     # Compute scores for both stages
     top_score_first, min_dist_first, best_simulated_moments, best_parameters_list =
         compute_scores_modular(output_folder, false, max_loop;
-                               u_draws=u_draws, sample_weights=sample_weights)
+                               u_draws=u_draws, sample_weights=sample_weights,
+                               analytical=analytical, n_quad=n_quad)
 
     
     if !isempty(best_simulated_moments)
@@ -1279,7 +1294,8 @@ function run_pso_optimization(;
     mkpath(stage0_folder)
     NPZ.npzwrite(joinpath(stage0_folder, "best_params.npy"), reshape(best_params, :, 1))
     generate_report(loop_base, string(stage), 1, nothing, best_params, "";
-                    u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+                    u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                    analytical=analytical, n_quad=n_quad)
 
     # ── Refinement loops ─────────────────────────────────────────────────────
     alpha_start, alpha_end = 0.3, 0.9
@@ -1308,7 +1324,8 @@ function run_pso_optimization(;
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
             generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
-                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                            analytical=analytical, n_quad=n_quad)
         else
             # Sub-stage 1: Productivity
             alpha_prod = 0.7 + 0.2 * alpha
@@ -1324,7 +1341,8 @@ function run_pso_optimization(;
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
             generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_prod);
-                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                            analytical=analytical, n_quad=n_quad)
 
             # Sub-stage 2: Spatial structure (β, T)
             best_params, best_fitness, history = train_stage_pso(
@@ -1339,7 +1357,8 @@ function run_pso_optimization(;
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
             generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
-                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                            analytical=analytical, n_quad=n_quad)
 
             # Sub-stage 3: Technical coefficients
             best_params, best_fitness, history = train_stage_pso(
@@ -1355,7 +1374,8 @@ function run_pso_optimization(;
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
             generate_report(loop_folder, string(stage), 1,
                             ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha);
-                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                            analytical=analytical, n_quad=n_quad)
         end
 
         println("  ✓ Loop $loop done. Fitness: $(round(best_fitness, digits=6))")
@@ -1372,7 +1392,8 @@ function run_pso_optimization(;
         end
     end
 
-    run_reporting(loop_base, max_loop; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+    run_reporting(loop_base, max_loop; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                  analytical=analytical, n_quad=n_quad)
     return best_params, best_fitness
 end
 
