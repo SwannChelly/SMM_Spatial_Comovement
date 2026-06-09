@@ -47,7 +47,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_rho               = $(4000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const lambda              = $(0.5)
-@everywhere const nu                  = $(0.2)
+@everywhere const nu                  = $(0.01)
 @everywhere const nu_s                = $(ones(S_) .* 2.5)
 @everywhere const theta               = $(1.768)
 

@@ -617,7 +617,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     reg_ = [reg_emp, reg_sim]
 
     pi_r_emp_result = matrix_report(emp_pi, false)
-    pi_r_sim_result = matrix_report(results[best_index][2][3])
+    pi_r_sim_result = matrix_report(results[best_index][2][3], false)
     pi_r = [pi_r_emp_result, pi_r_sim_result]
 
     best_score = results[best_index][1][1]
