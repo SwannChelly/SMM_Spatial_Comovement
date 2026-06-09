@@ -326,6 +326,7 @@ function train_stage_one(n, init_beta, params_list = nothing, second_stage = fal
     return params_list,results
 end
 
+# Returns (n_zeros, q1, median, q3, max_val) when include_n_zero=true, else (q1, median, q3, max_val). Callers must be consistent with their choice.
 function matrix_report(mat,include_n_zero = true)
     vals = vec(mat)
     n_zeros = count(==(0), vals)
@@ -608,8 +609,8 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     agg_industry_share_ = [emp_pi_sA,sim_pi_sA]
 
-    gamma_emp_result = matrix_report(emp_gamma, false)
-    gamma_sim_result = matrix_report(sim_gamma, false)
+    gamma_emp_result = matrix_report(emp_gamma, true)
+    gamma_sim_result = matrix_report(sim_gamma, true)
     gamma_ls_ = [gamma_emp_result, gamma_sim_result]
 
     reg_emp = reg_coef
