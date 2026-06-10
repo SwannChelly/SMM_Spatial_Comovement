@@ -578,10 +578,87 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     # ── Bubble scatter plots ──
 
-    p1 = bubble_scatter(emp_gamma, sim_gamma;
-        xlabel = "Empirical γ_ls",
-        ylabel = "Simulated γ_ls",
-        title  = "γ_ls: Empirical vs Simulated")
+    # p1 (γ_ls) is built directly here — NOT via bubble_scatter — so it can carry
+    # the two-series color/marker distinction and legend from compute_smm_inference
+    # §6b (the gamma_ref_map block). bubble_scatter is shared by p2/p3 below and
+    # plots a single unlabelled series; labelling its points to drive a legend would
+    # spill that legend onto p2/p3. p2/p3 stay on bubble_scatter, unchanged.
+    p1 = let emp_g = Float64.(emp_gamma), sim_g = Float64.(sim_gamma)
+        # Non-reference (retained) points: empirical x > 0 (as in bubble_scatter).
+        keep = emp_g .> 0
+        xf   = emp_g[keep]
+        yf   = sim_g[keep]
+
+        # Reconstruct each sector's dropped reference-region point from the
+        # within-sector adding-up constraint γ_ref,s = c_s − Σ_{l≠ref} γ_ls.
+        # sim_gamma is the γ block as a standalone 1-based vector (BLOCK_RANGES[5]
+        # extracted), so entry.local_positions indexes it with ZERO offset — no
+        # β-block precedes it here (unlike §6b's β-then-γ subsystem).
+        x_ref = Float64[]; y_ref = Float64[]
+        for entry in GAMMA_REF_MAP
+            pos = entry.local_positions
+            (isempty(pos) || maximum(pos) > length(sim_g)) && continue
+            entry.emp_ref <= 0 && continue
+            push!(x_ref, entry.emp_ref)
+            push!(y_ref, entry.c_s - sum(sim_g[pos]))
+        end
+
+        # Marker sizes proportional to empirical values (matches bubble_scatter).
+        sizes = 300 .* xf ./ maximum(xf)
+
+        # WLS y = b·x (no intercept), weights = x — NON-REFERENCE points ONLY; the
+        # reconstructed reference points must not enter the fit.
+        w      = xf
+        b      = sum(w .* xf .* yf) / sum(w .* xf .^ 2)
+        resid  = yf .- b .* xf
+        nobs   = length(xf)
+        s2     = sum(w .* resid .^ 2) / max(nobs - 1, 1)
+        se_b   = sqrt(s2 / sum(w .* xf .^ 2))
+        t_stat = se_b > 0 ? b / se_b : Inf
+
+        # Axis limits spanning BOTH series.
+        all_x = vcat(xf, x_ref)
+        all_y = vcat(yf, y_ref)
+        lo = min(minimum(all_x), minimum(all_y)) * 0.9
+        hi = max(maximum(all_x), maximum(all_y)) * 1.1
+        lims = (lo, hi)
+
+        pg = scatter(xf, yf;
+            markersize        = sqrt.(sizes) ./ 2,
+            alpha             = 0.6,
+            markerstrokecolor = :black,
+            markerstrokewidth = 0.5,
+            color             = RGB(0.247, 0.404, 0.667),
+            label             = "Non-reference",
+            xlabel            = "Empirical γ_ls",
+            ylabel            = "Simulated γ_ls",
+            title             = "γ_ls: Empirical vs Simulated",
+            xlims             = lims,
+            ylims             = lims,
+            legend            = :bottomright,
+            grid              = true,
+            gridalpha         = 0.5,
+            gridstyle         = :dash)
+
+        if !isempty(x_ref)
+            scatter!(pg, x_ref, y_ref;
+                markersize        = 5,
+                markershape       = :diamond,
+                alpha             = 0.7,
+                markerstrokecolor = :black,
+                markerstrokewidth = 0.5,
+                color             = RGB(0.75, 0.30, 0.20),
+                label             = "Reference (reconstructed)")
+        end
+
+        plot!(pg, [lo, hi], [lo, hi]; color=:black, label="45°", linewidth=1)
+
+        annotate!(pg, hi * 0.95, lo + (hi - lo) * 0.12,
+                  text(@sprintf("Coef: %.3f", b), :right, 8))
+        annotate!(pg, hi * 0.95, lo + (hi - lo) * 0.04,
+                  text(@sprintf("t-stat: %.1f", t_stat), :right, 8))
+        pg
+    end
 
     p2 = bubble_scatter(emp_pi, sim_pi_r;
         xlabel = "Empirical π_r",
