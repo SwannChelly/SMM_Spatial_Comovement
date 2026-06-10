@@ -1061,7 +1061,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     # rows/cols. β block (1:N_REG) is never pruned.
     X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
     T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
-    T_mask_moment_new = vec(permutedims(reshape(collect(T_MASK), S, R)))     # thresholded
+    T_mask_moment_new = collect(T_MASK)                                      # thresholded; T_MASK is now s-major (= moment convention)
 
     # In the old mask, remove reference regions.
     keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
@@ -1214,7 +1214,7 @@ function run_pso_optimization(;
 
         A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A_init ./= sum(A_init)
-        T_init_nz = vec(T_rs_init)[T_MASK]
+        T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
         # New layout: [Ω^L | Ω^s | A | β(N_TAU) | T] — beta is inserted between A and T
         init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
         expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]

@@ -95,7 +95,7 @@ R_ = size(N_downstream_per_region_local[N_downstream_per_region_local.!=0])[1]
 #end
 
 # Mask for non-zero T_rs: only optimize T where gamma_ls > 0
-T_mask_local = vec(X_rs_local) .> 0
+T_mask_local = vec(permutedims(X_rs_local)) .> 0  # s-major to match T_MASK_MOMENT / unpack_params
 @everywhere const T_MASK = $T_mask_local
 T_mask_moment_local = vec(permutedims(X_rs_local)) .> 0
 @everywhere const T_MASK_MOMENT = $T_mask_moment_local
@@ -104,7 +104,7 @@ println("T_MASK: $(sum(T_mask_local)) / $(length(T_mask_local)) non-zero T param
 
 # Precompute flat index mappings for good (s,r) pairs
 R_full = size(filter_N_upstream_local, 2)  # original R before R_ gets reassigned
-good_indices_local = findall(reshape(T_mask_local, S_, R_full))
+good_indices_local = findall(permutedims(reshape(T_mask_local, R_full, S_)))  # s-major flat → (R,S) → (S,R)
 n_good_local = length(good_indices_local)
 GOOD_S_local = [ci[1] for ci in good_indices_local]
 GOOD_R_local = [ci[2] for ci in good_indices_local]
@@ -375,7 +375,7 @@ if full_run
     A ./= sum(A)
 
     # Extract only active entries (respect sparsity mask)
-    T_init_nonzero = vec(T_rs_init)[T_mask_local]
+    T_init_nonzero = vec(permutedims(T_rs_init))[T_mask_local]
     
     println("T_init stats:")
     println("  min = $(minimum(T_init_nonzero))")
