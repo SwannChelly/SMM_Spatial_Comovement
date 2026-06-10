@@ -130,12 +130,12 @@ println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
 @everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)
 # ──────────────────────────────────────────────────────────────────────────
 
-T_mask_local         = vec(X_rs_local) .> 0 # X_rs has shape (S,R)
+T_mask_local         = vec(permutedims(X_rs_local)) .> 0 # s-major (region-minor): identical to T_mask_moment_local / γ-moment convention
 T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
 @everywhere const T_MASK_MOMENT = $T_mask_moment_local
 
-good_indices_local        = findall(reshape(T_mask_local, S_, R_full))
+good_indices_local        = findall(permutedims(reshape(T_mask_local, R_full, S_)))  # s-major flat → (R,S) → (S,R)
 n_good_local              = length(good_indices_local)
 GOOD_S_local              = [ci[1] for ci in good_indices_local]
 GOOD_R_local              = [ci[2] for ci in good_indices_local]
@@ -294,7 +294,7 @@ T_param_offset = 1 + S_ + R_down_ + N_TAU
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
     ref_r == 0 && continue
-    flat_pos = (ref_r - 1) * S_ + s   # column-major index in vec(T_rs), shape (S, R)
+    flat_pos = (s - 1) * R_full + ref_r   # s-major index in vec(permutedims(T_rs)), shape (R, S)
     if T_mask_local[flat_pos]
         t_idx = count(T_mask_local[1:flat_pos])
         push!(_excluded, T_param_offset + t_idx)
@@ -426,11 +426,11 @@ push!(_param_labels_full, "Omega_L")
 for s in 1:S_;            push!(_param_labels_full, "Omega_s[$(_sector_names[s])]"); end
 for r in 1:R_down_;       push!(_param_labels_full, "A[$(_ze_names[downstream_regions_local[r]])]"); end
 for b in 1:N_TAU;         push!(_param_labels_full, N_TAU == 1 ? "alpha" : "beta_$b"); end
-# T entries follow vec(T_rs) column-major over (S,R) restricted to T_MASK.
+# T entries follow vec(permutedims(T_rs)) s-major over (S,R) restricted to T_MASK.
 # Recover (s,r) for each active T slot in the same order T_reduced is laid out.
-for flat_pos in findall(T_mask_local)             # column-major: r outer, s inner
-    s = ((flat_pos - 1) % S_) + 1
-    r = ((flat_pos - 1) ÷ S_) + 1
+for flat_pos in findall(T_mask_local)             # s-major: s outer, r inner
+    s = ((flat_pos - 1) ÷ R_full) + 1
+    r = ((flat_pos - 1) %  R_full) + 1
     push!(_param_labels_full, "T[$(_sector_names[s])-$(_ze_names[r])]")
 end
 @assert length(_param_labels_full) == 1 + S_ + R_down_ + N_TAU + sum(T_mask_local)

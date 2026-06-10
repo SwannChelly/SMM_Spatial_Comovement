@@ -44,8 +44,8 @@ using StatsBase
 ############## Parse arguments ##############
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
-n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
-n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
+n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
+n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
 
 K = 2

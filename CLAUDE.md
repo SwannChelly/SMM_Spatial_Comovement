@@ -4,6 +4,7 @@
 
 | Date | Files | Summary |
 |------|-------|---------|
+| 2026-06-10 | `load_parameters.jl`, `model_CP.jl`, `tools.jl`, `pso_integration.jl`, `main_pso.jl`, `test_t_reorder.jl`, `CLAUDE.md` | Unify the T-parameter flattening to **s-major** (`vec(permutedims(X_rs))`), identical to the γ-moment and `T_MASK_MOMENT` convention, so the Jacobian's parameter axis aligns column-for-column with its γ-moment row axis (`T[s,r]` column ↔ `γ[s,r]` row). Previously T parameters used region-major `vec(X_rs)` while γ moments used s-major — the two Jacobian axes disagreed. The parameter LAYOUT `[Ω^L \| Ω^s \| A \| β \| T]` is unchanged; only the internal order of the active-T sub-block changes. Coupled edits (all move together; partial application silently transposes `T_mat`): (1) `load_parameters.jl` `T_MASK = vec(permutedims(X_rs)) .> 0` (now == `T_MASK_MOMENT`); (2) `good_indices = findall(permutedims(reshape(T_MASK, R, S)))`; (3) `model_CP.unpack_params` inverts the new flatten: `T_full = zeros(R*S); T_full[T_MASK]=T_reduced; T_mat = permutedims(reshape(T_full, R, S))` (still returns region-major `vec(T_mat)`, so inter-stage full-T is unchanged); (4) jacobian ref-exclusion `flat_pos = (s-1)*R_full + ref_r`; (5) `PARAM_LABELS` T loop `s=((fp-1)÷R_full)+1, r=((fp-1)%R_full)+1`. Phase-0e surfaced **4 additional active flat-T consumers beyond the documented 5** (the "five edits" premise undercounted): `tools.jl:build_step3_weight_matrix` Σ_data subset (`reshape(collect(T_MASK),S,R)` → `collect(T_MASK)`, used by main.jl/main_gmm.jl Step-3 inference); `tools.jl` & `pso_integration.jl` PSO init/bounds (`vec(T_rs_init)[T_MASK]` → `vec(permutedims(T_rs_init))[T_MASK]`); `pso_integration.jl` warm-start reduce (`params_dict[:T][T_MASK]` → `vec(permutedims(reshape(params_dict[:T],S,R)))[T_MASK]`); and `main_pso.jl` (shares `unpack_params`, so its own region-major `T_MASK`/`good_indices`/`T_init` were flipped too, else it silently breaks). The dormant `second_stage` masking path (`mask_emp_gamma_ls`, `second_stage=false` in every main flow; only `run_amplification_analysis.jl` defines the mask) is intentionally left untouched. `GOOD_S/GOOD_R` remain region-major (findall over (S,R)) — confirmed nothing positionally aligns `GOOD[g]` with the reduced-T block (model reads `T_mat[s,r]` via `SR_TO_GOOD`; all param-block construction uses `T_MASK` order). New `test_t_reorder.jl` GATE asserts T1 (`T_MASK==T_MASK_MOMENT`), T2 (unpack round-trip), T3 (label↔index), T4 (γ-row order == T-col order). |
 | 2026-06-09 | `tools.jl` | Fix field-mismatch in `generate_report`: `gamma_emp_result`/`gamma_sim_result` were built with `matrix_report(..., false)` (4-field tuple), but `generate_dashboard_report` accesses `.n_zeros` expecting the 5-field form. Restored to `matrix_report(..., true)` for γ only; π_r remains `false` (zero counts uninformative there, γ sparsity is a meaningful diagnostic). Added a one-line comment to `matrix_report` documenting the asymmetric return type. |
 | 2026-06-06 | `main_gmm.jl`, `CLAUDE.md` | Restructure `main_gmm.jl` to mirror `main.jl` control flow. Introduces `run_step1..run_step4` booleans and a `step2/W_eff.npy` resume guard (parity with `main.jl`'s `W_step3.npy` guard). Fixes a guaranteed `UndefVarError`: `Omega_gmm = Sigma_data_gb` was assigned *after* the `@assert size(Omega_gmm,…)` check — assignment now precedes both correctness asserts. Adds θ̂_1 inference in Step 2 (into `step2/inference/`, `K_sim=0`, `Ω=Σ_data`) for comparability with the SMM. Moves Jacobian-at-θ̂_2 and `compute_smm_inference` out of `run_step3` into a new `run_step4` block so inference can rerun without re-optimising; full-column `jacobian_all_step3.npy` is retained for diagnostics. Renames `gb_param_cols`/`gb_param_indices_step3`/`beta_T_start_raw`/`S_`/`R_down_` to `gb_cols`/`gb_param_idx`/`beta_T_start`/`S`/`R_downstream` to match `main.jl`. Adds `param_labels`, `moment_labels`, and `gamma_ref_map` kwargs to all `compute_smm_inference` calls. GMM semantics unchanged: `K=1` Jacobian, `K_sim=0`, `Ω=Σ_data`, `analytical=true`, `gmm_note.txt` preserved. |
 | 2026-06-04 | `load_parameters.jl`, `model_CP.jl`, `model_analytical.jl`, `tools.jl`, `pso_integration.jl`, `main.jl`, `main_gmm.jl`, `main_pso.jl`, `CLAUDE.md` | Decouple trade-cost parametrization (`N_TAU`) from reg_coef moment count (`N_REG`). Replaces single `N_beta` with two constants: `N_REG = n_coef` (reg_coef moment count, moment axis) and `N_TAU = n_tau` (β-parameter count, parameter axis). Default `n_tau = n_coef` preserves all existing behavior. Target config `N_TAU=1, N_REG=4`: power-law τ=d^α (one α param) with four binned regression moments (over-identified, df=3 on reg_coef). `build_tau`/`unpack_params`/PSO β-slices key off `N_TAU`; `fast_weighted_regression`/`compute_regression_quadrature`/`distance_bin`/`BLOCK_RANGES[4]`/`Sigma_beta_gamma` file selection key off `N_REG`. Two runtime asserts added in main.jl and main_gmm.jl: (1) Ω size == `N_REG + n_γ`; (2) β/α label count in `gb_cols` == `N_TAU`. New arg: `julia main.jl aero 4 1` → N_REG=4, N_TAU=1. `PARAM_LABELS` β entry is "alpha" when N_TAU==1. |
@@ -53,6 +54,38 @@ gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
 ```
 
 This ordering applies everywhere: `Sigma_beta_gamma.npy`, `W_step3`, `Omega`, `gb_indices` in `main.jl` and `main_gmm.jl`. Do not reverse it.
+
+---
+
+## Invariant: T flat-indexing convention (s-major)
+
+**Both Jacobian axes share one flattening: s-major (region-minor).** The γ-moment
+rows and the T-parameter columns enumerate `(s,r)` pairs in the *same* order — all
+regions of sector 1, then all regions of sector 2, … — so the `T[s,r]` column aligns
+with the `γ[s,r]` row.
+
+```julia
+T_MASK = vec(permutedims(X_rs)) .> 0     # == T_MASK_MOMENT (s-major over (S,R))
+```
+
+- **Flat position** of active pair `(s,r)` in the reduced-T / moment axis:
+  `flat_pos = (s-1)*R_full + r`. Inverse: `s = (flat_pos-1)÷R_full + 1`, `r = (flat_pos-1)%R_full + 1`.
+- **`unpack_params`** inverts this flatten: `T_full = zeros(R*S); T_full[T_MASK] = T_reduced;
+  T_mat = permutedims(reshape(T_full, R, S))`. It still **returns region-major `vec(T_mat)`**,
+  so the inter-stage full-T representation is unchanged — only the *reduced* (active) T
+  ordering is s-major.
+- **Every reduced-T producer must emit s-major**: PSO init/bounds use
+  `vec(permutedims(T_rs_init))[T_MASK]`; the warm-start reduce uses
+  `vec(permutedims(reshape(params_dict[:T], S, R)))[T_MASK]`; `build_step3_weight_matrix`'s
+  Σ_data subset uses `collect(T_MASK)` directly (T_MASK is already the moment convention).
+- **`main_pso.jl`** shares `model_CP.unpack_params`, so its own `T_MASK`/`good_indices`/`T_init`
+  are flipped to s-major in lockstep. A partial application silently transposes `T_mat`
+  (runs fine, fits wrong T) — see `test_t_reorder.jl`.
+- **`GOOD_S/GOOD_R` are region-major** (`findall` over the (S,R) mask) and are *not*
+  required to match the reduced-T order: the model reads `T_mat[s,r]` via `SR_TO_GOOD`, and
+  no code positionally aligns `GOOD[g]` with the reduced-T block.
+- The dormant `second_stage` `mask_emp_gamma_ls` path is unaffected by this convention
+  (off in all main flows).
 
 ---
 

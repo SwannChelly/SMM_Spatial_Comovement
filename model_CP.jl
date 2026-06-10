@@ -309,9 +309,9 @@ function unpack_params(params)
     beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)]
 
     T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
-    T_full = zeros(S * R)
+    T_full = zeros(R * S)
     T_full[T_MASK] = T_reduced
-    T_mat = reshape(T_full, S, R)
+    T_mat = permutedims(reshape(T_full, R, S))   # s-major flat (R,S) → (S,R)
 
     for s in 1:S
         ref_r = T_REF_REGION[s]

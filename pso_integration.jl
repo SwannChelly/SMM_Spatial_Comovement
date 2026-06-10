@@ -324,7 +324,7 @@ function train_stage_pso(
         A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
         A ./= sum(A) 
         
-        T_init_nz = vec(T_rs_init)[T_MASK]   # Only non-zero T values
+        T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # Only non-zero T values (s-major to match T_MASK)
         lb = vcat(
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
@@ -356,7 +356,7 @@ function train_stage_pso(
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
         # T from unpack_params is full S*R; reduce to only non-zero entries for optimization
-        params_dict[:T] = params_dict[:T][T_MASK]
+        params_dict[:T] = vec(permutedims(reshape(params_dict[:T], S, R)))[T_MASK]   # region-major full → s-major, then mask
         
         # Handle single variable or list
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
