@@ -27,7 +27,7 @@ regional_wages_local .= ifelse.(regional_wages_local .!= 0, regional_wages_local
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
 agg_industry_share_local      = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
 domestic_share_local          = NPZ.npzread(joinpath(input_folder, "domestic_share.npy"))
-X_rs_local                    = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))
+X_rs_local                    = NPZ.npzread(joinpath(input_folder, "X_rs.npy")) # X_rs has shape (S,R)
 N_rs_local                    = NPZ.npzread(joinpath(input_folder, "N_rs.npy"))
 
 S_, R_full = size(filter_N_upstream_local)
@@ -44,12 +44,20 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(4000)
+@everywhere const N_rho               = $(2000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const lambda              = $(0.5)
-@everywhere const nu                  = $(0.01)
+@everywhere const nu                  = $(0.9)
 @everywhere const nu_s                = $(ones(S_) .* 2.5)
 @everywhere const theta               = $(1.768)
+
+println("\n N_rho = $N_rho — Entreprise par secteur x region")
+println("\n Lambda = $lambda — Labor / CI share")
+println("\n Epsilon = $epsilon — Sales elasticity")
+println("\n nu = $nu — Across sector substituability")
+println("\n nu_s = $nu_s — Within sector substituability")
+println("\n theta = $theta — Frechet parameter")
+
 
 # Γ((θ+1-ν_s)/θ)^{1/(1-ν_s)} — constant factor in EK closed-form price index P_sr.
 # Precomputed once; used by compute_prices_analytical in model_analytical.jl.
@@ -67,7 +75,7 @@ end
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.04   # (s,r) pairs with γ_{rs} < threshold are zeroed out
+gamma_threshold = 0.01   # (s,r) pairs with γ_{rs} < threshold are zeroed out
 NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
@@ -122,7 +130,7 @@ println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
 @everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)
 # ──────────────────────────────────────────────────────────────────────────
 
-T_mask_local         = vec(X_rs_local) .> 0
+T_mask_local         = vec(X_rs_local) .> 0 # X_rs has shape (S,R)
 T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
 @everywhere const T_MASK_MOMENT = $T_mask_moment_local
