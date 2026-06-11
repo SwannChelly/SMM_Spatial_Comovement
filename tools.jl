@@ -1171,8 +1171,6 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
     flush(stdout)
 
-
-
     M_sim_rows = pmap(1:K) do k
         u_k, w_k = generate_stratified_draws(N_rho, n_good;
                                       randomise=true,

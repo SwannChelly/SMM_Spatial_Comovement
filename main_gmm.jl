@@ -55,7 +55,7 @@ n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) :
 n_quad   = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 200
 K = 2   # PSO loops
 
-run_step1 = true
+run_step1 = false
 run_step2 = true
 run_step3 = true
 run_step4 = true
@@ -113,7 +113,7 @@ step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
 theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
 ndims(theta_hat_1) > 1 && (theta_hat_1 = theta_hat_1[:, 1])
 println("θ̂_1 loaded from: $step1_last")
-test_analytical_vs_simulated(theta_hat_1; N_rho_test=10_000, n_quad=200)
+test_analytical_vs_simulated(theta_hat_1; N_rho_test=N_rho, n_quad=200)
 
 ############## STEP 2 — Efficient weight matrix (W = Σ_data^{-1}) + θ̂_1 inference ##############
 # In GMM mode, Σ_sim = 0 by construction → W_eff = Σ_data^{-1} directly.
@@ -276,7 +276,7 @@ if run_step4
 
     theta_hat_2 = NPZ.npzread(joinpath(output_folder, "step3", "theta_hat_2.npy"))
     ndims(theta_hat_2) > 1 && (theta_hat_2 = theta_hat_2[:, 1])
-    test_analytical_vs_simulated(theta_hat_2; N_rho_test=10_000, n_quad=200)
+    test_analytical_vs_simulated(theta_hat_2; N_rho_test=N_rho, n_quad=200)
 
     # Full-column Jacobian at θ̂_2 (saved for diagnostics, as in main.jl)
     println("\nComputing Jacobian at θ̂_2 (analytical, K=1)...")
