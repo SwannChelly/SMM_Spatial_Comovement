@@ -147,7 +147,12 @@ if run_step2
     gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
     N_gb = length(gb_indices)
 
-    Sigma_data_gb = Sigma_data_full[1:N_gb, 1:N_gb]
+    # Reconcile the on-disk Σ with the (possibly gamma-thresholded) active set —
+    # SHARED with the SMM (tools.jl build_step3_weight_matrix). A naive
+    # Sigma_data_full[1:N_gb, 1:N_gb] slice silently mixes surviving and pruned
+    # (s,r) γ moments whenever the file is pre-threshold (size n_gb_old > N_gb),
+    # misaligning W_eff against the threshold-aware Jacobian/moment vectors.
+    Sigma_data_gb = reconcile_sigma_data(Sigma_data_full, input_folder)
 
     # Optional regularization if near-singular
     F_gb = eigen(Symmetric(Sigma_data_gb))
