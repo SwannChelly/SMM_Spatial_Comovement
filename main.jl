@@ -48,7 +48,7 @@ n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
 
-K = 2
+K = 10
 
 run_step1 = true#true
 run_step2 = true
@@ -134,8 +134,8 @@ if run_step2
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
         K             = 50,
-        step_rel      = 1e-3,
-        step_abs      = 1e-8,
+        step_rel      = 1e-4,
+        step_abs      = 1e-9,
         base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
     )
 
@@ -161,7 +161,7 @@ if run_step2
     J_gb       = J1[gb_indices, gb_cols]                          # β+γ rows × β+T cols
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
-    Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_cols]
+    Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_indices]
 
     compute_smm_inference(
          theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
@@ -288,8 +288,8 @@ if run_step4
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
         K             = 50,
-        step_rel      = 1e-3,
-        step_abs      = 1e-8,
+        step_rel      = 1e-4,
+        step_rel      = 1e-9,
         base_seed     = 1_000_000
     )
 
