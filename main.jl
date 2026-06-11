@@ -55,6 +55,11 @@ run_step2 = true
 run_step3 = true
 run_step4 = true
 
+# Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
+# is byte-identical to today: nothing extra is computed or written.
+run_2x2_test = false
+n_quad       = 200
+
 
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")
@@ -178,6 +183,33 @@ if run_step2
          moment_labels = MOMENT_LABELS[gb_indices]    # NEW: names for kept moments (rows of J)
 
     )
+
+    # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
+    if run_2x2_test
+        J_ana, _, _, _ = compute_jacobian(
+            theta_hat_1;
+            param_indices = jacobian_param_indices,
+            output_folder = output_folder,
+            output_subdir = "step2",
+            filename      = "jacobian_2x2_ana.npy",
+            K             = 1,
+            step_rel      = 1e-4,
+            step_abs      = 1e-9,
+            base_seed     = 3_000_000,
+            analytical    = true,
+            n_quad        = n_quad)
+        J_ana_gb   = J_ana[gb_indices, gb_cols]
+        Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
+        Sigma_sim  = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_sim.npy"))
+        run_2x2_inference_test(
+            theta_hat_1, J_gb, J_ana_gb, gb_param_idx,
+            emp_vec_gb, sim_vec_gb, Sigma_data, Sigma_sim, GAMMA_REF_MAP,
+            gb_block_ranges, gb_block_names, PARAM_LABELS[gb_cols],
+            MOMENT_LABELS[gb_indices],
+            joinpath(output_folder, "step2", "inference_2x2_test");
+            label="theta_1")
+    end
+
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
     println("Step 2 skipped (resume). Loading W_step3...")
@@ -362,7 +394,33 @@ if run_step4
         gamma_ref_map   = GAMMA_REF_MAP,
         param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
         moment_labels = MOMENT_LABELS[gb_indices])    # NEW: names for kept moments (rows of J)
-    
+
+    # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
+    if run_2x2_test
+        J_ana, _, _, _ = compute_jacobian(
+            theta_hat_2;
+            param_indices = jacobian_param_indices,
+            output_folder = output_folder,
+            output_subdir = "step3",
+            filename      = "jacobian_2x2_ana.npy",
+            K             = 1,
+            step_rel      = 1e-4,
+            step_abs      = 1e-9,
+            base_seed     = 4_000_000,
+            analytical    = true,
+            n_quad        = n_quad)
+        J_ana_gb   = J_ana[gb_indices, gb_cols]
+        Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
+        Sigma_sim  = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_sim.npy"))
+        run_2x2_inference_test(
+            theta_hat_2, J2_gb, J_ana_gb, gb_param_idx,
+            emp_vec_gb, sim_vec_gb, Sigma_data, Sigma_sim, GAMMA_REF_MAP,
+            gb_block_ranges, gb_block_names, PARAM_LABELS[gb_cols],
+            MOMENT_LABELS[gb_indices],
+            joinpath(output_folder, "step3", "inference_2x2_test");
+            label="theta_2")
+    end
+
 end
 
 

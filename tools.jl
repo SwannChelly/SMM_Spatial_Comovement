@@ -2001,3 +2001,216 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         "pval"          => pval,
     )
 end
+
+
+"""
+    run_2x2_inference_test(theta_hat, J_sim_gb, J_ana_gb, gb_param_idx,
+                           emp_vec_gb, sim_vec_gb, Sigma_data, Sigma_sim,
+                           gamma_ref_map, gb_block_ranges, gb_block_names,
+                           param_labels, moment_labels, out_dir; label="")
+
+TEST-ONLY noise-decomposition diagnostic. **Off by default** (gated behind
+`run_2x2_test` in `main.jl`). Fully standalone: it replicates ONLY the
+linear-algebra core of `compute_smm_inference` (G'WG, efficient + sandwich
+variance, se_sw, Hansen J = r'Wr) inline and does NOT call it. Writes to its
+OWN tree `out_dir` (= `<step>/inference_2x2_test/`) with its OWN report format —
+it never touches the production `inference/` outputs.
+
+Crosses two axes at a fixed estimate θ̂:
+  - axis 1 (Jacobian): {simulated J (`J_sim_gb`), analytical J (`J_ana_gb`)}
+  - axis 2 (weighting): {data-only (Σ_data, Σ_data⁻¹), data+sim (Ω, W_full≈W_step3)}
+
+The (analytical, data-only) corner is the GMM-style variance evaluated at the
+SMM estimate. Goal: attribute SMM parameter-variance noise to the Jacobian
+channel vs the weighting channel.
+
+`gamma_ref_map`, `gb_block_ranges`, `gb_block_names` are accepted for signature
+parity with the production inference call site; this test reports se_sw only and
+does not produce per-block / γ-reference plots, so they are currently unused.
+"""
+function run_2x2_inference_test(theta_hat::Vector{Float64},
+                                J_sim_gb::Matrix{Float64},
+                                J_ana_gb::Matrix{Float64},
+                                gb_param_idx::Vector{Int},
+                                emp_vec_gb::Vector{Float64},
+                                sim_vec_gb::Vector{Float64},
+                                Sigma_data::Matrix{Float64},
+                                Sigma_sim::Matrix{Float64},
+                                gamma_ref_map,
+                                gb_block_ranges,
+                                gb_block_names,
+                                param_labels,
+                                moment_labels,
+                                out_dir::String; label::String="")
+
+    mkpath(out_dir)
+
+    # ── Build the two weightings internally ──────────────────────────────────
+    Omega_full = Sigma_data .+ Sigma_sim
+    Omega_full = (Omega_full .+ Omega_full') ./ 2
+    Sigma_data_sym = (Sigma_data .+ Sigma_data') ./ 2
+
+    W_full = inv(Symmetric(Omega_full))             # ≈ W_step3
+    W_data = inv(Symmetric(Sigma_data_sym))         # GMM-style data-only weight
+
+    p_dim = length(gb_param_idx)
+    N_mom = length(emp_vec_gb)
+
+    # ── Inline linear-algebra core (replicates compute_smm_inference) ─────────
+    function compute_cell(G, W, Omega)
+        p = size(G, 2); Nm = size(G, 1)
+
+        GtWG = Symmetric(G' * W * G)
+        GtWG_inv = try
+            F = cholesky(GtWG)
+            inv(F)
+        catch
+            F = eigen(GtWG)
+            fl = F.values[end] * 1e-10
+            λ  = max.(F.values, fl)
+            Symmetric(F.vectors * Diagonal(1.0 ./ λ) * F.vectors')
+        end
+        GtWG_inv = (Matrix(GtWG_inv) .+ Matrix(GtWG_inv)') ./ 2
+
+        Var_eff = GtWG_inv
+        middle  = G' * W * Omega * W * G
+        Var_sw  = Var_eff * middle * Var_eff
+        Var_sw  = (Var_sw .+ Var_sw') ./ 2
+
+        se_eff = sqrt.(max.(diag(Var_eff), 0.0))
+        se_sw  = sqrt.(max.(diag(Var_sw),  0.0))
+
+        r      = emp_vec_gb .- sim_vec_gb
+        J_stat = (r' * W * r)[1]
+        df     = Nm - p
+        pval   = df > 0 ? (1.0 - cdf(Chisq(df), J_stat)) : NaN
+
+        sv     = svdvals(G)
+        rank_G = count(sv .> sv[1] * 1e-8)
+
+        return (se_eff=se_eff, se_sw=se_sw, J_stat=J_stat, df=df, pval=pval,
+                rank_G=rank_G, p=p, N_mom=Nm, ok=true)
+    end
+
+    nan_cell = (se_eff=fill(NaN, p_dim), se_sw=fill(NaN, p_dim), J_stat=NaN,
+                df=-1, pval=NaN, rank_G=-1, p=p_dim, N_mom=N_mom, ok=false)
+
+    # ── Grid (jrow, wcol) → cell — each wrapped in try/catch ──────────────────
+    cell_specs = [
+        ("sim", "data",    J_sim_gb, W_data, Sigma_data_sym),
+        ("ana", "data",    J_ana_gb, W_data, Sigma_data_sym),
+        ("sim", "dataSim", J_sim_gb, W_full, Omega_full),
+        ("ana", "dataSim", J_ana_gb, W_full, Omega_full),
+    ]
+    grid = Dict{Tuple{String,String}, Any}()
+    for (jrow, wcol, G, W, Om) in cell_specs
+        grid[(jrow, wcol)] = try
+            compute_cell(G, W, Om)
+        catch e
+            @warn "2×2 cell (J=$jrow, Ω=$wcol) failed; recording NaNs." exception=e
+            nan_cell
+        end
+    end
+
+    # ── Save the four se_sw vectors for external plotting ─────────────────────
+    se_dict = Dict(
+        "simJ_data"    => grid[("sim", "data")].se_sw,
+        "anaJ_data"    => grid[("ana", "data")].se_sw,
+        "simJ_dataSim" => grid[("sim", "dataSim")].se_sw,
+        "anaJ_dataSim" => grid[("ana", "dataSim")].se_sw,
+    )
+    NPZ.npzwrite(joinpath(out_dir, "se_2x2_$(label).npy"), se_dict)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    safemean(v)   = (vv = filter(isfinite, v); isempty(vv) ? NaN : mean(vv))
+    safemedian(v) = (vv = filter(isfinite, v); isempty(vv) ? NaN : median(vv))
+    msse(jrow, wcol) = safemean(grid[(jrow, wcol)].se_sw)   # mean se_sw shortcut
+
+    # ── Distinct 2×2 report (NOT inference_summary.txt) ───────────────────────
+    report_path = joinpath(out_dir, "report_2x2_$(label).txt")
+    open(report_path, "w") do io
+        println(io, "#"^72)
+        println(io, "# 2×2 NOISE-DECOMPOSITION TEST  (test-only, off by default)")
+        println(io, "#"^72)
+        println(io, "  θ̂ label  : $(isempty(label) ? "(unlabelled)" : label)")
+        println(io, "  Date      : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))")
+        println(io, "  Output    : $out_dir")
+        println(io, "  N_moments : $N_mom   |   p_params : $p_dim")
+        println(io)
+        println(io, "  Axis 1 (rows)    Jacobian : {sim = simulated FD, ana = analytical FD}")
+        println(io, "  Axis 2 (cols)    (W, Ω)   : {data = (Σ_data, Σ_data⁻¹),")
+        println(io, "                              data+sim = (Ω=Σ_data+Σ_sim, W=Ω⁻¹≈W_step3)}")
+        println(io, "  Corner (ana, data) = GMM-style variance evaluated at the SMM estimate.")
+        println(io)
+        println(io, "  VALIDITY NOTE:")
+        println(io, "    at θ̂_1 the estimator was identity-weighted, so se_eff is meaningless")
+        println(io, "    and only se_sw is interpretable; at θ̂_2 the (data+sim) column is")
+        println(io, "    efficient (se_eff≈se_sw) and the others are non-efficient diagnostics.")
+        println(io, "    Report se_sw throughout for comparability.")
+        println(io)
+
+        # ── 2×2 tables, one per metric ───────────────────────────────────────
+        # Values are pre-formatted to strings (a fixed %s layout) so @printf
+        # never receives a runtime-built format string.
+        fmt_e(x) = isnan(x)    ? "NaN" : @sprintf("%.6e", x)
+        fmt_f(x) = isnan(x)    ? "NaN" : @sprintf("%.6f", x)
+        fmt_d(x) = x < 0       ? "NaN" : string(x)
+
+        function print_2x2(io, title, valfun)
+            println(io, "-"^72)
+            println(io, title)
+            @printf(io, "  %-14s  %-18s  %-18s\n", "", "Ω=data", "Ω=data+sim")
+            for jrow in ("sim", "ana")
+                v_data = valfun(grid[(jrow, "data")])
+                v_ds   = valfun(grid[(jrow, "dataSim")])
+                @printf(io, "  J=%-12s  %-18s  %-18s\n", jrow, v_data, v_ds)
+            end
+            println(io)
+        end
+
+        print_2x2(io, ">> mean se_sw",   c -> fmt_e(safemean(c.se_sw)))
+        print_2x2(io, ">> median se_sw", c -> fmt_e(safemedian(c.se_sw)))
+        print_2x2(io, ">> Hansen p",     c -> fmt_f(c.pval))
+        print_2x2(io, ">> rank(G)",      c -> fmt_d(c.rank_G))
+
+        # ── Channel decomposition (on mean se_sw) ────────────────────────────
+        println(io, "="^72)
+        println(io, "CHANNEL DECOMPOSITION  (units: mean se_sw)")
+        println(io, "="^72)
+        println(io, "  Jacobian channel = (simJ − anaJ) at fixed Ω:")
+        @printf(io, "    Ω=data      : %.6e\n", msse("sim","data")    - msse("ana","data"))
+        @printf(io, "    Ω=data+sim  : %.6e\n", msse("sim","dataSim") - msse("ana","dataSim"))
+        println(io, "  Weighting channel = (data+sim − data) at fixed J:")
+        @printf(io, "    J=sim       : %.6e\n", msse("sim","dataSim") - msse("sim","data"))
+        @printf(io, "    J=ana       : %.6e\n", msse("ana","dataSim") - msse("ana","data"))
+        println(io, "  Total penalty = (simJ,data+sim) vs (anaJ,data) corner-to-corner:")
+        @printf(io, "    total       : %.6e\n", msse("sim","dataSim") - msse("ana","data"))
+        println(io)
+
+        # ── Per-parameter se_sw, four cells side by side ─────────────────────
+        println(io, "="^72)
+        println(io, "PER-PARAMETER se_sw  (four cells side by side)")
+        println(io, "="^72)
+        has_plab = param_labels !== nothing && length(param_labels) == p_dim
+        hdr = @sprintf("  %-22s  %-15s  %-15s  %-15s  %-15s",
+                       "param", "simJ_data", "anaJ_data", "simJ_dataSim", "anaJ_dataSim")
+        println(io, hdr)
+        println(io, "  " * "-"^(length(hdr)-2))
+        sd = grid[("sim","data")].se_sw
+        ad = grid[("ana","data")].se_sw
+        sds = grid[("sim","dataSim")].se_sw
+        ads = grid[("ana","dataSim")].se_sw
+        for i in 1:p_dim
+            plab = has_plab ? string(param_labels[i]) : "idx_$(gb_param_idx[i])"
+            @printf(io, "  %-22s  %-15.6e  %-15.6e  %-15.6e  %-15.6e\n",
+                    plab, sd[i], ad[i], sds[i], ads[i])
+        end
+        println(io)
+        println(io, "#"^72)
+    end
+
+    println("2×2 noise-decomposition test ($label) written to: $report_path")
+    println("  se vectors saved to: " * joinpath(out_dir, "se_2x2_$(label).npy"))
+
+    return grid
+end
