@@ -1117,25 +1117,37 @@ restricted to the same moment indices.
 
 Returns W_step3 of size (N_REG + n_gamma_kept, N_REG + n_gamma_kept).
 """
-function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
-                                   K::Int=10_000,
-                                   output_folder::String=".")
-    N_moments = length(empirical_moments)
+"""
+    reconcile_sigma_data(Sigma_full, input_folder) -> Sigma_data
 
+Reconcile an on-disk β+γ moment covariance (`Sigma_beta_gamma[_1].npy`, or the
+`w_beta`/`w_gamma` block-diagonal fallback) with the current, possibly
+gamma-thresholded active set, and return it subset to the active β+γ moments in
+**β-then-γ order** (`BLOCK_RANGES[4]` then `BLOCK_RANGES[5]`).
+
+The file may have been bootstrapped on the PRE-threshold active set; if a
+`gamma_threshold` pruned (s,r) pairs the γ block shrank, so the matching β+γ
+rows/cols must be dropped. The β block (`1:N_REG`) is never pruned.
+
+Three-way size branch:
+  * `size == n_gb`     → already regenerated post-threshold, use as-is
+  * `size == n_gb_old` → pre-threshold full file, subset to surviving (s,r)
+  * otherwise          → error (regenerate the file)
+
+NOTE: the subset branch returns Cov(raw γ); the loss uses renormalized γ (factor
+`c_s ≈ sum_before/sum_after`), so subset γ rows are over-weighted by ~`c_s^2` and
+the resulting T SEs run ~`c_s` too tight. For exact inference, regenerate
+`Sigma_beta_gamma` with the threshold applied.
+
+Shared by `build_step3_weight_matrix` (SMM) and `main_gmm.jl` Step 2 (GMM) so the
+two paths cannot silently diverge on which moments enter the weight matrix.
+"""
+function reconcile_sigma_data(Sigma_full::AbstractMatrix, input_folder::String)
     # ── Gamma+beta moment indices in the masked vector ───────────────────────
     gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
     n_gb = length(gb_indices)
 
-    # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
-    # File selection keyed on N_REG (the moment count, not the τ-parameter count N_TAU).
-    # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
-    sigma_file = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
-    Sigma_full = NPZ.npzread(joinpath(input_folder, sigma_file))
-
     # ── Reconcile file size with the (possibly thresholded) active set ───────
-    # The on-disk Σ was bootstrapped on the PRE-threshold active set. If a
-    # gamma_threshold pruned (s,r) pairs, n_gb shrank → drop matching β+γ
-    # rows/cols. β block (1:N_REG) is never pruned.
     X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
     T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
     T_mask_moment_new = collect(T_MASK)                                      # thresholded; T_MASK is now s-major (= moment convention)
@@ -1166,6 +1178,27 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     end
 
     @assert isapprox(Sigma_data, Sigma_data'; atol=1e-10) "Sigma is non-symmetric"
+    return Sigma_data
+end
+
+function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
+                                   K::Int=10_000,
+                                   output_folder::String=".")
+    N_moments = length(empirical_moments)
+
+    # ── Gamma+beta moment indices in the masked vector ───────────────────────
+    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    n_gb = length(gb_indices)
+
+    # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
+    # File selection keyed on N_REG (the moment count, not the τ-parameter count N_TAU).
+    # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
+    sigma_file = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
+    Sigma_full = NPZ.npzread(joinpath(input_folder, sigma_file))
+
+    # ── Reconcile file size with the (possibly thresholded) active set ───────
+    # Shared with main_gmm.jl Step 2 so SMM and GMM agree on which moments enter W.
+    Sigma_data = reconcile_sigma_data(Sigma_full, input_folder)
 
     # ── Estimate Σ_sim via K re-seeded SMM evaluations ───────────────────────
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
