@@ -1210,7 +1210,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     step2_dir = joinpath(output_folder, "step2")
     mkpath(step2_dir)
 
-    NPZ.npzwrite(joinpath(step2_dir, "M_sim.npy"),      M_sim)
+    NPZ.npzwrite(joinpath(step2_dir, "M_sim.npy"),       M_sim)
     NPZ.npzwrite(joinpath(step2_dir, "Sigma_data.npy"),  Sigma_data)
     NPZ.npzwrite(joinpath(step2_dir, "Sigma_sim.npy"),   Sigma_sim)
     NPZ.npzwrite(joinpath(step2_dir, "Omega.npy"),       Omega)

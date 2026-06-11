@@ -50,14 +50,14 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 
 K = 2
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
-run_step3 = true
+run_step3 = false
 run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
-run_2x2_test = false
+run_2x2_test = true
 n_quad       = 200
 
 
@@ -107,7 +107,7 @@ else
 end
 
 ############## Load θ̂_1 ##############
-
+output_folder = "./reporting_gmm_$industry"
 step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
 theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
 
@@ -139,8 +139,8 @@ if run_step2
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
         K             = 50,
-        step_rel      = 1e-3,
-        step_abs      = 1e-8,
+        step_rel      = 1e-4,
+        step_abs      = 1e-9,
         base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
     )
 
