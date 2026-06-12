@@ -50,9 +50,9 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 
 K = 10
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
-run_step3 = false
+run_step3 = true
 run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
@@ -107,7 +107,7 @@ else
 end
 
 ############## Load θ̂_1 ##############
-output_folder = "./reporting_gmm_$industry"
+#output_folder = "./reporting_gmm_$industry"
 step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
 theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
 

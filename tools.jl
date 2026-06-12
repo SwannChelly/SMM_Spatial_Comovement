@@ -1099,24 +1099,7 @@ function loss_decomposition(params)
 
     return c, block_totals, sum(c)
 end
-"""
-    build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)
 
-DEPRECATED for GMM mode. In analytical GMM (main_gmm.jl), use W = inv(Σ_data) directly;
-Σ_sim = 0 by construction so no simulation replications are needed.
-This function remains for legacy SMM mode (main.jl).
-
-Assemble the efficient SMM weight matrix W_step3 = (Σ_data + Σ_sim)^{-1}
-over γ_ls and reg_coef moments only.
-
-Σ_data is loaded from Sigma_beta_gamma.npy — the joint bootstrap covariance of
-reg_coef and γ_ls moments (ordering: β block first, then γ block, matching
-BLOCK_RANGES[4] followed by BLOCK_RANGES[5]).
-Σ_sim is estimated from K re-seeded full_SMM evaluations at theta_hat_1,
-restricted to the same moment indices.
-
-Returns W_step3 of size (N_REG + n_gamma_kept, N_REG + n_gamma_kept).
-"""
 """
     reconcile_sigma_data(Sigma_full, input_folder) -> Sigma_data
 
