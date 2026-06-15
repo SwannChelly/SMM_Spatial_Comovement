@@ -218,6 +218,13 @@ if run_step2
     # The sandwich form (G'WG)^{-1} G'WΩWG (G'WG)^{-1} is the only valid variance here.
     W_step1 = Matrix(Weight_matrix_custom[gb_indices, gb_indices])
 
+    # T-identification eigen-screen (diagnostic, print-only) at θ̂_1
+    screen_T_identification(theta_hat_1;
+        J            = J1_gb,
+        W            = W_step1,
+        param_labels = PARAM_LABELS[gb_cols],
+        label        = "GMM step2 θ̂_1")
+
     compute_smm_inference(
         theta_hat_1, J1_gb, W_step1, Omega_gmm;
         param_indices         = gb_param_idx,
@@ -355,6 +362,13 @@ if run_step4
     println("Step-4 inference: J2_gb is $(N_gb)×$(n_gb_params) " *
             "($(N_gb) β+γ moments × $(n_gb_params) β+T params). " *
             "df = $(N_gb - n_gb_params)")
+
+    # T-identification eigen-screen (diagnostic, print-only) at θ̂_2
+    screen_T_identification(theta_hat_2;
+        J            = J2_gb,
+        W            = W_eff,
+        param_labels = PARAM_LABELS[gb_cols],
+        label        = "GMM step4 θ̂_2")
 
     compute_smm_inference(
         theta_hat_2, J2_gb, W_eff, Omega_gmm;

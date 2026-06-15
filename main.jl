@@ -168,6 +168,13 @@ if run_step2
     emp_vec_gb = emp_vec[gb_indices]
     Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_indices]
 
+    # T-identification eigen-screen (diagnostic, print-only) at θ̂_1
+    screen_T_identification(theta_hat_1;
+        J            = J_gb,
+        W            = Matrix(Weight_matrix_custom[gb_indices, gb_indices]),
+        param_labels = PARAM_LABELS[gb_cols],
+        label        = "SMM step2 θ̂_1")
+
     compute_smm_inference(
          theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
          param_indices         = gb_param_idx,
@@ -220,60 +227,6 @@ end
 ############## STEP 3 — Efficient-weighted optimisation ##############
 
 
-using LinearAlgebra
-# requires compute_prices_analytical → include("model_analytical.jl") first
-# and FIX the doubled-loop bug there before trusting any reg_coef output (not used here)
-
-"""
-Per-sector eigen-screen of the T-block of the γ-moment Jacobian at `params` (use θ̂_1).
-M^s = Σ_dr ω_dr (diag(g_dr) − g_dr g_dr'), restricted to FREE (non-ref) active regions.
-Returns, per sector: smallest eigenpair, plus each region's marginal share and its
-curvature contribution diag(M) = Σ_dr ω_dr γ(1−γ).  Cost ~ Σ_s n_L^2 · R_downstream.
-"""
-function screen_T_identification(params)
-    Ω_L, Ω_s, A, β, T_vec = unpack_params(params)
-    T_mat = reshape(T_vec, S, R)
-    τ     = build_tau(β)
-    pr    = compute_prices_analytical(Ω_L, Ω_s, A, T_mat, τ)
-    P_sr, P_r, c_r, Y_r, mu, Φ = pr.P_sr, pr.P_r, pr.c_r, pr.Y_r, pr.mu, pr.Phi
-
-    out = NamedTuple[]
-    for s in 1:S
-        gidx = SECTOR_GOOD_INDICES[s]; isempty(gidx) && continue
-        regs = SECTOR_GOOD_REGIONS[s]; nL = length(regs)
-
-        # downstream weights ω_dr ∝ sector-s nominal input purchase of region dr
-        w = [Ω_s[s]*(P_sr[s,dr]/P_r[dr])^(1-nu)*(P_r[dr]/c_r[dr])^(1-lambda)*
-             (1-Ω_L)*mu*Y_r[dr] for dr in 1:R_downstream]
-        ω = w ./ sum(w)
-
-        # bilateral shares g[l,dr] = T_l (w_l τ_{l,dr})^{-θ} / Φ_{s,dr}
-        G = Matrix{Float64}(undef, nL, R_downstream)
-        for (li,l) in enumerate(regs), dr in 1:R_downstream
-            g = SR_TO_GOOD[s,l]
-            G[li,dr] = T_mat[s,l]*(W_RS_FLAT[g]*τ[l,dr])^(-theta)/Φ[s,dr]
-        end
-
-        M = zeros(nL,nL)
-        for dr in 1:R_downstream
-            gd = @view G[:,dr]; M .+= ω[dr] .* (Diagonal(gd) .- gd*gd')
-        end
-        γ_marg = G*ω; curv = diag(M)
-
-        ref  = T_REF_REGION[s]
-        free = findall(!=(ref), regs); isempty(free) && continue
-        F = eigen(Symmetric(M[free,free]))
-        push!(out, (sector=s, regions=regs[free],
-                    gamma_marg=γ_marg[free], curvature=curv[free],
-                    eval_min=F.values[1], eval_max=F.values[end],
-                    evec_min=F.vectors[:,1]))
-        println(F.values[1]/F.values[end])
-    end
-    return out
-end
-
-screen = screen_T_identification(theta_hat_1)
-
 if run_step3
     println("\n" * "="^70)
     println("STEP 3: Efficient-weighted PSO optimisation")
@@ -293,8 +246,6 @@ if run_step3
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
     println("Step 3 complete. θ̂_2 saved.")
-
-    screen = screen_T_identification(theta_hat_2)
 end
 
 
@@ -321,7 +272,7 @@ if run_step4
         filename      = "jacobian_all_step3.npy",
         K             = 50,
         step_rel      = 1e-4,
-        step_rel      = 1e-9,
+        step_abs      = 1e-9,
         base_seed     = 1_000_000
     )
 
@@ -380,6 +331,13 @@ if run_step4
     println("Step-3 inference: J2_gb is $(n_gb_moments)×$(n_gb_params) " *
             "($(n_gb_moments) β+γ moments × $(n_gb_params) β+T params). " *
             "df = $(n_gb_moments - n_gb_params)")
+
+    # T-identification eigen-screen (diagnostic, print-only) at θ̂_2
+    screen_T_identification(theta_hat_2;
+        J            = J2_gb,
+        W            = W_step3,
+        param_labels = PARAM_LABELS[gb_cols],
+        label        = "SMM step4 θ̂_2")
 
     compute_smm_inference(
         theta_hat_2, J2_gb, W_step3, Omega_inf;
