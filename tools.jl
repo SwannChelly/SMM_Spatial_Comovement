@@ -2397,16 +2397,43 @@ per-sector analytical screen:
      (gb column order is β/α first then T — asserted when labels are present).
      Prints λ_min and λ_max of the sub-block `H[T_cols, T_cols]`.
 
-Then the existing per-sector analytical screen runs on `params`, unchanged:
+When the T sub-block is non-empty, three mechanism-attribution diagnostics follow,
+all computed from the already-built `H`, `T_cols`, `J`, `W`, `param_labels`:
+
+  1. Support of the λ_min eigenvector `v_min` of `H[T,T]`: each T column's sector is
+     parsed from its `"T[sname-rname]"` label (split on the LAST '-', sector before),
+     and per sector the share of squared mass `Σ v_min[sector]² / Σ v_min²` and the
+     dominant sign `sign(Σ v_min[sector])` are printed. Flags CONCENTRATED (one sector
+     > 0.8 of the mass → candidate mechanism 3, level-weak sector) vs SPREAD (mixed
+     signs across sectors → candidate mechanism 1, inter-sectoral flat direction).
+  3. W = I vs W = W_eff: `H_I = J'J` and its `H_I[T,T]` λ_min (and conditioning) are
+     printed alongside the W-weighted values. λ_min weak under W_eff but fine under I
+     ⇒ mechanism 2 (the W metric de-identifies the T-via-γ_ls parameters); weak under
+     both ⇒ intrinsic to J.
+
+After the per-sector analytical screen below runs (building `out`), a cross-check (2)
+prints, per sector, the v_min support share/sign side-by-side with that sector's M^s
+ratio λ_min/λ_max, so the worst-M^s sector can be matched to the support of the global
+weak direction.
+
+The per-sector analytical screen on `params` is unchanged:
 M^s = Σ_dr ω_dr (diag(g_dr) − g_dr g_dr'), restricted to FREE (non-ref) active
 regions; smallest eigenpair, plus each region's marginal share and curvature
 contribution diag(M) = Σ_dr ω_dr γ(1−γ). Cost ~ Σ_s n_L^2 · R_downstream.
 
+All additions are print-only (prefixed by `label`, eigen on `Symmetric` wrappers); no
+estimate, weight matrix, inference output, or file is affected.
+
 Returns `(out, global_eigen)`:
   - `out`           : the per-sector NamedTuple vector (unchanged shape).
-  - `global_eigen`  : a NamedTuple `(eval_min, eval_max, cond, rank, T_eval_min,
-                      T_eval_max)` summarising the global/T-only eigen-screen, or
-                      `nothing` when `J === nothing`.
+  - `global_eigen`  : a NamedTuple summarising the global/T-only eigen-screen, or
+                      `nothing` when `J === nothing`. Fields: `eval_min, eval_max,
+                      cond, rank, T_eval_min, T_eval_max` (unchanged) plus the new
+                      `T_evec_support::Vector{Float64}` (per-sector squared-mass share
+                      of v_min), `T_evec_signs::Vector{Int}`, `T_evec_sectors::Vector{Int}`
+                      (sector indices aligning the two), and `T_eval_min_identity`
+                      (λ_min of H[T,T] under W = I). New fields are additive — existing
+                      fields and all call sites keep working.
 """
 function screen_T_identification(params;
         J::Union{Nothing,Matrix{Float64}} = nothing,
@@ -2415,6 +2442,13 @@ function screen_T_identification(params;
         label::String = "")
 
     pfx = isempty(label) ? "" : "[$label] "
+
+    # Mechanism-attribution accumulators (filled in the J block; always defined so the
+    # post-loop M^s cross-check and the returned NamedTuple are safe when J === nothing).
+    T_evec_support      = Float64[]   # per-sector share of squared v_min mass
+    T_evec_signs        = Int[]       # per-sector dominant sign of v_min
+    T_evec_sectors      = Int[]       # sector indices aligned with the two vectors above
+    T_eval_min_identity = NaN         # λ_min(H_I[T,T]) under W = I
 
     # ── (a)+(b) Global GMM-information eigen-screen (only when J provided) ────────
     global_eigen = nothing
@@ -2448,10 +2482,70 @@ function screen_T_identification(params;
             T_emin = Ft.values[1]; T_emax = Ft.values[end]
             @printf("%sH[T,T] (%d T cols): λ_min=%.4e  λ_max=%.4e\n",
                     pfx, length(T_cols), T_emin, T_emax)
+
+            # ── (1) Per-sector support of the λ_min eigenvector of H[T,T] ─────────
+            # The weak direction v_min lives in T-column space; mapping its squared
+            # mass back to sectors says WHERE the flat direction sits. Concentration
+            # on one sector ⇒ that sector is level-weak (mechanism 3); spread with
+            # opposite signs ⇒ an inter-sectoral flat direction (mechanism 1).
+            v_min = Ft.vectors[:, 1]
+            sumsq = max(sum(abs2, v_min), 1e-300)
+            if param_labels !== nothing
+                sname_to_s = Dict(_sector_names[s] => s for s in 1:S)
+                col_sector = Int[]                      # sector index of each T column
+                for c in T_cols
+                    body  = string(param_labels[c])[3:end-1]   # strip "T[" … "]"
+                    dash  = findlast('-', body)                # region name after last '-'
+                    sname = dash === nothing ? body : body[1:dash-1]
+                    push!(col_sector, get(sname_to_s, sname, 0))
+                end
+                T_evec_sectors = sort(unique(col_sector))
+                @printf("%sH[T,T] λ_min eigenvector support (share of squared mass | dominant sign):\n", pfx)
+                for s in T_evec_sectors
+                    mask  = findall(==(s), col_sector)
+                    share = sum(abs2, @view v_min[mask]) / sumsq
+                    sgn   = sum(@view v_min[mask]) >= 0 ? 1 : -1
+                    push!(T_evec_support, share); push!(T_evec_signs, sgn)
+                    @printf("%s    sector %d: mass=%.3f  sign=%+d\n", pfx, s, share, sgn)
+                end
+                if !isempty(T_evec_support)
+                    mx, mi = findmax(T_evec_support)
+                    if mx > 0.8
+                        @printf("%s    → CONCENTRATED on sector %d (%.0f%% of v_min mass) — see M^s cross-check (mechanism 3?)\n",
+                                pfx, T_evec_sectors[mi], 100 * mx)
+                    else
+                        mixed = length(unique(T_evec_signs)) > 1
+                        @printf("%s    → SPREAD across %d sectors%s — inter-sectoral flat direction (mechanism 1?)\n",
+                                pfx, length(T_evec_sectors), mixed ? " with MIXED signs" : "")
+                    end
+                end
+            else
+                @printf("%sH[T,T] λ_min eigenvector support: param_labels=nothing → sector parse skipped\n", pfx)
+            end
+
+            # ── (3) W = I vs W = W_eff on the T sub-block ─────────────────────────
+            # Recompute the T-block λ_min under identity weighting. If the weak
+            # direction is an artifact of the W metric it is ill-conditioned under
+            # W_eff but well-conditioned under I (mechanism 2: W de-identifies the
+            # T-via-γ_ls parameters); if intrinsic to J it is weak under both.
+            JtJ = J' * J
+            FtI = eigen(Symmetric(JtJ[T_cols, T_cols]))
+            T_eval_min_identity = FtI.values[1]; T_emax_I = FtI.values[end]
+            condW = T_emax   / max(T_emin,              1e-300)
+            condI = T_emax_I / max(T_eval_min_identity, 1e-300)
+            @printf("%sH[T,T] λ_min:  W=W_eff %.4e   W=I %.4e\n", pfx, T_emin, T_eval_min_identity)
+            @printf("%sH[T,T] cond :  W=W_eff %.4e   W=I %.4e\n", pfx, condW, condI)
+            if condW > 10 * condI
+                @printf("%s    → weak T direction is largely a W-metric artifact (mechanism 2: W de-identifies T-via-γ_ls)\n", pfx)
+            elseif condW > 1e3 && condI > 1e3
+                @printf("%s    → weak T direction is intrinsic to J (present under W and I)\n", pfx)
+            end
         end
 
         global_eigen = (eval_min=λmin, eval_max=λmax, cond=condH, rank=rankJ,
-                        T_eval_min=T_emin, T_eval_max=T_emax)
+                        T_eval_min=T_emin, T_eval_max=T_emax,
+                        T_evec_support=T_evec_support, T_evec_signs=T_evec_signs,
+                        T_evec_sectors=T_evec_sectors, T_eval_min_identity=T_eval_min_identity)
     end
 
     # ── (c) Per-sector analytical screen (unchanged) ─────────────────────────────
@@ -2493,5 +2587,20 @@ function screen_T_identification(params;
                     evec_min=F.vectors[:,1]))
         @printf("%ssector %d: M λ_min/λ_max = %.4e\n", pfx, s, F.values[1]/F.values[end])
     end
+
+    # ── (2) Cross-check: global v_min support vs each sector's M^s ratio ─────────
+    # Side-by-side so the worst-M^s sector (level-weak, mechanism 3) can be matched
+    # against where the global weak direction actually concentrates. A high support
+    # share on a low M^s-ratio sector confirms mechanism 3; high support spread over
+    # sectors whose M^s ratios are healthy points to mechanism 1 (inter-sectoral).
+    if !isempty(T_evec_support)
+        ms_ratio = Dict(o.sector => o.eval_min / max(o.eval_max, 1e-300) for o in out)
+        @printf("%sv_min support  vs  M^s λ_min/λ_max:\n", pfx)
+        for (i, s) in enumerate(T_evec_sectors)
+            @printf("%s    sector %d: support=%.3f  sign=%+d  M^s ratio=%.4e\n",
+                    pfx, s, T_evec_support[i], T_evec_signs[i], get(ms_ratio, s, NaN))
+        end
+    end
+
     return out, global_eigen
 end
