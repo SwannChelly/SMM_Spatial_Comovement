@@ -2228,3 +2228,122 @@ function run_2x2_inference_test(theta_hat::Vector{Float64},
 
     return grid
 end
+
+# requires compute_prices_analytical → model_analytical.jl must be included before
+# this is called (both main.jl and main_gmm.jl include it before any tools usage).
+"""
+    screen_T_identification(params; J, W, param_labels, label)
+
+T-identification eigen-screen. Pure diagnostic (print-only, no files, no effect on
+any estimate/weight/inference output).
+
+When a Jacobian `J` is supplied (β+γ rows × β+T cols, i.e. the `J_gb` slice), an
+informativeness eigen-screen of the GMM information matrix is printed BEFORE the
+per-sector analytical screen:
+
+  a. Global: `H = Symmetric(J' W J)` with `W = I` when `W === nothing`. Prints
+     λ_min(H), λ_max(H), cond = λ_max / max(λ_min, 1e-300), and rank(J) (singular
+     values > sv[1]·1e-8). Lines prefixed with `label`.
+  b. T-only restriction: T columns are those whose `param_labels` entry starts with
+     `"T["`; if `param_labels === nothing`, falls back to columns `N_TAU+1:end`
+     (gb column order is β/α first then T — asserted when labels are present).
+     Prints λ_min and λ_max of the sub-block `H[T_cols, T_cols]`.
+
+Then the existing per-sector analytical screen runs on `params`, unchanged:
+M^s = Σ_dr ω_dr (diag(g_dr) − g_dr g_dr'), restricted to FREE (non-ref) active
+regions; smallest eigenpair, plus each region's marginal share and curvature
+contribution diag(M) = Σ_dr ω_dr γ(1−γ). Cost ~ Σ_s n_L^2 · R_downstream.
+
+Returns `(out, global_eigen)`:
+  - `out`           : the per-sector NamedTuple vector (unchanged shape).
+  - `global_eigen`  : a NamedTuple `(eval_min, eval_max, cond, rank, T_eval_min,
+                      T_eval_max)` summarising the global/T-only eigen-screen, or
+                      `nothing` when `J === nothing`.
+"""
+function screen_T_identification(params;
+        J::Union{Nothing,Matrix{Float64}} = nothing,
+        W::Union{Nothing,AbstractMatrix}  = nothing,
+        param_labels = nothing,
+        label::String = "")
+
+    pfx = isempty(label) ? "" : "[$label] "
+
+    # ── (a)+(b) Global GMM-information eigen-screen (only when J provided) ────────
+    global_eigen = nothing
+    if J !== nothing
+        Wmat = W === nothing ? I : W
+        H = Symmetric(J' * (Wmat * J))
+        Fh = eigen(H)
+        λmin = Fh.values[1]; λmax = Fh.values[end]
+        condH = λmax / max(λmin, 1e-300)
+        sv = svdvals(J)
+        rankJ = count(sv .> sv[1] * 1e-8)
+        @printf("%sH=J'WJ: λ_min=%.4e  λ_max=%.4e  cond=%.4e  rank(J)=%d/%d\n",
+                pfx, λmin, λmax, condH, rankJ, size(J, 2))
+
+        # T-only column restriction
+        if param_labels !== nothing
+            T_cols = findall(l -> startswith(string(l), "T["), param_labels)
+            if !isempty(T_cols)
+                @assert T_cols == collect(minimum(T_cols):length(param_labels)) "gb column order violated: T columns must be a contiguous suffix (β/α first, then T)"
+                @assert minimum(T_cols) > 1 "gb column order violated: expected β/α column(s) before T columns"
+            end
+        else
+            T_cols = collect((N_TAU + 1):size(J, 2))
+        end
+
+        T_emin = NaN; T_emax = NaN
+        if isempty(T_cols)
+            @printf("%sH[T,T]: no T columns identified — skipped\n", pfx)
+        else
+            Ft = eigen(Symmetric(Matrix(H)[T_cols, T_cols]))
+            T_emin = Ft.values[1]; T_emax = Ft.values[end]
+            @printf("%sH[T,T] (%d T cols): λ_min=%.4e  λ_max=%.4e\n",
+                    pfx, length(T_cols), T_emin, T_emax)
+        end
+
+        global_eigen = (eval_min=λmin, eval_max=λmax, cond=condH, rank=rankJ,
+                        T_eval_min=T_emin, T_eval_max=T_emax)
+    end
+
+    # ── (c) Per-sector analytical screen (unchanged) ─────────────────────────────
+    Ω_L, Ω_s, A, β, T_vec = unpack_params(params)
+    T_mat = reshape(T_vec, S, R)
+    τ     = build_tau(β)
+    pr    = compute_prices_analytical(Ω_L, Ω_s, A, T_mat, τ)
+    P_sr, P_r, c_r, Y_r, mu, Φ = pr.P_sr, pr.P_r, pr.c_r, pr.Y_r, pr.mu, pr.Phi
+
+    out = NamedTuple[]
+    for s in 1:S
+        gidx = SECTOR_GOOD_INDICES[s]; isempty(gidx) && continue
+        regs = SECTOR_GOOD_REGIONS[s]; nL = length(regs)
+
+        # downstream weights ω_dr ∝ sector-s nominal input purchase of region dr
+        w = [Ω_s[s]*(P_sr[s,dr]/P_r[dr])^(1-nu)*(P_r[dr]/c_r[dr])^(1-lambda)*
+             (1-Ω_L)*mu*Y_r[dr] for dr in 1:R_downstream]
+        ω = w ./ sum(w)
+
+        # bilateral shares g[l,dr] = T_l (w_l τ_{l,dr})^{-θ} / Φ_{s,dr}
+        G = Matrix{Float64}(undef, nL, R_downstream)
+        for (li,l) in enumerate(regs), dr in 1:R_downstream
+            g = SR_TO_GOOD[s,l]
+            G[li,dr] = T_mat[s,l]*(W_RS_FLAT[g]*τ[l,dr])^(-theta)/Φ[s,dr]
+        end
+
+        M = zeros(nL,nL)
+        for dr in 1:R_downstream
+            gd = @view G[:,dr]; M .+= ω[dr] .* (Diagonal(gd) .- gd*gd')
+        end
+        γ_marg = G*ω; curv = diag(M)
+
+        ref  = T_REF_REGION[s]
+        free = findall(!=(ref), regs); isempty(free) && continue
+        F = eigen(Symmetric(M[free,free]))
+        push!(out, (sector=s, regions=regs[free],
+                    gamma_marg=γ_marg[free], curvature=curv[free],
+                    eval_min=F.values[1], eval_max=F.values[end],
+                    evec_min=F.vectors[:,1]))
+        @printf("%ssector %d: M λ_min/λ_max = %.4e\n", pfx, s, F.values[1]/F.values[end])
+    end
+    return out, global_eigen
+end
