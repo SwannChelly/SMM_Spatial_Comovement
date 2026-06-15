@@ -292,21 +292,117 @@ function test_analytical_vs_simulated(params; N_rho_test::Int=10_000, n_quad::In
     u_draws, sw = generate_stratified_draws(N_rho_test, n_good; randomise=false)
 
     println("Solving SMM network...")
-    network = solve_network(params; u_draws=u_draws, sample_weights=sw)
+    network  = solve_network(params; u_draws=u_draws, sample_weights=sw)
     moms_sim = compute_moments(network, params)
 
     println("Computing analytical moments...")
     moms_ana = compute_moments_analytical(params; n_quad=n_quad)
 
     block_names = ("agg_labor_share", "agg_industry_share", "pi_r", "reg_coef", "gamma_ls")
-    eps_tol = [1e-3, 1e-3, 1e-3, 1e-2, 1e-3]
+    eps_tol     = [1e-3, 1e-3, 1e-3, 1e-2, 1e-3]
 
+    # ── (a) per-block scalar (unchanged output) ─────────────────────────────
     for (k, name) in enumerate(block_names)
-        sim_b = vec(moms_sim[k])
-        ana_b = vec(moms_ana[k])
+        sim_b = vec(moms_sim[k]); ana_b = vec(moms_ana[k])
         rel_err = maximum(abs.(sim_b .- ana_b) ./ (abs.(sim_b) .+ 1e-10))
-        status = rel_err < eps_tol[k] ? "✓ OK" : "✗ FAIL"
-        @printf("  %-20s  max_rel_err = %.2e  tol=%.0e  %s\n",
-                name, rel_err, eps_tol[k], status)
+        status  = rel_err < eps_tol[k] ? "✓ OK" : "✗ FAIL"
+        @printf("  %-20s  max_rel_err = %.2e  tol=%.0e  %s\n", name, rel_err, eps_tol[k], status)
     end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # DIAGNOSTIC INSTRUMENTATION (print-only; no effect on return/criteria)
+    # ─────────────────────────────────────────────────────────────────────────
+    println("\n" * "="^72)
+    println("DIAGNOSTIC: localising the analytical/simulated gap")
+    println("="^72)
+
+    # ── (c) shared price-solver intermediates, region by region ─────────────
+    # Both moment functions descend from the same prices; if these diverge the
+    # gap is upstream of any single block. Recompute the analytical prices and
+    # compare to the simulated network on DOWNSTREAM regions.
+    Ω_L, Ω_s, A, β, T_vec = unpack_params(params)
+    T_mat = reshape(T_vec, S, R)
+    τ     = build_tau(β)
+    pr    = compute_prices_analytical(Ω_L, Ω_s, A, T_mat, τ)
+
+    c_sim = network.c_tilde_r[DOWNSTREAM_REGIONS]   # padded → restrict to downstream
+    c_ana = pr.c_tilde_r
+    Y_sim = network.Y_r[DOWNSTREAM_REGIONS]
+    Y_ana = pr.Y_r
+    relv(a, b) = abs(a - b) / (abs(a) + 1e-12)
+
+    @printf("  c_tilde_r : max_rel=%.3e  mean_rel=%.3e\n",
+            maximum(relv.(c_sim, c_ana)), mean(relv.(c_sim, c_ana)))
+    @printf("  Y_r       : max_rel=%.3e  mean_rel=%.3e\n",
+            maximum(relv.(Y_sim, Y_ana)), mean(relv.(Y_sim, Y_ana)))
+    # worst downstream region for c_tilde — the entry to chase if prices diverge
+    wd = argmax(relv.(c_sim, c_ana))
+    @printf("    worst c̃_r at downstream idx %d: sim=%.6e ana=%.6e\n",
+            wd, c_sim[wd], c_ana[wd])
+
+    # ── (b) γ_ls error per ACTIVE (s,r) pair, joined to structure ────────────
+    # γ is closed-form on both sides (no quadrature) so any gap is a construction
+    # mismatch. We tabulate per-sector and test the renormalisation hypothesis:
+    # c_s = sum_before/sum_after (threshold renorm). emp_gamma_ls is post-thresh.
+    γ_sim = moms_sim[5]   # (R, S)
+    γ_ana = moms_ana[5]   # (R, S)
+
+    # reconstruct c_s = sum_before / sum_after per sector from the RAW file
+    X_rs_raw = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))   # (S,R), pre-threshold mask
+    emp_raw  = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))  # (R,S) raw
+    println("\n  Per-sector γ_ls gap vs structure:")
+    @printf("  %-8s %7s %10s %10s %10s %10s\n",
+            "sector", "n_act", "max_rel", "mean_rel", "c_s", "mean|γ|")
+    sector_gap = Float64[]
+    sector_cs  = Float64[]
+    for s in 1:S
+        regs = SECTOR_GOOD_REGIONS[s]
+        isempty(regs) && continue
+        e = [relv(γ_sim[r, s], γ_ana[r, s]) for r in regs]
+        # c_s: ratio of pre-threshold sector mass to post-threshold survivor mass
+        col_raw   = @view emp_raw[:, s]
+        sum_before = sum(col_raw)
+        sum_after  = sum(col_raw[r] for r in 1:R if emp_gamma_ls[r, s] > 0; init=0.0)
+        c_s = sum_after > 1e-15 ? sum_before / sum_after : NaN
+        mean_g = mean(abs.(γ_sim[regs, s]))
+        push!(sector_gap, mean(e)); push!(sector_cs, c_s)
+        @printf("  %-8d %7d %10.3e %10.3e %10.4f %10.4e\n",
+                s, length(regs), maximum(e), mean(e), c_s, mean_g)
+    end
+
+    # hypothesis 3a: does per-sector γ gap correlate with c_s (renorm) or with
+    # coverage (n active)? A high corr with c_s ⇒ threshold-renorm mismatch.
+    if length(sector_gap) > 2
+        cc = cor(sector_gap, sector_cs)
+        @printf("\n  corr( per-sector γ gap , c_s )      = %+.3f\n", cc)
+        @printf("  (high positive ⇒ threshold-renormalisation mismatch is the driver)\n")
+    end
+
+    # ── per-entry γ gap vs |γ| magnitude (hypothesis: small shares diverge) ──
+    big = Tuple{Float64,Int,Int,Float64,Float64}[]   # (rel, s, r, γ_sim, γ_ana)
+    for s in 1:S, r in SECTOR_GOOD_REGIONS[s]
+        push!(big, (relv(γ_sim[r, s], γ_ana[r, s]), s, r, γ_sim[r, s], γ_ana[r, s]))
+    end
+    sort!(big, by = x -> -x[1])
+    println("\n  Top-8 worst γ entries (rel | s | r | γ_sim | γ_ana):")
+    for i in 1:min(8, length(big))
+        rel, s, r, gs, ga = big[i]
+        @printf("    %.3e  s=%-3d r=%-4d  sim=%.5e  ana=%.5e  ratio=%.3f\n",
+                rel, s, r, gs, ga, ga / (gs + 1e-12))
+    end
+
+    # ── (b') reg_coef: raw coefficients, not rel_err — sign/scale tells bug ──
+    # vs documented FKG bias. If signs match and ana ≈ k·sim (k≈const>1), it's
+    # the conditional-independence over-statement; if signs flip, it's a bug.
+    rc_sim = vec(moms_sim[4]); rc_ana = vec(moms_ana[4])
+    println("\n  reg_coef raw (bin | sim | ana | ana/sim):")
+    for b in 1:length(rc_sim)
+        @printf("    bin %d:  sim=%+.5e  ana=%+.5e  ratio=%+.3f\n",
+                b, rc_sim[b], rc_ana[b], rc_ana[b] / (rc_sim[b] + 1e-12))
+    end
+
+    # ── (b'') labor share: the exact block that should NOT diverge ───────────
+    @printf("\n  labor share:  sim=%.6e  ana=%.6e  rel=%.3e  (exact block — gap ⇒ shared cause)\n",
+            moms_sim[1][1], moms_ana[1][1], relv(moms_sim[1][1], moms_ana[1][1]))
+    println("="^72)
 end
