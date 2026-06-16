@@ -55,9 +55,9 @@ n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) :
 n_quad   = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 200
 K = 10   # PSO loops
 
-run_step1 = false
+run_step1 = true
 run_step2 = true
-run_step3 = false
+run_step3 = true
 run_step4 = true
 
 if !(n_coef in [1, 4, 5])
