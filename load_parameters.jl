@@ -63,11 +63,9 @@ println("\n theta = $theta — Frechet parameter")
 # Precomputed once; used by compute_prices_analytical in model_analytical.jl.
 # Requires θ+1 > ν_s (checked here); for current calibration 2.768 > 2.5 ✓
 begin
-    _nu_s_local  = ones(S_) .* 2.5
-    _theta_local = 1.768
-    @assert all(_theta_local + 1 .> _nu_s_local) "ν_s must be < θ+1 for closed-form P_sr"
+    @assert all(theta + 1 .> nu_s) "ν_s must be < θ+1 for closed-form P_sr"
     import SpecialFunctions
-    _gamma_factor_local = [SpecialFunctions.gamma((_theta_local + 1 - _nu_s_local[s]) / _theta_local)^(1 / (1 - _nu_s_local[s])) for s in 1:S_]
+    _gamma_factor_local = [SpecialFunctions.gamma((theta + 1 - nu_s[s]) / theta)^(1 / (1 - nu_s[s])) for s in 1:S_]
     @everywhere const GAMMA_FACTOR = $_gamma_factor_local
 end
 @everywhere const delta_r             = $(ones(R_full))
