@@ -424,14 +424,30 @@ function test_price_alignment(params; N_list = [8_000, 32_000, 128_000], n_quad:
     @printf("%-9s %-11s %10s %10s %10s %10s %10s %10s\n",
             "N_rho","draws","c_tilde","labor","industry","pi_r","reg_coef","gamma_ls")
 
+    a_is = 0.5   # IS tilt used by generate_stratified_draws (default)
     for N in N_list
-        us, ws = generate_stratified_draws(N, n_good; randomise = false)
+        us, ws = generate_stratified_draws(N, n_good; randomise = false, a = a_is)
         um, wm = generate_mc_draws(N, n_good, MersenneTwister(20260618))
 
-        #  strat      : production transform z = scale·(-log(1-u))^(-1/θ)  → high-z tail at u→0 (COARSE bins)
-        #  strat_flip : pass (1-u) ⇒ z = scale·(-log u)^(-1/θ)             → high-z tail at u→1 (FINE bins)
+        # Health diagnostics for the per-column IS draws (Step 7):
+        #   • min ESS across columns should be ≳ N/4 (bounded weights ⇒ no degeneracy)
+        #   • max off-diagonal |cor(U)| should be ≈ 1/sqrt(N) (columns decorrelated)
+        ess_min = minimum(1.0 ./ vec(sum(ws .^ 2, dims = 1)))   # ws columns sum to 1
+        C = cor(us); C[diagind(C)] .= 0.0
+        max_offdiag_cor = maximum(abs.(C))
+        @printf("  N=%-8d min ESS = %.0f / %d (frac %.2f, target ≳ %.0f)   max|cor(U)−I| = %.3f (≈ 1/√N = %.3f)\n",
+                N, ess_min, N, ess_min / N, N / 4, max_offdiag_cor, 1.0 / sqrt(N))
+
+        # strat_flip reuses the FLIPPED quantile (1-u), so its IS weight must be
+        # recomputed from that quantile — pairing flipped draws with the un-flipped
+        # weights `ws` is an inconsistent SNIS estimator under per-column IS.
+        wf = (1.0 .- us) .^ (1.0 - a_is)            # raw IS weight ∝ u^{1-a}
+        wf ./= sum(wf, dims = 1)                     # per-column SNIS (matches the generator)
+
+        #  strat      : production transform z = scale·(-log(1-u))^(-1/θ)  → high-z tail at u→0
+        #  strat_flip : pass (1-u) ⇒ z = scale·(-log u)^(-1/θ)             → high-z tail at u→1 (wrong tail)
         #  mc         : i.i.d. uniform, no stratification (validates the closed form itself)
-        for (lab, u, w) in (("strat", us, ws), ("strat_flip", 1.0 .- us, ws), ("mc", um, wm))
+        for (lab, u, w) in (("strat", us, ws), ("strat_flip", 1.0 .- us, wf), ("mc", um, wm))
             net  = solve_network(params; u_draws = u, sample_weights = w)
             m    = compute_moments(net, params)
             ctil = net.c_tilde_r[DOWNSTREAM_REGIONS]

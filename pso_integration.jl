@@ -308,7 +308,7 @@ function train_stage_pso(
     second_stage = false,
     method = false,
     u_draws::Union{Nothing, Matrix{Float64}} = nothing,
-    sample_weights::Union{Nothing, Vector{Float64}} = nothing,
+    sample_weights::Union{Nothing, Matrix{Float64}} = nothing,
     weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
     warm_start_override::Union{Nothing, Vector{Float64}} = nothing,
     moment_blocks::Union{Nothing, Vector{Int}} = nothing,

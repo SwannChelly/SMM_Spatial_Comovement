@@ -55,6 +55,7 @@ using Distributions
 using Random
 using NPZ
 using LinearAlgebra
+using Printf
 using QuasiMonteCarlo
 using DataFrames
 using Optim
@@ -139,148 +140,111 @@ function vdc(n::Int)::Float64
 end
 
 """
-    generate_stratified_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG)
-        -> (U, sample_weights)
+    generate_stratified_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG,
+                              a=0.5, verbose=false)
+        -> (U, W)
 
-Stratified quantile draws on (0, 1) for the Fréchet inverse-CDF transform in
-`solve_network`. Returns:
-  - `U::Matrix{Float64}`  of shape (N_rho, n_good) — quantiles in (0, 1)
-  - `sample_weights::Vector{Float64}` of length N_rho, positive, sums to 1
+Per-column importance-sampling draws on (0, 1) for the Fréchet inverse-CDF
+transform in `solve_network`. Returns:
+  - `U::Matrix{Float64}` of shape (N_rho, n_good) — quantiles in (0, 1)
+  - `W::Matrix{Float64}` of shape (N_rho, n_good) — IS weights, normalised
+    PER COLUMN (`sum(W[:, g]) = 1` for every good pair g)
 
-# Stratification
+This replaces the previous comonotonic stratified-QMC design (which returned a
+length-N_rho weight VECTOR shared across columns). The shared bin grid made
+every region's productivity a near-deterministic function of one latent per
+row, collapsing Ricardian selection — the winner of `min_r c_r` became fixed by
+T/tau/w rather than by independent Fréchet draws. Here each good pair g gets an
+INDEPENDENT proposal stream, so `u[rho, g1]` and `u[rho, g2]` are independent.
 
-The unit interval is partitioned into 25 unequal bins, with finer spacing
-above 0.95 to resolve the Fréchet upper tail (where productivity dispersion
-matters most for Ricardian selection). N_rho draws are spread across bins;
-any remainder is loaded onto the tail. Within each bin, draws are placed
-at evenly-spaced midpoints (k - 0.5)/n. The importance-sampling weight
-attached to each draw is (bin width) / (points in bin), normalised to sum
-to 1. These weights are consumed by `solve_network` in CES aggregation.
+# Importance sampling in uniform space
 
-# Decorrelation across good pairs
+The downstream transform (unchanged) is `z = scale·(-log(1-u))^(-1/theta)`, so
+the selection-relevant large-z mass sits at `u → 0`. The proposal must therefore
+oversample `u` near 0. Proposal `q(u) = a·u^(a-1)`, a Beta(a, 1) with a ∈ (0, 1):
+mass piles up at 0, inverse-CDF is `u = v^(1/a)`. The target is Uniform (p ≡ 1),
+so the IS weight is `w ∝ 1/q(u) = u^(1-a)/a` — BOUNDED on [0, 1] (→ 0 at u → 0,
+→ 1/a at u → 1): no weight degeneracy (unlike a Fréchet-scale tilt, whose weights
+blow up in the body).
 
-Without a per-pair offset every column of U would be identical, which
-would force productivity draws z_{ρ,s,r} to be perfectly correlated across
-(s, r) pairs at each ρ. A per-pair offset rotates within-bin positions
-so the columns are decorrelated.
+The proposal uniform `v` is stratified (one point per equal-prob stratum) with an
+INDEPENDENT permutation per column → columns decorrelated AND low-variance.
 
 # Two modes
 
 `randomise=false` (default — used during optimisation):
-    Per-pair offset is `vdc(g)` — the Van der Corput value of the pair
-    index. Deterministic. Identical on every call regardless of the RNG
-    state. This is the *base* sequence: it freezes Monte-Carlo noise so
-    the SMM criterion is a deterministic function of θ, which is a
-    prerequisite for PSO convergence.
+    `MersenneTwister(g)` + within-stratum midpoint (0.5) → deterministic
+    (PSO-safe; freezes Monte-Carlo noise so the SMM criterion is a
+    deterministic function of theta).
 
 `randomise=true` (used for Σ_sim estimation):
-    Per-pair offset is `rand(rng)` — a fresh uniform per pair, drawn
-    from the supplied RNG. Each call returns an independent stratified
-    sample. Used inside `build_step3_weight_matrix`: pass
-    `MersenneTwister(k)` for replication k; cov of the resulting moment
-    vectors is an unbiased estimator of the simulator's variance, valid
-    under standard RQMC theory (Cranley–Patterson rotation within a
-    stratified design preserves the per-replication low-variance
-    property and is independent across replications).
+    permutation + jitter drawn from the supplied `rng` → independent per
+    replication. Pass `MersenneTwister(k)` for replication k.
 
 # Arguments
 
 - `N_rho::Int`            : draws per good pair (production: 1000).
 - `n_good::Int`           : number of active (sector, region) pairs.
-- `randomise::Bool=false` : false → VdC offsets (base sequence);
-                            true  → uniform offsets from `rng` (RQMC).
+- `randomise::Bool=false` : false → MersenneTwister(g) + midpoint (base);
+                            true  → rng permutation + jitter (Σ_sim).
 - `rng::AbstractRNG`      : source of randomness when `randomise=true`.
-                            Pass a freshly seeded RNG per replication
-                            for reproducibility and thread safety.
+- `a::Float64=0.5`        : IS tilt, a ∈ (0, 1); smaller a ⇒ heavier tail
+                            oversampling, lower ESS.
+- `verbose::Bool=false`   : print `min_g ESS_g` (effective sample size of the
+                            weakest column) as a degeneracy health check.
 """
 function generate_stratified_draws(N_rho::Int, n_good::Int;
                                    randomise::Bool=false,
-                                   rng::AbstractRNG=Random.GLOBAL_RNG)
+                                   rng::AbstractRNG=Random.GLOBAL_RNG,
+                                   a::Float64=0.5,
+                                   verbose::Bool=false)
+    @assert 0.0 < a < 1.0 "IS tilt a ∈ (0,1); smaller a ⇒ heavier tail oversampling, lower ESS."
 
-    # ── 1. Bin grid (fixed; do not edit without re-validating moment fit) ──
-    # Coarse below 0.5, progressively finer in the tail. The 25-bin design
-    # ensures each bin holds ≥ 1 point even at N_rho = 50.
-    bin_edges = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50,
-                 0.55, 0.60, 0.65, 0.70, 0.75,
-                 0.80, 0.85, 0.90, 0.925, 0.95,
-                 0.96, 0.97, 0.98, 0.99, 0.995,
-                 0.996, 0.997, 0.998, 0.999, 1.0]
-    N_bins = length(bin_edges) - 1
+    U     = Matrix{Float64}(undef, N_rho, n_good)
+    W     = Matrix{Float64}(undef, N_rho, n_good)
+    inv_N = 1.0 / N_rho
+    lo, hi = eps(), 1.0 - eps()
 
-    # ── 2. Allocate N_rho draws across bins ────────────────────────────────
-    # Each bin receives base_per_bin points; the remainder is loaded onto
-    # the highest bins, where Fréchet variance is largest.
-    base_per_bin = div(N_rho, N_bins)
-    remainder    = mod(N_rho, N_bins)
-    n_per_bin    = fill(base_per_bin, N_bins)
-    for i in 1:remainder
-        n_per_bin[N_bins - i + 1] += 1
-    end
-    @assert sum(n_per_bin) == N_rho
-
-    # ── 3. Importance-sampling weights ─────────────────────────────────────
-    # Within a bin, all points carry equal mass; the bin's total mass is its
-    # width. Identical across good pairs because the bin grid is shared.
-    sample_weights = Vector{Float64}(undef, N_rho)
-    idx = 0
-    for b in 1:N_bins
-        width = bin_edges[b+1] - bin_edges[b]
-        n     = n_per_bin[b]
-        for _ in 1:n
-            idx += 1
-            sample_weights[idx] = width / n
+    @inbounds for g in 1:n_good
+        col_rng = randomise ? rng : MersenneTwister(g)
+        perm    = randperm(col_rng, N_rho)
+        wsum    = 0.0
+        for rho in 1:N_rho
+            xi = randomise ? rand(rng) : 0.5         # within-stratum position
+            v  = (perm[rho] - xi) * inv_N            # stratified proposal uniform
+            u  = clamp(v^(1.0 / a), lo, hi)          # power-law tilt toward u→0
+            w  = u^(1.0 - a) / a                     # ∝ 1/q(u), bounded
+            U[rho, g] = u
+            W[rho, g] = w
+            wsum     += w
         end
+        @views W[:, g] ./= wsum                      # per-column SNIS: Σ_rho W = 1
     end
-    sample_weights ./= sum(sample_weights)
 
-    # ── 4. Build the (N_rho × n_good) quantile matrix ──────────────────────
-    # For each good pair g, draw a per-pair offset and place stratified
-    # points using that offset to rotate within-bin positions.
-    U = Matrix{Float64}(undef, N_rho, n_good)
-    for g in 1:n_good
-
-        # Per-pair offset:
-        #   randomise=false → deterministic VdC, base sequence (frozen).
-        #   randomise=true  → fresh uniform from rng (one per replication).
-        offset = randomise ? rand(rng) : vdc(g)
-
-        idx = 0
-        for b in 1:N_bins
-            # Within each bin, points are first uniformly selected (already low-discrepancy)
-            lo, hi = bin_edges[b], bin_edges[b+1]
-            width  = hi - lo
-            n      = n_per_bin[b]
-
-            for k in 1:n
-                idx += 1
-
-                # Shifted within-bin midpoint, wrapped onto (0, 1).
-                # The rotation insure that draws are different across sector x region pairs. 
-                # This rotation is the Cranley–Patterson rotation. 
-                frac = mod((k - 0.5)/n + offset, 1.0)
-
-                # Numerical guard: a wrapped value of exactly 0.0 maps to
-                # the lower bin edge, which propagates as a degenerate
-                # Fréchet draw. Fall back to the unshifted midpoint
-                # (strictly interior to (0, 1)).
-                if iszero(frac)
-                    frac = (k - 0.5) / n
-                end
-
-                # Map within-bin (0, 1) position to (lo, hi).
-                U[idx, g] = lo + frac * width
+    if verbose
+        # ESS_g = 1 / Σ_rho W[rho,g]^2 (columns sum to 1) → count in [1, N_rho].
+        min_ess = Inf
+        @inbounds for g in 1:n_good
+            s2 = 0.0
+            for rho in 1:N_rho
+                s2 += W[rho, g]^2
             end
+            min_ess = min(min_ess, 1.0 / s2)
         end
+        @printf("  generate_stratified_draws: min_g ESS_g = %.1f / %d  (frac %.3f, a=%.2f)\n",
+                min_ess, N_rho, min_ess / N_rho, a)
     end
 
-    return U, sample_weights
+    return U, W
 end
 
 
 
 function generate_mc_draws(N_rho::Int, n_good::Int, rng::AbstractRNG)
     U = rand(rng, N_rho, n_good)
-    w = fill(1.0 / N_rho, N_rho)
+    # Uniform weight MATRIX (N_rho × n_good) so consumers can index [rho, g],
+    # matching generate_stratified_draws' per-column weight convention.
+    w = fill(1.0 / N_rho, N_rho, n_good)
     return U, w
 end
 
@@ -387,7 +351,7 @@ If return_firm_level=true, additionally returns sparse COO vectors:
 function solve_network(params; return_firm_level=false,
                        precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                        u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                       sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                       sample_weights::Union{Nothing, Matrix{Float64}}=nothing)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Unpack parameters (paper notation)
@@ -421,7 +385,8 @@ function solve_network(params; return_firm_level=false,
             end
         end
         if sample_weights === nothing
-            sample_weights = fill(1.0/N_rho, N_rho)
+            # Uniform weight matrix so downstream [rho, g] indexing is consistent.
+            sample_weights = fill(1.0/N_rho, N_rho, n_good)
         end
     else
         # CdGM-style: Fréchet inverse CDF from stratified uniform draws
@@ -438,8 +403,10 @@ function solve_network(params; return_firm_level=false,
     end
     z_inv_flat = z_flat .^ (-1)
 
-    # Reshape sample_weights for broadcasting in CES aggregation
-    w_rho = reshape(sample_weights, N_rho, 1)  # (N_rho, 1)
+    # NOTE: weights are now per-(rho, good-pair) — `sample_weights[rho, g]`.
+    # The CES price index weights each (rho, s) variety by the weight of the
+    # good pair that WON that variety (built per downstream region below from
+    # `winner_good_idx`); there is no single shared length-N_rho weight vector.
 
     # ─────────────────────────────────────────────────────────────────────────
     # Distance to closest downstream plant (precomputed constants)
@@ -505,7 +472,15 @@ function solve_network(params; return_firm_level=false,
         # P_r   = [Σ_s Ω^s · P_{sr}^{1-ν}]^{1/(1-ν)}           (across-sector)
         # c_r   = [Ω^L w_r^{1-λ} + (1-Ω^L) P_r^{1-λ}]^{1/(1-λ)} (unit cost)
         # ─────────────────────────────────────────────────────────────────────
-        P_sr = sum(w_rho .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
+        # Per-(rho, s) weight = weight of the good pair that won this variety.
+        w_rho_s = Matrix{Float64}(undef, N_rho, S)
+        for s in 1:S
+            for rho in 1:N_rho
+                g_w = winner_good_idx[rho, s]
+                w_rho_s[rho, s] = g_w == 0 ? 0.0 : sample_weights[rho, g_w]
+            end
+        end
+        P_sr = sum(w_rho_s .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
         P_r = sum(P_sr.^(1 - nu) .* Omega_s)^(1 / (1 - nu))
         c_r = (Omega_L * regional_wages[r]^(1-lambda) +
                (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
@@ -530,8 +505,8 @@ function solve_network(params; return_firm_level=false,
                 # Mark linkage
                 linkages_flat[rho, g_winner] = 1.0
 
-                # Expenditure share for this variety
-                exp_val = sample_weights[rho] * Omega_s_vec[s] * (1-Omega_L) *
+                # Expenditure share for this variety (weight = winning pair's column)
+                exp_val = sample_weights[rho, g_winner] * Omega_s_vec[s] * (1-Omega_L) *
                     (p_rho_s[rho, s] / P_sr_s)^(1 - nu_s_s) *
                     (P_sr_s / P_r)^(1 - nu) *
                     (P_r / c_r)^(1 - lambda)
@@ -639,7 +614,7 @@ using analytical weighted OLS with group demeaning (Frisch-Waugh-Lovell).
 
 Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
-function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
+function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64})
 
     n_regressors = N_REG + 1  # distance bins + log_productivity
 
@@ -666,7 +641,7 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights)
         for rho in 1:N_rho
             idx += 1
             y[idx] = linkages_flat[rho, g] > 0 ? 1.0 : 0.0
-            w[idx] = sample_weights[rho]
+            w[idx] = sample_weights[rho, g]
             fe_group[idx] = group_id
 
             if N_REG == 1
@@ -819,7 +794,7 @@ Main SMM function for optimization.
 """
 function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
              u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-             sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+             sample_weights::Union{Nothing, Matrix{Float64}}=nothing)
 
     # Solve network
     network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau,
@@ -861,7 +836,7 @@ Used for untargeted moment validation (Table 2 regression).
 """
 function SMM_with_network(params; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                           u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                          sample_weights::Union{Nothing, Vector{Float64}}=nothing)
+                          sample_weights::Union{Nothing, Matrix{Float64}}=nothing)
 
     # Solve network with firm-level data
     network = solve_network(params, return_firm_level=true, precomputed_tau=precomputed_tau,
@@ -975,7 +950,7 @@ kwargs are ignored in analytical mode.
 function full_SMM(params, simulation=false, second_stage=false, method="original";
                   precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                   u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                  sample_weights::Union{Nothing, Vector{Float64}}=nothing,
+                  sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
                   W_override::Union{Nothing, AbstractMatrix}=nothing,
                   moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                   analytical::Bool=false,

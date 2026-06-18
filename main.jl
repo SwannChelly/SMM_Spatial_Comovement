@@ -467,7 +467,7 @@ for i in 1:n_entries
     push!(downstream_purchase, Y_r[r] * mu)
     push!(intermediate_derivative, network.firm_deriv_val[i])
     push!(productivity, network.z_flat[rho, g])
-    push!(sample_weight_vec, network.sample_weights[rho])
+    push!(sample_weight_vec, network.sample_weights[rho, g])
 end
 df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
                ze2010_downstream=ze2010_downstream, share=share,

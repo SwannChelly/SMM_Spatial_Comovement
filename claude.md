@@ -92,13 +92,80 @@ SMM_Spatial_Comovement/
 ### `model_CP.jl` — core model (read this first)
 
 Key functions:
-- `generate_stratified_draws(N_rho, n_good; seed_offset=0)`: CdGM-style stratified uniform draws for Fréchet inverse CDF. Returns `(U, weights)` where `U` is `(N_rho × n_good)`. `seed_offset` shifts the Van der Corput index so that `K` independent draw configurations can be generated without touching the global RNG — required by `build_step3_weight_matrix`.
+- `generate_stratified_draws(N_rho, n_good; randomise=false, rng, a=0.5, verbose=false)`: per-column importance-sampling uniform draws for the Fréchet inverse CDF. Returns `(U, W)`, **both** `(N_rho × n_good)` matrices, `W` normalised per column (`sum(W[:,g])=1`). `randomise=false` → `MersenneTwister(g)`+midpoint (PSO-deterministic base); `randomise=true` → supplied `rng` perm+jitter (Σ_sim replications). See **Importance-sampling draws and the `a` parameter** below.
 - `unpack_params(params)`: splits flat vector into `(β, Ω^L, Ω^s, A, T_full)`. `T_full` is `S×R` with zeros for inactive pairs.
 - `build_tau(beta)`: builds `(R, R_downstream)` iceberg cost matrix from distance-bin coefficients using precomputed `DistBin`.
 - `solve_network(params; return_firm_level, precomputed_tau, u_draws, sample_weights)`: main equilibrium solver. Returns NamedTuple. If `return_firm_level=true`, appends sparse COO firm-level arrays (`firm_exp_rho/s/g/r/val`, `firm_deriv_val`).
 - `compute_moments(network, params)`: extracts all 5 moment blocks from solved network.
-- `fast_weighted_regression(linkages_flat, z_flat, sample_weights)`: analytical weighted OLS with FWL demeaning by sector×downstream-region FE. Returns `N_beta` distance-bin coefficients.
+- `fast_weighted_regression(linkages_flat, z_flat, sample_weights)`: analytical weighted OLS with FWL demeaning by sector×downstream-region FE. Returns `N_beta` distance-bin coefficients. `sample_weights` is the `(N_rho × n_good)` IS matrix; each `(rho, g)` row carries weight `sample_weights[rho, g]`.
 - `full_SMM(params, simulation=false, second_stage=false, method="original"; ..., W_override=nothing)`: wrapper returning `(loss, moments_tuple)`. When `W_override` is not nothing it is used instead of the global `Weight_matrix_custom`; existing call sites are unaffected.
+
+#### Importance-sampling draws and the `a` parameter
+
+`generate_stratified_draws` performs per-column importance sampling in uniform
+space, not stratified QMC. Each good pair `g` gets an independent proposal
+stream, so `u[rho,g1]` and `u[rho,g2]` are independent — this is required: the
+previous shared-bin design made every region's productivity a near-deterministic
+function of one latent per row, collapsing Ricardian selection (the winner of
+`min_r c_r` became fixed by `T/tau/w`, not by independent Fréchet draws). The
+symptom was the price-alignment test showing `strat` columns ~100× worse than
+`mc`.
+
+**Proposal.** The Fréchet inverse-CDF `z = T^{1/theta}(-ln(1-u))^{-1/theta}`
+puts the selection-relevant large-`z` mass at `u→0`. The proposal
+`q(u) = a·u^{a-1}` (a `Beta(a,1)`, inverse-CDF `u = v^{1/a}`) oversamples `u→0`;
+the target is `Uniform`, so the IS weight is `w ∝ 1/q(u) = u^{1-a}/a`, bounded on
+`[0,1]` (→0 at `u→0`, →`1/a` at `u→1`). Bounded weights ⇒ no weight degeneracy,
+unlike a Fréchet-scale (`z`-space) tilt whose weights blow up in the body and
+would need the tilt to track `T`.
+
+**Why a single `a` serves the whole PSO parameter space.** The tilt is in uniform
+space, applied before the `T^{1/theta}` scaling. PSO moves `T` (and `beta`),
+which scales `z` and shifts which region wins, but not the `u`-region that decides
+selection — that is always the `u→0` tail, invariant to `T`. The tail shape is
+governed by `theta = 1.768`, which is fixed. So only the effective tail depth
+wobbles mildly across `theta`; one moderate tilt covers it. A `z`-space tilt
+would need a `T`-dependent proposal and would not survive PSO; the uniform-space
+tilt does.
+
+**Recommended value:** `a = 0.5` (`u = v²`): ~1% of draws below `u=10^{-4}`, ~10%
+below `10^{-2}` — solid tail resolution without starving the body, weight bounded
+by `2`, high ESS in both sharp- and flat-selection regions. It is the "never
+badly wrong" compromise, not the per-`theta` optimum. Smaller `a` (e.g. `0.3`)
+deepens tail resolution but lowers ESS and risks degeneracy where selection is
+mild (flat `T`, early PSO). Larger `a` (→1) approaches plain LHS (no tilt).
+
+**Confirm, don't assume.** Pick `a` by measuring
+`min_g ESS_g = min_g 1/(N_rho·Σ_rho W[rho,g]²)` (a fraction; the absolute count is
+`1/Σ_rho W[rho,g]²` since columns sum to 1) and the `gamma_ls`/`reg_coef` block
+variance at a sharp-selection `theta` (large `T` spread) and a flat `theta`, for
+`a ∈ {0.4, 0.5, 0.6}`; keep `a=0.5` if `min ESS ≳ N_rho/4` at both ends. Monitor
+`min ESS` during PSO as a health signal — with bounded weights it should never
+collapse.
+
+**Weights are a matrix.** `SAMPLE_WEIGHTS` / `U_DRAWS` are both `(N_rho × n_good)`.
+Every consumer indexes `[rho, g]`: `solve_network` weights the CES `P_sr` sum and
+`exp_val` by the winning pair's column `winner_good_idx[rho,s]`;
+`fast_weighted_regression` uses `W[rho,g]`. Weights are self-normalised per column
+(`Σ_rho W[rho,g] = 1`).
+
+**Caution — the IS tilt is keyed to the `−log(1−u)` transform; do not flip it.**
+`solve_network` and `compute_regression_quadrature` both map quantiles via
+`z = T^{1/theta}·(−log(1−u))^{−1/theta}`, which places the selection-relevant
+high-z mass at `u→0` (as `u→0`, `−log(1−u)≈u→0` and `z→∞`; as `u→1`, `z→0`). The
+proposal `q(u)=a·u^{a−1}` deliberately oversamples `u→0` and is therefore correct
+only for this `1−u` convention. Two silent failure modes: (1) **Flipping the
+draw.** Passing `1−u` (the `strat_flip` arm of `test_price_alignment`) sends the
+oversampled mass to `u→1`, i.e. `z→0` — the irrelevant low-z tail; selection
+resolution collapses. Do not "symmetrise" the asymmetry by flipping; the
+asymmetry is the point. (2) **Weight/draw mismatch.** The weight is a per-column
+function of the same `u` handed to `solve_network`: `W[rho,g] ∝ u[rho,g]^{1−a}`.
+Any arm that flips the draw must recompute the weight from the flipped quantile
+(`test_price_alignment` does this for `strat_flip`, using `(1−u)^{1−a}`), or the
+estimator is inconsistent. At `θ̂_2`, confirm the `strat` arm (raw `u`,
+`−log(1−u)`) is the one that collapses to the `mc` column; if `strat_flip` aligns
+instead, the tilt is on the wrong tail — investigate before trusting any block
+error.
 
 **Flat indexing convention** (critical): active `(s, r)` pairs are stored in a flat array of length `n_good`. Global constants `GOOD_S[g]`, `GOOD_R[g]` map index `g` back to `(s, r)`. `SR_TO_GOOD[s, r]` is the reverse map (0 for inactive). `SECTOR_GOOD_INDICES[s]` lists all `g` indices for sector `s`.
 
