@@ -55,10 +55,10 @@ n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) :
 n_quad   = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 200
 K = 10   # PSO loops
 
-run_step1 = true
-run_step2 = true
-run_step3 = true
-run_step4 = true
+run_step1 = false
+run_step2 = false
+run_step3 = false
+run_step4 = false
 
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")
@@ -401,3 +401,56 @@ run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weigh
               analytical=true, n_quad=n_quad)
 
 println("\nGMM estimation complete. Results in: $output_folder")
+
+theta_hat_2 = NPZ.npzread(joinpath(output_folder, "step3", "theta_hat_2.npy"))
+# ============================================================================
+# DIAGNOSTIC: price-index convergence & stratification alignment
+# Append after Step 4 in main_gmm.jl. Reuses loaded globals.
+# ============================================================================
+function test_price_alignment(params; N_list = [8_000, 32_000, 128_000], n_quad::Int = 200)
+    ndims(params) > 1 && (params = params[:, 1])
+
+    # Closed-form reference (the N→∞ target)
+    moms_ana = compute_moments_analytical(params; n_quad = n_quad)
+    Ω_L, Ω_s, A, β, T_vec = unpack_params(params)
+    pr_ana = compute_prices_analytical(Ω_L, Ω_s, A, reshape(T_vec, S, R), build_tau(β))
+    c_ana  = pr_ana.c_tilde_r                       # length R_downstream
+
+    rel(sim, ana) = maximum(abs.(vec(sim) .- vec(ana)) ./ (abs.(vec(ana)) .+ 1e-12))
+
+    println("\n" * "="^100)
+    println("PRICE-INDEX ALIGNMENT TEST — block max-rel-err vs closed form (c̃_r isolates the price channel)")
+    println("="^100)
+    @printf("%-9s %-11s %10s %10s %10s %10s %10s %10s\n",
+            "N_rho","draws","c_tilde","labor","industry","pi_r","reg_coef","gamma_ls")
+
+    for N in N_list
+        us, ws = generate_stratified_draws(N, n_good; randomise = false)
+        um, wm = generate_mc_draws(N, n_good, MersenneTwister(20260618))
+
+        #  strat      : production transform z = scale·(-log(1-u))^(-1/θ)  → high-z tail at u→0 (COARSE bins)
+        #  strat_flip : pass (1-u) ⇒ z = scale·(-log u)^(-1/θ)             → high-z tail at u→1 (FINE bins)
+        #  mc         : i.i.d. uniform, no stratification (validates the closed form itself)
+        for (lab, u, w) in (("strat", us, ws), ("strat_flip", 1.0 .- us, ws), ("mc", um, wm))
+            net  = solve_network(params; u_draws = u, sample_weights = w)
+            m    = compute_moments(net, params)
+            ctil = net.c_tilde_r[DOWNSTREAM_REGIONS]
+            @printf("%-9d %-11s %10.2e %10.2e %10.2e %10.2e %10.2e %10.2e\n",
+                    N, lab, rel(ctil, c_ana),
+                    rel(m[1], moms_ana[1]), rel(m[2], moms_ana[2]), rel(m[3], moms_ana[3]),
+                    rel(m[4], moms_ana[4]), rel(m[5], moms_ana[5]))
+        end
+        println("-"^100)
+    end
+    println("""
+    Decision rule:
+      • 'strat' high but 'strat_flip' → 0 : stratification is on the wrong tail of the inverse-CDF
+                                            (the (1-u) transform); fine bins miss the high-z mass.
+      • only 'mc' → 0 (both strat stall)  : bins are SHARED across source regions ⇒ comonotonic draws
+                                            suppress Ricardian selection; columns need full decorrelation.
+      • all three → 0                     : pure finite-N error; closed form is correct, trust the GMM.
+      • all three stall at one floor      : structural mismatch between solve_network and
+                                            compute_moments_analytical (not a sampling issue).""")
+end
+
+test_price_alignment(theta_hat_2; n_quad = n_quad)   # theta_hat_1 works too if Step 4 is off
