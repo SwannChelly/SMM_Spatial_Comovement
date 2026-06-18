@@ -370,33 +370,47 @@ function solve_network(params; return_firm_level=false,
     T = reshape(T_vec, S, R)              # (S, R)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Draw upstream firm productivities — flat (N_rho, n_good) layout
+    # Draw upstream firm productivities — flat (N_rho_eff, n_good) layout
     # Only good (s,r) pairs (where T_MASK is true) are computed.
+    #
+    # Row count is taken from the PASSED draws/weights (`N_rho_eff`), not the
+    # global `N_rho` const. The two coincide in production (all draws are
+    # generated at `N_rho`), but a caller may pass a different number of draws
+    # (e.g. the price-alignment test sweeps N). Using the global const while the
+    # weights are normalised over the passed N would consume only the first
+    # `N_rho` rows and break the per-column Σw=1 invariant, inflating the CES
+    # price index by (N/N_rho)^2.
     # ─────────────────────────────────────────────────────────────────────────
+    N_rho_eff = u_draws !== nothing ? size(u_draws, 1) :
+                sample_weights !== nothing ? size(sample_weights, 1) : N_rho
+    if u_draws !== nothing && sample_weights !== nothing
+        @assert size(sample_weights, 1) == N_rho_eff "sample_weights rows ($(size(sample_weights,1))) must match u_draws rows ($N_rho_eff)"
+    end
+
     if u_draws === nothing
         # Backward compatibility: random Fréchet draws with uniform weights
         Random.seed!(50)
-        z_flat = zeros(N_rho, n_good)
+        z_flat = zeros(N_rho_eff, n_good)
         for g in 1:n_good
             T_sr = T[GOOD_S[g], GOOD_R[g]]
             if T_sr > 0
                 d = Frechet(theta, T_sr^(1/theta))
-                z_flat[:, g] = rand(d, N_rho)
+                z_flat[:, g] = rand(d, N_rho_eff)
             end
         end
         if sample_weights === nothing
             # Uniform weight matrix so downstream [rho, g] indexing is consistent.
-            sample_weights = fill(1.0/N_rho, N_rho, n_good)
+            sample_weights = fill(1.0/N_rho_eff, N_rho_eff, n_good)
         end
     else
         # CdGM-style: Fréchet inverse CDF from stratified uniform draws
-        # u_draws is a Matrix{Float64} (N_rho × n_good) with per-pair quantiles
+        # u_draws is a Matrix{Float64} (N_rho_eff × n_good) with per-pair quantiles
         # F⁻¹(u) = σ · (-ln(1-u))^(-1/θ) where σ = T_{sr}^{1/θ}
-        z_flat = zeros(N_rho, n_good)
+        z_flat = zeros(N_rho_eff, n_good)
         for g in 1:n_good
             T_sr = T[GOOD_S[g], GOOD_R[g]]
             scale = max(T_sr, eps(Float64))^(1/theta)
-            for rho in 1:N_rho
+            for rho in 1:N_rho_eff
                 z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
             end
         end
@@ -419,7 +433,7 @@ function solve_network(params; return_firm_level=false,
     # ─────────────────────────────────────────────────────────────────────────
     X_shares_by_r = zeros(n_good, R_downstream)  # Raw expenditure shares per good pair per downstream r
     c_tilde_r = zeros(R_downstream)              # Unit costs c̃_r = c_r / A_r
-    linkages_flat = zeros(N_rho, n_good) # Firm-level supplier indicator
+    linkages_flat = zeros(N_rho_eff, n_good) # Firm-level supplier indicator
 
     if return_firm_level
         # Sparse COO storage: one entry per (rho, downstream_r) winning pair
@@ -443,8 +457,8 @@ function solve_network(params; return_firm_level=false,
         # For each sector, find cheapest supplier among active upstream regions
         # p_{ρsr'→r} = w_{r's} · τ_{r'r} / z_{ρsr'}
         # ─────────────────────────────────────────────────────────────────────
-        p_rho_s = zeros(N_rho, S)
-        winner_good_idx = zeros(Int, N_rho, S)
+        p_rho_s = zeros(N_rho_eff, S)
+        winner_good_idx = zeros(Int, N_rho_eff, S)
 
         for s in 1:S
             g_indices = SECTOR_GOOD_INDICES[s]
@@ -454,11 +468,11 @@ function solve_network(params; return_firm_level=false,
             # Prices only for active upstream (s,r') pairs
             tau_sr = reshape(tau[regions_s, r_d], 1, :)      # (1, n_active_in_s); tau is R × R_downstream
             w_sr = reshape(W_RS_FLAT[g_indices], 1, :)       # (1, n_active_in_s)
-            prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr  # (N_rho, n_active_in_s)
+            prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr  # (N_rho_eff, n_active_in_s)
 
             # Ricardian selection: lowest-cost supplier wins each variety
-            min_local = argmin(prices_s, dims=2)  # (N_rho, 1)
-            for rho in 1:N_rho
+            min_local = argmin(prices_s, dims=2)  # (N_rho_eff, 1)
+            for rho in 1:N_rho_eff
                 local_idx = min_local[rho][2]
                 winner_good_idx[rho, s] = g_indices[local_idx]
                 p_rho_s[rho, s] = prices_s[rho, local_idx]
@@ -473,9 +487,9 @@ function solve_network(params; return_firm_level=false,
         # c_r   = [Ω^L w_r^{1-λ} + (1-Ω^L) P_r^{1-λ}]^{1/(1-λ)} (unit cost)
         # ─────────────────────────────────────────────────────────────────────
         # Per-(rho, s) weight = weight of the good pair that won this variety.
-        w_rho_s = Matrix{Float64}(undef, N_rho, S)
+        w_rho_s = Matrix{Float64}(undef, N_rho_eff, S)
         for s in 1:S
-            for rho in 1:N_rho
+            for rho in 1:N_rho_eff
                 g_w = winner_good_idx[rho, s]
                 w_rho_s[rho, s] = g_w == 0 ? 0.0 : sample_weights[rho, g_w]
             end
@@ -498,7 +512,7 @@ function solve_network(params; return_firm_level=false,
         for s in 1:S
             P_sr_s = P_sr[s]
             nu_s_s = nu_s[s]
-            for rho in 1:N_rho
+            for rho in 1:N_rho_eff
                 g_winner = winner_good_idx[rho, s]
                 if g_winner == 0; continue; end
 
@@ -618,8 +632,12 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
 
     n_regressors = N_REG + 1  # distance bins + log_productivity
 
-    # All good pairs are valid (n_good entries, each with N_rho varieties)
-    N_valid = n_good * N_rho
+    # Row count from the passed draws (not the global N_rho const), so callers
+    # may pass a different number of varieties (e.g. the price-alignment test).
+    N_rho_eff = size(sample_weights, 1)
+
+    # All good pairs are valid (n_good entries, each with N_rho_eff varieties)
+    N_valid = n_good * N_rho_eff
 
     y = Vector{Float64}(undef, N_valid)
     X = zeros(N_valid, n_regressors)
@@ -638,7 +656,7 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
             b = DistBin[r, dr]
         end
 
-        for rho in 1:N_rho
+        for rho in 1:N_rho_eff
             idx += 1
             y[idx] = linkages_flat[rho, g] > 0 ? 1.0 : 0.0
             w[idx] = sample_weights[rho, g]
