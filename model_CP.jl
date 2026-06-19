@@ -140,8 +140,8 @@ function vdc(n::Int)::Float64
 end
 
 """
-    generate_stratified_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG,
-                              a=0.5, verbose=false)
+    generate_is_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG,
+                      a=0.5, verbose=false)
         -> (U, W)
 
 Per-column importance-sampling draws on (0, 1) for the Fréchet inverse-CDF
@@ -149,6 +149,18 @@ transform in `solve_network`. Returns:
   - `U::Matrix{Float64}` of shape (N_rho, n_good) — quantiles in (0, 1)
   - `W::Matrix{Float64}` of shape (N_rho, n_good) — IS weights, normalised
     PER COLUMN (`sum(W[:, g]) = 1` for every good pair g)
+
+NOTE (defect): the IS tilt is BIASED for the min-coupled consumer moments
+(`c_tilde`, `gamma_ls`, `industry`, `pi_r`). `solve_network`'s CES price index
+applies only the WINNING column's weight `W[rho, winner_good_idx[rho,s]]` to each
+row, dropping the density ratios of the *losing* columns; with a non-flat tilt
+those ratios do not cancel, so the realised per-row weight is not the correct
+importance weight for the joint (min over regions) functional. The "bounded
+weights ⇒ no degeneracy" property only makes this estimator UNBIASED for
+single-column functionals (the `reg_coef` quadrature rows), where there is no
+min-coupling. For the default production path use `:qmc` (flat weights → the
+winner-weight shortcut is exact). `:is` is retained only for the `reg_coef`
+tail-resolution use case; it is NOT the default. See `generate_qmc_draws`.
 
 This replaces the previous comonotonic stratified-QMC design (which returned a
 length-N_rho weight VECTOR shared across columns). The shared bin grid made
@@ -193,11 +205,11 @@ INDEPENDENT permutation per column → columns decorrelated AND low-variance.
 - `verbose::Bool=false`   : print `min_g ESS_g` (effective sample size of the
                             weakest column) as a degeneracy health check.
 """
-function generate_stratified_draws(N_rho::Int, n_good::Int;
-                                   randomise::Bool=false,
-                                   rng::AbstractRNG=Random.GLOBAL_RNG,
-                                   a::Float64=0.5,
-                                   verbose::Bool=false)
+function generate_is_draws(N_rho::Int, n_good::Int;
+                           randomise::Bool=false,
+                           rng::AbstractRNG=Random.GLOBAL_RNG,
+                           a::Float64=0.5,
+                           verbose::Bool=false)
     @assert 0.0 < a < 1.0 "IS tilt a ∈ (0,1); smaller a ⇒ heavier tail oversampling, lower ESS."
 
     U     = Matrix{Float64}(undef, N_rho, n_good)
@@ -231,7 +243,7 @@ function generate_stratified_draws(N_rho::Int, n_good::Int;
             end
             min_ess = min(min_ess, 1.0 / s2)
         end
-        @printf("  generate_stratified_draws: min_g ESS_g = %.1f / %d  (frac %.3f, a=%.2f)\n",
+        @printf("  generate_is_draws: min_g ESS_g = %.1f / %d  (frac %.3f, a=%.2f)\n",
                 min_ess, N_rho, min_ess / N_rho, a)
     end
 
@@ -239,14 +251,112 @@ function generate_stratified_draws(N_rho::Int, n_good::Int;
 end
 
 
+"""
+    generate_qmc_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG)
+        -> (U, W)
+
+**Default production sampler.** Per-column STRATIFIED uniform draws on (0, 1) for
+the Fréchet inverse-CDF transform in `solve_network`, with FLAT weights. Returns:
+  - `U::Matrix{Float64}` (N_rho × n_good) — stratified quantiles in (0, 1)
+  - `W::Matrix{Float64}` (N_rho × n_good) — uniform weights `1/N_rho` (matrix, so
+    `[rho, g]` consumers are untouched; columns sum to 1)
+
+Each good pair `g` gets an INDEPENDENT permutation, so `u[rho, g1] ⊥ u[rho, g2]`
+(decorrelated — required to keep Ricardian `min_r c_r` selection alive) while one
+point per equal-probability stratum gives the variance reduction of LHS. Unlike
+`generate_is_draws`, there is NO importance tilt: the weight is uniform, which
+makes `solve_network`'s winner-weight shortcut (it applies only the winning
+column's weight per row) EXACT for the min-coupled moments — the source of the IS
+sampler's bias. Stratification weakly beats plain i.i.d. MC on every block.
+
+Two modes mirror `generate_is_draws`:
+  - `randomise=false` (default; optimisation): `MersenneTwister(g)` + midpoint
+    (0.5) within each stratum → deterministic per column (PSO-safe).
+  - `randomise=true` (Σ_sim estimation): permutation + jitter from the supplied
+    `rng`. NOTE: in this mode ALL columns of one call share the single `rng`
+    stream (they are drawn sequentially, not from independent `MersenneTwister(g)`
+    streams as in the base mode). This is intentional for Σ_sim, which wants
+    independent DESIGNS across replications k (pass `MersenneTwister(k)`); within a
+    replication the columns remain decorrelated via distinct random permutations.
+"""
+function generate_qmc_draws(N_rho::Int, n_good::Int;
+                            randomise::Bool=false,
+                            rng::AbstractRNG=Random.GLOBAL_RNG)
+    U     = Matrix{Float64}(undef, N_rho, n_good)
+    inv_N = 1.0 / N_rho
+    lo, hi = eps(), 1.0 - eps()
+
+    @inbounds for g in 1:n_good
+        col_rng = randomise ? rng : MersenneTwister(g)
+        perm    = randperm(col_rng, N_rho)
+        for rho in 1:N_rho
+            xi = randomise ? rand(rng) : 0.5      # within-stratum position
+            u  = clamp((perm[rho] - xi) * inv_N, lo, hi)   # stratified uniform, NO tilt
+            U[rho, g] = u
+        end
+    end
+
+    # Flat weight MATRIX (N_rho × n_good): the winner-weight shortcut in
+    # solve_network is exact iff weights are flat, so this is unbiased for the
+    # min-coupled moments.
+    W = fill(inv_N, N_rho, n_good)
+    return U, W
+end
+
 
 function generate_mc_draws(N_rho::Int, n_good::Int, rng::AbstractRNG)
     U = rand(rng, N_rho, n_good)
     # Uniform weight MATRIX (N_rho × n_good) so consumers can index [rho, g],
-    # matching generate_stratified_draws' per-column weight convention.
+    # matching the per-column weight convention of the other samplers.
     w = fill(1.0 / N_rho, N_rho, n_good)
     return U, w
 end
+
+
+"""
+    generate_draws(N_rho, n_good, method::Symbol; randomise=false,
+                   rng=Random.GLOBAL_RNG, a=0.5, verbose=false) -> (U, W::Matrix)
+
+Unified draw dispatcher. `method ∈ (:qmc, :mc, :is)`:
+  - `:qmc` (default everywhere) — stratified uniform, flat weights, decorrelated
+    columns. Unbiased for the min-coupled moments; weakly beats `:mc`.
+  - `:mc`  — i.i.d. uniform, flat weights. `randomise=false` ⇒ deterministic
+    (`MersenneTwister(0)`) for PSO; `randomise=true` ⇒ supplied `rng`.
+  - `:is`  — per-column importance sampling (tilt `a`). BIASED for min-coupled
+    moments; retain only for `reg_coef` tail resolution. `a`/`verbose` apply only
+    here (ignored for `:qmc`/`:mc`).
+
+W is always an `(N_rho × n_good)` matrix, so every `[rho, g]` consumer is
+untouched regardless of method — the invariant that confines the method switch to
+the generation sites.
+"""
+function generate_draws(N_rho::Int, n_good::Int, method::Symbol;
+                        randomise::Bool=false,
+                        rng::AbstractRNG=Random.GLOBAL_RNG,
+                        a::Float64=0.5,
+                        verbose::Bool=false)
+    if method === :qmc
+        return generate_qmc_draws(N_rho, n_good; randomise=randomise, rng=rng)
+    elseif method === :mc
+        mc_rng = randomise ? rng : MersenneTwister(0)
+        return generate_mc_draws(N_rho, n_good, mc_rng)
+    elseif method === :is
+        return generate_is_draws(N_rho, n_good; randomise=randomise, rng=rng,
+                                 a=a, verbose=verbose)
+    else
+        error("Unknown draw method :$method (choose :qmc, :mc, or :is)")
+    end
+end
+
+
+# Backward-compatible alias: existing call sites that have not been threaded with
+# an explicit method keep compiling and resolve to the new DEFAULT (:qmc). The
+# `a`/`verbose` kwargs are accepted for signature parity but ignored by :qmc.
+generate_stratified_draws(N_rho::Int, n_good::Int; randomise::Bool=false,
+                          rng::AbstractRNG=Random.GLOBAL_RNG,
+                          a::Float64=0.5, verbose::Bool=false) =
+    generate_draws(N_rho, n_good, :qmc; randomise=randomise, rng=rng,
+                   a=a, verbose=verbose)
 
 
 ##################### Helper Functions ###################

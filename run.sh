@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is]
 #
 # Examples:
 #   ./run.sh aero
@@ -11,17 +11,19 @@
 #   ./run.sh aero --n_coef=4 --mode=gmm
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm --n_quad=500
+#   ./run.sh aero --n_coef=4 --draws=mc
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is]"
     echo "  industry : aero, auto, car, both"
     echo "  --n_coef : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau  : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
     echo "  --mode   : smm (default) or gmm (analytical, faster, exact SEs)"
     echo "  --n_quad : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
+    echo "  --draws  : Fréchet draw method: qmc (default), mc, or is"
     exit 1
 fi
 
@@ -33,6 +35,7 @@ N_COEF="4"
 N_TAU=""       # empty = default to n_coef inside Julia
 MODE="smm"
 N_QUAD="200"
+DRAWS="qmc"    # Fréchet draw method: qmc (default), mc, is
 
 for arg in "$@"; do
     case "$arg" in
@@ -40,6 +43,7 @@ for arg in "$@"; do
         --n_tau=*)  N_TAU="${arg#--n_tau=}" ;;
         --mode=*)   MODE="${arg#--mode=}" ;;
         --n_quad=*) N_QUAD="${arg#--n_quad=}" ;;
+        --draws=*)  DRAWS="${arg#--draws=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -54,6 +58,11 @@ for val in "$N_COEF" "$N_TAU"; do
         exit 1
     fi
 done
+
+if [ "$DRAWS" != "qmc" ] && [ "$DRAWS" != "mc" ] && [ "$DRAWS" != "is" ]; then
+    echo "Error: --draws must be qmc, mc, or is (got: $DRAWS)"
+    exit 1
+fi
 
 if [ "$MODE" = "gmm" ]; then
     JULIA_SCRIPT="SMM_Spatial_Comovement/main_gmm.jl"
@@ -92,14 +101,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau
-    # main_gmm.jl: industry n_coef n_tau n_quad
+    # main.jl    : industry n_coef n_tau K_sim draws
+    # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
-        local args="$ind $N_COEF $N_TAU $N_QUAD"
-        echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD)"
+        local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
+        echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS)"
     fi
     echo "Logs: $log_file"
 

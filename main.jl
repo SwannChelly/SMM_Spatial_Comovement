@@ -47,6 +47,11 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
+# Draw method for the Fréchet inverse-CDF transform: :qmc (default, unbiased for
+# the min-coupled moments), :mc, or :is. Picked up by load_parameters.jl and
+# forwarded to every draw-generation site (U_DRAWS, Σ_sim, Jacobian replications).
+draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :qmc
+@assert draw_method in (:qmc, :mc, :is) "draw method must be qmc|mc|is, got :$draw_method"
 
 K = 10
 
@@ -68,7 +73,7 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim")
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method")
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$industry"

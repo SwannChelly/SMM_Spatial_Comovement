@@ -92,7 +92,10 @@ SMM_Spatial_Comovement/
 ### `model_CP.jl` — core model (read this first)
 
 Key functions:
-- `generate_stratified_draws(N_rho, n_good; randomise=false, rng, a=0.5, verbose=false)`: per-column importance-sampling uniform draws for the Fréchet inverse CDF. Returns `(U, W)`, **both** `(N_rho × n_good)` matrices, `W` normalised per column (`sum(W[:,g])=1`). `randomise=false` → `MersenneTwister(g)`+midpoint (PSO-deterministic base); `randomise=true` → supplied `rng` perm+jitter (Σ_sim replications). See **Importance-sampling draws and the `a` parameter** below.
+- `generate_draws(N_rho, n_good, method; randomise=false, rng, a=0.5, verbose=false)`: unified draw dispatcher. `method ∈ (:qmc, :mc, :is)`. Returns `(U, W)` with `W` **always** an `(N_rho × n_good)` matrix (the invariant that confines the method switch to the generation sites — every `[rho,g]` consumer is untouched). `:qmc` (**default**) = stratified uniform with flat weights and decorrelated columns; `:mc` = i.i.d. uniform, flat weights; `:is` = per-column importance sampling (tilt `a`). See **Draw methods (`:qmc` default) and the IS bias** below.
+- `generate_qmc_draws(N_rho, n_good; randomise=false, rng)`: the default sampler. Stratified uniform draws (independent permutation per column → decorrelated, one point per equal-prob stratum → LHS variance reduction), **flat** weight matrix `1/N_rho`. `randomise=false` → `MersenneTwister(g)`+midpoint (PSO-deterministic base); `randomise=true` → supplied `rng` perm+jitter (Σ_sim replications, columns share one stream).
+- `generate_is_draws(N_rho, n_good; randomise=false, rng, a=0.5, verbose=false)`: per-column importance-sampling uniform draws for the Fréchet inverse CDF. Returns `(U, W)`, **both** `(N_rho × n_good)` matrices, `W` normalised per column (`sum(W[:,g])=1`). **BIASED for the min-coupled consumer moments** (see below) — not the default; retained for the `reg_coef` quadrature tail.
+- `generate_stratified_draws(...)`: backward-compatible alias resolving to `generate_draws(..., :qmc)` (the new default). `a`/`verbose` accepted for signature parity, ignored by `:qmc`.
 - `unpack_params(params)`: splits flat vector into `(β, Ω^L, Ω^s, A, T_full)`. `T_full` is `S×R` with zeros for inactive pairs.
 - `build_tau(beta)`: builds `(R, R_downstream)` iceberg cost matrix from distance-bin coefficients using precomputed `DistBin`.
 - `solve_network(params; return_firm_level, precomputed_tau, u_draws, sample_weights)`: main equilibrium solver. Returns NamedTuple. If `return_firm_level=true`, appends sparse COO firm-level arrays (`firm_exp_rho/s/g/r/val`, `firm_deriv_val`).
@@ -100,72 +103,56 @@ Key functions:
 - `fast_weighted_regression(linkages_flat, z_flat, sample_weights)`: analytical weighted OLS with FWL demeaning by sector×downstream-region FE. Returns `N_beta` distance-bin coefficients. `sample_weights` is the `(N_rho × n_good)` IS matrix; each `(rho, g)` row carries weight `sample_weights[rho, g]`.
 - `full_SMM(params, simulation=false, second_stage=false, method="original"; ..., W_override=nothing)`: wrapper returning `(loss, moments_tuple)`. When `W_override` is not nothing it is used instead of the global `Weight_matrix_custom`; existing call sites are unaffected.
 
-#### Importance-sampling draws and the `a` parameter
+#### Draw methods (`:qmc` default) and the IS bias
 
-`generate_stratified_draws` performs per-column importance sampling in uniform
-space, not stratified QMC. Each good pair `g` gets an independent proposal
-stream, so `u[rho,g1]` and `u[rho,g2]` are independent — this is required: the
-previous shared-bin design made every region's productivity a near-deterministic
-function of one latent per row, collapsing Ricardian selection (the winner of
-`min_r c_r` became fixed by `T/tau/w`, not by independent Fréchet draws). The
-symptom was the price-alignment test showing `strat` columns ~100× worse than
-`mc`.
+The Fréchet inverse-CDF transform consumes uniform draws `u ∈ (0,1)`. Three
+samplers are available via `generate_draws(N_rho, n_good, method)`, selectable at
+the entry point (`draw_method`, CLI `--draws=qmc|mc|is`, default `:qmc`):
 
-**Proposal.** The Fréchet inverse-CDF `z = T^{1/theta}(-ln(1-u))^{-1/theta}`
-puts the selection-relevant large-`z` mass at `u→0`. The proposal
-`q(u) = a·u^{a-1}` (a `Beta(a,1)`, inverse-CDF `u = v^{1/a}`) oversamples `u→0`;
-the target is `Uniform`, so the IS weight is `w ∝ 1/q(u) = u^{1-a}/a`, bounded on
-`[0,1]` (→0 at `u→0`, →`1/a` at `u→1`). Bounded weights ⇒ no weight degeneracy,
-unlike a Fréchet-scale (`z`-space) tilt whose weights blow up in the body and
-would need the tilt to track `T`.
+- **`:qmc` (default).** Stratified uniform, **flat** weights. Each good pair `g`
+  gets an independent permutation (`u[rho,g1] ⊥ u[rho,g2]` — required to keep
+  Ricardian `min_r c_r` selection alive; the old shared-bin design collapsed it),
+  with one point per equal-probability stratum (LHS variance reduction). Flat
+  weights make `solve_network`'s winner-weight shortcut **exact** (see below), so
+  it is **unbiased** for the min-coupled consumer moments and weakly beats `:mc`.
+- **`:mc`.** Plain i.i.d. uniform, flat weights. Validates the closed form itself.
+- **`:is`.** Per-column importance sampling. **Biased** for the min-coupled
+  moments — kept only for `reg_coef` tail resolution.
 
-**Why a single `a` serves the whole PSO parameter space.** The tilt is in uniform
-space, applied before the `T^{1/theta}` scaling. PSO moves `T` (and `beta`),
-which scales `z` and shifts which region wins, but not the `u`-region that decides
-selection — that is always the `u→0` tail, invariant to `T`. The tail shape is
-governed by `theta = 1.768`, which is fixed. So only the effective tail depth
-wobbles mildly across `theta`; one moderate tilt covers it. A `z`-space tilt
-would need a `T`-dependent proposal and would not survive PSO; the uniform-space
-tilt does.
+**Why `:is` is biased (the winner-weight shortcut).** `solve_network`'s within-
+sector CES price index `P_sr = [Σ_ρ w_ρ p_ρ^{1-ν_s}]^{1/(1-ν_s)}` weights each
+row `ρ` by **only the winning column's** weight `W[rho, winner_good_idx[rho,s]]`
+— it never multiplies in the importance-density ratios of the *losing* columns.
+The realised per-row factor is therefore the correct importance weight for the
+joint (min over regions) functional **only when all columns carry the same
+weight**, i.e. flat weights. With a non-flat tilt the dropped losing-column
+ratios do not cancel, so `c_tilde`, `gamma_ls`, `industry`, `pi_r` are estimated
+with a systematic bias that does **not** vanish as `N→∞`. The earlier
+"bounded weights ⇒ no degeneracy" claim is only true for **single-column**
+functionals (the `reg_coef` quadrature rows, which have no min-coupling) — there
+`:is` remains valid and its `u→0` tilt buys real tail resolution. It is false for
+every min-coupled block. This is why the default switched to `:qmc`.
 
-**Recommended value:** `a = 0.5` (`u = v²`): ~1% of draws below `u=10^{-4}`, ~10%
-below `10^{-2}` — solid tail resolution without starving the body, weight bounded
-by `2`, high ESS in both sharp- and flat-selection regions. It is the "never
-badly wrong" compromise, not the per-`theta` optimum. Smaller `a` (e.g. `0.3`)
-deepens tail resolution but lowers ESS and risks degeneracy where selection is
-mild (flat `T`, early PSO). Larger `a` (→1) approaches plain LHS (no tilt).
+**Proposal (`:is` only).** The inverse-CDF `z = T^{1/theta}(-ln(1-u))^{-1/theta}`
+puts the selection-relevant large-`z` mass at `u→0`. Proposal `q(u) = a·u^{a-1}`
+(`Beta(a,1)`, inverse-CDF `u = v^{1/a}`) oversamples `u→0`; target `Uniform` ⇒ IS
+weight `w ∝ 1/q(u) = u^{1-a}/a`, bounded on `[0,1]`. Recommended `a = 0.5`. The
+tilt is keyed to the `−log(1−u)` transform (high-z mass at `u→0`); do not flip the
+draw without recomputing the weight from the flipped quantile.
 
-**Confirm, don't assume.** Pick `a` by measuring
-`min_g ESS_g = min_g 1/(N_rho·Σ_rho W[rho,g]²)` (a fraction; the absolute count is
-`1/Σ_rho W[rho,g]²` since columns sum to 1) and the `gamma_ls`/`reg_coef` block
-variance at a sharp-selection `theta` (large `T` spread) and a flat `theta`, for
-`a ∈ {0.4, 0.5, 0.6}`; keep `a=0.5` if `min ESS ≳ N_rho/4` at both ends. Monitor
-`min ESS` during PSO as a health signal — with bounded weights it should never
-collapse.
+**Weights are always a matrix.** `SAMPLE_WEIGHTS` / `U_DRAWS` are both
+`(N_rho × n_good)` for every method. Every consumer indexes `[rho, g]`:
+`solve_network` weights the CES `P_sr` sum and `exp_val` by the winning pair's
+column `winner_good_idx[rho,s]`; `fast_weighted_regression` uses `W[rho,g]`. This
+matrix interface is the invariant that lets the method switch stay confined to the
+generation sites — consumer indexing, the weight-matrix construction, `MOMENT_MASK`,
+the T flat-indexing, and inference are all untouched by the choice of sampler.
 
-**Weights are a matrix.** `SAMPLE_WEIGHTS` / `U_DRAWS` are both `(N_rho × n_good)`.
-Every consumer indexes `[rho, g]`: `solve_network` weights the CES `P_sr` sum and
-`exp_val` by the winning pair's column `winner_good_idx[rho,s]`;
-`fast_weighted_regression` uses `W[rho,g]`. Weights are self-normalised per column
-(`Σ_rho W[rho,g] = 1`).
-
-**Caution — the IS tilt is keyed to the `−log(1−u)` transform; do not flip it.**
-`solve_network` and `compute_regression_quadrature` both map quantiles via
-`z = T^{1/theta}·(−log(1−u))^{−1/theta}`, which places the selection-relevant
-high-z mass at `u→0` (as `u→0`, `−log(1−u)≈u→0` and `z→∞`; as `u→1`, `z→0`). The
-proposal `q(u)=a·u^{a−1}` deliberately oversamples `u→0` and is therefore correct
-only for this `1−u` convention. Two silent failure modes: (1) **Flipping the
-draw.** Passing `1−u` (the `strat_flip` arm of `test_price_alignment`) sends the
-oversampled mass to `u→1`, i.e. `z→0` — the irrelevant low-z tail; selection
-resolution collapses. Do not "symmetrise" the asymmetry by flipping; the
-asymmetry is the point. (2) **Weight/draw mismatch.** The weight is a per-column
-function of the same `u` handed to `solve_network`: `W[rho,g] ∝ u[rho,g]^{1−a}`.
-Any arm that flips the draw must recompute the weight from the flipped quantile
-(`test_price_alignment` does this for `strat_flip`, using `(1−u)^{1−a}`), or the
-estimator is inconsistent. At `θ̂_2`, confirm the `strat` arm (raw `u`,
-`−log(1−u)`) is the one that collapses to the `mc` column; if `strat_flip` aligns
-instead, the tilt is on the wrong tail — investigate before trusting any block
-error.
+**`test_price_alignment`** (in `main_gmm.jl`) compares all three methods against
+the closed form. Expected at `θ̂_2`: `:qmc ≤ :mc` on `c_tilde`/`industry`/`pi_r`/
+`gamma_ls` (stratification ≥ i.i.d.), `:is` visibly biased on those blocks (it
+documents the defect, it does not hide it), and `reg_coef ~1e2` for **all three**
+(FKG/quadrature bias in the regression moment, not a sampling artefact).
 
 **Flat indexing convention** (critical): active `(s, r)` pairs are stored in a flat array of length `n_good`. Global constants `GOOD_S[g]`, `GOOD_R[g]` map index `g` back to `(s, r)`. `SR_TO_GOOD[s, r]` is the reverse map (0 for inactive). `SECTOR_GOOD_INDICES[s]` lists all `g` indices for sector `s`.
 
@@ -175,7 +162,7 @@ error.
 
 Key utilities:
 - `generate_lhs_beta(n, n_beta, lb, ub)`: LHS samples with sorted draws → monotone β.
-- `generate_stratified_draws` is in `model_CP.jl`, not here.
+- `generate_draws` / `generate_qmc_draws` / `generate_is_draws` / `generate_mc_draws` (and the `generate_stratified_draws` alias) are in `model_CP.jl`, not here.
 - `parallel_SMM_safe(...; W_override=nothing)`: try-catch wrapper returning `nothing` on failure. Threads `W_override` to `full_SMM`.
 - `distance_bin(d, n_bins)`: maps distance (km) to bin index 1..N_beta (0 = local, excluded from regression).
 - `generate_report(...)`: saves `dashboard.png`, `report.txt`, `pi_r.npy`, `productivity.npy`.

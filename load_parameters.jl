@@ -251,8 +251,15 @@ w_vec[BLOCK_RANGES_local[4]] .= 100.0
 Weight_matrix_custom_local = Diagonal(w_vec)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
-println("Generating CdGM-style stratified draws...")
-u_draws_local, sample_weights_local = generate_stratified_draws(N_rho, n_good_local)
+# Draw method for the Fréchet inverse-CDF transform. The entry point (main.jl /
+# main_gmm.jl) may define `draw_method`; default to :qmc (stratified uniform, flat
+# weights — unbiased for the min-coupled moments). :mc and :is are alternatives.
+draw_method_local = (@isdefined(draw_method)) ? draw_method : :qmc
+@assert draw_method_local in (:qmc, :mc, :is) "draw_method must be :qmc, :mc or :is, got :$draw_method_local"
+@everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
+
+println("Generating draws (method = :$DRAW_METHOD)...")
+u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)
 @everywhere const U_DRAWS        = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
 

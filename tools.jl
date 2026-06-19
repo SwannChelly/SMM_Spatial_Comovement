@@ -1166,7 +1166,8 @@ end
 
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
-                                   output_folder::String=".")
+                                   output_folder::String=".",
+                                   draw_method::Symbol=DRAW_METHOD)
     N_moments = length(empirical_moments)
 
     # ── Gamma+beta moment indices in the masked vector ───────────────────────
@@ -1188,7 +1189,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     flush(stdout)
 
     M_sim_rows = pmap(1:K) do k
-        u_k, w_k = generate_stratified_draws(N_rho, n_good;
+        u_k, w_k = generate_draws(N_rho, n_good, draw_method;
                                       randomise=true,
                                       rng=MersenneTwister(k))
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
@@ -1559,7 +1560,8 @@ function compute_jacobian(theta::Vector{Float64};
                           n_quad::Int = 200,
                           t_log_step::Bool = true,
                           check_symmetry::Bool = false,
-                          richardson_check::Bool = false)
+                          richardson_check::Bool = false,
+                          draw_method::Symbol = DRAW_METHOD)
 
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
@@ -1613,7 +1615,7 @@ function compute_jacobian(theta::Vector{Float64};
                 vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
             end
         else
-            u_k, w_k = generate_stratified_draws(N_rho, n_good;
+            u_k, w_k = generate_draws(N_rho, n_good, draw_method;
                                                  randomise = true,
                                                  rng       = MersenneTwister(base_seed + k))
             eval_one = p -> begin

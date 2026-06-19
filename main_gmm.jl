@@ -53,6 +53,10 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 n_quad   = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 200
+# Draw method for the simulated price solver (:qmc default, :mc, :is). Forwarded
+# to load_parameters.jl (U_DRAWS) and every draw-generation site.
+draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :qmc
+@assert draw_method in (:qmc, :mc, :is) "draw method must be qmc|mc|is, got :$draw_method"
 K = 10   # PSO loops
 
 run_step1 = false
@@ -67,7 +71,7 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("GMM mode | Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | n_quad: $n_quad")
+println("GMM mode | Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | n_quad: $n_quad | draws: :$draw_method")
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_gmm_$industry"
@@ -424,30 +428,27 @@ function test_price_alignment(params; N_list = [8_000, 32_000, 128_000], n_quad:
     @printf("%-9s %-11s %10s %10s %10s %10s %10s %10s\n",
             "N_rho","draws","c_tilde","labor","industry","pi_r","reg_coef","gamma_ls")
 
-    a_is = 0.5   # IS tilt used by generate_stratified_draws (default)
+    a_is = 0.5   # IS tilt (only used by the :is arm)
     for N in N_list
-        us, ws = generate_stratified_draws(N, n_good; randomise = false, a = a_is)
-        um, wm = generate_mc_draws(N, n_good, MersenneTwister(20260618))
+        uq, wq = generate_draws(N, n_good, :qmc; randomise = false)
+        um, wm = generate_draws(N, n_good, :mc;  randomise = false)
+        ui, wi = generate_draws(N, n_good, :is;  randomise = false, a = a_is)
 
-        # Health diagnostics for the per-column IS draws (Step 7):
-        #   • min ESS across columns should be ≳ N/4 (bounded weights ⇒ no degeneracy)
-        #   • max off-diagonal |cor(U)| should be ≈ 1/sqrt(N) (columns decorrelated)
-        ess_min = minimum(1.0 ./ vec(sum(ws .^ 2, dims = 1)))   # ws columns sum to 1
-        C = cor(us); C[diagind(C)] .= 0.0
-        max_offdiag_cor = maximum(abs.(C))
-        @printf("  N=%-8d min ESS = %.0f / %d (frac %.2f, target ≳ %.0f)   max|cor(U)−I| = %.3f (≈ 1/√N = %.3f)\n",
-                N, ess_min, N, ess_min / N, N / 4, max_offdiag_cor, 1.0 / sqrt(N))
+        # Decorrelation / ESS diagnostics for the stratified arms.
+        #   • qmc has FLAT weights ⇒ ESS == N by construction (no degeneracy possible).
+        #   • is  has bounded but non-flat weights ⇒ min ESS reported as a health signal.
+        #   • columns should be decorrelated: max off-diagonal |cor(U)| ≈ 1/√N.
+        ess_is = minimum(1.0 ./ vec(sum(wi .^ 2, dims = 1)))     # wi columns sum to 1
+        Cq = cor(uq); Cq[diagind(Cq)] .= 0.0
+        @printf("  N=%-8d qmc ESS = %.0f / %d (frac %.2f)   is ESS = %.0f / %d (frac %.2f)   max|cor(U_qmc)−I| = %.3f (≈ 1/√N = %.3f)\n",
+                N, N, N, 1.0, ess_is, N, ess_is / N,
+                maximum(abs.(Cq)), 1.0 / sqrt(N))
 
-        # strat_flip reuses the FLIPPED quantile (1-u), so its IS weight must be
-        # recomputed from that quantile — pairing flipped draws with the un-flipped
-        # weights `ws` is an inconsistent SNIS estimator under per-column IS.
-        wf = (1.0 .- us) .^ (1.0 - a_is)            # raw IS weight ∝ u^{1-a}
-        wf ./= sum(wf, dims = 1)                     # per-column SNIS (matches the generator)
-
-        #  strat      : production transform z = scale·(-log(1-u))^(-1/θ)  → high-z tail at u→0
-        #  strat_flip : pass (1-u) ⇒ z = scale·(-log u)^(-1/θ)             → high-z tail at u→1 (wrong tail)
-        #  mc         : i.i.d. uniform, no stratification (validates the closed form itself)
-        for (lab, u, w) in (("strat", us, ws), ("strat_flip", 1.0 .- us, wf), ("mc", um, wm))
+        #  qmc : stratified uniform, FLAT weights → winner-weight shortcut exact (unbiased)
+        #  mc  : i.i.d. uniform, flat weights      → validates the closed form itself
+        #  is  : per-column importance tilt        → BIASED for min-coupled moments
+        #                                            (documents the defect, does not hide it)
+        for (lab, u, w) in (("qmc", uq, wq), ("mc", um, wm), ("is", ui, wi))
             net  = solve_network(params; u_draws = u, sample_weights = w)
             m    = compute_moments(net, params)
             ctil = net.c_tilde_r[DOWNSTREAM_REGIONS]
@@ -459,13 +460,17 @@ function test_price_alignment(params; N_list = [8_000, 32_000, 128_000], n_quad:
         println("-"^100)
     end
     println("""
-    Decision rule:
-      • 'strat' high but 'strat_flip' → 0 : stratification is on the wrong tail of the inverse-CDF
-                                            (the (1-u) transform); fine bins miss the high-z mass.
-      • only 'mc' → 0 (both strat stall)  : bins are SHARED across source regions ⇒ comonotonic draws
-                                            suppress Ricardian selection; columns need full decorrelation.
-      • all three → 0                     : pure finite-N error; closed form is correct, trust the GMM.
-      • all three stall at one floor      : structural mismatch between solve_network and
+    Decision rule (default sampler is :qmc):
+      • 'qmc' ≤ 'mc' on c_tilde/industry/pi_r/gamma_ls : flat weights make the winner-weight
+                                            shortcut exact and stratification adds variance reduction.
+                                            This is the expected, correct behaviour.
+      • 'is' biased (does NOT → 0 with N) on the min-coupled blocks : the IS tilt drops the losing
+                                            columns' density ratios in solve_network's CES sum; this is a
+                                            real defect, which is why :is is not the default.
+      • reg_coef ~1e2 for ALL three        : FKG/quadrature bias in the regression moment, NOT a
+                                            sampling artefact (unaffected by the draw method). :is is
+                                            valid here (single-column functional, no min-coupling).
+      • all three stall together on a block: structural mismatch between solve_network and
                                             compute_moments_analytical (not a sampling issue).""")
 end
 

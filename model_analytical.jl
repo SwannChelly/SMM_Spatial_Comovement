@@ -287,9 +287,10 @@ Acceptance criterion:
   < 1e-3 for blocks {Ω^L, Ω^s, π_r, γ_ls}
   < 1e-2 for reg_coef (quadrature introduces controlled approximation)
 """
-function test_analytical_vs_simulated(params; N_rho_test::Int=10_000, n_quad::Int=200)
-    println("Generating high-accuracy stratified draws (N_rho=$N_rho_test)...")
-    u_draws, sw = generate_stratified_draws(N_rho_test, n_good; randomise=false)
+function test_analytical_vs_simulated(params; N_rho_test::Int=10_000, n_quad::Int=200,
+                                      draw_method::Symbol=DRAW_METHOD)
+    println("Generating high-accuracy draws (method=:$draw_method, N_rho=$N_rho_test)...")
+    u_draws, sw = generate_draws(N_rho_test, n_good, draw_method; randomise=false)
 
     println("Solving SMM network...")
     network  = solve_network(params; u_draws=u_draws, sample_weights=sw)
