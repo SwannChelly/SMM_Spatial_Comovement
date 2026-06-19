@@ -411,7 +411,7 @@ theta_hat_2 = NPZ.npzread(joinpath(output_folder, "step3", "theta_hat_2.npy"))
 # DIAGNOSTIC: price-index convergence & stratification alignment
 # Append after Step 4 in main_gmm.jl. Reuses loaded globals.
 # ============================================================================
-function test_price_alignment(params; N_list = [8_000, 32_000, 128_000], n_quad::Int = 200)
+function test_price_alignment(params; N_list = [2000, 8000, 32000], n_quad::Int = 200)
     ndims(params) > 1 && (params = params[:, 1])
 
     # Closed-form reference (the N→∞ target)

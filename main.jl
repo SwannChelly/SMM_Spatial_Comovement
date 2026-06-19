@@ -53,7 +53,7 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :qmc
 @assert draw_method in (:qmc, :mc, :is) "draw method must be qmc|mc|is, got :$draw_method"
 
-K = 10
+K = 5
 
 run_step1 = true#true
 run_step2 = true
