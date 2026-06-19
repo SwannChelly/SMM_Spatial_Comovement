@@ -98,7 +98,7 @@ const IV_ROOT = output_folder
 ############## Configuration ##############
 
 # Smoke test: tiny everything so the full pipeline can be validated in minutes.
-const SMOKE_TEST = false
+const SMOKE_TEST = true
 
 const RUN_EXP1 = true     # 10-start full-vector point recovery
 const RUN_EXP2 = true     # β+T coverage Monte Carlo
