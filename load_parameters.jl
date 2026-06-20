@@ -12,7 +12,11 @@
 #
 # All @everywhere const values are broadcast to workers here.
 
-############## Load and distribute constants ##############
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 1 — RAW DATA LOADING
+# Reads the per-industry empirical inputs (wages, shares, distances, firm counts,
+# sourcing matrix X_rs) from disk. Nothing is broadcast to workers yet.
+# ═══════════════════════════════════════════════════════════════════════════
 
 coefs                         = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
 distances_local               = NPZ.npzread(joinpath(input_folder, "distances.npy"))
@@ -28,7 +32,14 @@ N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream
 agg_industry_share_local      = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
 domestic_share_local          = NPZ.npzread(joinpath(input_folder, "domestic_share.npy"))
 X_rs_local                    = NPZ.npzread(joinpath(input_folder, "X_rs.npy")) # X_rs has shape (S,R)
-N_rs_local                    = NPZ.npzread(joinpath(input_folder, "N_rs.npy"))
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 2 — FIXED STRUCTURAL PARAMETERS (CALIBRATION)
+# Dimensions (S sectors, R regions) and all non-estimated model primitives:
+# elasticities (epsilon, nu, nu_s), Fréchet dispersion (theta), labor/CI split
+# (lambda), draw count (N_rho), and derived constants (GAMMA_FACTOR, delta_r).
+# These are held fixed during estimation and broadcast to all workers.
+# ═══════════════════════════════════════════════════════════════════════════
 
 S_, R_full = size(filter_N_upstream_local)
 @everywhere const S = $(S_)
@@ -68,8 +79,15 @@ begin
     _gamma_factor_local = [SpecialFunctions.gamma((theta + 1 - nu_s[s]) / theta)^(1 / (1 - nu_s[s])) for s in 1:S_]
     @everywhere const GAMMA_FACTOR = $_gamma_factor_local
 end
-@everywhere const delta_r             = $(ones(R_full)) # Downstream preference shifter. 
-@everywhere const Weight_matrix       = $(nothing)      # Weight matrix for the SMM. 
+@everywhere const delta_r             = $(ones(R_full)) # Downstream preference shifter.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 3 — GAMMA THRESHOLD + ACTIVE-SET PRUNING
+# Defines which (sector, upstream-region) sourcing pairs are estimated. Pairs
+# with a within-sector share at or below the threshold are dropped from both the
+# γ_ls targets and the T active set, then survivors are renormalized to preserve
+# each sector total. MUST run before T_mask_local — it shapes the active set.
+# ═══════════════════════════════════════════════════════════════════════════
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
@@ -129,7 +147,15 @@ println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
 # ──────────────────────────────────────────────────────────────────────────
 
 
-# T-mask will be used to isolate the sector-region on which to estimate comparative advantage. 
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 4 — T-MASK + GOOD-PAIR INDEX MAPS
+# Builds the bookkeeping that links each active (s,r) comparative-advantage
+# parameter T[s,r] to its position in the flattened parameter/moment vectors.
+# The s-major (region-minor) flattening here is the convention the Jacobian's
+# parameter axis and γ-moment row axis share (see CLAUDE.md invariant).
+# ═══════════════════════════════════════════════════════════════════════════
+
+# T-mask will be used to isolate the sector-region on which to estimate comparative advantage.
 T_mask_local         = vec(permutedims(X_rs_local)) .> 0 # s-major (region-minor): identical to T_mask_moment_local / γ-moment convention
 T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
@@ -159,8 +185,15 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 5 — REFERENCE REGIONS
+# Each sector's T and γ_ls shares are identified only up to a per-sector scale,
+# so one region per sector is normalized to T=1 and its γ moment dropped. We pin
+# that reference to the largest empirical sourcing share for numerical stability.
+# ═══════════════════════════════════════════════════════════════════════════
+
 # Reference region per sector: largest empirical sourcing share among active regions
-# Those regions will always have T equal to one after unpack-parameters so we don't need to estimate them. 
+# Those regions will always have T equal to one after unpack-parameters so we don't need to estimate them.
 T_REF_REGION_local = Vector{Int}(undef, S_)
 for s in 1:S_
     idxs = SECTOR_GOOD_INDICES_local[s]
@@ -174,6 +207,14 @@ for s in 1:S_
 end
 @everywhere const T_REF_REGION = $T_REF_REGION_local
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 6 — REMAINING TARGETS + PARAMETER COUNTS (pi_r, reg_coef, N_REG/N_TAU)
+# Downstream market shares (pi_r) and the distance-bin regression coefficients
+# (reg_coef) complete the empirical targets. N_REG fixes the reg_coef moment
+# count; N_TAU the trade-cost parameter count — decoupled so a power-law τ=d^α
+# (N_TAU=1) can be over-identified against N_REG>1 binned moments.
+# ═══════════════════════════════════════════════════════════════════════════
 
 X_dr_local = CSV.read(joinpath(input_folder, "X_dr.csv"), DataFrame).X_dr
 X_dr_local = X_dr_local[N_downstream_per_region_local .!= 0]
@@ -195,6 +236,13 @@ n_reg = length(reg_coef_local)   # actual moment count from loaded data
 @everywhere N_TAU = $(n_tau)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 7 — T STARTING VALUES (GRAVITY)
+# Warm-starts the comparative-advantage optimisation at a gravity-implied guess
+# T ≈ γ_ls · w^θ, the value consistent with observed shares at uniform trade
+# costs — a basin near the optimum that shortens PSO search.
+# ═══════════════════════════════════════════════════════════════════════════
+
 # The starting point of the optimization for the comparative advantage:
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
@@ -206,11 +254,19 @@ for s in 1:S_
 end
 @everywhere const T_rs_init = $(T_gravity)
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 8 — EMPIRICAL MOMENT VECTOR + MOMENT_MASK + BLOCK_RANGES
+# Stacks the five moment blocks into one target vector and builds MOMENT_MASK,
+# which drops the linearly-dependent moments (first industry/pi_r share, inactive
+# and per-sector reference γ_ls) so the system is identified. BLOCK_RANGES indexes
+# each block within the masked vector; Weight_matrix_custom is the Step-1 metric.
+# ═══════════════════════════════════════════════════════════════════════════
+
 # Moment block sizes + MOMENT_MASK
 n_labor    = 1
 n_industry = length(vec(agg_industry_share_local))
 n_gamma    = length(vec(emp_gamma_ls_local))
-n_reg      = length(reg_coef_local)
+# n_reg already computed above (== length(reg_coef_local)) for the N_REG broadcast.
 n_pi       = length(emp_pi_r_local)
 N_moments_full = n_labor + n_industry + n_pi + n_reg + n_gamma
 
@@ -260,6 +316,13 @@ w_vec[BLOCK_RANGES_local[4]] .= 100.0
 Weight_matrix_custom_local = Diagonal(w_vec)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 9 — SIMULATION DRAWS
+# Generates the fixed common-random-numbers (U_DRAWS) and importance weights used
+# by the simulated moments, so the SMM objective is smooth across parameter
+# evaluations. Held constant for the whole estimation.
+# ═══════════════════════════════════════════════════════════════════════════
+
 # Draw method for the Fréchet inverse-CDF transform. The entry point (main.jl /
 # main_gmm.jl) may define `draw_method`; default to :qmc (stratified uniform, flat
 # weights — unbiased for the min-coupled moments). :mc and :is are alternatives.
@@ -271,6 +334,13 @@ println("Generating draws (method = :$DRAW_METHOD)...")
 u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)
 @everywhere const U_DRAWS        = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 10 — DISTANCE / GEOGRAPHY PRECOMPUTATION
+# Precomputes the geography the regression moments and trade costs depend on:
+# distance bins, nearest downstream plant/region, and log-distances. Cached once
+# here since geography is fixed across parameter evaluations.
+# ═══════════════════════════════════════════════════════════════════════════
 
 downstream_regions_local     = findall(N_downstream_per_region_local .> 0)
 @everywhere const DOWNSTREAM_REGIONS = $(downstream_regions_local)
@@ -293,6 +363,13 @@ LOG_CLOSEST_DIST_local    = log.(max.(closest_plant_dist_local, 1.0))
 @everywhere const LOG_CLOSEST_DIST    = $LOG_CLOSEST_DIST_local
 
 println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 11 — IDENTIFIED-PARAMETER INDICES (JACOBIAN / INFERENCE)
+# Selects the columns of the Jacobian that are actually identified, dropping the
+# directions killed by the model's internal normalizations (Ω^s, A, and each
+# sector's reference T). Without this the Jacobian would be rank-deficient.
+# ═══════════════════════════════════════════════════════════════════════════
 
 # Indices of identified parameters to use in Jacobian/inference.
 # Excludes the S+2 flat directions created by internal normalizations:
@@ -317,6 +394,13 @@ end
 jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_TAU + sum(T_mask_local)) if i ∉ _excluded]
 println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 12 — γ REFERENCE-REGION RECONSTRUCTION MAP
+# Records, per sector, how to rebuild the dropped reference-region γ share (and
+# its SE) from the retained shares via the adding-up constraint — used only for
+# inference reporting, not for estimation.
+# ═══════════════════════════════════════════════════════════════════════════
 
 # ── γ_ls reference-region reconstruction map (for inference plotting) ────────
 # Each retained γ moment in BLOCK_RANGES[5] corresponds to one active (s,r) pair
@@ -370,6 +454,13 @@ end
 @everywhere const GAMMA_REF_MAP = $gamma_ref_map_local
 println("γ reference-region map built for $(length(gamma_ref_map_local)) sectors " *
         "(used for inference reference-point SEs).")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 13 — MOMENT AND PARAMETER LABELS
+# Builds human-readable names for each Jacobian row (moment) and column
+# (parameter), aligned to MOMENT_MASK and jacobian_param_indices, for the
+# inference reports. Falls back to integer ids when the name CSV is absent.
+# ═══════════════════════════════════════════════════════════════════════════
 
 # ── Human-readable labels for moments and parameters (for inference reports) ─
 # Two SEPARATE axes:

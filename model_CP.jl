@@ -1096,15 +1096,12 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
                                 u_draws=u_draws, sample_weights=sample_weights)
     end
 
-    if second_stage
-        emp = empirical_moments_reduced
-        W = Weight_matrix
-        moments = [simulated_moments[5][mask_emp_gamma_ls .!= 0]]
-    else
-        emp = empirical_moments
-        W = W_override !== nothing ? W_override : Weight_matrix_custom
-        moments = simulated_moments
-    end
+    # `second_stage` is retained as an ignored positional arg for call-site
+    # compatibility (parallel_SMM / parallel_SMM_safe / train_stage_pso pass it
+    # positionally); the second-stage masked-moment branch was dead and removed.
+    emp = empirical_moments
+    W = W_override !== nothing ? W_override : Weight_matrix_custom
+    moments = simulated_moments
 
     moment_indices = moment_blocks === nothing ? nothing :
         vcat([collect(BLOCK_RANGES[b]) for b in moment_blocks]...)
