@@ -60,7 +60,7 @@ println("\n theta = $theta — Frechet parameter")
 
 
 # Γ((θ+1-ν_s)/θ)^{1/(1-ν_s)} — constant factor in EK closed-form price index P_sr.
-# Precomputed once; used by compute_prices_analytical in model_analytical.jl.
+# Precomputed once; used by compute_prices_analytical in model_analytical.jl (the GMM)
 # Requires θ+1 > ν_s (checked here); for current calibration 2.768 > 2.5 ✓
 begin
     @assert all(theta + 1 .> nu_s) "ν_s must be < θ+1 for closed-form P_sr"
@@ -68,12 +68,12 @@ begin
     _gamma_factor_local = [SpecialFunctions.gamma((theta + 1 - nu_s[s]) / theta)^(1 / (1 - nu_s[s])) for s in 1:S_]
     @everywhere const GAMMA_FACTOR = $_gamma_factor_local
 end
-@everywhere const delta_r             = $(ones(R_full))
-@everywhere const Weight_matrix       = $(nothing)
+@everywhere const delta_r             = $(ones(R_full)) # Downstream preference shifter. 
+@everywhere const Weight_matrix       = $(nothing)      # Weight matrix for the SMM. 
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.04   # (s,r) pairs with γ_{rs} < threshold are zeroed out
+gamma_threshold = 0.04   # (s,r) pairs with γ_{rs} <= threshold are zeroed out
 NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
@@ -128,11 +128,15 @@ println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
 @everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)
 # ──────────────────────────────────────────────────────────────────────────
 
+
+# T-mask will be used to isolate the sector-region on which to estimate comparative advantage. 
 T_mask_local         = vec(permutedims(X_rs_local)) .> 0 # s-major (region-minor): identical to T_mask_moment_local / γ-moment convention
 T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
 @everywhere const T_MASK_MOMENT = $T_mask_moment_local
 
+
+# Bellow, we flatten the vector and store the sector and region coordinates of the active regions. 
 good_indices_local        = findall(permutedims(reshape(T_mask_local, R_full, S_)))  # s-major flat → (R,S) → (S,R)
 n_good_local              = length(good_indices_local)
 GOOD_S_local              = [ci[1] for ci in good_indices_local]
@@ -156,6 +160,7 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 
 
 # Reference region per sector: largest empirical sourcing share among active regions
+# Those regions will always have T equal to one after unpack-parameters so we don't need to estimate them. 
 T_REF_REGION_local = Vector{Int}(undef, S_)
 for s in 1:S_
     idxs = SECTOR_GOOD_INDICES_local[s]
@@ -189,6 +194,8 @@ n_reg = length(reg_coef_local)   # actual moment count from loaded data
 @everywhere N_REG = $(n_reg)
 @everywhere N_TAU = $(n_tau)
 
+
+# The starting point of the optimization for the comparative advantage:
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
     idxs = SECTOR_GOOD_INDICES_local[s]
@@ -242,6 +249,8 @@ N_moments = sum(moment_mask_local)
 @everywhere const empirical_moments  = $(empirical_moments_local)
 @everywhere const K_max              = $(50)
 
+
+# BLOCK_RANGES : Length of each block of moment. 
 BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, moment_mask_local)
 @everywhere const BLOCK_RANGES = $BLOCK_RANGES_local
 @everywhere const BLOCK_NAMES  = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
