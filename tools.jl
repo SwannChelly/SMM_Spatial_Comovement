@@ -1552,7 +1552,7 @@ function compute_jacobian(theta::Vector{Float64};
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
                           step_rel::Float64 = 1e-2,
                           step_abs::Float64 = 1e-8,
-                          t_log_step_rel = 1e-5,   # step séparé pour colonnes T
+                          t_log_step_rel = 1e-1,   # step séparé pour colonnes T
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
                           base_seed::Int = 0,
