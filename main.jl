@@ -57,8 +57,8 @@ K = 5
 
 run_step1 = false#true
 run_step2 = true
-run_step3 = false
-run_step4 = false
+run_step3 = true
+run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
@@ -133,9 +133,9 @@ if run_step2
     println("STEP 2: Building efficient weight matrix (K=$K_sim)")
     println("="^70)
 
-    #W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
-    #                                     K=K_sim, output_folder=output_folder)
-    W_step3 = NPZ.npzread(step2_W_path)
+    W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
+                                         K=K_sim, output_folder=output_folder)
+    #W_step3 = NPZ.npzread(step2_W_path)
     # Jacobian at θ̂_1 — identified parameters only
     J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
         theta_hat_1;

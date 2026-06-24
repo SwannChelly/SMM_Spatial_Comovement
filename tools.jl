@@ -1573,7 +1573,7 @@ function compute_jacobian(theta::Vector{Float64};
     # (Fréchet scale T^{1/θ}, shares T(wτ)^{-θ}/Φ), so a scale-invariant log step is
     # both justified and immune to the additive floor. Layout is
     # [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T], so the first T flat index is:
-    T_first = 1 + S + R_downstream + N_TAU + 1
+    T_first = 1 + S + R_downstream + N_TAU #+1 ( uncomment to remove alpha)
     use_log = [t_log_step && (indices[k] >= T_first) for k in 1:n_perturb]
     # A stray zero/negative in the log set would give exp-steps of 0 or a 1/θ blow-up;
     # T_MASK already excludes zeros, so this should never fire — fail loudly if it does.
@@ -1846,14 +1846,18 @@ function compute_jacobian(theta::Vector{Float64};
                 "mean=$(round(mean_e, sigdigits=4))  " *
                 "noise=$(isnan(noise_ratio) ? "n/a" : string(round(noise_ratio, sigdigits=3)))")
     end
-    α_col = findfirst(l -> startswith(l, "alpha"), PARAM_LABELS[jacobian_param_indices])
-    for (i, m) in enumerate(BLOCK_RANGES[4])
-        μ = J1_elast[m, α_col]; σ = J1_elast_sd[m, α_col]
-        @printf("reg_coef[%d] vs α : elast=%.4e  sd=%.4e  ratio=%.2f\n", i, μ, σ, σ/abs(μ))
+    α_col = findfirst(l -> startswith(l, "alpha"), PARAM_LABELS)
+    if α_col !== nothing
+        for (i, m) in enumerate(BLOCK_RANGES[4])
+            μ = J_elast[m, α_col]; σ = J_elast_sd[m, α_col]
+            @printf("reg_coef[%d] vs α : elast=%.4e  sd=%.4e  ratio=%.2f\n",
+                    i, μ, σ, abs(μ) > 1e-300 ? σ/abs(μ) : NaN)
+        end
     end
 
     return J, J_elast, J_sd, J_elast_sd
 end
+
 
 
 """

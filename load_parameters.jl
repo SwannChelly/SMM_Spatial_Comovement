@@ -55,7 +55,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(10000)
+@everywhere const N_rho               = $(2000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
@@ -91,7 +91,7 @@ end
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.04   # (s,r) pairs with γ_{rs} <= threshold are zeroed out
+gamma_threshold = 0.01   # (s,r) pairs with γ_{rs} <= threshold are zeroed out
 NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
