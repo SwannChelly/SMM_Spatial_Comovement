@@ -327,7 +327,7 @@ Weight_matrix_custom_local = Diagonal(w_vec)
 # main_gmm.jl) may define `draw_method`; default to :qmc (stratified uniform, flat
 # weights — unbiased for the min-coupled moments). :mc and :is are alternatives.
 draw_method_local = (@isdefined(draw_method)) ? draw_method : :qmc
-@assert draw_method_local in (:qmc, :mc, :is) "draw_method must be :qmc, :mc or :is, got :$draw_method_local"
+@assert draw_method_local in (:qmc, :mc, :is, :sobol) "draw_method must be :qmc, :mc, :is or :sobol, got :$draw_method_local"
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
 
 println("Generating draws (method = :$DRAW_METHOD)...")

@@ -314,17 +314,106 @@ end
 
 
 """
+    sobol_scrambled_net(N, d, rng) -> Matrix{Float64} (N × d)
+
+A `d`-dimensional Sobol net of `N` points in (0, 1), randomised by a base-2
+DIGITAL SHIFT drawn from the explicit `rng`. Returns an `N × d` matrix (points in
+rows) so callers index `[point, dim]`.
+
+Why a digital shift rather than QuasiMonteCarlo's `OwenScramble`: the goal is a
+randomisation that (a) consumes an EXPLICIT `rng` so the design is reproducible
+under a frozen seed (PSO determinism) and independent across Σ_sim replications,
+and (b) NEVER calls `Random.seed!` globally. QuasiMonteCarlo's scramble draws
+from the global RNG and cannot be seeded per call without a global reseed, so we
+keep the deterministic Sobol net from QuasiMonteCarlo and apply our own
+rng-consuming randomisation. A base-2 digital shift (XOR of the fixed-point bits
+with a random per-dimension mask) PRESERVES the (t, m, s)-net equidistribution
+and dissolves the Sobol origin (the all-zeros first point), so no coordinate
+collapses to u = 0.
+"""
+function sobol_scrambled_net(N::Int, d::Int, rng::AbstractRNG)
+    pts   = QuasiMonteCarlo.sample(N, zeros(d), ones(d), SobolSample())  # d × N in [0,1]
+    U     = Matrix{Float64}(undef, N, d)
+    nbits = 52
+    scale = Float64(2)^nbits
+    mask  = (UInt64(1) << nbits) - UInt64(1)
+    @inbounds for j in 1:d
+        shift = rand(rng, UInt64) & mask            # per-dim digital shift, from rng
+        for i in 1:N
+            m       = floor(UInt64, pts[j, i] * scale) & mask
+            U[i, j] = (m ⊻ shift) / scale
+        end
+    end
+    return U
+end
+
+
+"""
+    generate_sobol_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG,
+                         seed=42) -> (U, W)
+
+Sobol-based draws on (0, 1) for the Fréchet inverse-CDF transform, with FLAT
+weights (like `:qmc`). Each SECTOR's active (sector, region) columns form one
+Sobol net of dimension `d = length(SECTOR_GOOD_INDICES[s])`, scrambled by a
+per-sector digital shift consumed from the master rng. Building one net per
+sector (rather than a single global `n_good`-dim net) keeps the dimension low
+where the Ricardian `min_r c_r` interaction actually lives — within a sector,
+across its regions — which is where the net's superior equidistribution pays off;
+distinct sectors draw distinct shifts and are therefore decorrelated.
+
+Returns `U::Matrix (N_rho × n_good)` and the flat weight `W = fill(1/N_rho, …)`.
+The flat weight makes `solve_network`'s winner-weight shortcut EXACT, so this is
+unbiased for the min-coupled moments (same property as `:qmc`).
+
+  - `randomise=false` (optimisation): master = `MersenneTwister(seed)` (frozen) →
+    deterministic per call (PSO-safe). NOTE: this is a Sobol net at a FROZEN
+    scramble seed, not a midpoint rule.
+  - `randomise=true` (Σ_sim): master = supplied `rng` → independent scrambles per
+    replication (pass `MersenneTwister(k)` for replication k).
+"""
+function generate_sobol_draws(N_rho::Int, n_good::Int;
+                              randomise::Bool=false,
+                              rng::AbstractRNG=Random.GLOBAL_RNG,
+                              seed::Int=42)
+    U      = Matrix{Float64}(undef, N_rho, n_good)
+    lo, hi = eps(), 1.0 - eps()
+    master = randomise ? rng : MersenneTwister(seed)
+    covered = 0
+    @inbounds for s in 1:length(SECTOR_GOOD_INDICES)
+        g_indices = SECTOR_GOOD_INDICES[s]
+        d = length(g_indices)
+        d == 0 && continue
+        net = sobol_scrambled_net(N_rho, d, master)   # N_rho × d, scrambled from master
+        for (k, g) in enumerate(g_indices)
+            for rho in 1:N_rho
+                U[rho, g] = clamp(net[rho, k], lo, hi)
+            end
+        end
+        covered += d
+    end
+    @assert covered == n_good "generate_sobol_draws: covered $covered active goods != n_good $n_good"
+    # Flat weight MATRIX (N_rho × n_good): winner-weight shortcut exact ⇒ unbiased.
+    W = fill(1.0 / N_rho, N_rho, n_good)
+    return U, W
+end
+
+
+"""
     generate_draws(N_rho, n_good, method::Symbol; randomise=false,
                    rng=Random.GLOBAL_RNG, a=0.5, verbose=false) -> (U, W::Matrix)
 
-Unified draw dispatcher. `method ∈ (:qmc, :mc, :is)`:
+Unified draw dispatcher. `method ∈ (:qmc, :mc, :is, :sobol)`:
   - `:qmc` (default everywhere) — stratified uniform, flat weights, decorrelated
     columns. Unbiased for the min-coupled moments; weakly beats `:mc`.
   - `:mc`  — i.i.d. uniform, flat weights. `randomise=false` ⇒ deterministic
     (`MersenneTwister(0)`) for PSO; `randomise=true` ⇒ supplied `rng`.
   - `:is`  — per-column importance sampling (tilt `a`). BIASED for min-coupled
     moments; retain only for `reg_coef` tail resolution. `a`/`verbose` apply only
-    here (ignored for `:qmc`/`:mc`).
+    here (ignored for the other methods).
+  - `:sobol` — per-sector digitally-shifted Sobol net, flat weights. Same
+    unbiasedness as `:qmc` (flat weights ⇒ winner-weight shortcut exact); aims for
+    lower Σ_sim variance on thick (multi-region) sectors. `randomise=false` ⇒
+    frozen scramble seed (PSO-safe); `randomise=true` ⇒ supplied `rng`.
 
 W is always an `(N_rho × n_good)` matrix, so every `[rho, g]` consumer is
 untouched regardless of method — the invariant that confines the method switch to
@@ -343,8 +432,11 @@ function generate_draws(N_rho::Int, n_good::Int, method::Symbol;
     elseif method === :is
         return generate_is_draws(N_rho, n_good; randomise=randomise, rng=rng,
                                  a=a, verbose=verbose)
+    elseif method === :sobol
+        return generate_sobol_draws(N_rho, n_good; randomise=randomise, rng=rng,
+                                    seed=42)
     else
-        error("Unknown draw method :$method (choose :qmc, :mc, or :is)")
+        error("Unknown draw method :$method (choose :qmc, :mc, :is, or :sobol)")
     end
 end
 

@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol]
 #
 # Examples:
 #   ./run.sh aero
@@ -17,13 +17,13 @@
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol]"
     echo "  industry : aero, auto, car, both"
     echo "  --n_coef : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau  : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
     echo "  --mode   : smm (default) or gmm (analytical, faster, exact SEs)"
     echo "  --n_quad : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
-    echo "  --draws  : Fréchet draw method: qmc (default), mc, or is"
+    echo "  --draws  : Fréchet draw method: qmc (default), mc, is, or sobol"
     exit 1
 fi
 
@@ -35,7 +35,7 @@ N_COEF="4"
 N_TAU=""       # empty = default to n_coef inside Julia
 MODE="smm"
 N_QUAD="200"
-DRAWS="qmc"    # Fréchet draw method: qmc (default), mc, is
+DRAWS="qmc"    # Fréchet draw method: qmc (default), mc, is, sobol
 
 for arg in "$@"; do
     case "$arg" in
@@ -59,8 +59,8 @@ for val in "$N_COEF" "$N_TAU"; do
     fi
 done
 
-if [ "$DRAWS" != "qmc" ] && [ "$DRAWS" != "mc" ] && [ "$DRAWS" != "is" ]; then
-    echo "Error: --draws must be qmc, mc, or is (got: $DRAWS)"
+if [ "$DRAWS" != "qmc" ] && [ "$DRAWS" != "mc" ] && [ "$DRAWS" != "is" ] && [ "$DRAWS" != "sobol" ]; then
+    echo "Error: --draws must be qmc, mc, is, or sobol (got: $DRAWS)"
     exit 1
 fi
 

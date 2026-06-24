@@ -51,7 +51,7 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 # the min-coupled moments), :mc, or :is. Picked up by load_parameters.jl and
 # forwarded to every draw-generation site (U_DRAWS, Σ_sim, Jacobian replications).
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :qmc
-@assert draw_method in (:qmc, :mc, :is) "draw method must be qmc|mc|is, got :$draw_method"
+@assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
 
 K = 5
 
