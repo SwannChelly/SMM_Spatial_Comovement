@@ -1562,6 +1562,7 @@ function compute_jacobian(theta::Vector{Float64};
                           t_log_step::Bool = true,
                           check_symmetry::Bool = true,
                           richardson_check::Bool = true,
+                          richardson_rel_tol = 0.05,
                           draw_method::Symbol = DRAW_METHOD)
 
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
@@ -1746,20 +1747,73 @@ function compute_jacobian(theta::Vector{Float64};
     if richardson_check
         J_rich = dropdims(mean(cat([rep_results[k][5] for k in 1:K]...; dims=3); dims=3); dims=3)
         log_cols = findall(use_log)
+
+        # Moment→sector map (γ block only; 0 elsewhere) and param→sector map, both
+        # rebuilt from structural consts so the diagnostic is self-contained.
+        # Unmasked layout: [labor(1) | industry(S) | pi(R_d) | reg(N_REG) | γ(S*R)],
+        # γ slot = (s-1)*R + r (s-major, region-minor) — same convention as T.
+        gamma_full_offset = 1 + S + R_downstream + N_REG
+        n_before_gamma    = count(MOMENT_MASK[1:gamma_full_offset])
+        moment_sector     = zeros(Int, size(J, 1))
+        let lg = 0
+            for s in 1:S, r in 1:R
+                MOMENT_MASK[gamma_full_offset + (s-1)*R + r] || continue
+                lg += 1
+                moment_sector[n_before_gamma + lg] = s
+            end
+        end
+        active_T_flat = findall(T_MASK)                  # s-major active order
+        param_sector  = idx -> begin                     # 0 for non-T params
+            idx < T_first && return 0
+            t = idx - T_first + 1
+            (t < 1 || t > length(active_T_flat)) && return 0
+            ((active_T_flat[t] - 1) ÷ R) + 1
+        end
+
         println("\nRichardson step-doubling check (J(δ) vs J(2δ), T columns):")
+        println("  [worst-gap moment, its sector vs the param's, and |J| there;")
+        println("   a large gap on a ~0 CROSS-sector derivative is a benign artefact]")
         if isempty(log_cols)
             println("  (no log columns)")
         else
+            tot_flag = 0; tot_flag_insec = 0
             for col in log_cols
-                num = abs.(J[:, col] .- J_rich[:, col])
-                den = max.(abs.(J[:, col]), 1e-30)
-                rel = num ./ den
-                mm  = argmax(rel)
+                s_par = param_sector(indices[col])
+                num   = abs.(J[:, col] .- J_rich[:, col])
+                den   = max.(abs.(J[:, col]), 1e-30)
+                rel   = num ./ den
+                mm    = argmax(rel)
+
+                s_mom = moment_sector[mm]
+                cls   = s_mom == 0     ? "non-γ" :
+                        s_mom == s_par ? "IN-sector" : "CROSS-sector"
+                absJ   = abs(J[mm, col])
                 sd_ref = K > 1 ? J_sd[mm, col] : NaN
-                println("  param $(indices[col]): max rel gap " *
-                        "$(round(rel[mm], sigdigits=3)) at moment $mm " *
-                        "(J_sd there = $(isnan(sd_ref) ? "n/a" : string(round(sd_ref, sigdigits=3)))).")
+
+                # Contrast: typical identifying (in-sector γ) derivative magnitude.
+                in_rows = findall(==(s_par), moment_sector)
+                med_in  = isempty(in_rows) ? NaN : median(abs.(J[in_rows, col]))
+                ratio   = (isnan(med_in) || med_in == 0) ? NaN : absJ / med_in
+
+                flagged      = findall(rel .> richardson_rel_tol)
+                n_flag       = length(flagged)
+                n_flag_insec = count(i -> moment_sector[i] == s_par, flagged)
+                tot_flag      += n_flag; tot_flag_insec += n_flag_insec
+
+                @printf("  param %d [sector %d]: max rel gap %s at moment %d [%s]  |J|=%s",
+                        indices[col], s_par, string(round(rel[mm], sigdigits=3)),
+                        mm, cls, string(round(absJ, sigdigits=3)))
+                isnan(med_in) || @printf(" (in-sec med |J|=%s, ratio %s)",
+                        string(round(med_in, sigdigits=3)),
+                        isnan(ratio) ? "n/a" : string(round(ratio, sigdigits=2)))
+                @printf(";  J_sd=%s;  flagged>%g: %d (%d in-sector)\n",
+                        isnan(sd_ref) ? "n/a" : string(round(sd_ref, sigdigits=3)),
+                        richardson_rel_tol, n_flag, n_flag_insec)
             end
+            verdict = tot_flag_insec == 0 ?
+                "✓ tous les moments flaggés sont CROSS-sector / non-γ (T identifié par son seul secteur)" :
+                "⚠ $tot_flag_insec / $tot_flag moments flaggés sont IN-sector — l'écart n'est PAS purement un artefact hors-secteur"
+            println("  → $verdict")
         end
     end
 
@@ -1791,6 +1845,11 @@ function compute_jacobian(theta::Vector{Float64};
         println("  $(rpad(name, 10)) : max=$(round(max_e, sigdigits=4))  " *
                 "mean=$(round(mean_e, sigdigits=4))  " *
                 "noise=$(isnan(noise_ratio) ? "n/a" : string(round(noise_ratio, sigdigits=3)))")
+    end
+    α_col = findfirst(l -> startswith(l, "alpha"), PARAM_LABELS[jacobian_param_indices])
+    for (i, m) in enumerate(BLOCK_RANGES[4])
+        μ = J1_elast[m, α_col]; σ = J1_elast_sd[m, α_col]
+        @printf("reg_coef[%d] vs α : elast=%.4e  sd=%.4e  ratio=%.2f\n", i, μ, σ, σ/abs(μ))
     end
 
     return J, J_elast, J_sd, J_elast_sd
