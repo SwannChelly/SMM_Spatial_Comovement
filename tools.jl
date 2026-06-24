@@ -1552,6 +1552,7 @@ function compute_jacobian(theta::Vector{Float64};
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
                           step_rel::Float64 = 1e-2,
                           step_abs::Float64 = 1e-8,
+                          t_log_step_rel = 1e-5,   # step séparé pour colonnes T
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
                           base_seed::Int = 0,
@@ -1559,8 +1560,8 @@ function compute_jacobian(theta::Vector{Float64};
                           analytical::Bool = false,
                           n_quad::Int = 200,
                           t_log_step::Bool = true,
-                          check_symmetry::Bool = false,
-                          richardson_check::Bool = false,
+                          check_symmetry::Bool = true,
+                          richardson_check::Bool = true,
                           draw_method::Symbol = DRAW_METHOD)
 
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
@@ -1585,7 +1586,7 @@ function compute_jacobian(theta::Vector{Float64};
 
     # Additive step (used for non-log columns); δ is the dimensionless log step.
     h = [max(abs(theta[indices[k]]) * step_rel, step_abs) for k in 1:n_perturb]
-    δ = fill(step_rel, n_perturb)
+    δ = [use_log[k] ? t_log_step_rel : step_rel for k in 1:n_perturb]
 
     # Pre-build perturbed parameter vectors (shared across replications)
     plus_params  = [copy(theta) for _ in 1:n_perturb]
