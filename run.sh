@@ -23,7 +23,7 @@ if [ -z "$1" ]; then
     echo "  --n_tau  : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
     echo "  --mode   : smm (default) or gmm (analytical, faster, exact SEs)"
     echo "  --n_quad : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
-    echo "  --draws  : Fréchet draw method: qmc (default), mc, is, or sobol"
+    echo "  --draws  : Fréchet draw method: sobol (default), mc, is, or sobol"
     exit 1
 fi
 
@@ -35,7 +35,7 @@ N_COEF="4"
 N_TAU=""       # empty = default to n_coef inside Julia
 MODE="smm"
 N_QUAD="200"
-DRAWS="qmc"    # Fréchet draw method: qmc (default), mc, is, sobol
+DRAWS="sobol"    # Fréchet draw method: sobol (default), mc, is, qmc
 
 for arg in "$@"; do
     case "$arg" in

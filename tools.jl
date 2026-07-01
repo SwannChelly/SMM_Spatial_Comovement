@@ -37,11 +37,11 @@ function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::I
         expanding_beta = [[x] for x in range_beta]
     elseif n_beta == 4
         expanding_beta = [
-            [i, j, k,k]
+            [i, k, k,k]
             for i in range_beta
-            for j in range_beta
             for k in range_beta
-            if i <= j <= k
+            for k in range_beta
+            if i  <= k
         ]
     elseif n_beta == 5
         expanding_beta = [
@@ -1177,7 +1177,7 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
     # File selection keyed on N_REG (the moment count, not the τ-parameter count N_TAU).
     # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
-    sigma_file = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
+    sigma_file = N_REG == 1 ? "Sigma_beta_gamma_1_f.npy" : "Sigma_beta_gamma_f.npy"
     Sigma_full = NPZ.npzread(joinpath(input_folder, sigma_file))
 
     # ── Reconcile file size with the (possibly thresholded) active set ───────
@@ -1550,9 +1550,9 @@ Both regimes store derivatives in raw units `∂m/∂θ`; `J_elast` is derived f
 function compute_jacobian(theta::Vector{Float64};
                           K::Int = 50,
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
-                          step_rel::Float64 = 1e-2,
+                          step_rel::Float64 = 1e-4,
                           step_abs::Float64 = 1e-8,
-                          t_log_step_rel = 1e-1,   # step séparé pour colonnes T
+                          t_log_step_rel = 1e-3,   # step séparé pour colonnes T
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
                           base_seed::Int = 0,
@@ -1564,7 +1564,7 @@ function compute_jacobian(theta::Vector{Float64};
                           richardson_check::Bool = true,
                           richardson_rel_tol = 0.05,
                           draw_method::Symbol = DRAW_METHOD)
-
+    print(DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
 

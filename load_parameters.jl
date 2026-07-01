@@ -91,7 +91,7 @@ end
 
 # ── Gamma threshold: drop small sourcing-share pairs from active set ─────
 # Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.01   # (s,r) pairs with γ_{rs} <= threshold are zeroed out
+gamma_threshold = 0.0   # (s,r) pairs with γ_{rs} <= threshold are zeroed out
 NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
@@ -326,7 +326,7 @@ Weight_matrix_custom_local = Diagonal(w_vec)
 # Draw method for the Fréchet inverse-CDF transform. The entry point (main.jl /
 # main_gmm.jl) may define `draw_method`; default to :qmc (stratified uniform, flat
 # weights — unbiased for the min-coupled moments). :mc and :is are alternatives.
-draw_method_local = (@isdefined(draw_method)) ? draw_method : :qmc
+draw_method_local = (@isdefined(draw_method)) ? draw_method : :sobol
 @assert draw_method_local in (:qmc, :mc, :is, :sobol) "draw_method must be :qmc, :mc, :is or :sobol, got :$draw_method_local"
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
 

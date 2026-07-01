@@ -50,14 +50,14 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 # Draw method for the Fréchet inverse-CDF transform: :qmc (default, unbiased for
 # the min-coupled moments), :mc, or :is. Picked up by load_parameters.jl and
 # forwarded to every draw-generation site (U_DRAWS, Σ_sim, Jacobian replications).
-draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :qmc
+draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
 @assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
 
-K = 5
+K = 20
 
 run_step1 = false#true
-run_step2 = true
-run_step3 = true
+run_step2 = false
+run_step3 = false
 run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior

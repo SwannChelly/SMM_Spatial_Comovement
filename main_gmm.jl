@@ -59,10 +59,10 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 @assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
 K = 10   # PSO loops
 
-run_step1 = false
-run_step2 = false
-run_step3 = false
-run_step4 = false
+run_step1 = true
+run_step2 = true
+run_step3 = true
+run_step4 = true
 
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")
