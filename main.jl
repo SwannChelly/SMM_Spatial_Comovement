@@ -53,11 +53,11 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
 @assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
 
-K = 20
+K = 5
 
-run_step1 = false#true
-run_step2 = false
-run_step3 = false
+run_step1 = true#true
+run_step2 = true
+run_step3 = true
 run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
@@ -275,7 +275,7 @@ if run_step4
         output_folder = output_folder,
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
-        K             = 50,
+        K             = 500,
         step_rel      = 1e-4,
         step_abs      = 1e-9,
         base_seed     = 1_000_000

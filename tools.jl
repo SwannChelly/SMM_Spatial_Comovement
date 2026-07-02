@@ -1552,7 +1552,7 @@ function compute_jacobian(theta::Vector{Float64};
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
                           step_rel::Float64 = 1e-4,
                           step_abs::Float64 = 1e-8,
-                          t_log_step_rel = 1e-3,   # step séparé pour colonnes T
+                          t_log_step_rel = 1e-2,   # step séparé pour colonnes T
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
                           base_seed::Int = 0,
@@ -1573,7 +1573,7 @@ function compute_jacobian(theta::Vector{Float64};
     # (Fréchet scale T^{1/θ}, shares T(wτ)^{-θ}/Φ), so a scale-invariant log step is
     # both justified and immune to the additive floor. Layout is
     # [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T], so the first T flat index is:
-    T_first = 1 + S + R_downstream + N_TAU #+1 ( uncomment to remove alpha)
+    T_first = 1 + S + R_downstream #+ N_TAU +1 ( uncomment to remove alpha)
     use_log = [t_log_step && (indices[k] >= T_first) for k in 1:n_perturb]
     # A stray zero/negative in the log set would give exp-steps of 0 or a 1/θ blow-up;
     # T_MASK already excludes zeros, so this should never fire — fail loudly if it does.
@@ -1958,7 +1958,7 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     Var_r_diag = diag(Omega) .- diag(Var_m)
     n_clipped   = count(Var_r_diag .< 0.0)
     if n_clipped > 0
-        @warn "Clipping $n_clipped negative residual variances to 0."
+        @warn "$n_clipped negative residual variances to 0."
     end
     se_m_resid = sqrt.(max.(Var_r_diag, 0.0))
 
