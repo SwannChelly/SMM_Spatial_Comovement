@@ -55,9 +55,9 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 
 K = 5
 
-run_step1 = true#true
-run_step2 = true
-run_step3 = true
+run_step1 = false#true
+run_step2 = false
+run_step3 = false
 run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
@@ -277,7 +277,7 @@ if run_step4
         output_folder = output_folder,
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
-        K             = 500,
+        K             = 50,
         step_rel      = 1e-4,
         step_abs      = 1e-9,
         base_seed     = 1_000_000
@@ -377,6 +377,15 @@ if run_step4
             ad_validate   = true,
             n_quad        = n_quad)
         J_ana_gb   = J_ana[gb_indices, gb_cols]
+
+
+        screen_T_identification(theta_hat_2;
+            J            = J_ana_gb,
+            W            = W_step3,
+            param_labels = PARAM_LABELS[gb_cols],
+            label        = "SMM step4 θ̂_2 ana")
+
+
         Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
         Sigma_sim  = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_sim.npy"))
         run_2x2_inference_test(

@@ -2742,10 +2742,19 @@ function screen_T_identification(params;
     # sectors whose M^s ratios are healthy points to mechanism 1 (inter-sectoral).
     if !isempty(T_evec_support)
         ms_ratio = Dict(o.sector => o.eval_min / max(o.eval_max, 1e-300) for o in out)
-        @printf("%sv_min support  vs  M^s λ_min/λ_max:\n", pfx)
+        ms_min   = Dict(o.sector => o.eval_min for o in out)
+        ms_max   = Dict(o.sector => o.eval_max for o in out)
+
+        @printf("%sv_min support  vs  M^s spectrum:\n", pfx)
         for (i, s) in enumerate(T_evec_sectors)
-            @printf("%s    sector %d: support=%.3f  sign=%+d  M^s ratio=%.4e\n",
-                    pfx, s, T_evec_support[i], T_evec_signs[i], get(ms_ratio, s, NaN))
+            @printf("%s    sector %d: support=%.3f  sign=%+d  λ_min=%.4e  λ_max=%.4e  ratio=%.4e\n",
+                    pfx,
+                    s,
+                    T_evec_support[i],
+                    T_evec_signs[i],
+                    get(ms_min, s, NaN),
+                    get(ms_max, s, NaN),
+                    get(ms_ratio, s, NaN))
         end
     end
 
