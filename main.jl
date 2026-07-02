@@ -209,6 +209,8 @@ if run_step2
             step_abs      = 1e-9,
             base_seed     = 3_000_000,
             analytical    = true,
+            analytical_ad = true,   # exact closed-form AD ⇒ the Jacobian channel is FD-noise-free
+            ad_validate   = true,
             n_quad        = n_quad)
         J_ana_gb   = J_ana[gb_indices, gb_cols]
         Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
@@ -371,6 +373,8 @@ if run_step4
             step_abs      = 1e-9,
             base_seed     = 4_000_000,
             analytical    = true,
+            analytical_ad = true,   # exact closed-form AD ⇒ the Jacobian channel is FD-noise-free
+            ad_validate   = true,
             n_quad        = n_quad)
         J_ana_gb   = J_ana[gb_indices, gb_cols]
         Sigma_data = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))

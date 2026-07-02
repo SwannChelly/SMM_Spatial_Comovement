@@ -174,8 +174,8 @@ if run_step2
     NPZ.npzwrite(joinpath(step2_folder, "W_eff.npy"), W_eff)
     println("  W_eff ($(N_gb)×$(N_gb)) saved to step2/.")
 
-    # Jacobian at θ̂_1 (analytical, K=1 deterministic)
-    println("\nComputing Jacobian at θ̂_1 (analytical, K=1)...")
+    # Jacobian at θ̂_1 — exact closed-form via forward-mode AD (no FD step).
+    println("\nComputing Jacobian at θ̂_1 (analytical, exact AD)...")
     J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
         theta_hat_1;
         param_indices = jacobian_param_indices,
@@ -187,6 +187,8 @@ if run_step2
         step_abs      = 1e-9,
         base_seed     = 0,
         analytical    = true,
+        analytical_ad = true,
+        ad_validate   = true,
         n_quad        = n_quad
     )
 
@@ -294,8 +296,8 @@ if run_step4
     ndims(theta_hat_2) > 1 && (theta_hat_2 = theta_hat_2[:, 1])
     test_analytical_vs_simulated(theta_hat_2; N_rho_test=N_rho, n_quad=200)
 
-    # Full-column Jacobian at θ̂_2 (saved for diagnostics, as in main.jl)
-    println("\nComputing Jacobian at θ̂_2 (analytical, K=1)...")
+    # Full-column Jacobian at θ̂_2 — exact closed-form via forward-mode AD.
+    println("\nComputing Jacobian at θ̂_2 (analytical, exact AD)...")
     J2, J2_elast, J2_sd, J2_elast_sd = compute_jacobian(
         theta_hat_2;
         param_indices = jacobian_param_indices,
@@ -307,6 +309,8 @@ if run_step4
         step_abs      = 1e-9,
         base_seed     = 1_000_000,
         analytical    = true,
+        analytical_ad = true,
+        ad_validate   = true,
         n_quad        = n_quad
     )
 
@@ -395,7 +399,7 @@ if run_step4
         println(io, "GMM mode: closed-form EK moments (n_quad=$n_quad for reg_coef).")
         println(io, "Σ_sim = 0 by construction → W_eff = Σ_data^{-1}.")
         println(io, "SEs are exact delta-method without Murphy-Topel correction.")
-        println(io, "Jacobian computed analytically (single FD replication, K=1).")
+        println(io, "Jacobian computed analytically via forward-mode AD (ForwardDiff, exact ∂m/∂θ).")
     end
     println("Step 4 inference complete. Results in step3/inference/.")
 end

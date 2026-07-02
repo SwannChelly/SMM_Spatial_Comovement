@@ -18,6 +18,7 @@ Pkg.add("Parquet")
 # Required for GMM analytical mode (model_analytical.jl)
 Pkg.add("SpecialFunctions")   # gamma function Γ(·)
 Pkg.add("FastGaussQuadrature") # gausslegendre(n) for quadrature
+Pkg.add("ForwardDiff")         # exact analytical Jacobian via forward-mode AD
 
 
 

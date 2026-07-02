@@ -475,7 +475,9 @@ function unpack_params(params)
     beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)]
 
     T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
-    T_full = zeros(R * S)
+    # eltype(params) (not a hard-coded Float64) so ForwardDiff Duals survive the
+    # scatter into T_full — byte-identical for Float64 params.
+    T_full = zeros(eltype(params), R * S)
     T_full[T_MASK] = T_reduced
     T_mat = permutedims(reshape(T_full, R, S))   # s-major flat (R,S) → (S,R)
 
@@ -500,7 +502,9 @@ Build iceberg trade cost matrix from distance bin coefficients.
 Returns matrix of size (R, R). Trade costs are identical across sectors.
 """
 function build_tau(beta)
-    tau = ones(R, R_downstream)
+    # eltype(beta) keeps ForwardDiff Duals through the τ construction; identical
+    # to ones(Float64, …) for the Float64 production path.
+    tau = ones(eltype(beta), R, R_downstream)
     if N_TAU == 1
         # Power-law: τ_{r',r} = max(d, 1)^α = exp(α · log(max(d, 1)))
         for r_prime in 1:R, r_d in 1:R_downstream

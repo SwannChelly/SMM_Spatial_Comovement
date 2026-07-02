@@ -1546,6 +1546,18 @@ Both regimes store derivatives in raw units `∂m/∂θ`; `J_elast` is derived f
                     more than 10× the across-replication `J_sd` (nonlinear/clamped regime).
 - `richardson_check`: recompute T columns at `2δ` and report the relative gap to the `δ`
                     estimate (default `false`); diagnostic only, returned `J` is unchanged.
+
+# Exact analytical Jacobian (AD)
+- `analytical_ad` : with `analytical=true`, compute the closed-form Jacobian by
+                    forward-mode automatic differentiation (`ForwardDiff`) instead of
+                    finite differences. This is the **true** `∂m/∂θ` of the analytical
+                    moments — machine precision, no FD step, no truncation error. `K`,
+                    `base_seed`, and the symmetry/Richardson diagnostics are ignored
+                    (the moments are deterministic); `J_sd` is exactly zero. Same
+                    return shape and saved files as the FD path, so it is a drop-in.
+- `ad_validate`   : (with `analytical_ad=true`) run the correctness gates — compute the
+                    FD analytical Jacobian once and compare (expected `O(δ²)` gap), then
+                    the γ_ls adding-up structural test `Σ_r ∂γ_{r,s}/∂θ = 0`. Print-only.
 """
 function compute_jacobian(theta::Vector{Float64};
                           K::Int = 50,
@@ -1558,6 +1570,8 @@ function compute_jacobian(theta::Vector{Float64};
                           base_seed::Int = 0,
                           output_subdir::String = "step2",
                           analytical::Bool = false,
+                          analytical_ad::Bool = false,
+                          ad_validate::Bool = false,
                           n_quad::Int = 200,
                           t_log_step::Bool = true,
                           check_symmetry::Bool = true,
@@ -1567,6 +1581,67 @@ function compute_jacobian(theta::Vector{Float64};
     print(DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
+
+    # ── Exact analytical Jacobian via forward-mode AD (no finite-difference step) ──
+    # When both flags are set, ForwardDiff differentiates the closed-form analytical
+    # moment vector directly — eliminating the FD truncation error that the plain
+    # `analytical=true` FD path still carries. Deterministic ⇒ K, base_seed, and the
+    # symmetry/Richardson diagnostics are irrelevant here; J_sd is exactly zero.
+    if analytical && analytical_ad
+        println("Computing EXACT analytical Jacobian via ForwardDiff AD " *
+                "($(n_perturb) params, no FD step)...")
+        flush(stdout)
+        J  = analytical_jacobian_ad(theta, indices; n_quad=n_quad)
+        m0 = moments_vec_analytical(theta; n_quad=n_quad)
+        N_moments = length(m0)
+        @assert size(J, 1) == N_moments (
+            "AD Jacobian row count $(size(J,1)) ≠ masked moment count $N_moments")
+
+        if !all(isfinite, J)
+            bad = findall(!isfinite, J)
+            error("Non-finite AD analytical Jacobian: $(length(bad)) entries; first at " *
+                  "(moment=$(bad[1][1]), param=$(indices[bad[1][2]])).")
+        end
+
+        J_elast = zeros(N_moments, n_perturb)
+        for kk in 1:n_perturb, mm in 1:N_moments
+            if abs(m0[mm]) > 1e-12 && abs(theta[indices[kk]]) > 1e-12
+                J_elast[mm, kk] = (theta[indices[kk]] / m0[mm]) * J[mm, kk]
+            end
+        end
+        J_sd       = zeros(size(J))
+        J_elast_sd = zeros(size(J_elast))
+
+        # Optional correctness gates (plan steps 4–5): AD-vs-FD + γ adding-up.
+        if ad_validate
+            J_fd, _, _, _ = compute_jacobian(theta;
+                K = 1, param_indices = indices, step_rel = step_rel, step_abs = step_abs,
+                t_log_step_rel = t_log_step_rel, output_folder = output_folder,
+                filename = replace(filename, ".npy" => "_fd_check.npy"),
+                output_subdir = output_subdir, analytical = true, analytical_ad = false,
+                n_quad = n_quad, t_log_step = t_log_step,
+                check_symmetry = false, richardson_check = false)
+            validate_analytical_jacobian(theta, indices; n_quad = n_quad, J_fd = J_fd)
+        end
+
+        out_dir = joinpath(output_folder, output_subdir)
+        mkpath(out_dir)
+        NPZ.npzwrite(joinpath(out_dir, filename), J)
+        NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity.npy")),    J_elast)
+        NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_sd.npy")),            J_sd)
+        NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity_sd.npy")), J_elast_sd)
+        NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_param_indices.npy")),
+                     collect(indices))
+
+        println("\nMean |elasticity| by block (AD-exact analytical Jacobian):")
+        for (k, name) in enumerate(BLOCK_NAMES)
+            rng = BLOCK_RANGES[k]
+            isempty(rng) && continue
+            @printf("  %-10s : max=%.4g  mean=%.4g\n", name,
+                    maximum(abs.(J_elast[rng, :])), mean(abs.(J_elast[rng, :])))
+        end
+        return J, J_elast, J_sd, J_elast_sd
+    end
 
     # ── Column classification: log-step (T) vs additive-step (everything else) ──
     # T parameters are strictly positive and enter the moments multiplicatively
@@ -2247,6 +2322,12 @@ it never touches the production `inference/` outputs.
 Crosses two axes at a fixed estimate θ̂:
   - axis 1 (Jacobian): {simulated J (`J_sim_gb`), analytical J (`J_ana_gb`)}
   - axis 2 (weighting): {data-only (Σ_data, Σ_data⁻¹), data+sim (Ω, W_full≈W_step3)}
+
+`J_ana_gb` is now the EXACT closed-form Jacobian (forward-mode AD via
+`analytical_jacobian_ad`, no finite-difference step). The Jacobian axis is thus a
+clean noisy-simulation vs exact-closed-form contrast: the whole gap on axis 1 is
+the Ricardian-selection simulation noise in `J_sim_gb`, with no residual FD
+truncation artefact to confound it.
 
 The (analytical, data-only) corner is the GMM-style variance evaluated at the
 SMM estimate. Goal: attribute SMM parameter-variance noise to the Jacobian

@@ -8,6 +8,7 @@
 
 using SpecialFunctions
 using FastGaussQuadrature
+using ForwardDiff
 using Printf
 
 
@@ -191,10 +192,21 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
     sqrt_w = sqrt.(w_arr)
     Xw  = sqrt_w .* X
     yw  = sqrt_w .* y
-    coefs = Xw \ yw
+    coefs = _ls_solve(Xw, yw)
 
     return coefs[1:N_REG]
 end
+
+
+# Least-squares solve, dispatched on element type so the production Float64 path
+# is byte-identical while the AD (ForwardDiff.Dual) path stays differentiable.
+#   • Float64: keep the exact pivoted-QR `\` used everywhere until now.
+#   • Dual:    solve the normal equations (X'X)\(X'y) — a square, generic-LU
+#              solve ForwardDiff differentiates cleanly. Pivoted-QR least squares
+#              has no generic Dual method; the normal equations are algebraically
+#              identical for the full-rank, tiny (n_reg ≤ N_REG+1) design here.
+_ls_solve(X::AbstractMatrix{<:AbstractFloat}, y::AbstractVector) = X \ y
+_ls_solve(X::AbstractMatrix, y::AbstractVector) = (X' * X) \ (X' * y)
 
 
 """
@@ -406,4 +418,130 @@ function test_analytical_vs_simulated(params; N_rho_test::Int=10_000, n_quad::In
     @printf("\n  labor share:  sim=%.6e  ana=%.6e  rel=%.3e  (exact block — gap ⇒ shared cause)\n",
             moms_sim[1][1], moms_ana[1][1], relv(moms_sim[1][1], moms_ana[1][1]))
     println("="^72)
+end
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXACT ANALYTICAL JACOBIAN VIA AUTOMATIC DIFFERENTIATION (ForwardDiff)
+# ═══════════════════════════════════════════════════════════════════════════════
+# The analytical moment path (compute_prices_analytical → compute_moments_analytical
+# → compute_regression_quadrature) is written in generic FT with no argmin/branch on
+# a differentiated value, so forward-mode AD yields ∂m/∂θ at machine precision — no
+# finite-difference step, no truncation error, no manual GE chain-rule derivation.
+# This replaces the FD-of-a-closed-form Jacobian (analytical=true in compute_jacobian)
+# with the true closed-form derivative.
+
+"""
+    moments_vec_analytical(params; n_quad=200) -> Vector
+
+Stacked, `MOMENT_MASK`-filtered analytical moment vector — byte-for-byte the same
+assembly as `compute_jacobian`'s analytical `eval_one`
+(`vcat(vec.(m)...)[MOMENT_MASK]`), factored out so ForwardDiff differentiates the
+exact object whose rows are the Jacobian's moment axis. Generic in `eltype(params)`.
+"""
+function moments_vec_analytical(params; n_quad::Int=200)
+    m = compute_moments_analytical(params; n_quad=n_quad)
+    return vcat(vec(m[1]), vec(m[2]), vec(m[3]), vec(m[4]), vec(m[5]))[MOMENT_MASK]
+end
+
+
+"""
+    analytical_jacobian_ad(theta, param_indices; n_quad=200) -> Matrix{Float64}
+
+Exact Jacobian `∂m/∂θ` (raw units) of the masked analytical moment vector w.r.t.
+the active `param_indices`, by forward-mode AD. Rows are the `MOMENT_MASK`-order
+moments; columns are ordered as `param_indices` — the same axes `compute_jacobian`
+produces, so the result is a drop-in for the FD analytical Jacobian.
+
+The full parameter vector is promoted to the Dual element type and only the
+`param_indices` entries carry perturbation seeds, so fixed parameters flow through
+with zero partials (identical construction to the FD path, which perturbs only
+those columns).
+"""
+function analytical_jacobian_ad(theta::Vector{Float64},
+                                param_indices::Vector{Int};
+                                n_quad::Int=200)
+    x0 = theta[param_indices]
+    f = function (x)
+        p = convert(Vector{eltype(x)}, theta)
+        @inbounds for (k, j) in enumerate(param_indices)
+            p[j] = x[k]
+        end
+        return moments_vec_analytical(p; n_quad=n_quad)
+    end
+    return ForwardDiff.jacobian(f, x0)
+end
+
+
+"""
+    validate_analytical_jacobian(theta, param_indices; n_quad=200, J_fd=nothing)
+        -> NamedTuple
+
+Plan steps 4–5 correctness gates for the AD analytical Jacobian. Print-only.
+
+(4) **AD-vs-FD cross-check** (when `J_fd`, the existing finite-difference analytical
+    Jacobian, is supplied): reports `max|J_ad − J_fd|` and the worst relative gap.
+    Expected `O(δ²)` residual (~1e-6…1e-8 with `δ = step_rel`); a large gap signals
+    either a wrapper/assembly bug or a non-smooth spot in the analytical path.
+
+(5) **γ_ls adding-up structural test** on the FULL region set (reference region
+    INCLUDED — the row `MOMENT_MASK` drops). Since `Σ_r γ_{r,s} = domestic_share[s]`
+    is a parameter-independent constant, `Σ_r ∂γ_{r,s}/∂θ_k = 0` must hold exactly
+    for every sector `s` and parameter `k`; AD should return ~machine zero. This is
+    the correct adding-up check (differentiates the full γ block, not just the
+    masked non-reference rows).
+
+Returns `(J_ad, gamma_addup_max)`.
+"""
+function validate_analytical_jacobian(theta::Vector{Float64},
+                                      param_indices::Vector{Int};
+                                      n_quad::Int=200,
+                                      J_fd::Union{Nothing,Matrix{Float64}}=nothing)
+    println("\n" * "="^72)
+    println("ANALYTICAL JACOBIAN — AD-vs-FD cross-check + γ adding-up structural test")
+    println("="^72)
+
+    J_ad = analytical_jacobian_ad(theta, param_indices; n_quad=n_quad)
+    @printf("  AD Jacobian: %d moments × %d params (ForwardDiff, exact)\n",
+            size(J_ad, 1), size(J_ad, 2))
+
+    # (4) Cross-validation vs the finite-difference analytical Jacobian.
+    if J_fd !== nothing
+        @assert size(J_fd) == size(J_ad) "FD/AD Jacobian shape mismatch: $(size(J_fd)) vs $(size(J_ad))"
+        num = abs.(J_ad .- J_fd)
+        den = max.(abs.(J_ad), 1e-8)
+        rel = num ./ den
+        ci  = argmax(rel)
+        @printf("  vs FD:  max|ΔJ| = %.3e   max rel = %.3e at (moment %d, param col %d)  [expect O(δ²) ~1e-6..1e-8]\n",
+                maximum(num), maximum(rel), ci[1], ci[2])
+    else
+        println("  (no FD Jacobian supplied — AD-vs-FD comparison skipped)")
+    end
+
+    # (5) γ_ls adding-up: Σ_r γ_{r,s} = domestic_share[s] (const) ⇒ Σ_r ∂γ/∂θ = 0
+    #     on the full region set (reference INCLUDED). gamma_ls is (R,S); vec is
+    #     column-major so the flat index is (s-1)*R + r (region-minor within sector).
+    x0 = theta[param_indices]
+    gvec = function (x)
+        p = convert(Vector{eltype(x)}, theta)
+        @inbounds for (k, j) in enumerate(param_indices)
+            p[j] = x[k]
+        end
+        return vec(compute_moments_analytical(p; n_quad=n_quad).gamma_ls)
+    end
+    Jg = ForwardDiff.jacobian(gvec, x0)          # (R*S) × length(param_indices)
+    worst = 0.0; worst_s = 0; worst_k = 0
+    for s in 1:S, k in 1:length(param_indices)
+        colsum = 0.0
+        for r in 1:R
+            colsum += Jg[(s - 1) * R + r, k]
+        end
+        if abs(colsum) > worst
+            worst = abs(colsum); worst_s = s; worst_k = k
+        end
+    end
+    @printf("  γ adding-up: max_{s,k} |Σ_r ∂γ_{r,s}/∂θ_k| = %.3e (sector %d, param col %d)  [expect ~1e-13]\n",
+            worst, worst_s, worst_k)
+    println("="^72)
+    return (J_ad=J_ad, gamma_addup_max=worst)
 end
