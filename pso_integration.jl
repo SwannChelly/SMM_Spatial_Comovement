@@ -50,11 +50,26 @@ function parallel_pso_smm(
     c2::Float64 = 2.5,
     beta_constraint::Bool = true,
     beta_indices::UnitRange = 1:N_TAU,
+    log_mask::Union{Nothing, Vector{Bool}} = nothing,
     verbose::Bool = false
 )
-    
+
     d = length(lb)
-    
+
+    # ── Search-space transform: flagged dims (T) optimised in log ──────────────
+    # Confined to this function: bounds, particles, velocities, clamps and restarts
+    # operate in log coordinate; the objective is exponentiated to levels before
+    # evaluation, and the returned optimum is in levels. The Jacobian/inference
+    # never see this (they consume best_params in levels).
+    lmask = log_mask === nothing ? falses(d) : log_mask
+    @assert length(lmask) == d "log_mask length $(length(lmask)) != dim $d"
+    any(lmask) && @assert all(>(0), lb[lmask]) && all(>(0), ub[lmask]) "log dims need positive bounds"
+    _fwd(y) = Float64[lmask[i] ? exp(y[i]) : y[i] for i in 1:d]   # search → level
+    _inv(x) = Float64[lmask[i] ? log(x[i]) : x[i] for i in 1:d]   # level  → search
+    lb = _inv(lb); ub = _inv(ub)
+    warm_start_particle = warm_start_particle === nothing ? nothing : _inv(warm_start_particle)
+    obj = y -> objective_func(_fwd(y))
+
     # CRITICAL: Reserve one slot for warm start if provided
     n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
     particles = [lb .+ rand(d) .* (ub .- lb) for _ in 1:n_random]
@@ -93,8 +108,8 @@ function parallel_pso_smm(
         flush(stdout)
     end
     
-    fitness = pmap(objective_func, particles)
-    
+    fitness = pmap(obj, particles)
+
     # Handle any failed evaluations (returning nothing)
     for i in 1:length(particles)
         if isnothing(fitness[i])
@@ -167,7 +182,7 @@ function parallel_pso_smm(
         end
         
         # PARALLEL EVALUATION - All particles evaluated at once
-        fitness = pmap(objective_func, particles)
+        fitness = pmap(obj, particles)
         
         # Handle failures
         for i in 1:length(particles)
@@ -256,7 +271,7 @@ function parallel_pso_smm(
         end
     end
     
-    return g_best, g_best_fitness, history
+    return _fwd(g_best), g_best_fitness, history
 end
 
 
@@ -273,6 +288,8 @@ function enforce_beta_constraint(params::Vector{Float64}, beta_indices::UnitRang
     return params_new
 end
 
+
+const PSO_LOG_VARS = Set(["T"])   # variables explored in log space (T only; α is already in exp via τ=d^α)
 
 """
     train_stage_pso(n_particles, max_iter; kwargs...)
@@ -339,6 +356,15 @@ function train_stage_pso(
             A .* 1.2,
             init_beta .* 1.5,
             10 * T_init_nz
+        )
+
+        # log mask aligned on [Ω^L | Ω^s | A | β | T]
+        log_mask = vcat(
+            fill("agg_labor_share_tech"    in PSO_LOG_VARS, 1),
+            fill("agg_industry_share_tech" in PSO_LOG_VARS, S),
+            fill("productivity"            in PSO_LOG_VARS, R_downstream),
+            fill("beta"                    in PSO_LOG_VARS, N_TAU),
+            fill("T"                       in PSO_LOG_VARS, length(T_init_nz)),
         )
 
         beta_constraint = true
@@ -419,6 +445,10 @@ function train_stage_pso(
             ub = vcat(ub[1:t_start], ub_T, (t_start + t_length < length(ub)) ? ub[t_start + t_length + 1:end] : Float64[])
         end
         
+        # log mask aligned on the stage vector (var_list order)
+        log_mask = vcat([fill(v in PSO_LOG_VARS, length(params_dict[Symbol(v)])) for v in var_list]...)
+        @assert length(log_mask) == length(lb) "log_mask/lb mismatch (second_stage T-mask not threaded for log)"
+
         # CRITICAL: Extract warm start particle (previous best in reduced parameter space)
         warm_start = Float64[]
         for var in var_list
@@ -505,6 +535,7 @@ function train_stage_pso(
         warm_start_particle = warm_start,  # CRITICAL: Pass previous best
         beta_constraint = beta_constraint,
         beta_indices = beta_indices,
+        log_mask = log_mask,
         verbose = true
     )
     
