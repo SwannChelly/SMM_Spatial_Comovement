@@ -252,7 +252,8 @@ for s in 1:S_
         T_gravity[s, l] = max(emp_gamma_ls[l, s] * (w_rs_local[l]^theta), 1e-12)
     end
 end
-@everywhere const T_rs_init = $(T_gravity)
+#@everywhere const T_rs_init = $(T_gravity)
+@everywhere const T_rs_init = $(T_gravity./T_gravity)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 8 — EMPIRICAL MOMENT VECTOR + MOMENT_MASK + BLOCK_RANGES
@@ -312,7 +313,7 @@ BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_ga
 @everywhere const BLOCK_NAMES  = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
 
 w_vec = ones(N_moments)
-w_vec[BLOCK_RANGES_local[4]] .= 100.0
+#w_vec[BLOCK_RANGES_local[4]] .= 100.0
 Weight_matrix_custom_local = Diagonal(w_vec)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 

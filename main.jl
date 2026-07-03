@@ -53,11 +53,11 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
 @assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
 
-K = 5
+K = 2
 
-run_step1 = false#true
-run_step2 = false
-run_step3 = false
+run_step1 = true#true
+run_step2 = true
+run_step3 = true
 run_step4 = true
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
@@ -82,6 +82,7 @@ mkpath(output_folder)
 ############## Load and distribute constants ##############
 include("load_parameters.jl")
 NPZ.npzwrite(joinpath(output_folder, "n_reg_coef.npy"), n_coef)
+NPZ.npzwrite(joinpath(output_folder, "n_reg_coef.npy"), n_tau)
 
 ############## Determine step to run ##############
 
