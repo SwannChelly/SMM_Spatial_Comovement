@@ -39,6 +39,8 @@ using StatsBase
 @everywhere include("tools.jl")
 @everywhere include("model_analytical.jl")
 @everywhere include("pso_integration.jl")
+@everywhere include("cmaes_integration.jl")
+@everywhere include("optimizer_api.jl")
 @everywhere include("run_untargeted_validation.jl")
 
 ############## Parse arguments ##############
@@ -52,6 +54,10 @@ K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) :
 # forwarded to every draw-generation site (U_DRAWS, Σ_sim, Jacobian replications).
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
 @assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
+# Optimizer backend: :pso (default, legacy staged pattern) or :cmaes (one joint
+# CMA-ES per SMM step). Read by load_parameters.jl into OPTIMIZER_BACKEND.
+optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
+@assert optimizer_backend in (:pso, :cmaes) "optimizer must be pso|cmaes, got :$optimizer_backend"
 
 K = 20
 
@@ -73,7 +79,7 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method")
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend")
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$industry"

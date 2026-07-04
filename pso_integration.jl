@@ -341,13 +341,15 @@ function train_stage_pso(
         A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
         A ./= sum(A) 
         
-        T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # Only non-zero T values (s-major to match T_MASK)
+        # T block is searched as free log-space φ (ref entries dropped, T_init≡1 →
+        # φ_init≡0). φ ∈ [log(0.1), log(10)] mirrors the old [0.1,10]×T_init box,
+        # now symmetric and scale-free (see t_levels_to_free_phi / model_CP.jl).
         lb = vcat(
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
             init_beta .* 0.5,
-            0.1 * T_init_nz
+            fill(log(0.1), N_T_FREE)
         )
 
         ub = vcat(
@@ -355,7 +357,7 @@ function train_stage_pso(
             1.2 .* agg_industry_share,
             A .* 1.2,
             init_beta .* 1.5,
-            10 * T_init_nz
+            fill(log(10.0), N_T_FREE)
         )
 
         # log mask aligned on [Ω^L | Ω^s | A | β | T]
@@ -371,8 +373,9 @@ function train_stage_pso(
         beta_start = 1 + S + R_downstream + 1   # beta follows Ω^L, Ω^s, A in new layout
         beta_indices = beta_start:(beta_start + N_TAU - 1)
         best_params_prev = nothing
-        # Use warm_start_override if provided (Step 3 warm-start from θ̂_1)
-        warm_start = warm_start_override
+        # Use warm_start_override if provided (Step 3 warm-start from θ̂_1); convert
+        # its level T block to the free-φ search space.
+        warm_start = warm_start_override === nothing ? nothing : full_to_search(warm_start_override)
         cached_tau = nothing  # Beta is being optimized in initial stage
         
     else
@@ -381,8 +384,11 @@ function train_stage_pso(
         names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :beta, :T]
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
-        # T from unpack_params is full S*R; reduce to only non-zero entries for optimization
-        params_dict[:T] = vec(permutedims(reshape(params_dict[:T], S, R)))[T_MASK]   # region-major full → s-major, then mask
+        # T from unpack_params is full S*R; reduce to non-zero entries, then map to
+        # the free log-space search vector φ (ref entries dropped). All downstream
+        # length/slice arithmetic then uses N_T_FREE automatically.
+        T_red_levels = vec(permutedims(reshape(params_dict[:T], S, R)))[T_MASK]   # region-major full → s-major, then mask
+        params_dict[:T] = t_levels_to_free_phi(T_red_levels)
         
         # Handle single variable or list
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
@@ -407,6 +413,11 @@ function train_stage_pso(
                 # Clamp to valid range [0.001, 1.0]
                 lb_v = max.(lb_v, 0.001)
                 ub_v = min.(ub_v, 1.0)
+            elseif v == "T"
+                # val is φ (log space): the multiplicative [val·alpha, val/alpha]
+                # level box becomes an additive box φ ± |log alpha|.
+                lb_v = val .+ log(alpha)
+                ub_v = val .- log(alpha)
             else
                 # Standard multiplicative bounds
                 lb_v = val .* alpha
@@ -494,11 +505,17 @@ function train_stage_pso(
                 
                 stage_start = var_idx == 1 ? 1 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(var_idx-1)]) + 1
                 stage_end = stage_start + var_len - 1
-                
-                x_full[param_start:(param_start + var_len - 1)] = x_stage[stage_start:stage_end]
+
+                if var == "T"
+                    # stage holds free φ (length N_T_FREE); expand to level T block
+                    # (length N_T_REDUCED, ref entries = 1) before writing to x_full.
+                    x_full[param_start:(param_start + N_T_REDUCED - 1)] = t_free_phi_to_levels(x_stage[stage_start:stage_end])
+                else
+                    x_full[param_start:(param_start + var_len - 1)] = x_stage[stage_start:stage_end]
+                end
             end
         else
-            x_full = x_stage
+            x_full = search_to_full(x_stage)
         end
         
         # Evaluate SMM (or analytical GMM)
@@ -514,50 +531,54 @@ function train_stage_pso(
         end
     end
     
-    # Run PSO with warm start
+    # Run the selected optimizer (PSO or CMA-ES) with warm start
     println("\n" * "="^60)
-    println("Starting PSO Optimization")
+    println("Starting Optimization (backend = :$OPTIMIZER_BACKEND)")
     println("="^60)
     if variable_list !== nothing
         var_str = isa(variable_list, String) ? variable_list : join(variable_list, ", ")
         println("Optimizing variables: $var_str")
     end
-    println("Particles: $n_particles")
-    println("Max iterations: $max_iter")
+    println("Particles/λ: $n_particles")
+    println("Max iterations/generations: $max_iter")
     println("Dimension: $(length(lb))")
     println("="^60)
-    
-    best_params, best_fitness, history = parallel_pso_smm(
+
+    best_params, best_fitness, history = optimize_stage(
         objective,
-        lb, ub,
+        lb, ub;
+        x0 = warm_start,                   # CRITICAL: previous best (warm start / incumbent)
         n_particles = n_particles,
         max_iter = max_iter,
-        warm_start_particle = warm_start,  # CRITICAL: Pass previous best
         beta_constraint = beta_constraint,
         beta_indices = beta_indices,
         log_mask = log_mask,
         verbose = true
     )
     
-    # If optimizing subset, reconstruct full vector
+    # If optimizing subset, reconstruct full vector (T: φ → level, ref = 1)
     if last_stage_folder !== nothing
         final_params = copy(best_params_prev)
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
-        
+
         for (var_idx, var) in enumerate(var_list)
             var_symbol = Symbol(var)
             param_start = get_param_start_index(var_symbol)
             var_len = length(params_dict[var_symbol])
-            
+
             stage_start = var_idx == 1 ? 1 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(var_idx-1)]) + 1
             stage_end = stage_start + var_len - 1
-            
-            final_params[param_start:(param_start + var_len - 1)] = best_params[stage_start:stage_end]
+
+            if var == "T"
+                final_params[param_start:(param_start + N_T_REDUCED - 1)] = t_free_phi_to_levels(best_params[stage_start:stage_end])
+            else
+                final_params[param_start:(param_start + var_len - 1)] = best_params[stage_start:stage_end]
+            end
         end
     else
-        final_params = best_params
+        final_params = search_to_full(best_params)
     end
-    
+
     return final_params, best_fitness, history
 end
 

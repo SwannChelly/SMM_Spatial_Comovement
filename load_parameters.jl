@@ -208,6 +208,40 @@ end
 @everywhere const T_REF_REGION = $T_REF_REGION_local
 
 
+# ── log-T (φ) reparameterization index maps ──────────────────────────────────
+# The optimizer searches φ_i = log(T_i / T_{s,ref}) over the FREE reduced-T
+# positions only; each sector's reference entry is dropped (pinned T=1) so the S
+# unidentified directions never enter the search space. Reduced ordering matches
+# unpack_params: flat p=(s-1)*R+r (r fastest), kept where T_MASK is true.
+T_reduced_s_local = Int[]
+T_reduced_r_local = Int[]
+let p = 0
+    for s in 1:S_, r in 1:R_full
+        p += 1
+        if T_mask_local[p]
+            push!(T_reduced_s_local, s)
+            push!(T_reduced_r_local, r)
+        end
+    end
+end
+n_T_reduced_local = length(T_reduced_s_local)
+# reduced index of each sector's reference entry (T pinned to 1 there)
+sector_ref_reduced_local = zeros(Int, S_)
+for i in 1:n_T_reduced_local
+    if T_reduced_r_local[i] == T_REF_REGION_local[T_reduced_s_local[i]]
+        sector_ref_reduced_local[T_reduced_s_local[i]] = i
+    end
+end
+@assert all(sector_ref_reduced_local[s] > 0
+            for s in 1:S_ if !isempty(SECTOR_GOOD_INDICES_local[s])) "each active sector needs a reference reduced index in T_MASK"
+T_free_reduced_idx_local = [i for i in 1:n_T_reduced_local if i ∉ sector_ref_reduced_local]
+@everywhere const T_REDUCED_S        = $T_reduced_s_local        # sector per reduced-T position
+@everywhere const SECTOR_REF_REDUCED = $sector_ref_reduced_local # reduced index of each sector's ref
+@everywhere const T_FREE_REDUCED_IDX = $T_free_reduced_idx_local # reduced positions the optimizer varies
+@everywhere const N_T_REDUCED        = $n_T_reduced_local        # sum(T_MASK)
+@everywhere const N_T_FREE           = $(length(T_free_reduced_idx_local)) # = N_T_REDUCED - #active sectors
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 6 — REMAINING TARGETS + PARAMETER COUNTS (pi_r, reg_coef, N_REG/N_TAU)
 # Downstream market shares (pi_r) and the distance-bin regression coefficients
@@ -330,6 +364,13 @@ Weight_matrix_custom_local = Diagonal(w_vec)
 draw_method_local = (@isdefined(draw_method)) ? draw_method : :sobol
 @assert draw_method_local in (:qmc, :mc, :is, :sobol) "draw_method must be :qmc, :mc, :is or :sobol, got :$draw_method_local"
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
+
+# Optimizer backend. The entry point may define `optimizer_backend`; default :pso
+# (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step. Both search
+# T in log space via the φ maps above.
+optimizer_backend_local = (@isdefined(optimizer_backend)) ? optimizer_backend : :pso
+@assert optimizer_backend_local in (:pso, :cmaes) "optimizer_backend must be :pso or :cmaes, got :$optimizer_backend_local"
+@everywhere const OPTIMIZER_BACKEND = $(QuoteNode(optimizer_backend_local))
 
 println("Generating draws (method = :$DRAW_METHOD)...")
 u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)

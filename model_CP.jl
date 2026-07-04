@@ -492,6 +492,62 @@ function unpack_params(params)
 end
 
 
+##################### log-T (φ) reparameterization #####################
+# The optimizer searches φ (free, log-space, per-sector reference dropped); the
+# model and every disk artifact stay in raw T *levels*. These two helpers are the
+# only bridge — confined here so the choice of search space never leaks into
+# solve_network / compute_moments / inference / reporting (the reference entries
+# reconstruct to T=1, so unpack_params' `./= T_mat[s,ref]` stays a no-op).
+
+"""
+    t_levels_to_free_phi(T_red) -> φ   (length N_T_FREE)
+
+Map a full reduced-T LEVEL block (length `N_T_REDUCED`, sector-major, `T_MASK`
+order) to the free search vector `φ_k = log(T_i / T_{s(i),ref})`. Reference
+entries are dropped. Inverse of [`t_free_phi_to_levels`](@ref).
+"""
+function t_levels_to_free_phi(T_red::AbstractVector)
+    φ = Vector{Float64}(undef, N_T_FREE)
+    @inbounds for (k, i) in enumerate(T_FREE_REDUCED_IDX)
+        ref_i = SECTOR_REF_REDUCED[T_REDUCED_S[i]]
+        φ[k] = log(T_red[i]) - log(T_red[ref_i])
+    end
+    return φ
+end
+
+"""
+    t_free_phi_to_levels(φ) -> T_red   (length N_T_REDUCED)
+
+Inverse of [`t_levels_to_free_phi`](@ref): scatter `exp.(φ)` into the free
+reduced-T positions; reference entries are set to 1. `eltype(φ)` is preserved so
+ForwardDiff Duals survive.
+"""
+function t_free_phi_to_levels(φ::AbstractVector)
+    T_red = ones(eltype(φ), N_T_REDUCED)
+    @inbounds for (k, i) in enumerate(T_FREE_REDUCED_IDX)
+        T_red[i] = exp(φ[k])
+    end
+    return T_red
+end
+
+"""
+    full_to_search(p) / search_to_full(x)
+
+Convert a full LEVEL parameter vector `[Ω^L | Ω^s | A | β | T(N_T_REDUCED)]` to/from
+the full SEARCH vector `[Ω^L | Ω^s | A | β | φ(N_T_FREE)]`. Only the trailing T
+block is transformed; the head is untouched. Search vector is shorter by the
+number of active sectors.
+"""
+function full_to_search(p::AbstractVector)
+    nhead = 1 + S + R_downstream + N_TAU
+    return vcat(p[1:nhead], t_levels_to_free_phi(p[(nhead + 1):end]))
+end
+function search_to_full(x::AbstractVector)
+    nhead = 1 + S + R_downstream + N_TAU
+    return vcat(x[1:nhead], t_free_phi_to_levels(x[(nhead + 1):end]))
+end
+
+
 """
     build_tau(beta) -> τ[r', r]
 

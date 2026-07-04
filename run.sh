@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes]
 #
 # Examples:
 #   ./run.sh aero
@@ -12,18 +12,20 @@
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm --n_quad=500
 #   ./run.sh aero --n_coef=4 --draws=mc
+#   ./run.sh aero --n_coef=4 --optimizer=cmaes
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol]"
-    echo "  industry : aero, auto, car, both"
-    echo "  --n_coef : number of regression moments: 1, 4, or 5 (default: 4)"
-    echo "  --n_tau  : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
-    echo "  --mode   : smm (default) or gmm (analytical, faster, exact SEs)"
-    echo "  --n_quad : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
-    echo "  --draws  : Fréchet draw method: sobol (default), mc, is, or sobol"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes]"
+    echo "  industry   : aero, auto, car, both"
+    echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
+    echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
+    echo "  --mode     : smm (default) or gmm (analytical, faster, exact SEs)"
+    echo "  --n_quad   : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
+    echo "  --draws    : Fréchet draw method: sobol (default), mc, is, or sobol"
+    echo "  --optimizer: pso (default) or cmaes (SMM only)"
     exit 1
 fi
 
@@ -36,6 +38,7 @@ N_TAU=""       # empty = default to n_coef inside Julia
 MODE="smm"
 N_QUAD="200"
 DRAWS="sobol"    # Fréchet draw method: sobol (default), mc, is, qmc
+OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
 
 for arg in "$@"; do
     case "$arg" in
@@ -44,6 +47,7 @@ for arg in "$@"; do
         --mode=*)   MODE="${arg#--mode=}" ;;
         --n_quad=*) N_QUAD="${arg#--n_quad=}" ;;
         --draws=*)  DRAWS="${arg#--draws=}" ;;
+        --optimizer=*) OPTIMIZER="${arg#--optimizer=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -61,6 +65,11 @@ done
 
 if [ "$DRAWS" != "qmc" ] && [ "$DRAWS" != "mc" ] && [ "$DRAWS" != "is" ] && [ "$DRAWS" != "sobol" ]; then
     echo "Error: --draws must be qmc, mc, is, or sobol (got: $DRAWS)"
+    exit 1
+fi
+
+if [ "$OPTIMIZER" != "pso" ] && [ "$OPTIMIZER" != "cmaes" ]; then
+    echo "Error: --optimizer must be pso or cmaes (got: $OPTIMIZER)"
     exit 1
 fi
 
@@ -101,14 +110,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau K_sim draws
+    # main.jl    : industry n_coef n_tau K_sim draws optimizer
     # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
         local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
         echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU 10000 $DRAWS"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER)"
     fi
     echo "Logs: $log_file"
 
