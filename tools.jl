@@ -1243,21 +1243,26 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
 end
 
 """
-    run_pso_optimization(; kwargs...) -> (best_params, best_fitness)
+    run_optimization(; kwargs...) -> (best_params, best_fitness)
 
-Unified PSO wrapper for Steps 1 and 3 of three-step SMM.
+Unified optimizer wrapper for Steps 1 and 3 of three-step SMM. Backend-agnostic:
+the concrete optimizer (PSO or CMA-ES) is selected by `OPTIMIZER_BACKEND` inside
+`train_stage_pso` → `optimize_stage`. Under `:pso` it runs the staged refinement
+loop; under `:cmaes` the loop collapses to the single joint Stage-1 run.
+
+`run_pso_optimization` is retained as a backward-compatible alias.
 
 # Keyword arguments
 - `weight_matrix`: SMM weight matrix passed to full_SMM (default: uses global Weight_matrix_custom)
 - `skip_initial_beta_search`: if true, skip Stage 0 LHS search (use warm_start_params beta)
-- `warm_start_params`: full parameter vector to warm-start Stage 1 PSO (nothing = fresh start)
+- `warm_start_params`: full parameter vector to warm-start Stage 1 (nothing = fresh start)
 - `output_subfolder`: subfolder under output_folder for all stage outputs
-- `max_loop`: number of refinement loops (default 50)
-- `n_particles`, `max_iter_initial`, `max_iter_stage`: PSO configuration
+- `max_loop`: number of refinement loops (PSO backend only; default 50)
+- `n_particles`, `max_iter_initial`, `max_iter_stage`: optimizer configuration
 - `beta_search_method`: "log_grid" or "lhs"
 - `beta_selection_criterion`: "reg_coef" or "score"
 """
-function run_pso_optimization(;
+function run_optimization(;
     weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
     skip_initial_beta_search::Bool = false,
     warm_start_params::Union{Nothing, Vector{Float64}} = nothing,
@@ -1493,6 +1498,9 @@ function run_pso_optimization(;
                   analytical=analytical, n_quad=n_quad)
     return best_params, best_fitness
 end
+
+# Backward-compatible alias (main_gmm.jl, run_internal_validity.jl still call this).
+const run_pso_optimization = run_optimization
 
 """
     compute_jacobian(theta; K, param_indices, step_rel, step_abs,

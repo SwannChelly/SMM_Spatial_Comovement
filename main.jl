@@ -101,11 +101,11 @@ step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 
 if run_step1
     println("\n" * "="^70)
-    println("STEP 1: Identity-weighted PSO optimisation")
+    println("STEP 1: Identity-weighted optimisation (backend = :$optimizer_backend)")
     println("="^70)
 
-    theta_hat_1, _ = run_pso_optimization(;
-        weight_matrix            = nothing,   
+    theta_hat_1, _ = run_optimization(;
+        weight_matrix            = nothing,
         skip_initial_beta_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
@@ -243,12 +243,12 @@ end
 
 if run_step3
     println("\n" * "="^70)
-    println("STEP 3: Efficient-weighted PSO optimisation")
+    println("STEP 3: Efficient-weighted optimisation (backend = :$optimizer_backend)")
     println("="^70)
 
     # A_r, labor share, and industry share are fixed at θ̂_1.
     # Only β and T are optimised, using the gamma+beta-only weight matrix from step 2.
-    theta_hat_2, _ = run_pso_optimization(;
+    theta_hat_2, _ = run_optimization(;
         weight_matrix            = W_step3,
         skip_initial_beta_search = true,
         warm_start_params        = theta_hat_1,
