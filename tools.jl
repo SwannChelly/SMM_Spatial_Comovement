@@ -2315,6 +2315,19 @@ prints, per sector, the v_min support share/sign side-by-side with that sector's
 ratio λ_min/λ_max, so the worst-M^s sector can be matched to the support of the global
 weak direction.
 
+Phase-1 scale-normalized / block-diagonality screen (print-only, additive fields):
+
+  P1a. Global normalized conditioning `Hn = D^{-1/2} H D^{-1/2}`, `D = diag(H)` — its
+       `λ_min`/`λ_max`/`cond` are printed beside the raw `cond(H)`. A large raw cond
+       that collapses under normalization is a scale artifact (Ω, A, β, T live on very
+       different scales), not weak identification.
+  P1b. Normalized T-block `Hn[T,T]` conditioning, then the per-sector normalized block
+       spectrum `Hn[T_s, T_s]` (sector membership from the same `"T[sname-rname]"`
+       parse), and a cross-sector coherence table
+       `‖Hn[T_s,T_s′]‖₂ / √(λ_min(Hn_s)·λ_min(Hn_s′))` with its max over sector pairs.
+       Coherence ≪ 1 licenses the block preconditioning / per-sector concentration of
+       Phases 4–5; near/above 1 flags strong inter-sector coupling.
+
 The per-sector analytical screen on `params` is unchanged:
 M^s = Σ_dr ω_dr (diag(g_dr) − g_dr g_dr'), restricted to FREE (non-ref) active
 regions; smallest eigenpair, plus each region's marginal share and curvature
@@ -2331,8 +2344,14 @@ Returns `(out, global_eigen)`:
                       `T_evec_support::Vector{Float64}` (per-sector squared-mass share
                       of v_min), `T_evec_signs::Vector{Int}`, `T_evec_sectors::Vector{Int}`
                       (sector indices aligning the two), and `T_eval_min_identity`
-                      (λ_min of H[T,T] under W = I). New fields are additive — existing
-                      fields and all call sites keep working.
+                      (λ_min of H[T,T] under W = I). Phase-1 additive fields:
+                      `cond_normalized` (cond of the globally normalized H),
+                      `T_cond_normalized` / `T_eval_min_normalized` (Hn[T,T]),
+                      `block_sectors::Vector{Int}` with aligned `block_eval_min` /
+                      `block_cond` (per-sector normalized T-block λ_min / cond), and
+                      `coherence_max` / `coherence_argmax` (largest cross-sector
+                      off-block coherence and the attaining pair). New fields are
+                      additive — existing fields and all call sites keep working.
 """
 function screen_T_identification(params;
         J::Union{Nothing,Matrix{Float64}} = nothing,
@@ -2349,6 +2368,17 @@ function screen_T_identification(params;
     T_evec_sectors      = Int[]       # sector indices aligned with the two vectors above
     T_eval_min_identity = NaN         # λ_min(H_I[T,T]) under W = I
 
+    # Phase-1 scale-normalized / block-diagonality accumulators (always defined so
+    # the returned NamedTuple is safe when J === nothing or T_cols is empty).
+    cond_normalized       = NaN       # cond of Hn = D^{-1/2} H D^{-1/2} (global)
+    T_cond_normalized     = NaN       # cond of Hn[T,T]
+    T_eval_min_normalized = NaN       # λ_min of Hn[T,T]
+    block_sectors_out     = Int[]     # sectors with a normalized T-block spectrum
+    block_eval_min_out    = Float64[] # λ_min(Hn[T_s,T_s]) per sector (aligned)
+    block_cond_out        = Float64[] # cond(Hn[T_s,T_s]) per sector (aligned)
+    coherence_max         = NaN       # max cross-sector off-block coherence
+    coherence_argmax      = (0, 0)    # sector pair attaining coherence_max
+
     # ── (a)+(b) Global GMM-information eigen-screen (only when J provided) ────────
     global_eigen = nothing
     if J !== nothing
@@ -2361,6 +2391,22 @@ function screen_T_identification(params;
         rankJ = count(sv .> sv[1] * 1e-8)
         @printf("%sH=J'WJ: λ_min=%.4e  λ_max=%.4e  cond=%.4e  rank(J)=%d/%d\n",
                 pfx, λmin, λmax, condH, rankJ, size(J, 2))
+
+        # ── (P1a) Scale-normalized global conditioning ───────────────────────
+        # Raw cond(H) conflates parameter units (Ω, A, β, T live on wildly
+        # different scales) with genuine weak identification. Normalizing by
+        # D = diag(H) gives Hn = D^{-1/2} H D^{-1/2} with unit diagonal, whose
+        # conditioning is scale-free: a large raw cond that collapses under
+        # normalization is a scale artifact, not weak identification.
+        Hfull = Matrix(H)
+        dH    = diag(Hfull)
+        dsafe = sqrt.(max.(abs.(dH), 1e-300))
+        Dinv  = 1.0 ./ dsafe
+        Hn    = Dinv .* Hfull .* Dinv'          # D^{-1/2} H D^{-1/2}
+        Fn    = eigen(Symmetric(Hn))
+        cond_normalized = Fn.values[end] / max(Fn.values[1], 1e-300)
+        @printf("%sNORMALIZED H: λ_min=%.4e  λ_max=%.4e  cond=%.4e   (raw cond=%.4e)\n",
+                pfx, Fn.values[1], Fn.values[end], cond_normalized, condH)
 
         # T-only column restriction
         if param_labels !== nothing
@@ -2382,6 +2428,20 @@ function screen_T_identification(params;
             @printf("%sH[T,T] (%d T cols): λ_min=%.4e  λ_max=%.4e\n",
                     pfx, length(T_cols), T_emin, T_emax)
 
+            # Sector membership of each T column (parsed from "T[sname-rname]",
+            # split on the LAST '-'). Shared by the mechanism-1 support map and
+            # the Phase-1 per-sector block spectrum / coherence table below.
+            col_sector = Int[]
+            if param_labels !== nothing
+                sname_to_s = Dict(_sector_names[s] => s for s in 1:S)
+                for c in T_cols
+                    body  = string(param_labels[c])[3:end-1]   # strip "T[" … "]"
+                    dash  = findlast('-', body)                # region name after last '-'
+                    sname = dash === nothing ? body : body[1:dash-1]
+                    push!(col_sector, get(sname_to_s, sname, 0))
+                end
+            end
+
             # ── (1) Per-sector support of the λ_min eigenvector of H[T,T] ─────────
             # The weak direction v_min lives in T-column space; mapping its squared
             # mass back to sectors says WHERE the flat direction sits. Concentration
@@ -2390,14 +2450,6 @@ function screen_T_identification(params;
             v_min = Ft.vectors[:, 1]
             sumsq = max(sum(abs2, v_min), 1e-300)
             if param_labels !== nothing
-                sname_to_s = Dict(_sector_names[s] => s for s in 1:S)
-                col_sector = Int[]                      # sector index of each T column
-                for c in T_cols
-                    body  = string(param_labels[c])[3:end-1]   # strip "T[" … "]"
-                    dash  = findlast('-', body)                # region name after last '-'
-                    sname = dash === nothing ? body : body[1:dash-1]
-                    push!(col_sector, get(sname_to_s, sname, 0))
-                end
                 T_evec_sectors = sort(unique(col_sector))
                 @printf("%sH[T,T] λ_min eigenvector support (share of squared mass | dominant sign):\n", pfx)
                 for s in T_evec_sectors
@@ -2439,12 +2491,86 @@ function screen_T_identification(params;
             elseif condW > 1e3 && condI > 1e3
                 @printf("%s    → weak T direction is intrinsic to J (present under W and I)\n", pfx)
             end
+
+            # ── (P1b) Normalized T-block conditioning + per-sector spectrum ───────
+            # Same scale-normalization applied to the T sub-block, then split by
+            # sector. This is the block-diagonality measurement Phases 4–5 rely on:
+            # block preconditioning and per-sector T concentration are only licensed
+            # if (i) each sector's normalized T-block is well-conditioned and (ii)
+            # cross-sector coupling is small.
+            HnTT = Hn[T_cols, T_cols]
+            Ftn  = eigen(Symmetric(HnTT))
+            T_eval_min_normalized = Ftn.values[1]
+            T_cond_normalized     = Ftn.values[end] / max(Ftn.values[1], 1e-300)
+            @printf("%sNORMALIZED H[T,T]: λ_min=%.4e  cond=%.4e   (raw T cond=%.4e)\n",
+                    pfx, T_eval_min_normalized, T_cond_normalized, condW)
+
+            if param_labels !== nothing && !isempty(col_sector)
+                HnTTm       = Matrix(HnTT)
+                secs        = sort(unique(filter(!=(0), col_sector)))
+                sector_local = Dict{Int,Vector{Int}}()   # sector → local T-block indices
+                sector_lmin  = Dict{Int,Float64}()        # sector → λ_min(Hn[T_s,T_s])
+                @printf("%sNormalized per-sector T-block spectrum:\n", pfx)
+                for s in secs
+                    loc = findall(==(s), col_sector)
+                    isempty(loc) && continue
+                    sector_local[s] = loc
+                    Fs  = eigen(Symmetric(HnTTm[loc, loc]))
+                    lmn = Fs.values[1]; lmx = Fs.values[end]
+                    cnd = lmx / max(lmn, 1e-300)
+                    sector_lmin[s] = lmn
+                    push!(block_sectors_out, s)
+                    push!(block_eval_min_out, lmn)
+                    push!(block_cond_out, cnd)
+                    @printf("%s    sector %d (%d cols): λ_min=%.4e  λ_max=%.4e  cond=%.4e\n",
+                            pfx, s, length(loc), lmn, lmx, cnd)
+                end
+
+                # Cross-block coherence: ‖Hn[T_s,T_s′]‖₂ / √(λ_min(Hn_s)·λ_min(Hn_s′))
+                # ≪ 1 ⇒ the T Hessian is near block-diagonal by sector ⇒ block
+                # precond / per-sector concentration (Phases 4–5) are licensed.
+                # Near/above 1 ⇒ strong inter-sector coupling; revisit those phases.
+                coherence_max = 0.0
+                if length(secs) >= 2
+                    npairs = 0
+                    for i in 1:length(secs)-1, j in (i+1):length(secs)
+                        si, sj = secs[i], secs[j]
+                        (haskey(sector_local, si) && haskey(sector_local, sj)) || continue
+                        B   = HnTTm[sector_local[si], sector_local[sj]]
+                        num = opnorm(B, 2)
+                        den = sqrt(max(sector_lmin[si], 1e-300) * max(sector_lmin[sj], 1e-300))
+                        coh = num / den
+                        npairs += 1
+                        if coh > coherence_max
+                            coherence_max = coh
+                            coherence_argmax = (si, sj)
+                        end
+                    end
+                    @printf("%sCross-sector coherence: max=%.4e at sectors (%d,%d) over %d pairs\n",
+                            pfx, coherence_max, coherence_argmax[1], coherence_argmax[2], npairs)
+                    if coherence_max < 0.1
+                        @printf("%s    → T Hessian near block-diagonal (coherence≪1): block precond/concentration licensed\n", pfx)
+                    elseif coherence_max < 1.0
+                        @printf("%s    → moderate inter-sector coupling (coherence<1): block methods viable, expect some leakage\n", pfx)
+                    else
+                        @printf("%s    → STRONG inter-sector coupling (coherence≥1): revisit the Phase 4–5 block assumption\n", pfx)
+                    end
+                end
+            end
         end
 
         global_eigen = (eval_min=λmin, eval_max=λmax, cond=condH, rank=rankJ,
                         T_eval_min=T_emin, T_eval_max=T_emax,
                         T_evec_support=T_evec_support, T_evec_signs=T_evec_signs,
-                        T_evec_sectors=T_evec_sectors, T_eval_min_identity=T_eval_min_identity)
+                        T_evec_sectors=T_evec_sectors, T_eval_min_identity=T_eval_min_identity,
+                        cond_normalized=cond_normalized,
+                        T_cond_normalized=T_cond_normalized,
+                        T_eval_min_normalized=T_eval_min_normalized,
+                        block_sectors=block_sectors_out,
+                        block_eval_min=block_eval_min_out,
+                        block_cond=block_cond_out,
+                        coherence_max=coherence_max,
+                        coherence_argmax=coherence_argmax)
     end
 
     # ── (c) Per-sector analytical screen (unchanged) ─────────────────────────────
