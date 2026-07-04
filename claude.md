@@ -75,10 +75,12 @@ Sum-to-1 redundancies are dropped via `MOMENT_MASK` (one per share-constrained b
 
 ```
 SMM_Spatial_Comovement/
-├── model_CP.jl                  # Core: solve_network, compute_moments, full_SMM
+├── model_CP.jl                  # Core: solve_network, compute_moments, full_SMM, log-T (φ) transforms
 ├── tools.jl                     # Optimization helpers, reporting, LHS/Halton grids
-├── pso_integration.jl           # PSO: parallel_pso_smm, train_stage_pso
-├── main.jl                      # Entry point: three-step efficient SMM (Steps 1–3)
+├── pso_integration.jl           # PSO: parallel_pso_smm, train_stage_pso (optimizer-agnostic stage builder)
+├── cmaes_integration.jl         # CMA-ES: parallel_cmaes_smm (unit-cube search + incumbent tracker)
+├── optimizer_api.jl             # optimize_stage: PSO/CMA-ES dispatcher (single seam)
+├── main.jl                      # Entry point: three-step efficient SMM (Steps 1–3), --optimizer=pso|cmaes
 ├── main_pso.jl                  # Legacy entry point: identity-weighted PSO only (unchanged)
 ├── main_NM.jl                   # Entry point: Nelder-Mead optimizer (2-step)
 ├── untargeted_moments.jl        # Validation: 3-model shock simulation + regressions
@@ -172,17 +174,52 @@ Key utilities:
 - `build_step3_weight_matrix(theta_hat_1, input_folder; K, output_folder)`: assembles `W_step3 = (Σ_data + Σ_sim)^{-1}` restricted to γ_ls and reg_coef moments. `Σ_data` loaded from `Sigma.npy` (joint bootstrap covariance of γ+β, size `n_gamma_kept + n_beta_kept`). `Σ_sim` estimated via K pmap evaluations with MC draws seeded by k, restricted to the same indices. The returned `W_step3` is `N_moments × N_moments` with zeros outside the γ+β sub-block. Saves `Sigma_data.npy`, `Sigma_sim.npy`, `Omega.npy`, `Omega_gb.npy`, `W_step3.npy`, `W_gb.npy`, `diagnostics.txt` to `output_folder/step2/`.
 - `compute_jacobian(theta; K, param_indices, step_rel, step_abs, base_seed, output_subdir, analytical, n_quad, t_log_step, check_symmetry, richardson_check)`: central finite differences of the masked moment vector w.r.t. selected parameters, averaged over `K` re-seeded replications. **Two step regimes** keyed on the flat parameter position: **T columns** (strictly-positive, multiplicatively-entering trade-cost levels; flat index `≥ 1 + S + R_downstream + N_TAU + 1`) take a **log-space central step** `θ·exp(±δ)` with `δ = step_rel`, converted back to raw `∂m/∂θ` by dividing by `θ_j` (chain rule `∂m/∂θ = (∂m/∂lnθ)·(1/θ)`); **all other columns** (`Ω^L`, `Ω^s`, `A`, `β`/`α`) take the additive step `h = max(|θ|·step_rel, step_abs)`. **In both regimes the stored column is raw `∂m/∂θ`**, so `G'WG` inference is unaffected in units — the log step is purely a numerical-accuracy device (scale-invariant, immune to the additive floor, never straddles the Fréchet `eps` clamp). `t_log_step=true` (default) enables this; `t_log_step=false` recovers the byte-identical additive behaviour for every column. `check_symmetry=false` (opt-in) prints a forward-vs-backward asymmetry diagnostic on T columns; `richardson_check=false` (opt-in) recomputes T columns at `2δ` and reports the relative gap. Both diagnostics are print-only and never alter the returned `J`. The analytical branch (`analytical=true`) routes T columns through the same per-column log logic. Saves `J`, `J_elast`, `J_sd`, `J_elast_sd`, and the param-index map under `<output_folder>/<output_subdir>/`.
 - `compute_smm_inference(theta_hat, J, W, Omega; param_indices, empirical_moments_vec, simulated_moments_vec, output_folder, industry, K_sim)`: computes delta-method standard errors (efficient and sandwich), fitted-moment SEs, moment-residual SEs, and the Hansen J over-identification test. Saves all arrays plus `inference_summary.txt` and `J_stat.txt` to `output_folder/inference/`. Returns a Dict.
-- `run_pso_optimization(; weight_matrix, skip_initial_beta_search, warm_start_params, output_subfolder, max_loop, ...)`: unified PSO wrapper for Steps 1 and 3. Runs Stage 0 LHS search (unless `skip_initial_beta_search=true`), Stage 1 full PSO, and 50-loop refinement. Returns `(best_params, best_fitness)`.
+- `run_pso_optimization(; weight_matrix, skip_initial_beta_search, warm_start_params, output_subfolder, max_loop, ...)`: unified optimizer wrapper for Steps 1 and 3 (name kept; backend-agnostic). Runs Stage 0 LHS search (unless `skip_initial_beta_search=true`) and Stage 1. **PSO backend**: Stage 1 + `max_loop`-epoch × 3-substage refinement (productivity → β+T → technical). **CMA-ES backend** (`OPTIMIZER_BACKEND == :cmaes`): the refinement loop is skipped (`for … in 1:0`) — Stage 1's single joint CMA-ES run is the whole search, since CMA-ES learns cross-block covariance directly and stops on ftol/xtol. Returns `(best_params, best_fitness)`.
 
-### `pso_integration.jl` — PSO optimizer
+### Optimizer backends (`--optimizer=pso|cmaes`)
 
-- `parallel_pso_smm(obj, lb, ub; n_particles, max_iter, warm_start_particle, ...)`: core PSO. Always includes `warm_start_particle` as one particle (guarantees monotone improvement). Restarts stagnant particles every 25 iterations when `fitness > 1.5 × g_best`.
-- `train_stage_pso(n_particles, max_iter; variable_list, last_stage_folder, alpha, weight_matrix=nothing, warm_start_override=nothing, ...)`: builds bounds around previous best (multiplicative `alpha`), constructs warm start, defines stage-specific objective, calls `parallel_pso_smm`. `weight_matrix` is forwarded to `parallel_SMM_safe` as `W_override`. `warm_start_override` allows passing a full-parameter warm start when `last_stage_folder=nothing` (used in Step 3 Stage 1).
+Both SMM steps run through `optimize_stage` (in `optimizer_api.jl`), the single seam
+that dispatches on `OPTIMIZER_BACKEND` to either PSO or CMA-ES. The contract is
+identical: `(objective, lb, ub; x0, n_particles, max_iter, beta_constraint,
+beta_indices, verbose) -> (best_x, best_f, history)`, so `train_stage_pso`,
+`run_pso_optimization`, and `main.jl` are optimizer-agnostic. `x0` is the warm
+start / incumbent (previous best). The two-step SMM procedure (Step 1 identity-W all
+params → Step 2 W_step3 → Step 3 efficient-W β+T) is the **same** for both backends;
+only the intra-step search differs (see `run_pso_optimization` below).
+
+**log-T (φ) search space (both backends).** The optimizer never sees raw `T`. The T
+block is searched as free log-space `φ_i = log(T_i / T_{s,ref})`, with each sector's
+reference entry **dropped** (pinned `T_{s,ref}=1`), so the search dimension is
+`N_T_FREE = sum(T_MASK) − #active_sectors` and the S unidentified directions never
+enter. Conversion is confined to `model_CP.jl`'s `t_levels_to_free_phi` /
+`t_free_phi_to_levels` / `full_to_search` / `search_to_full`; **every disk artifact
+and all of `full_SMM`/inference/reporting stay in raw T levels** (reference entries
+reconstruct to 1, so `unpack_params`' `./= T_mat[s,ref]` is a no-op). This mirrors
+the draw-method invariant: the search-space choice is confined to the transform
+sites. Fresh-start T bounds are `φ ∈ [log 0.1, log 10]` (symmetric, was `[0.1,10]×T_init`);
+continuation T bounds are `φ ± |log alpha|`.
+
+### `pso_integration.jl` — PSO optimizer + stage builder
+
+- `parallel_pso_smm(obj, lb, ub; n_particles, max_iter, warm_start_particle, ...)`: core PSO. Always includes `warm_start_particle` as one particle (guarantees monotone improvement). Restarts stagnant particles every 25 iterations when `fitness > 1.5 × g_best`. Unchanged.
+- `train_stage_pso(n_particles, max_iter; variable_list, last_stage_folder, alpha, weight_matrix=nothing, warm_start_override=nothing, ...)`: builds bounds around previous best (multiplicative `alpha`; additive-in-`φ` for the T block), constructs the warm start, defines the stage-specific objective, and calls **`optimize_stage`** (PSO or CMA-ES). `weight_matrix` is forwarded to `parallel_SMM_safe` as `W_override`. `warm_start_override` allows passing a full-parameter warm start when `last_stage_folder=nothing` (used in Step 3 Stage 1). The T block of every stage vector holds free φ (length `N_T_FREE`); the objective/reconstruction expand it to levels via `t_free_phi_to_levels`. Despite the name it is optimizer-agnostic.
 - `get_param_start_index(param_name)`: maps `:beta/:agg_labor_share_tech/:agg_industry_share_tech/:productivity/:T` to starting index in flat param vector.
+
+### `cmaes_integration.jl` — CMA-ES optimizer
+
+- `parallel_cmaes_smm(obj, lb, ub; x0, n_particles→λ, max_iter, beta_constraint, beta_indices, sigma0=0.2, seed=1, verbose)`: wraps `CMAEvolutionStrategy.minimize`. Runs on the **unit cube [0,1]^n** (mapped to `[lb,ub]` inside the evaluator) so a single scalar `σ0` is meaningful across heterogeneous coordinates. Population is evaluated via `pmap` (`parallel_evaluation=true`; library passes an `n × popsize` matrix). **Incumbent tracker** runs master-side after `pmap` (Refs inside the pmapped closure would be worker-local and lost) and compares against `f(x0)` before returning, restoring the "loss never worse than warm start" guarantee. β ordering enforced by the same `enforce_beta_constraint` repair as PSO. `history` supersets PSO's keys (`best_fitness`/`mean_fitness`/`best_params`); σ and axis-ratio print to console at `verbosity=1`.
+
+### `optimizer_api.jl` — dispatcher
+
+- `optimize_stage(obj, lb, ub; x0, n_particles, max_iter, beta_constraint, beta_indices, verbose, backend=OPTIMIZER_BACKEND, seed)`: dispatches to `parallel_pso_smm` (x0 → warm-start particle) or `parallel_cmaes_smm` (x0 → initial mean + incumbent floor).
 
 ### `main.jl` — three-step efficient SMM (primary entry point)
 
-`julia main.jl [industry] [n_coef] [resume] [K_sim]`
+`julia main.jl [industry] [n_coef] [n_tau] [K_sim] [draws] [optimizer]`
+
+`optimizer ∈ {pso (default), cmaes}` (ARGS[6]); read into `OPTIMIZER_BACKEND`. With
+`--optimizer=cmaes`, each step's staged refinement collapses into one joint CMA-ES run
+(see `run_pso_optimization`).
 
 Three-step procedure:
 1. **Step 1** (`output_subfolder="step1"`): identity-weighted (uses global `Weight_matrix_custom`) PSO → `θ̂_1`. Includes Stage 0 LHS beta search.
@@ -252,6 +289,11 @@ baseline_{industry}/
 | `Weight_matrix_custom` | Diagonal | Default SMM weight matrix: identity with 100× on reg_coef block |
 | `N_beta` | Int | Number of distance bins (4 or 5) |
 | `BLOCK_RANGES` | NTuple{5} | Index ranges into masked moment vector for each block |
+| `OPTIMIZER_BACKEND` | Symbol | `:pso` (default) or `:cmaes`, from `--optimizer` (ARGS[6]) |
+| `T_REDUCED_S` | Vector{Int} | Sector per reduced-T position (T_MASK order) |
+| `SECTOR_REF_REDUCED` | Vector{Int} | Reduced-T index of each sector's reference (pinned T=1) |
+| `T_FREE_REDUCED_IDX` | Vector{Int} | Reduced-T positions the optimizer varies as φ |
+| `N_T_REDUCED` / `N_T_FREE` | Int | `sum(T_MASK)` / free count (`= N_T_REDUCED − #active sectors`) |
 
 ---
 
@@ -388,6 +430,8 @@ If a change modifies anything documented in this file — file structure, functi
 *Format: date · file(s) changed · description (≤4 sentences)*
 
 <!-- Add entries below in reverse chronological order -->
+
+2026-07-04 · `cmaes_integration.jl` (new), `optimizer_api.jl` (new), `model_CP.jl`, `pso_integration.jl`, `tools.jl`, `load_parameters.jl`, `main.jl`, `run.sh`, `pkg.jl`, `claude.md` · Add a CMA-ES optimizer backend behind `--optimizer=pso|cmaes` (ARGS[6] → `OPTIMIZER_BACKEND`), and reparameterize the T block to free log-space φ for both backends. `optimize_stage` (optimizer_api.jl) is the single dispatch seam; `parallel_cmaes_smm` wraps `CMAEvolutionStrategy.minimize` on the unit cube with a master-side incumbent tracker (monotone vs warm start) and `pmap` population evaluation. `train_stage_pso` now calls `optimize_stage` and searches T as `φ_i = log(T_i/T_{s,ref})` with reference entries dropped (`N_T_FREE = sum(T_MASK) − #active sectors`); conversions `t_levels_to_free_phi`/`t_free_phi_to_levels`/`full_to_search`/`search_to_full` live in `model_CP.jl` and keep every disk artifact + `full_SMM`/inference in raw T levels (ref reconstructs to 1, so `unpack_params` normalization is a no-op). CMA-ES collapses each step's refinement loop (`run_pso_optimization` runs `1:0`) into one joint Stage-1 run; the two-step SMM structure (Step 1 identity-W all params, Step 3 efficient-W β+T) is unchanged for both. `main_pso.jl` (legacy) left untouched — it would need the two new includes to run under the renamed call path.
 
 2026-06-20 · `model_CP.jl`, `load_parameters.jl`, `CLAUDE.md`, `claude.md` · Remove the dead `second_stage` framework and reorganize `load_parameters.jl`. Verified the `second_stage=true` branch of `full_SMM` is dead — it reads `empirical_moments_reduced`/`Weight_matrix`/`mask_emp_gamma_ls` (defined only in `run_amplification_analysis.jl`, which neither includes `load_parameters.jl` nor calls `full_SMM`), and every live caller passes `second_stage=false`; collapsed it to the `else` body. Kept `second_stage` as an ignored positional arg (removing it would ripple through `parallel_SMM`/`parallel_SMM_safe`/`train_stage_one`/`pso_integration.jl`, which forward it positionally); `main_pso.jl` untouched. In `load_parameters.jl` removed the orphaned `Weight_matrix=nothing` const, the unused `N_rs_local` load, and a duplicate `n_reg` recompute, then grouped the file into 13 banner-delimited sections with one-line role comments — exact execution order, constant values, and all `@everywhere` broadcasts unchanged.
 

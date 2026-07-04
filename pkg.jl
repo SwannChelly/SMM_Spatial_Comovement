@@ -19,6 +19,8 @@ Pkg.add("Parquet")
 Pkg.add("SpecialFunctions")   # gamma function Γ(·)
 Pkg.add("FastGaussQuadrature") # gausslegendre(n) for quadrature
 Pkg.add("ForwardDiff")         # exact analytical Jacobian via forward-mode AD
+# Required for CMA-ES optimizer backend (cmaes_integration.jl)
+Pkg.add("CMAEvolutionStrategy") # CMA-ES with parallel evaluation, IPOP restarts, bounds
 
 
 

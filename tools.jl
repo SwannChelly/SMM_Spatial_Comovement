@@ -1391,11 +1391,15 @@ function run_pso_optimization(;
                     analytical=analytical, n_quad=n_quad)
 
     # ── Refinement loops ─────────────────────────────────────────────────────
+    # PSO backend only: the staged block-coordinate refinement (productivity →
+    # β+T → technical, or β+T for gamma_beta_only). The CMA-ES backend collapses
+    # all of this into the single joint Stage 1 run above (it learns cross-block
+    # covariance directly and stops on its own ftol/xtol), so we skip the loops.
     alpha_start, alpha_end = 0.3, 0.9
     # gamma_beta_only: one sub-stage per loop (beta+T only); else: three sub-stages
     substages_per_loop = gamma_beta_only ? 1 : 3
 
-    for loop in 1:max_loop
+    for loop in (OPTIMIZER_BACKEND == :cmaes ? (1:0) : 1:max_loop)
         alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
         past_loop_folder = loop == 1 ? loop_base : joinpath(loop_base, "epoch_$(loop-1)")
         loop_folder = joinpath(loop_base, "epoch_$loop")
