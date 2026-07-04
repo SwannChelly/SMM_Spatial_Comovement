@@ -45,7 +45,9 @@ using StatsBase
 @everywhere include("model_CP.jl")
 @everywhere include("model_analytical.jl")
 @everywhere include("tools.jl")
-@everywhere include("pso_integration.jl")
+@everywhere include("pso_integration.jl")      # PSO backend
+@everywhere include("cmaes_integration.jl")    # CMA-ES backend
+@everywhere include("optimizer.jl")            # backend-neutral hub (defines run_optimization / run_pso_optimization)
 
 ############## Parse arguments ##############
 

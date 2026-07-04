@@ -1,7 +1,14 @@
 """
-Particle Swarm Optimization integration for SMM calibration - FIXED VERSION
-Key fix: Always includes previous best as a warm start particle for monotonic improvement
-Additional fix: Enforce [0, 1] bounds for agg_labor_share_tech
+PSO backend for the SMM optimizer layer.
+
+Exposes the PSO half of the optimizer contract:
+- `parallel_pso_smm(objective, lb, ub; warm_start_particle, ...) -> (best_x, best_f, history)`
+- `enforce_beta_constraint` — the β-ordering repair, shared with the CMA-ES backend.
+
+The backend-neutral orchestration (`optimize_stage`, `train_stage`,
+`run_optimization`) lives in `optimizer.jl`; this file knows nothing about which
+backend is selected. Key feature: `warm_start_particle` is always included as a
+particle, guaranteeing monotone improvement across stages.
 """
 
 using Distributed
@@ -287,6 +294,7 @@ function enforce_beta_constraint(params::Vector{Float64}, beta_indices::UnitRang
     params_new[beta_indices] = betas_sorted
     return params_new
 end
+<<<<<<< HEAD
 
 
 const PSO_LOG_VARS = Set(["T"])   # variables explored in log space (T only; α is already in exp via τ=d^α)
@@ -609,3 +617,5 @@ end
 function get_n_T_params()
     return sum(T_MASK)
 end
+=======
+>>>>>>> aeb58f89c0cfdf3740451e81f65ec8efce79367a
