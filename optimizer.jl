@@ -435,7 +435,7 @@ function run_optimization(;
     output_subfolder::String = "step1",
     max_loop::Int = 50,
     n_particles::Int = 100,
-    max_iter_initial::Int = 200,
+    max_iter_initial::Int = 400,
     max_iter_stage::Int = 50,
     beta_search_method::String = "log_grid",
     beta_selection_criterion::String = "reg_coef",

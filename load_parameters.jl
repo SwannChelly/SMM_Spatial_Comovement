@@ -286,8 +286,8 @@ for s in 1:S_
         T_gravity[s, l] = max(emp_gamma_ls[l, s] * (w_rs_local[l]^theta), 1e-12)
     end
 end
-#@everywhere const T_rs_init = $(T_gravity)
-@everywhere const T_rs_init = $(T_gravity./T_gravity)
+@everywhere const T_rs_init = $(T_gravity)
+#@everywhere const T_rs_init = $(T_gravity./T_gravity)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 8 — EMPIRICAL MOMENT VECTOR + MOMENT_MASK + BLOCK_RANGES

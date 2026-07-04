@@ -150,7 +150,7 @@ if run_step2
         output_folder = output_folder,
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
-        K             = 500,
+        K             = 50,
         step_rel      = 1e-4,
         step_abs      = 1e-9,
         base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
@@ -284,7 +284,7 @@ if run_step4
         output_folder = output_folder,
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
-        K             = 500,
+        K             = 50,
         step_rel      = 1e-4,
         step_abs      = 1e-9,
         base_seed     = 1_000_000
