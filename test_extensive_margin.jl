@@ -65,28 +65,36 @@ println("="^72)
 
 # ── Parameter vector: prefer a saved estimate, else a documented default ──────
 function load_theta()
+    # A saved θ̂ is only usable if it was estimated under the SAME (N_REG, N_TAU,
+    # gamma_threshold) config as this invocation — unpack_params slices the head by
+    # the current N_TAU and scatters the tail into the current T_MASK, so a length
+    # mismatch means the file is from a different config and must be rejected.
+    expected = 1 + S + R_downstream + N_TAU + count(T_MASK)
     for rel in (("step3", "theta_hat_2.npy"), ("step1", "theta_hat_1.npy"),
                 ("step1", "best_params.npy"))
         p = joinpath(output_folder, rel...)
-        if isfile(p)
-            θ = NPZ.npzread(p)
-            ndims(θ) > 1 && (θ = θ[:, 1])
+        isfile(p) || continue
+        θ = NPZ.npzread(p)
+        ndims(θ) > 1 && (θ = θ[:, 1])
+        if length(θ) == expected
             @printf("Loaded θ̂ from %s (length %d)\n", p, length(θ))
             return θ
+        else
+            @printf("Skipping %s: length %d ≠ expected %d for this config (N_REG=%d, N_TAU=%d, active T=%d) — likely a different run\n",
+                    p, length(θ), expected, N_REG, N_TAU, count(T_MASK))
         end
     end
     # Default: T from the gravity start, unit A/Ω, a mild β. Geometry (dominance
     # structure, |D*|) is what we measure; the per-node error table depends on β,
     # so this default is clearly reported and β-perturbation stability is checked.
-    N_T_RED = count(T_MASK)
     T_red   = vec(permutedims(T_rs_init))[T_MASK]      # s-major, T_MASK order
     Ω_L     = 0.5
     Ω_s     = ones(S)
     A       = ones(R_downstream)
     β       = N_TAU == 1 ? [0.1] : collect(range(0.05, 0.30, length = N_TAU))
     θ = vcat(Ω_L, Ω_s, A, β, T_red)
-    @printf("No saved θ̂ found — using DEFAULT (T=T_rs_init, Ω/A=1, β=%s)\n", string(round.(β; digits = 3)))
-    @assert length(θ) == 1 + S + R_downstream + N_TAU + N_T_RED
+    @printf("Using DEFAULT θ (T=T_rs_init, Ω/A=1, β=%s)\n", string(round.(β; digits = 3)))
+    @assert length(θ) == expected
     return θ
 end
 
