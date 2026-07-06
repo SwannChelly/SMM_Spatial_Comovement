@@ -62,68 +62,6 @@ using Optim
 using CSV
 using FixedEffectModels, RDatasets, CategoricalArrays
 
-
-###### Testing environment #####
-test = false 
-if test
-    industry = "aero"
-    input_folder = "./baseline_"*industry
-    
-    coefs = CSV.read(joinpath(input_folder,"stats.csv"), DataFrame)
-    distances = NPZ.npzread(joinpath(input_folder, "distances.npy"))
-    w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-    N_downstream_per_region = NPZ.npzread(joinpath(input_folder,"N_downstream_per_region.npy"))
-    filter_N_upstream = NPZ.npzread(joinpath(input_folder,"filter_N_upstream.npy"))
-    S, R = size(filter_N_upstream)
-    R_downstream = size(N_downstream_per_region[N_downstream_per_region.!=0])[1]
-    delta_r = ones(R)
-
-    N_rho = 50
-    agg_labor_share = coefs[2,"value"]
-    agg_industry_share = NPZ.npzread(joinpath(input_folder,"input_share.npy"))
-    epsilon = coefs[1,"value"]
-    lambda = 0.5
-    nu = 0.2
-    nu_s = ones(S).*2.5
-    theta = 1.768
-
-    w_rs = NPZ.npzread(joinpath(input_folder, "w_rs.npy"))
-    regional_wages = NPZ.npzread(joinpath(input_folder, "regional_wages.npy"))
-
-    domestic_share = NPZ.npzread(joinpath(input_folder,"domestic_share.npy"))
-    emp_gamma_ls = (NPZ.npzread(joinpath(input_folder,"emp_gamma_ls.npy"))')
-    emp_pi_r = NPZ.npzread(joinpath(input_folder,"emp_pi_r.npy"))[2:end]
-    reg_coef = NPZ.npzread(joinpath(input_folder,"reg_coef.npy"))
-    empirical_moments = [[agg_labor_share],agg_industry_share[2:end],emp_pi_r,reg_coef,emp_gamma_ls]
-    empirical_moments = vcat([vec(empirical_moments[i]) for i in 1:(length(empirical_moments)-1)]...)   
-    empirical_moments = reshape(empirical_moments,1,length(empirical_moments))
-
-    function distance_bin(d)
-        if 20 < d <= 50
-            return 1
-        elseif 50 < d <= 100
-            return 2
-        elseif 100 < d <= 150
-            return 3
-        elseif 150 < d <= 200
-            return 4
-        elseif d > 200
-            return 5
-        else
-            return 0
-        end
-    end
-
-    DistBin = Array{Int}(undef, R, R)
-    for i in 1:R, j in 1:R
-        DistBin[i,j] = distance_bin(distances[i,j])
-    end
-
-    CLOSEST_PLANT_DIST = vec(map(x -> distances[x[1], x[2]], argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2)))
-    CLOSEST_DOWNSTREAM_REGION = vec(getindex.(argmin(1 ./ (1 ./ distances .* (N_downstream_per_region .> 0)'), dims=2), 2))
-end
-
-
 ##################### Stratified Draws (CdGM-style) ###################
 
 """
@@ -492,7 +430,7 @@ function unpack_params(params)
 end
 
 
-##################### log-T (φ) reparameterization #####################
+##################### log-T = (φ) reparameterization #####################
 # The optimizer searches φ (free, log-space, per-sector reference dropped); the
 # model and every disk artifact stay in raw T *levels*. These two helpers are the
 # only bridge — confined here so the choice of search space never leaks into

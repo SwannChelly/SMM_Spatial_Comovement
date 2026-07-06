@@ -244,6 +244,14 @@ function train_stage(
                 # level box becomes an additive box φ ± |log alpha|.
                 lb_v = val .+ log(alpha)
                 ub_v = val .- log(alpha)
+            elseif v == "beta"
+                if N_TAU == 1
+                    lb_v = val .* (1 - alpha)
+                    ub_v = val .* (1 + alpha)
+                    # Clamp to valid range [0.5, 1.5]
+                    lb_v = max.(lb_v, 0.5)
+                    ub_v = min.(ub_v, 1.5)
+                end
             else
                 # Standard multiplicative bounds
                 lb_v = val .* alpha

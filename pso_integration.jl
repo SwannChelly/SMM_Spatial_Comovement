@@ -248,22 +248,6 @@ function parallel_pso_smm(
             println("  Best fitness:     $(round(g_best_fitness, digits=6))")
             println("  Mean fitness:     $(round(mean(filter(isfinite, fitness)), digits=6))")
 
-            # Loss decomposition by block
-            #c, blocks, total = loss_decomposition(g_best)
-            #if prev_c !== nothing
-            #    ΔL = total - sum(prev_c)
-            #    if abs(ΔL) > 1e-12
-            #        prev_blocks = [sum(prev_c[r]) for r in BLOCK_RANGES]
-            #        Δblocks = blocks .- prev_blocks
-            #        parts = join([
-            #            @sprintf("%s:%+.0f%%", BLOCK_NAMES[k], 100*Δblocks[k]/abs(ΔL))
-            #            for k in 1:5
-            #        ], " | ")
-            #        println("  Δ by block:       $parts")
-            #    end
-            #end
-            #prev_c = c
-
             # Keep existing improvement logging below...
             if last_printed_iter > 0
                 improvement = last_printed_fitness - g_best_fitness

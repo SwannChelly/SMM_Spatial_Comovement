@@ -60,7 +60,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
-@everywhere const theta               = $(1.768)
+@everywhere const theta               = $(1.)#1.768
 
 println("\n N_rho = $N_rho — Entreprise par secteur x region")
 println("\n Lambda = $lambda — Labor / CI share")
@@ -286,8 +286,8 @@ for s in 1:S_
         T_gravity[s, l] = max(emp_gamma_ls[l, s] * (w_rs_local[l]^theta), 1e-12)
     end
 end
-@everywhere const T_rs_init = $(T_gravity)
-#@everywhere const T_rs_init = $(T_gravity./T_gravity)
+#@everywhere const T_rs_init = $(T_gravity)
+@everywhere const T_rs_init = $(T_gravity./T_gravity)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 8 — EMPIRICAL MOMENT VECTOR + MOMENT_MASK + BLOCK_RANGES
