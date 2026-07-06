@@ -445,7 +445,7 @@ function run_optimization(;
     n_particles::Int = 100,
     max_iter_initial::Int = 400,
     max_iter_stage::Int = 50,
-    beta_search_method::String = "log_grid",
+    beta_search_method::String = "lhs",
     beta_selection_criterion::String = "reg_coef",
     length_range_beta::Int = 40,
     method::String = "original",
@@ -469,8 +469,8 @@ function run_optimization(;
         println("[$output_subfolder] STAGE 0: Finding good initial beta values")
         println("="^70)
 
-        beta_min = 1e-3
-        beta_max = 10
+        beta_min = 0.5
+        beta_max = 1.5
         if N_TAU == 1
             length_range_beta = 10000
         end
