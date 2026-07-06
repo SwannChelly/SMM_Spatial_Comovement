@@ -471,6 +471,7 @@ function run_optimization(;
 
         beta_min = 0.5
         beta_max = 1.5
+        println("Search is done $beta_search_method with min $beta_min and max $beta_max")
         if N_TAU == 1
             length_range_beta = 10000
         end
@@ -479,7 +480,7 @@ function run_optimization(;
                                                      log_grid_length=length_range_beta)
         else
             beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min, beta_max;
-                                                     lhs_n_samples=20000)
+                                                     lhs_n_samples=10000)
         end
         println("  Generated $(length(beta_candidates)) beta candidates")
 
