@@ -244,6 +244,7 @@ function train_stage(
                 # level box becomes an additive box φ ± |log alpha|.
                 lb_v = val .+ log(alpha)
                 ub_v = val .- log(alpha)
+                lb_v = max.(lb_v, 0)
             elseif v == "beta"
                 if N_TAU == 1
                     lb_v = val .* (1 - alpha)

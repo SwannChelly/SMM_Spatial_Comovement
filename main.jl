@@ -59,7 +59,7 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
 @assert optimizer_backend in (:pso, :cmaes) "optimizer must be pso|cmaes, got :$optimizer_backend"
 
-K = 20
+K = 2
 
 run_step1 = true#true
 run_step2 = true
@@ -99,6 +99,14 @@ step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 ############## STEP 1 — Identity-weighted optimisation ##############
 # Full optimisation to fixe un-bootstrapable parameters. 
 
+
+A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
+A_init ./= sum(A_init)
+T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
+# New layout: [Ω^L | Ω^s | A | β(N_TAU) | T] — beta is inserted between A and T
+init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
+warm_start = vcat(init_other_prefix, 1, T_init_nz)
+
 if run_step1
     println("\n" * "="^70)
     println("STEP 1: Identity-weighted optimisation (backend = :$optimizer_backend)")
@@ -106,8 +114,8 @@ if run_step1
 
     theta_hat_1, _ = run_optimization(;
         weight_matrix            = nothing,
-        skip_initial_beta_search = false,
-        warm_start_params        = nothing,
+        skip_initial_beta_search = true,
+        warm_start_params        = warm_start,
         output_subfolder         = "step1",
         max_loop                 = K
     )
