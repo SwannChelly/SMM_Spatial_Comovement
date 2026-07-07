@@ -573,15 +573,22 @@ function run_optimization(;
                     analytical=analytical, n_quad=n_quad)
 
     # ── Refinement loops ─────────────────────────────────────────────────────
-    # PSO backend only: the staged block-coordinate refinement (productivity →
-    # β+T → technical, or β+T for gamma_beta_only). The CMA-ES backend collapses
-    # all of this into the single joint Stage 1 run above (it learns cross-block
-    # covariance directly and stops on its own ftol/xtol), so we skip the loops.
+    # PSO backend: the staged block-coordinate refinement (productivity → β+T →
+    # technical, or joint β+T for gamma_beta_only). CMA-ES backend: the general
+    # (non-gamma_beta_only) case collapses all of this into the single joint
+    # Stage 1 run above (it learns cross-block covariance directly and stops on
+    # its own ftol/xtol), so those loops are skipped; the gamma_beta_only case
+    # instead alternates single-block CMA-ES runs (β-only, then T-only) — each
+    # is cheap (small λ, low dimension) and lets β adapt to the T update from the
+    # previous sub-stage and vice versa, which the joint Stage 1 run may have
+    # settled short of.
     alpha_start, alpha_end = 0.3, 0.9
-    # gamma_beta_only: one sub-stage per loop (beta+T only); else: three sub-stages
-    substages_per_loop = gamma_beta_only ? 1 : 3
+    # gamma_beta_only: 2 sub-stages/loop under CMA-ES (β, T alternating), 1 under
+    # PSO (joint β+T); else: three sub-stages (PSO only — CMA-ES skips this case)
+    substages_per_loop = gamma_beta_only ? (OPTIMIZER_BACKEND == :cmaes ? 2 : 1) : 3
+    run_refinement = gamma_beta_only || OPTIMIZER_BACKEND != :cmaes
 
-    for loop in (OPTIMIZER_BACKEND == :cmaes ? (1:0) : 1:max_loop)
+    for loop in (run_refinement ? (1:max_loop) : (1:0))
         alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
         past_loop_folder = loop == 1 ? loop_base : joinpath(loop_base, "epoch_$(loop-1)")
         loop_folder = joinpath(loop_base, "epoch_$loop")
@@ -589,7 +596,29 @@ function run_optimization(;
 
         println("\n[$output_subfolder] LOOP $loop/$max_loop  alpha=$alpha")
 
-        if gamma_beta_only
+        if gamma_beta_only && OPTIMIZER_BACKEND == :cmaes
+            # Alternate single-block CMA-ES refinement: β alone, then T alone.
+            # A_r / labor / industry shares stay fixed at warm start throughout.
+            substage_folder = past_loop_folder
+            for var in ("beta", "T")
+                best_params, best_fitness, history = train_stage(
+                    n_particles, max_iter_stage;
+                    variable_list     = [var],
+                    last_stage_folder = joinpath(substage_folder, string(stage)),
+                    K=1, alpha=alpha, second_stage=false, method=method,
+                    u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                    moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+                )
+                stage += 1
+                folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+                NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+                generate_report(loop_folder, string(stage), 1, [var], best_params, string(alpha);
+                                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                                analytical=analytical, n_quad=n_quad)
+                substage_folder = loop_folder
+            end
+        elseif gamma_beta_only
+            # PSO: joint β+T sub-stage (unchanged).
             # Only optimise β and T; A_r / labor / industry shares are fixed at warm start
             best_params, best_fitness, history = train_stage(
                 n_particles, max_iter_stage;
