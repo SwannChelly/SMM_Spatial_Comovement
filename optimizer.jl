@@ -184,7 +184,7 @@ function train_stage(
             0.8 .* agg_industry_share,
             0.8.* A,
             init_beta .* 0.5,
-            fill(log(0.1), N_T_FREE)
+            fill(log(0.5), N_T_FREE)
         )
 
         ub = vcat(
@@ -192,7 +192,7 @@ function train_stage(
             1.2 .* agg_industry_share,
             A .* 1.2,
             init_beta .* 1.5,
-            fill(log(10.0), N_T_FREE)
+            fill(log(2), N_T_FREE)
         )
 
         beta_constraint = true
@@ -244,7 +244,8 @@ function train_stage(
                 # level box becomes an additive box φ ± |log alpha|.
                 lb_v = val .+ log(alpha)
                 ub_v = val .- log(alpha)
-                lb_v = max.(lb_v, 0)
+                lb_v = max.(lb_v, log(0.5))
+                ub_v = min.(ub_v, log(2))
             elseif v == "beta"
                 if N_TAU == 1
                     lb_v = val .* (1 - alpha)
@@ -444,7 +445,7 @@ function run_optimization(;
     output_subfolder::String = "step1",
     max_loop::Int = 50,
     n_particles::Int = 100,
-    max_iter_initial::Int = 400,
+    max_iter_initial::Int = 200,
     max_iter_stage::Int = 50,
     beta_search_method::String = "lhs",
     beta_selection_criterion::String = "reg_coef",

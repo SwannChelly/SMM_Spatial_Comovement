@@ -117,7 +117,8 @@ if run_step1
         skip_initial_beta_search = true,
         warm_start_params        = warm_start,
         output_subfolder         = "step1",
-        max_loop                 = K
+        max_loop                 = K,
+        max_iter_initial         = 200
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -263,7 +264,8 @@ if run_step3
         output_subfolder         = "step3",
         max_loop                 = K,
         gamma_beta_only          = true,
-        moments_loss_gamma_beta  = true
+        moments_loss_gamma_beta  = true,
+        max_iter_initial         = 200
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
