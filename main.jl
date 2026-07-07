@@ -59,7 +59,7 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
 @assert optimizer_backend in (:pso, :cmaes) "optimizer must be pso|cmaes, got :$optimizer_backend"
 
-K = 2
+K = 5
 
 run_step1 = true#true
 run_step2 = true

@@ -167,10 +167,12 @@ function train_stage(
     analytical::Bool = false,
     n_quad::Int = 200
 )
+    
+    lb_t,ub_t = log(0.01),log(10)
+    lb_beta,ub_beta = 0.1,2
+
     println("\n Lower and Upper bound beta = [$lb_beta,$ub_beta]")
     println("\n Lower and Upper bound T = [$lb_t,$ub_t]")
-    lb_t,ub_t = log(0.1),log(10)
-    lb_beta,ub_beta = 0.1,2
     # Build bounds based on previous stage or initialization
     if last_stage_folder === nothing
         # Fresh start - use init_beta
@@ -251,9 +253,9 @@ function train_stage(
                 ub_v = min.(ub_v, ub_t)
             elseif v == "beta"
                 if N_TAU == 1
-                    lb_v = val .* (1 - alpha)
-                    ub_v = val .* (1 + alpha)
-                    # Clamp to valid range [0.5, 1.5]
+                    lb_v = val .* alpha
+                    ub_v = val ./ alpha
+                    # Clamp to valid range
                     lb_v = max.(lb_v, lb_beta)
                     ub_v = min.(ub_v, ub_beta)
                 end
@@ -600,6 +602,7 @@ function run_optimization(;
         println("\n[$output_subfolder] LOOP $loop/$max_loop  alpha=$alpha")
 
         if gamma_beta_only && OPTIMIZER_BACKEND == :cmaes
+            max_iter_stage = 100
             # Alternate single-block CMA-ES refinement: β alone, then T alone.
             # A_r / labor / industry shares stay fixed at warm start throughout.
             substage_folder = past_loop_folder
