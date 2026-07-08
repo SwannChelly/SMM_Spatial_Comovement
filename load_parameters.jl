@@ -529,6 +529,13 @@ else
 end
 @everywhere const T_rs_init = $(T_init_local)
 
+# Trade-cost (β/α) init anchor for the PSO search box. The α prior (N_TAU==1) is the
+# fixed centre of the [×0.5, ×2] bound the optimizer keeps β within, in every stage
+# (mirrors the T box anchored to T_rs_init). `nothing` ⇒ the optimizer falls back to
+# anchoring β to each stage's starting value (see optimizer.jl train_stage).
+@everywhere const TAU_PRIOR = $((_prior_alpha !== nothing && n_tau == 1) ?
+                                [Float64(_prior_alpha)] : nothing)
+
 # ── Diagnostic: gravity vs γ-inversion T starting values (ref-normalized) ────
 # Saves a log-log scatter of the two initialisations (both rescaled per sector to
 # their reference region) and quantifies their gap versus distance. Since both
