@@ -59,7 +59,7 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
 @assert optimizer_backend in (:pso, :cmaes) "optimizer must be pso|cmaes, got :$optimizer_backend"
 
-K = 2
+K = 20
 
 run_step1 = true#true
 run_step2 = true
@@ -105,7 +105,7 @@ A_init ./= sum(A_init)
 T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
 # New layout: [Ω^L | Ω^s | A | β(N_TAU) | T] — beta is inserted between A and T
 init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
-warm_start = vcat(init_other_prefix, 1, T_init_nz)
+warm_start = vcat(init_other_prefix, P_alpha, T_init_nz)
 
 if run_step1
     println("\n" * "="^70)
