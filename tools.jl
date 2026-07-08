@@ -734,6 +734,11 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     plot(p1, p2, p3, layout=(1, 3), size=(1500, 500), margin=5Plots.mm)
     savefig(joinpath(folder, "dashboard.png"))
 
+    # ── Second plot: best T vs the very-initial T (α in the name) ──
+    # Produced at the end of each epoch/stage report so the T distribution's drift
+    # from its γ-inversion warm start is tracked alongside the moment dashboard.
+    plot_T_vs_initial(best_params, folder; label = "$(stage)")
+
     # ── Save numpy arrays ──
 
     npzwrite(joinpath(folder, "pi_r.npy"), results[best_index][2][3])

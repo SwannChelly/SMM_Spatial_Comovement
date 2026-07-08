@@ -122,8 +122,6 @@ if run_step1
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
-    # Compare the fitted T distribution to the very initial one (α in the name).
-    plot_T_vs_initial(theta_hat_1, joinpath(output_folder, "step1"); label = "step1")
     println("Step 1 complete. θ̂_1 saved.")
 else
     println("Step 1 skipped (resume).")
@@ -271,8 +269,6 @@ if run_step3
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
-    # Compare the fitted T distribution to the very initial one (α in the name).
-    plot_T_vs_initial(theta_hat_2, joinpath(output_folder, "step3"); label = "step3")
     println("Step 3 complete. θ̂_2 saved.")
 end
 
