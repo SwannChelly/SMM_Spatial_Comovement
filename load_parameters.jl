@@ -57,7 +57,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
 @everywhere const N_rho               = $(2000)
 @everywhere const epsilon             = $(coefs[1, "value"])
-@everywhere const P_alpha             = $(coefs[4, "value"])
+@everywhere const P_alpha             = $(coefs[4, "value"]) #Prior on alpha
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
