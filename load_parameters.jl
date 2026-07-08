@@ -271,13 +271,15 @@ n_reg = length(reg_coef_local)   # actual moment count from loaded data
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 7 — T STARTING VALUES (GRAVITY)
-# Warm-starts the comparative-advantage optimisation at a gravity-implied guess
-# T ≈ γ_ls · w^θ, the value consistent with observed shares at uniform trade
-# costs — a basin near the optimum that shortens PSO search.
+# SECTION 7 — T STARTING VALUES (GRAVITY FALLBACK)
+# Warm-starts the comparative-advantage optimisation. The gravity guess
+# T ≈ γ_ls · w^θ is the value consistent with observed shares at UNIFORM trade
+# costs (τ≡1) — it drops all trade-cost geometry. It is kept here only as a
+# fallback: the active T_rs_init is built by the γ-inversion in SECTION 10b
+# (after the geography/trade-cost precompute), which restores the τ terms.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# The starting point of the optimization for the comparative advantage:
+# Gravity fallback base (uniform trade costs): T ≈ γ_ls · w^θ, per (s,r).
 T_gravity = zeros(S_, R_full)
 for s in 1:S_
     idxs = SECTOR_GOOD_INDICES_local[s]
@@ -286,8 +288,8 @@ for s in 1:S_
         T_gravity[s, l] = max(emp_gamma_ls[l, s] * (w_rs_local[l]^theta), 1e-12)
     end
 end
-#@everywhere const T_rs_init = $(T_gravity)
-@everywhere const T_rs_init = $(T_gravity./T_gravity)
+# NOTE: `@everywhere const T_rs_init` is bound in SECTION 10b, once the
+# trade-cost geometry (LOG_DIST_DOWNSTREAM) it needs is available.
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 8 — EMPIRICAL MOMENT VECTOR + MOMENT_MASK + BLOCK_RANGES
@@ -405,6 +407,127 @@ LOG_CLOSEST_DIST_local    = log.(max.(closest_plant_dist_local, 1.0))
 @everywhere const LOG_CLOSEST_DIST    = $LOG_CLOSEST_DIST_local
 
 println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 10b — T STARTING VALUES VIA γ_ls INVERSION (TRADE-COST AWARE)
+# Inverts the closed-form sourcing-share map for the comparative-advantage
+# starting point, using the α prior on trade costs and wages ≡ 1.
+#
+# Model (model_analytical.jl, w_val ≡ 1):
+#     X_ls[r,s] = T[s,r] · M[s,r],   M[s,r] = Σ_dr τ[r,dr]^(-θ) · Ê_dr / Φ[s,dr]
+#     Φ[s,dr]   = Σ_{r'} T[s,r'] · τ[r',dr]^(-θ)
+#     γ_ls[r,s] ∝ T[s,r] · M[s,r]
+# ⇒  T[s,r] ∝ γ_ls[r,s] / M[s,r].
+#
+# M depends on T only through Φ, so this is a cheap fixed point (τ from the α
+# prior is fixed throughout). Destination expenditure E_{s,dr} is proxied by the
+# observed market size Ê_dr = emp_pi_r_full (the destination-varying term is Y_dr;
+# the residual price-index terms need the GE solve and are dropped for the init).
+# At the fixed point the model reproduces emp_gamma_ls up to that proxy. T is only
+# identified per sector up to scale (unpack_params normalizes T[s,:] /= T[s,ref]),
+# so the inversion is likewise normalized to its reference region.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Read the α prior on trade costs from stats.csv (robust to layout) ────────
+# Accepts either a column named "prior_alpha" or a row whose label column equals
+# "prior_alpha" with the number in the "value" column. Returns nothing if absent.
+function _read_prior_alpha(coefs_df)
+    cols = names(coefs_df)
+    if "prior_alpha" in cols
+        vals = collect(skipmissing(coefs_df[!, "prior_alpha"]))
+        !isempty(vals) && return Float64(vals[1])
+    end
+    if "value" in cols
+        for cname in cols
+            col = coefs_df[!, cname]
+            idx = findfirst(x -> x isa AbstractString &&
+                                 lowercase(strip(x)) == "prior_alpha", col)
+            idx !== nothing && return Float64(coefs_df[idx, "value"])
+        end
+    end
+    return nothing
+end
+
+"""
+    invert_T_from_gamma(prior_alpha; max_iter=1000, tol=1e-11, damping=0.5)
+
+Fixed-point inversion of the sourcing-share map for the T starting values.
+Returns an (S, R_full) matrix with active (s,r) entries set to the inverted
+comparative advantage (per-sector normalized to the reference region) and
+inactive entries left at 0. Uses trade costs τ[r,dr] = exp(α · log max(d,1))
+(the power-law N_TAU==1 form in build_tau, evaluated at the α prior) and wages ≡ 1.
+"""
+function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
+                             tol::Float64=1e-11, damping::Float64=0.5)
+    θ = theta
+    # τ^{-θ}[r, dr] under the power-law prior and wages ≡ 1.
+    tau_negθ = exp.((-θ * prior_alpha) .* LOG_DIST_DOWNSTREAM_local)   # (R_full, R_downstream)
+    Ê = emp_pi_r_local ./ sum(emp_pi_r_local)                          # (R_downstream,) market size
+
+    T = zeros(Float64, S_, R_full)
+    max_iters_used = 0
+    for s in 1:S_
+        regions_s = SECTOR_GOOD_REGIONS_local[s]
+        isempty(regions_s) && continue
+        ref = T_REF_REGION_local[s] > 0 ? T_REF_REGION_local[s] : regions_s[1]
+        # Initialise at the observed shares (positive), normalized to the ref region.
+        for r in regions_s
+            T[s, r] = max(emp_gamma_ls_local[r, s], 1e-12)
+        end
+        T[s, regions_s] ./= T[s, ref]
+        for it in 1:max_iter
+            max_iters_used = max(max_iters_used, it)
+            # Φ[dr] = Σ_{r'∈active} T[s,r'] τ^{-θ}[r',dr]
+            Phi = zeros(Float64, R_down_)
+            for r in regions_s, dr in 1:R_down_
+                Phi[dr] += T[s, r] * tau_negθ[r, dr]
+            end
+            # T_new[r] ∝ γ / M[r],  M[r] = Σ_dr τ^{-θ}[r,dr] Ê_dr / Φ[dr]
+            # Damped log-space update; the map is homogeneous degree 1 in T (scale
+            # is a neutral direction), so renormalize to the ref region each pass.
+            T_new = Dict{Int,Float64}()
+            for r in regions_s
+                M = 0.0
+                for dr in 1:R_down_
+                    Phi[dr] > 1e-300 && (M += tau_negθ[r, dr] * Ê[dr] / Phi[dr])
+                end
+                γ  = max(emp_gamma_ls_local[r, s], 1e-12)
+                Tr = M > 1e-300 ? γ / M : T[s, r]
+                T_new[r] = exp((1 - damping) * log(T[s, r]) + damping * log(Tr))
+            end
+            ref_val = T_new[ref]
+            max_rel = 0.0
+            for r in regions_s
+                Tn  = T_new[r] / ref_val                       # renormalize to ref=1
+                rel = abs(log(Tn) - log(T[s, r]))
+                rel > max_rel && (max_rel = rel)
+                T[s, r] = Tn
+            end
+            max_rel < tol && break
+        end
+    end
+    return T, max_iters_used
+end
+
+_prior_alpha = _read_prior_alpha(coefs)
+if _prior_alpha === nothing
+    @warn "prior_alpha not found in stats.csv — falling back to gravity T init (τ≡1). " *
+          "Add a `prior_alpha` column or row to enable the trade-cost-aware inversion."
+    T_init_local = T_gravity ./ T_gravity   # active→1, inactive→NaN (masked out later)
+else
+    println("\nInverting T from γ_ls with prior_alpha = $_prior_alpha (wages ≡ 1)")
+    T_init_local, iters_used = invert_T_from_gamma(_prior_alpha)
+    active_vals = T_init_local[T_init_local .> 0]
+    if isempty(active_vals) || !all(isfinite, active_vals)
+        @warn "γ-inversion produced non-finite/empty T — falling back to gravity T init."
+        T_init_local = T_gravity ./ T_gravity
+    else
+        @printf("  γ-inversion done (≤%d iters). T range [%.3g, %.3g], median %.3g\n",
+                iters_used, minimum(active_vals), maximum(active_vals),
+                sort(active_vals)[cld(length(active_vals), 2)])
+    end
+end
+@everywhere const T_rs_init = $(T_init_local)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 11 — IDENTIFIED-PARAMETER INDICES (JACOBIAN / INFERENCE)
