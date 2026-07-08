@@ -539,6 +539,67 @@ function bubble_scatter(x::AbstractVector, y::AbstractVector;
 end
 
 
+"""
+    plot_T_vs_initial(best_params, out_folder; label="")
+
+Scatter the current best T against the *very initial* T (`T_rs_init`, the
+γ-inversion warm start built at the α prior). Called at the end of each estimation
+step. Both axes are per-sector reference-normalised, so a point on the 45° line is
+a region whose T was left unchanged by the fit.
+
+- **x** = initial T at the initial α (`TAU_PRIOR`, the γ-inversion prior).
+- **y** = current best T at the current best α (`unpack_params(best_params)` β block).
+
+The current best α is embedded in the scatter title, axis labels, and the output
+filename (`T_best_vs_initial_alpha<α>.png` + companion `.npz` with the raw pairs).
+Fully guarded — a failure here never blocks estimation.
+"""
+function plot_T_vs_initial(best_params, out_folder; label::String = "")
+    try
+        mkpath(out_folder)
+        _, _, _, beta_best, T_best_flat = unpack_params(best_params)
+        # Current best α (N_TAU==1 ⇒ scalar α); initial α from the γ-inversion prior.
+        cur_alpha  = length(beta_best) >= 1 ? Float64(beta_best[1]) : NaN
+        init_alpha = (TAU_PRIOR !== nothing) ? Float64(TAU_PRIOR[1]) : NaN
+
+        # unpack_params returns vec(T_mat) with T_mat (S,R); recover (S,R). Both this
+        # and T_rs_init are already per-sector ref-normalised → directly comparable.
+        T_best = reshape(Float64.(T_best_flat), S, R)
+        T_init = T_rs_init
+
+        xs = Float64[]; ys = Float64[]; ss = Int[]; rs = Int[]
+        for s in 1:S, r in 1:R
+            ti = T_init[s, r]; tb = T_best[s, r]
+            (isfinite(ti) && isfinite(tb) && ti > 1e-8 && tb > 1e-8) || continue
+            push!(xs, ti); push!(ys, tb); push!(ss, s); push!(rs, r)
+        end
+        isempty(xs) && return
+
+        a_i = round(init_alpha, digits = 3)
+        a_c = round(cur_alpha,  digits = 3)
+        ttl = "T distribution: initial (α=$a_i) vs best (α=$a_c)" *
+              (isempty(label) ? "" : "  [$label]")
+        p = Plots.scatter(xs, ys; xscale = :log10, yscale = :log10,
+            xlabel = "initial T / T_ref  (α=$a_i)",
+            ylabel = "current best T / T_ref  (α=$a_c)",
+            title  = ttl,
+            markersize = 5, markeralpha = 0.7, legend = false)
+        lo = min(minimum(xs), minimum(ys)); hi = max(maximum(xs), maximum(ys))
+        Plots.plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash)
+
+        png = joinpath(out_folder, "T_best_vs_initial_alpha$(a_c).png")
+        Plots.savefig(p, png)
+        NPZ.npzwrite(joinpath(out_folder, "T_best_vs_initial_alpha$(a_c).npz"),
+                     Dict("T_initial" => xs, "T_best" => ys,
+                          "sector" => Float64.(ss), "region" => Float64.(rs),
+                          "alpha_initial" => [init_alpha], "alpha_best" => [cur_alpha]))
+        println("  [T-plot] saved $(png)  (α_init=$a_i, α_best=$a_c, n=$(length(xs)))")
+    catch e
+        @warn "plot_T_vs_initial skipped: $e"
+    end
+end
+
+
 function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="";
                          u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                          sample_weights::Union{Nothing, Matrix{Float64}}=nothing,

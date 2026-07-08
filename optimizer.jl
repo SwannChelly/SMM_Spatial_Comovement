@@ -172,10 +172,10 @@ function train_stage(
     # α and T are constrained to [BOUND_LO, BOUND_HI] × their INITIAL value in every
     # stage: T to T_rs_init (the γ-inversion), β to TAU_PRIOR (the α prior). This
     # aligns the trust region with the theory-based warm start so PSO never drifts
-    # beyond a factor of 2 from it. The per-stage radius `alpha` still anneals INSIDE
+    # beyond ±20% of it. The per-stage radius `alpha` still anneals INSIDE
     # this box in continue stages. Falls back to the stage's starting value when no
-    # prior anchor is available (TAU_PRIOR === nothing → old ×0.5..×2 around init_beta).
-    BOUND_LO, BOUND_HI = 0.5, 2.0
+    # prior anchor is available (TAU_PRIOR === nothing → ×0.8..×1.2 around init_beta).
+    BOUND_LO, BOUND_HI = 0.8, 1.2
     phi_anchor = t_levels_to_free_phi(vec(permutedims(T_rs_init))[T_MASK])  # φ of T_rs_init (N_T_FREE)
     T_phi_lo   = phi_anchor .+ log(BOUND_LO)
     T_phi_hi   = phi_anchor .+ log(BOUND_HI)
@@ -189,9 +189,9 @@ function train_stage(
         A ./= sum(A)
 
         # T block is searched as free log-space φ (ref entries dropped). The box is
-        # φ_init + [log(BOUND_LO), log(BOUND_HI)] ⇒ T ∈ [×0.5, ×2] × T_rs_init, centred
+        # φ_init + [log(BOUND_LO), log(BOUND_HI)] ⇒ T ∈ [×0.8, ×1.2] × T_rs_init, centred
         # on the γ-inversion init (T_init is no longer ≡1, so the box must track it).
-        # β is boxed to [×0.5, ×2] × the α prior (TAU_PRIOR), else × init_beta.
+        # β is boxed to [×0.8, ×1.2] × the α prior (TAU_PRIOR), else × init_beta.
         beta_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_beta
         lb = vcat(
             0.8*agg_labor_share,
@@ -255,12 +255,12 @@ function train_stage(
                 ub_v = min.(ub_v, 1.0)
             elseif v == "T"
                 # val is φ (log space): the per-stage radius α gives the additive box
-                # φ ± |log α|, then clamped to the init-anchored [×0.5, ×2] × T_rs_init
+                # φ ± |log α|, then clamped to the init-anchored [×0.8, ×1.2] × T_rs_init
                 # box (T_phi_lo/T_phi_hi) so the search never leaves it in any stage.
                 lb_v = max.(val .+ log(alpha), T_phi_lo)
                 ub_v = min.(val .- log(alpha), T_phi_hi)
             elseif v == "beta"
-                # Per-stage radius α around the incumbent, clamped to [×0.5, ×2] × the
+                # Per-stage radius α around the incumbent, clamped to [×0.8, ×1.2] × the
                 # α prior (TAU_PRIOR); falls back to × the incumbent when no prior.
                 anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : val
                 lb_v = max.(val .* (1 - alpha), anchor .* BOUND_LO)
@@ -482,12 +482,12 @@ function run_optimization(;
         println("[$output_subfolder] STAGE 0: Finding good initial beta values")
         println("="^70)
 
-        # Anchor the coarse β search to [×0.5, ×2] × the α prior (N_TAU==1) so the
+        # Anchor the coarse β search to [×0.8, ×1.2] × the α prior (N_TAU==1) so the
         # selected init_beta lands inside the prior-anchored Stage-1 box; else the
         # historical [0.5, 1.5] range.
         if N_TAU == 1 && TAU_PRIOR !== nothing
-            beta_min = TAU_PRIOR[1] * 0.5
-            beta_max = TAU_PRIOR[1] * 2.0
+            beta_min = TAU_PRIOR[1] * 0.8
+            beta_max = TAU_PRIOR[1] * 1.2
         else
             beta_min = 0.5
             beta_max = 1.5
