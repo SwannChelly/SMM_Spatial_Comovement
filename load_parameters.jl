@@ -529,6 +529,96 @@ else
 end
 @everywhere const T_rs_init = $(T_init_local)
 
+# ── Diagnostic: gravity vs γ-inversion T starting values (ref-normalized) ────
+# Saves a log-log scatter of the two initialisations (both rescaled per sector to
+# their reference region) and quantifies their gap versus distance. Since both
+# share the same γ_ls and wages ≡ 1, the ratio is exactly the market-access ratio
+#   T_inv/T_grav = M[s,ref]/M[s,r],   M[s,r] = Σ_dr (π̂_dr/Φ_{s,dr}) · d_{r,dr}^{-θα},
+# whose only origin-r dependence is d^{-θα} ⇒ T_inv/T_grav ≈ (d_r/d_ref)^{θα}.
+# Master-only, guarded — never blocks estimation.
+try
+    # Reference-normalized gravity init (τ≡1): T_grav[s,r] = γ_ls[r,s]/γ_ls[ref,s].
+    _ref_norm_gravity = begin
+        G = fill(NaN, S_, R_full)
+        for s in 1:S_
+            regions_s = SECTOR_GOOD_REGIONS_local[s]
+            isempty(regions_s) && continue
+            ref  = T_REF_REGION_local[s] > 0 ? T_REF_REGION_local[s] : regions_s[1]
+            gref = T_gravity[s, ref]
+            for r in regions_s
+                G[s, r] = gref > 0 ? T_gravity[s, r] / gref : NaN
+            end
+        end
+        G
+    end
+
+    # Access-weighted mean distance to downstream markets (km), per region. This is
+    # the faithful single-distance summary of M[s,r]=Σ_dr w_dr d^{-θα} (the ratio
+    # M(ref)/M(r) is a ratio of accessibility sums, not a single power law, so the
+    # nearest-plant distance under-summarizes it).
+    _pihat = emp_pi_r_local ./ sum(emp_pi_r_local)
+    _dbar  = distances_downstream_local * _pihat          # (R_full,)
+
+    # Build the scatter + distance diagnostic for a given α (ref-normalized both axes).
+    function _t_init_compare(alpha_val)
+        T_inv_a, _ = invert_T_from_gamma(alpha_val)
+        xs = Float64[]; ys = Float64[]; ds = Float64[]; ss = Int[]; rs = Int[]
+        for s in 1:S_, r in SECTOR_GOOD_REGIONS_local[s]
+            (isfinite(_ref_norm_gravity[s, r]) && T_inv_a[s, r] > 1e-6 &&
+             _ref_norm_gravity[s, r] > 1e-6) || continue
+            push!(xs, _ref_norm_gravity[s, r]); push!(ys, T_inv_a[s, r])
+            push!(ds, _dbar[r]); push!(ss, s); push!(rs, r)
+        end
+        isempty(xs) && return
+        p = Plots.scatter(xs, ys; zcolor = ds, xscale = :log10, yscale = :log10,
+            xlabel = "gravity init  T/T_ref  (τ≡1)",
+            ylabel = "γ-inversion init  T/T_ref  (α=$alpha_val)",
+            title  = "T starting values: gravity vs γ-inversion (α=$alpha_val)",
+            colorbar_title = "access-weighted mean dist to markets (km)",
+            markersize = 5, markeralpha = 0.7, legend = false)
+        lo = min(minimum(xs), minimum(ys)); hi = max(maximum(xs), maximum(ys))
+        Plots.plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash)
+        png = joinpath(output_folder, "T_init_gravity_vs_inversion_a$(alpha_val).png")
+        Plots.savefig(p, png)
+        NPZ.npzwrite(joinpath(output_folder, "T_init_pairs_a$(alpha_val).npz"),
+                     Dict("gravity" => xs, "inversion" => ys, "dist_km" => ds,
+                          "sector" => Float64.(ss), "region" => Float64.(rs)))
+        println("  saved $(png)")
+
+        # Distance-difference approximation over d ∈ [0, 200] km.
+        keep = ds .<= 200.0
+        if count(keep) >= 3
+            rr = ys[keep] ./ xs[keep]                   # = M(ref)/M(r), the correction
+            lr = log.(rr)
+            ld = log.(max.(ds[keep], 1.0))
+            b  = hcat(ones(length(ld)), ld) \ lr        # OLS slope ≈ θα
+            srr = sort(rr)
+            med = srr[cld(length(srr), 2)]
+            @printf("\n[T-init α=%.2f diagnostic, access-weighted d ≤ 200 km, n=%d active regions]\n",
+                    alpha_val, count(keep))
+            @printf("  correction  T_inv/T_grav = M(ref)/M(r) (only geography + α differ):\n")
+            @printf("     min %.2f   median %.2f   max %.2f   mean|Δlog T| %.3f\n",
+                    minimum(rr), med, maximum(rr), sum(abs.(lr)) / length(lr))
+            @printf("  effective  log(T_inv/T_grav) ≈ %+.3f %+.3f·log d̄\n", b[1], b[2])
+            @printf("     (functional form (d/d_ref)^{θα}=(·)^%.2f holds exactly only in the\n",
+                    theta * alpha_val)
+            @printf("      single-dominant-destination limit; M sums over all markets so the\n")
+            @printf("      realized slope is geography-dependent, not a clean θα).\n")
+            @printf("  ⇒ at α=%.2f the γ-inversion repositions the gravity T by a factor\n", alpha_val)
+            @printf("    ~%.2f× (median) and up to ~%.1f× for the most market-remote regions;\n",
+                    med, maximum(rr))
+            @printf("    ≈1× for regions near the reference.\n")
+        end
+    end
+
+    _t_init_compare(0.5)                                # the requested α = 0.5 case
+    if _prior_alpha !== nothing && !isapprox(Float64(_prior_alpha), 0.5)
+        _t_init_compare(Float64(_prior_alpha))          # also the actual prior in use
+    end
+catch e
+    @warn "T-init comparison plot skipped: $e"
+end
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 11 — IDENTIFIED-PARAMETER INDICES (JACOBIAN / INFERENCE)
 # Selects the columns of the Jacobian that are actually identified, dropping the
