@@ -3,7 +3,7 @@ PSO backend for the SMM optimizer layer.
 
 Exposes the PSO half of the optimizer contract:
 - `parallel_pso_smm(objective, lb, ub; warm_start_particle, ...) -> (best_x, best_f, history)`
-- `enforce_beta_constraint` — the β-ordering repair, shared with the CMA-ES backend.
+- `enforce_alpha_constraint` — the α-ordering repair, shared with the CMA-ES backend.
 
 The backend-neutral orchestration (`optimize_stage`, `train_stage`,
 `run_optimization`) lives in `optimizer.jl`; this file knows nothing about which
@@ -36,7 +36,7 @@ guaranteeing monotonic improvement across stages.
 - `w_end`: Final inertia (0.4 = more exploitation)
 - `c1`: Cognitive parameter (personal best attraction)
 - `c2`: Social parameter (global best attraction)
-- `beta_constraint`: Enforce beta ordering if true
+- `alpha_constraint`: Enforce alpha ordering if true
 - `verbose`: Print progress
 
 # Returns
@@ -55,8 +55,8 @@ function parallel_pso_smm(
     w_end::Float64 = 0.4,
     c1::Float64 = 1.5,
     c2::Float64 = 2.5,
-    beta_constraint::Bool = true,
-    beta_indices::UnitRange = 1:N_TAU,
+    alpha_constraint::Bool = true,
+    alpha_indices::UnitRange = 1:N_TAU,
     log_mask::Union{Nothing, Vector{Bool}} = nothing,
     verbose::Bool = false
 )
@@ -81,10 +81,10 @@ function parallel_pso_smm(
     n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
     particles = [lb .+ rand(d) .* (ub .- lb) for _ in 1:n_random]
     
-    # Apply beta constraint to random particles
-    if beta_constraint
+    # Apply alpha constraint to random particles
+    if alpha_constraint
         for i in 1:n_random
-            particles[i] = enforce_beta_constraint(particles[i], beta_indices)
+            particles[i] = enforce_alpha_constraint(particles[i], alpha_indices)
         end
     end
     
@@ -93,9 +93,9 @@ function parallel_pso_smm(
         # Ensure warm start is within current bounds (bounds may have changed)
         warm_start_clamped = clamp.(warm_start_particle, lb, ub)
         
-        # Apply beta constraint
-        if beta_constraint
-            warm_start_clamped = enforce_beta_constraint(warm_start_clamped, beta_indices)
+        # Apply alpha constraint
+        if alpha_constraint
+            warm_start_clamped = enforce_alpha_constraint(warm_start_clamped, alpha_indices)
         end
         
         push!(particles, warm_start_clamped)
@@ -182,9 +182,9 @@ function parallel_pso_smm(
             # Enforce bounds
             particles[i] = clamp.(particles[i], lb, ub)
             
-            # Enforce beta constraint
-            if beta_constraint
-                particles[i] = enforce_beta_constraint(particles[i], beta_indices)
+            # Enforce alpha constraint
+            if alpha_constraint
+                particles[i] = enforce_alpha_constraint(particles[i], alpha_indices)
             end
         end
         
@@ -221,8 +221,8 @@ function parallel_pso_smm(
                 # Check if particle hasn't improved recently
                 if fitness[i] > g_best_fitness * 1.5  # Particle is far from best
                     particles[i] = lb .+ rand(d) .* (ub .- lb)
-                    if beta_constraint
-                        particles[i] = enforce_beta_constraint(particles[i], beta_indices)
+                    if alpha_constraint
+                        particles[i] = enforce_alpha_constraint(particles[i], alpha_indices)
                     end
                     velocities[i] = 0.1 * (ub .- lb) .* randn(d)
                     p_best[i] = copy(particles[i])
@@ -267,14 +267,14 @@ end
 
 
 """
-    enforce_beta_constraint(params, beta_indices)
+    enforce_alpha_constraint(params, alpha_indices)
 
-Ensure beta parameters are ordered: β₁ < β₂ < β₃ < β₄ < β₅
+Ensure alpha parameters are ordered: α₁ < α₂ < α₃ < α₄ < α₅
 """
-function enforce_beta_constraint(params::Vector{Float64}, beta_indices::UnitRange)
+function enforce_alpha_constraint(params::Vector{Float64}, alpha_indices::UnitRange)
     params_new = copy(params)
-    betas = params[beta_indices]
-    betas_sorted = sort(betas)
-    params_new[beta_indices] = betas_sorted
+    alphas = params[alpha_indices]
+    alphas_sorted = sort(alphas)
+    params_new[alpha_indices] = alphas_sorted
     return params_new
 end

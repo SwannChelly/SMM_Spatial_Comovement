@@ -392,17 +392,17 @@ generate_stratified_draws(N_rho::Int, n_good::Int; randomise::Bool=false,
 ##################### Helper Functions ###################
 
 """
-    unpack_params(params) -> (Ω^L, Ω^s, A, β, T)
+    unpack_params(params) -> (Ω^L, Ω^s, A, α, T)
 
 Unpack parameter vector into model components (paper notation).
 
-Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T(sum(T_MASK))]
+Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | T(sum(T_MASK))]
 
 Returns:
 - Ω^L (Omega_L): Labor share in production [scalar]
 - Ω^s (Omega_s): Sectoral input shares [S elements, normalized to sum to 1]
 - A: Downstream firm productivity by region [R_downstream elements]
-- β (beta): Trade cost parameters [N_TAU elements; 1 = power-law α, >1 = bin coefficients]
+- α (alpha): Trade cost parameters [N_TAU elements; 1 = power-law α, >1 = bin coefficients]
 - T: Fréchet scale parameters [S × R elements, full vector with zeros for masked entries]
 """
 function unpack_params(params)
@@ -410,7 +410,7 @@ function unpack_params(params)
     Omega_s = params[2:(1 + S)] / sum(params[2:(1 + S)])
     A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
-    beta = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)]
+    alpha = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)]
 
     T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
     # eltype(params) (not a hard-coded Float64) so ForwardDiff Duals survive the
@@ -426,7 +426,7 @@ function unpack_params(params)
         end
     end
 
-    return Omega_L, Omega_s, A, beta, vec(T_mat)
+    return Omega_L, Omega_s, A, alpha, vec(T_mat)
 end
 
 
@@ -471,8 +471,8 @@ end
 """
     full_to_search(p) / search_to_full(x)
 
-Convert a full LEVEL parameter vector `[Ω^L | Ω^s | A | β | T(N_T_REDUCED)]` to/from
-the full SEARCH vector `[Ω^L | Ω^s | A | β | φ(N_T_FREE)]`. Only the trailing T
+Convert a full LEVEL parameter vector `[Ω^L | Ω^s | A | α | T(N_T_REDUCED)]` to/from
+the full SEARCH vector `[Ω^L | Ω^s | A | α | φ(N_T_FREE)]`. Only the trailing T
 block is transformed; the head is untouched. Search vector is shorter by the
 number of active sectors.
 """
@@ -487,28 +487,28 @@ end
 
 
 """
-    build_tau(beta) -> τ[r', r]
+    build_tau(alpha) -> τ[r', r]
 
 Build iceberg trade cost matrix from distance bin coefficients.
 
-τ_{r'r} = 1 + β_b  where b = DistBin[r', r]
+τ_{r'r} = 1 + α_b  where b = DistBin[r', r]
 
 Returns matrix of size (R, R). Trade costs are identical across sectors.
 """
-function build_tau(beta)
-    # eltype(beta) keeps ForwardDiff Duals through the τ construction; identical
+function build_tau(alpha)
+    # eltype(alpha) keeps ForwardDiff Duals through the τ construction; identical
     # to ones(Float64, …) for the Float64 production path.
-    tau = ones(eltype(beta), R, R_downstream)
+    tau = ones(eltype(alpha), R, R_downstream)
     if N_TAU == 1
         # Power-law: τ_{r',r} = max(d, 1)^α = exp(α · log(max(d, 1)))
         for r_prime in 1:R, r_d in 1:R_downstream
-            tau[r_prime, r_d] = exp(beta[1] * LOG_DIST_DOWNSTREAM[r_prime, r_d])
+            tau[r_prime, r_d] = exp(alpha[1] * LOG_DIST_DOWNSTREAM[r_prime, r_d])
         end
     else
         for r_prime in 1:R, r_d in 1:R_downstream
             b = DistBin[r_prime, r_d]
             if b > 0 && b <= N_TAU
-                tau[r_prime, r_d] += beta[b]
+                tau[r_prime, r_d] += alpha[b]
             end
         end
     end
@@ -530,7 +530,7 @@ This function:
 4. Calculates downstream sales and trade flows
 
 # Arguments
-- `params`: Parameter vector [β, Ω^L, Ω^s, A, T]
+- `params`: Parameter vector [α, Ω^L, Ω^s, A, T]
 - `return_firm_level`: If true, return firm-level data for untargeted validation
 
 # Returns (NamedTuple):
@@ -556,10 +556,10 @@ function solve_network(params; return_firm_level=false,
     # ─────────────────────────────────────────────────────────────────────────
     # Unpack parameters (paper notation)
     # ─────────────────────────────────────────────────────────────────────────
-    Omega_L, Omega_s_vec, A_vec, beta, T_vec = unpack_params(params)
+    Omega_L, Omega_s_vec, A_vec, alpha, T_vec = unpack_params(params)
 
     # Build trade cost matrix τ_{r'r} — identical across sectors
-    tau = precomputed_tau === nothing ? build_tau(beta) : precomputed_tau
+    tau = precomputed_tau === nothing ? build_tau(alpha) : precomputed_tau
 
     # A_vec is already R_downstream length
     A_r = A_vec
@@ -913,7 +913,7 @@ Compute targeted moments from solved network for SMM estimation.
 """
 function compute_moments(network, params)
 
-    Omega_L, Omega_s_vec, A_vec, beta, T_vec = unpack_params(params)
+    Omega_L, Omega_s_vec, A_vec, alpha, T_vec = unpack_params(params)
 
     X_ls_flat = network.X_ls_flat
     c_tilde_r = network.c_tilde_r

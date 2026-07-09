@@ -218,10 +218,10 @@ Returns the same 5 moment blocks using closed-form EK formulas.
 Blocks {Ω^L, Ω^s, π_r, γ_ls} are exact; reg_coef uses Gauss-Legendre quadrature.
 """
 function compute_moments_analytical(params; n_quad::Int=200)
-    Omega_L, Omega_s_vec, A_vec, beta, T_vec = unpack_params(params)
+    Omega_L, Omega_s_vec, A_vec, alpha, T_vec = unpack_params(params)
     T_mat = reshape(T_vec, S, R)
 
-    tau = build_tau(beta)
+    tau = build_tau(alpha)
 
     prices = compute_prices_analytical(Omega_L, Omega_s_vec, A_vec, T_mat, tau)
     (; P_sr, P_r, c_r, c_tilde_r, p_r, P_agg, Y_r, mu, Phi) = prices

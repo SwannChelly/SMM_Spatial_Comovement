@@ -303,9 +303,9 @@ MAX_ITER_STAGE = 50         # Iterations for each refinement stage
 method = "original"
 max_loop = 50
 full_run = false
-length_range_beta = 40 # Normal is 50
-BETA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
-BETA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
+length_range_alpha = 40 # Normal is 50
+ALPHA_SEARCH_METHOD = "log_grid"  # Options: "lhs" (default), "log_grid" (old systematic grid)
+ALPHA_SELECTION_CRITERION = "reg_coef"  # Options: "reg_coef" (default), "score"
 
 # Reporting configuration
 REPORT_EVERY = 100  # Run reporting every X epochs (set to nothing for only at the end)
@@ -345,29 +345,29 @@ if full_run
 
     println("\n" * "="^70)
     println("Method $method")
-    println("STAGE 0: Finding good initial beta values")
-    println("Beta search method: $BETA_SEARCH_METHOD")
-    println("Beta selection criterion: $BETA_SELECTION_CRITERION")
+    println("STAGE 0: Finding good initial alpha values")
+    println("Alpha search method: $ALPHA_SEARCH_METHOD")
+    println("Alpha selection criterion: $ALPHA_SELECTION_CRITERION")
     println("="^70)
 
 
-    beta_min_informed = 1e-3#minimum(exp.(-reg_coef ./ theta) .- 1) * 0.3
-    beta_max_informed = 2#maximum(exp.(-reg_coef ./ theta) .- 1) * 3.0
-    #beta_min_informed = max(beta_min_informed, 1e-4)
-    print(beta_min_informed) 
-    print(beta_max_informed)
-    # Generate beta candidates using selected method
-    if BETA_SEARCH_METHOD == "log_grid"
-        beta_candidates = generate_initial_betas("log_grid", N_TAU, beta_min_informed, beta_max_informed;
-                                                  log_grid_length=length_range_beta)
-        println("Generated $(length(beta_candidates)) log-grid beta combinations")
-    elseif BETA_SEARCH_METHOD == "lhs"
+    alpha_min_informed = 1e-3#minimum(exp.(-reg_coef ./ theta) .- 1) * 0.3
+    alpha_max_informed = 2#maximum(exp.(-reg_coef ./ theta) .- 1) * 3.0
+    #alpha_min_informed = max(alpha_min_informed, 1e-4)
+    print(alpha_min_informed) 
+    print(alpha_max_informed)
+    # Generate alpha candidates using selected method
+    if ALPHA_SEARCH_METHOD == "log_grid"
+        alpha_candidates = generate_initial_alphas("log_grid", N_TAU, alpha_min_informed, alpha_max_informed;
+                                                  log_grid_length=length_range_alpha)
+        println("Generated $(length(alpha_candidates)) log-grid alpha combinations")
+    elseif ALPHA_SEARCH_METHOD == "lhs"
         N_LHS_SAMPLES = 20000
-        beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min_informed, beta_max_informed;
+        alpha_candidates = generate_initial_alphas("lhs", N_TAU, alpha_min_informed, alpha_max_informed;
                                                   lhs_n_samples=N_LHS_SAMPLES)
-        println("Generated $(length(beta_candidates)) LHS beta samples")
+        println("Generated $(length(alpha_candidates)) LHS alpha samples")
     else
-        error("Unknown BETA_SEARCH_METHOD: $BETA_SEARCH_METHOD")
+        error("Unknown ALPHA_SEARCH_METHOD: $ALPHA_SEARCH_METHOD")
     end
 
     # Use initial guess for other parameters
@@ -383,28 +383,28 @@ if full_run
     println("  mean = $(mean(T_init_nonzero))")
 
 
-    # New layout: [Ω^L | Ω^s | A | β | T] — beta is inserted between A and T
+    # New layout: [Ω^L | Ω^s | A | α | T] — alpha is inserted between A and T
     init_other_prefix = vcat([agg_labor_share], agg_industry_share, A)
-    expanding_beta = [vcat(init_other_prefix, beta, T_init_nonzero) for beta in beta_candidates]
+    expanding_alpha = [vcat(init_other_prefix, alpha, T_init_nonzero) for alpha in alpha_candidates]
 
-    println("Evaluating $(length(expanding_beta)) beta combinations in parallel...")
-    results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_beta)
+    println("Evaluating $(length(expanding_alpha)) alpha combinations in parallel...")
+    results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS), expanding_alpha)
 
-    # Find best beta using selected criterion
-    if BETA_SELECTION_CRITERION == "reg_coef"
+    # Find best alpha using selected criterion
+    if ALPHA_SELECTION_CRITERION == "reg_coef"
         reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_]
         #reg_coefs_sim = filter(row -> all(diff(row) .< 0), reg_coefs_sim)
         reg_distances = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
         best_idx = argmin(reg_distances)
-    elseif BETA_SELECTION_CRITERION == "score"
+    elseif ALPHA_SELECTION_CRITERION == "score"
         scores = [r !== nothing ? r[1][1] : Inf for r in results_]
         best_idx = argmin(scores)
     else
-        error("Unknown BETA_SELECTION_CRITERION: $BETA_SELECTION_CRITERION")
+        error("Unknown ALPHA_SELECTION_CRITERION: $ALPHA_SELECTION_CRITERION")
     end
-    init_beta = beta_candidates[best_idx]
+    init_alpha = alpha_candidates[best_idx]
 
-    println("Best initial beta: ", round.(init_beta, digits=6))
+    println("Best initial alpha: ", round.(init_alpha, digits=6))
     println("Related regression coefficients are: ", round.([r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_][best_idx], digits=6))
 
     ############## PSO-BASED OPTIMIZATION ##############
@@ -417,14 +417,14 @@ if full_run
     println("Iterations: $MAX_ITER_INITIAL")
 
 
-    # Stage 1: Optimize all parameters starting from init_beta
+    # Stage 1: Optimize all parameters starting from init_alpha
     best_params, best_fitness, history = train_stage_pso(
         N_PARTICLES,
         MAX_ITER_INITIAL,
-        init_beta = init_beta,
+        init_alpha = init_alpha,
         variable_list = nothing,  # Optimize all parameters
         last_stage_folder = nothing,
-        alpha = 0.5,
+        radius = 0.5,
         second_stage = false,
         method = method,
         u_draws = U_DRAWS,
@@ -460,7 +460,7 @@ if full_run
         println("Starting at loop: $loop_start, stage: $stage")
         
         # Alpha controls search radius: starts tight, expands over time
-        alpha_start, alpha_end = 0.3, 0.9
+        radius_start, radius_end = 0.3, 0.9
         
         for loop in loop_start:max_loop
             global stage
@@ -468,12 +468,12 @@ if full_run
             global best_params
             global best_fitness
 
-            alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
+            radius = radius_start + (loop - 1) * (radius_end - radius_start) / (max_loop - 1)
             
             println("\n" * "="^70)
             println("REFINEMENT LOOP $loop / $max_loop")
             println("="^70)
-            println("Alpha (search radius): $alpha")
+            println("Alpha (search radius): $radius")
             
             past_loop_folder = loop == 1 ? output_folder : output_folder*"/epoch_"*string(loop-1)
             loop_folder = output_folder*"/epoch_"*string(loop)
@@ -496,18 +496,18 @@ if full_run
             println("\n" * "-"^50)
             println("Loop $(loop) - Stage 1: PRODUCTIVITY (π_r matching)")
             println("-"^50)
-            println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*alpha, digits=2)))")
+            println("  Using tight bounds (alpha_A = $(round(0.7 + 0.2*radius, digits=2)))")
 
-            # Tighter alpha for productivity due to high sensitivity
-            alpha_productivity = 0.7 + 0.2 * alpha  # Range: 0.7 to 0.9 (tight)
-            #alpha_productivity = alpha
+            # Tighter radius for productivity due to high sensitivity
+            radius_productivity = 0.7 + 0.2 * radius  # Range: 0.7 to 0.9 (tight)
+            #radius_productivity = radius
             best_params, best_fitness, history = train_stage_pso(
                 N_PARTICLES,
                 MAX_ITER_STAGE,
                 variable_list = ["productivity"],
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
                 K = 1,
-                alpha = alpha_productivity,
+                radius = radius_productivity,
                 second_stage = false,
                 method = method,  # Log-space loss for π_r (handles concentration)
                 u_draws = U_DRAWS,
@@ -522,7 +522,7 @@ if full_run
                 "best_fitness" => history["best_fitness"],
                 "mean_fitness" => history["mean_fitness"]
             ))
-            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_productivity);
+            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(radius_productivity);
                              u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
             println("  ✓ Stage 1 complete. Fitness: $(round(best_fitness, digits=6))")
@@ -530,7 +530,7 @@ if full_run
             end # skip_substage_1
             
             # ═══════════════════════════════════════════════════════════════════
-            # STAGE 2: Spatial Structure (β, T) - MEDIUM SENSITIVITY
+            # STAGE 2: Spatial Structure (α, T) - MEDIUM SENSITIVITY
             # ═══════════════════════════════════════════════════════════════════
             # Trade costs affect regression coefficients
             # Fréchet scales affect sourcing shares γ_{ls}
@@ -544,7 +544,7 @@ if full_run
             else
 
             println("\n" * "-"^50)
-            println("Loop $(loop) - Stage 2: SPATIAL STRUCTURE (β, T)")
+            println("Loop $(loop) - Stage 2: SPATIAL STRUCTURE (α, T)")
             println("-"^50)
             println("  Sensitivity: MEDIUM")
             println("  Targets: regression coefficients, γ_{ls}")
@@ -552,10 +552,10 @@ if full_run
             best_params, best_fitness, history = train_stage_pso(
                 N_PARTICLES,
                 MAX_ITER_STAGE,
-                variable_list = ["beta", "T"],
+                variable_list = ["alpha", "T"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K = 1,
-                alpha = alpha,  # Standard alpha
+                radius = radius,  # Standard radius
                 second_stage = false,
                 method = method,
                 u_draws = U_DRAWS,
@@ -570,7 +570,7 @@ if full_run
                 "best_fitness" => history["best_fitness"],
                 "mean_fitness" => history["mean_fitness"]
             ))
-            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
+            generate_report(loop_folder, string(stage), 1, ["alpha", "T"], best_params, string(radius);
                              u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
             println("  ✓ Stage 2 complete. Fitness: $(round(best_fitness, digits=6))")
@@ -587,10 +587,10 @@ if full_run
             println("Loop $(loop) - Stage 3: TECHNICAL COEFFICIENTS (Ω^L, Ω^s)")
             println("-"^50)
             println("  Sensitivity: LOW (damped by λ=0.5, ν=0.2)")
-            println("  Using wider bounds (alpha_tech = $(round(alpha * 0.7, digits=2)))")
+            println("  Using wider bounds (alpha_tech = $(round(radius * 0.7, digits=2)))")
             
-            # Wider alpha for technical coefficients (less sensitive)
-            alpha_technical = alpha #* 0.7  # Allows broader exploration
+            # Wider radius for technical coefficients (less sensitive)
+            radius_technical = radius #* 0.7  # Allows broader exploration
             
             best_params, best_fitness, history = train_stage_pso(
                 N_PARTICLES,
@@ -598,7 +598,7 @@ if full_run
                 variable_list = ["agg_labor_share_tech", "agg_industry_share_tech"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K = 1,
-                alpha = alpha_technical,
+                radius = radius_technical,
                 second_stage = false,
                 method = method,
                 u_draws = U_DRAWS,
@@ -613,7 +613,7 @@ if full_run
                 "best_fitness" => history["best_fitness"],
                 "mean_fitness" => history["mean_fitness"]
             ))
-            generate_report(loop_folder, string(stage), 1, ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha_technical);
+            generate_report(loop_folder, string(stage), 1, ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(radius_technical);
                              u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
             
             println("  ✓ Stage 3 complete. Fitness: $(round(best_fitness, digits=6))")

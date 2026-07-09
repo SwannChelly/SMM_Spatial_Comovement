@@ -3,86 +3,86 @@ using Printf
 
 
 """
-    generate_lhs_beta(n_samples, n_beta, lb, ub; seed=42)
+    generate_lhs_alpha(n_samples, n_alpha, lb, ub; seed=42)
 
-Generate LHS samples for beta enforcing monotonicity: beta_1 <= beta_2 <= ... <= beta_K.
+Generate LHS samples for alpha enforcing monotonicity: alpha_1 <= alpha_2 <= ... <= alpha_K.
 Method: generate LHS in [0,1]^K, sort each sample, map to [lb, ub].
 """
-function generate_lhs_beta(n_samples::Int, n_beta::Int, lb, ub; seed=42)
-    lb_vec = lb isa Number ? fill(Float64(lb), n_beta) : Float64.(lb)
-    ub_vec = ub isa Number ? fill(Float64(ub), n_beta) : Float64.(ub)
+function generate_lhs_alpha(n_samples::Int, n_alpha::Int, lb, ub; seed=42)
+    lb_vec = lb isa Number ? fill(Float64(lb), n_alpha) : Float64.(lb)
+    ub_vec = ub isa Number ? fill(Float64(ub), n_alpha) : Float64.(ub)
 
-    raw_matrix = QuasiMonteCarlo.sample(n_samples, zeros(n_beta), ones(n_beta),
+    raw_matrix = QuasiMonteCarlo.sample(n_samples, zeros(n_alpha), ones(n_alpha),
                                          LatinHypercubeSample())
 
     samples = Vector{Vector{Float64}}()
     for i in 1:n_samples
         raw = sort(raw_matrix[:, i])  # Sort to enforce monotonicity
-        beta = lb_vec .+ raw .* (ub_vec .- lb_vec)
-        push!(samples, beta)
+        alpha = lb_vec .+ raw .* (ub_vec .- lb_vec)
+        push!(samples, alpha)
     end
     return samples
 end
 
 """
-    generate_log_grid_beta(n_beta, lb, ub, length_range)
+    generate_log_grid_alpha(n_alpha, lb, ub, length_range)
 
-Generate log-spaced beta grid with monotonicity constraint (β₁ ≤ β₂ ≤ ... ≤ β_K).
-Supports n_beta = 4 (pattern [i,j,k,k]) or n_beta = 5 (pattern [i,j,k,k,k]).
+Generate log-spaced alpha grid with monotonicity constraint (α₁ ≤ α₂ ≤ ... ≤ α_K).
+Supports n_alpha = 4 (pattern [i,j,k,k]) or n_alpha = 5 (pattern [i,j,k,k,k]).
 """
-function generate_log_grid_beta(n_beta::Int, lb::Real, ub::Real, length_range::Int)
-    range_beta = exp.(range(log(lb), stop=log(ub), length=length_range))
+function generate_log_grid_alpha(n_alpha::Int, lb::Real, ub::Real, length_range::Int)
+    range_alpha = exp.(range(log(lb), stop=log(ub), length=length_range))
 
-    if n_beta == 1
-        expanding_beta = [[x] for x in range_beta]
-    elseif n_beta == 4
-        expanding_beta = [
+    if n_alpha == 1
+        expanding_alpha = [[x] for x in range_alpha]
+    elseif n_alpha == 4
+        expanding_alpha = [
             [i, k, k,k]
-            for i in range_beta
-            for k in range_beta
-            for k in range_beta
+            for i in range_alpha
+            for k in range_alpha
+            for k in range_alpha
             if i  <= k
         ]
-    elseif n_beta == 5
-        expanding_beta = [
+    elseif n_alpha == 5
+        expanding_alpha = [
             [i, j, k, k, k]
-            for i in range_beta
-            for j in range_beta
-            for k in range_beta
+            for i in range_alpha
+            for j in range_alpha
+            for k in range_alpha
             if i <= j <= k
         ]
     else
-        error("Log grid beta generation not implemented for n_beta=$n_beta")
+        error("Log grid alpha generation not implemented for n_alpha=$n_alpha")
     end
 
-    return expanding_beta
+    return expanding_alpha
 end
 
 """
-    generate_initial_betas(method, n_beta, lb, ub; lhs_n_samples=1500, log_grid_length=20)
+    generate_initial_alphas(method, n_alpha, lb, ub; lhs_n_samples=1500, log_grid_length=20)
 
-Unified interface for generating initial beta candidates.
+Unified interface for generating initial alpha candidates.
 
 # Arguments
 - `method`: "log_grid" or "lhs"
-- `n_beta`: Number of beta parameters
-- `lb`, `ub`: Bounds for beta values
+- `n_alpha`: Number of alpha parameters
+- `lb`, `ub`: Bounds for alpha values
 - `lhs_n_samples`: Number of LHS samples (only for method="lhs")
 - `log_grid_length`: Grid resolution (only for method="log_grid")
 """
-function generate_initial_betas(method::String, n_beta::Int, lb::Real, ub::Real;
+function generate_initial_alphas(method::String, n_alpha::Int, lb::Real, ub::Real;
                                  lhs_n_samples::Int=1500, log_grid_length::Int=20)
     if method == "log_grid"
-        return generate_log_grid_beta(n_beta, lb, ub, log_grid_length)
+        return generate_log_grid_alpha(n_alpha, lb, ub, log_grid_length)
     elseif method == "lhs"
-        return generate_lhs_beta(lhs_n_samples, n_beta, lb, ub)
+        return generate_lhs_alpha(lhs_n_samples, n_alpha, lb, ub)
     else
-        error("Unknown beta search method: $method. Use 'log_grid' or 'lhs'.")
+        error("Unknown alpha search method: $method. Use 'log_grid' or 'lhs'.")
     end
 end
 
 
-function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, init_beta=ones(5), last_stage_folder=nothing, K=1, variable=nothing, alpha=0.1, second_stage=false)
+function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, init_alpha=ones(5), last_stage_folder=nothing, K=1, variable=nothing, radius=0.1, second_stage=false)
     """
 
     Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
@@ -95,15 +95,15 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
         return vcat([[agg_labor_share], agg_industry_share, A, ones(N_TAU), ones(S*R)]...)
     end
     if last_stage_folder == nothing
-        lb_beta, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_beta.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
-        ub_beta, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T = init_beta.*2, 1.2*agg_labor_share, 1.2.*agg_industry_share, A.*10, 100*ones(S*R)
+        lb_alpha, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_alpha.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
+        ub_alpha, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T = init_alpha.*2, 1.2*agg_labor_share, 1.2.*agg_industry_share, A.*10, 100*ones(S*R)
 
-        lb = vcat(lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_beta, lb_T)
-        ub = vcat(ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_beta, ub_T)
+        lb = vcat(lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_alpha, lb_T)
+        ub = vcat(ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_alpha, ub_T)
         condition = true
     else
         best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
-        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :beta, :T]
+        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :alpha, :T]
         vals = unpack_params(best_params)
         params_dict = Dict(names .=> vals)
         
@@ -111,11 +111,11 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
         variable_list = isa(variable, String) ? [variable] : variable
         
         # Build lb and ub by concatenating bounds for each variable in the list
-        lb = vcat([params_dict[Symbol(v)] ./ alpha for v in variable_list]...)
-        ub = vcat([params_dict[Symbol(v)] .* alpha for v in variable_list]...)
+        lb = vcat([params_dict[Symbol(v)] ./ radius for v in variable_list]...)
+        ub = vcat([params_dict[Symbol(v)] .* radius for v in variable_list]...)
         
-        # Set condition based on whether "beta" is in the variable list
-        condition = "beta" in variable_list
+        # Set condition based on whether "alpha" is in the variable list
+        condition = "alpha" in variable_list
         
         # Apply special constraints for specific variables
         for (var_idx, v) in enumerate(variable_list)
@@ -167,9 +167,9 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
 
             # apply your condition
             if condition
-                beta_start = 1 + S + R_downstream + 1
-                betas = scaled[beta_start:(beta_start + N_TAU - 1)]
-                if issorted(betas)
+                alpha_start = 1 + S + R_downstream + 1
+                alphas = scaled[alpha_start:(alpha_start + N_TAU - 1)]
+                if issorted(alphas)
                     push!(accepted, scaled)
                     if length(accepted) >= n_needed
                         break
@@ -187,7 +187,7 @@ function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, in
     end
     
     if last_stage_folder != nothing
-        names = ["agg_labor_share_tech", "agg_industry_share_tech", "productivity", "beta", "T"]
+        names = ["agg_labor_share_tech", "agg_industry_share_tech", "productivity", "alpha", "T"]
         variable_list = isa(variable, String) ? [variable] : variable
         
         if "T" in variable_list && second_stage
@@ -305,7 +305,7 @@ function distance_bin(d, n_bins=N_REG)
     end
 end
 
-function train_stage_one(n, init_beta, params_list = nothing, second_stage = false, method = "original";
+function train_stage_one(n, init_alpha, params_list = nothing, second_stage = false, method = "original";
                         u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                         sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
                         analytical::Bool=false,
@@ -317,7 +317,7 @@ function train_stage_one(n, init_beta, params_list = nothing, second_stage = fal
 
     t1 = time()
     if params_list == nothing
-        params_list = generate_halton_grid(n,2000,false,init_beta)
+        params_list = generate_halton_grid(n,2000,false,init_alpha)
     end
     f = params -> parallel_SMM_safe(params, false, second_stage, method, true;
                                     u_draws=u_draws, sample_weights=sample_weights,

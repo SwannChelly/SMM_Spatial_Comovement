@@ -8,7 +8,7 @@
 #
 # Expects n_tau to be defined in the calling scope (defaults to n_coef).
 #   N_REG = n_coef  — reg_coef moment count (number of distance-bin regression moments)
-#   N_TAU = n_tau   — trade-cost parameter count (length of the β vector in unpack_params/build_tau)
+#   N_TAU = n_tau   — trade-cost parameter count (length of the α vector in unpack_params/build_tau)
 #
 # All @everywhere const values are broadcast to workers here.
 
@@ -263,7 +263,7 @@ else
 end
 @everywhere const reg_coef = $reg_coef_local
 # N_REG: number of reg_coef moments (distance-bin regression coefficients).
-# N_TAU: number of trade-cost parameters (length of β in unpack_params/build_tau).
+# N_TAU: number of trade-cost parameters (length of α in unpack_params/build_tau).
 # For standard runs n_tau == n_coef so N_TAU == N_REG; the split enables N_TAU=1
 # (power-law τ = d^α) with N_REG=4 (four binned reg-coef moments, over-identified).
 n_reg = length(reg_coef_local)   # actual moment count from loaded data
@@ -530,10 +530,10 @@ else
 end
 @everywhere const T_rs_init = $(T_init_local)
 
-# Trade-cost (β/α) init anchor for the PSO search box. The α prior (N_TAU==1) is the
-# fixed centre of the [×0.5, ×2] bound the optimizer keeps β within, in every stage
+# Trade-cost (α) init anchor for the PSO search box. The α prior (N_TAU==1) is the
+# fixed centre of the [×0.5, ×2] bound the optimizer keeps α within, in every stage
 # (mirrors the T box anchored to T_rs_init). `nothing` ⇒ the optimizer falls back to
-# anchoring β to each stage's starting value (see optimizer.jl train_stage).
+# anchoring α to each stage's starting value (see optimizer.jl train_stage).
 @everywhere const TAU_PRIOR = $((_prior_alpha !== nothing && n_tau == 1) ?
                                 [Float64(_prior_alpha)] : nothing)
 
@@ -639,7 +639,7 @@ end
 #   - Ω^s[1]  (position 2)           : Omega_s ./= sum(Omega_s)
 #   - A[1]    (position S+2)          : A ./= A[1]
 #   - T[s, T_REF_REGION[s]] for each s: T_mat[s,:] ./= T_mat[s, ref_r] (most important regions in empirical gamma_ls)
-# New parameter layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_TAU) | T(sum(T_MASK))]
+# New parameter layout: [Ω^L(1) | Ω^s(S) | A(R_down) | α(N_TAU) | T(sum(T_MASK))]
 
 _excluded = Set{Int}()
 push!(_excluded, 2)              # Ω^s[1]: position 2 in new layout
@@ -731,7 +731,7 @@ println("γ reference-region map built for $(length(gamma_ref_map_local)) sector
 #     = order of empirical_moments / simulated vectors). Blocks: labor, industry,
 #     pi_r, reg_coef, gamma_ls — each already ref/sum-to-1-dropped.
 #   • PARAM_LABELS  : one per identified parameter, in jacobian_param_indices
-#     order (= columns of J). Layout [Ω^L | Ω^s | A | β | T], minus the S+2
+#     order (= columns of J). Layout [Ω^L | Ω^s | A | α | T], minus the S+2
 #     normalized-out directions.
 # Sector/ZE names come from filter_N_upstream.csv when present; otherwise we
 # fall back to integer ids so a missing CSV never aborts the run.
@@ -788,12 +788,12 @@ end
 @everywhere const MOMENT_LABELS = $_moment_labels
 
 # --- PARAM_LABELS: full param layout, then restrict to jacobian_param_indices
-# Layout: [Ω^L(1) | Ω^s(S) | A(R_down) | β(N_TAU) | T(active, sector-major)]
+# Layout: [Ω^L(1) | Ω^s(S) | A(R_down) | α(N_TAU) | T(active, sector-major)]
 _param_labels_full = String[]
 push!(_param_labels_full, "Omega_L")
 for s in 1:S_;            push!(_param_labels_full, "Omega_s[$(_sector_names[s])]"); end
 for r in 1:R_down_;       push!(_param_labels_full, "A[$(_ze_names[downstream_regions_local[r]])]"); end
-for b in 1:N_TAU;         push!(_param_labels_full, N_TAU == 1 ? "alpha" : "beta_$b"); end
+for b in 1:N_TAU;         push!(_param_labels_full, N_TAU == 1 ? "alpha" : "alpha_$b"); end
 # T entries follow vec(permutedims(T_rs)) s-major over (S,R) restricted to T_MASK.
 # Recover (s,r) for each active T slot in the same order T_reduced is laid out.
 for flat_pos in findall(T_mask_local)             # s-major: s outer, r inner

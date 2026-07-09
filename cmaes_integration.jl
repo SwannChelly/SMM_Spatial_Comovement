@@ -8,7 +8,7 @@ callers in `train_stage` / `run_pso_optimization`.
 
 Design choices specific to this codebase:
 - **Normalized search cube.** CMA-ES assumes comparably scaled coordinates and a
-  single scalar σ. Our raw box mixes shares in [0,1], β, and log-T (φ) of very
+  single scalar σ. Our raw box mixes shares in [0,1], α, and log-T (φ) of very
   different widths, so we run CMA-ES on the unit cube [0,1]^n and map back to
   [lb,ub] inside the evaluator. One `σ0` is then meaningful for every coordinate.
 - **Parallel evaluation.** The library hands us the whole population each
@@ -18,7 +18,7 @@ Design choices specific to this codebase:
   the previous stage" (PSO guaranteed this via the warm-start particle). We track
   the best-ever evaluated point and compare it against f(x0) before returning, so
   the returned solution is never worse than the warm start.
-- **β ordering.** Enforced by the same `enforce_beta_constraint` repair PSO uses,
+- **α ordering.** Enforced by the same `enforce_alpha_constraint` repair PSO uses,
   applied in real space before evaluation.
 """
 
@@ -40,8 +40,8 @@ function parallel_cmaes_smm(
     x0::Union{Vector{Float64}, Nothing} = nothing,
     n_particles::Union{Int, Nothing} = nothing,   # → CMA-ES popsize λ (nothing = default)
     max_iter::Union{Int, Nothing} = nothing,      # generations budget (→ maxfevals = λ·max_iter)
-    beta_constraint::Bool = true,
-    beta_indices::UnitRange = 1:0,
+    alpha_constraint::Bool = true,
+    alpha_indices::UnitRange = 1:0,
     sigma0::Float64 = 0.2,                         # initial step on the unit cube
     seed::Int = 1,
     verbose::Bool = false,
@@ -51,10 +51,10 @@ function parallel_cmaes_smm(
     # Guard against zero-width coordinates (fixed params): map through unchanged.
     span_safe = map(s -> s == 0.0 ? 1.0 : s, span)
 
-    # unit-cube z ∈ [0,1]^d  →  real parameter vector (+ β repair)
+    # unit-cube z ∈ [0,1]^d  →  real parameter vector (+ α repair)
     function to_real(z)
         x = lb .+ clamp.(z, 0.0, 1.0) .* span
-        return beta_constraint ? enforce_beta_constraint(x, beta_indices) : x
+        return alpha_constraint ? enforce_alpha_constraint(x, alpha_indices) : x
     end
 
     z0 = x0 === nothing ? fill(0.5, d) : clamp.((x0 .- lb) ./ span_safe, 0.0, 1.0)
@@ -89,7 +89,7 @@ function parallel_cmaes_smm(
         gi = argmin(vals)
         if vals[gi] < best_f[]
             best_f[] = vals[gi]
-            best_x[] = to_real(cols[gi])   # re-map (incl. β repair) the winner
+            best_x[] = to_real(cols[gi])   # re-map (incl. α repair) the winner
         end
         finite = filter(isfinite, vals)
         push!(history["best_fitness"], best_f[])
@@ -127,7 +127,7 @@ function parallel_cmaes_smm(
 
     # ── restore monotonicity vs the warm start ───────────────────────────────
     if x0 !== nothing
-        x0r = beta_constraint ? enforce_beta_constraint(copy(x0), beta_indices) : copy(x0)
+        x0r = alpha_constraint ? enforce_alpha_constraint(copy(x0), alpha_indices) : copy(x0)
         f0 = objective(x0r)
         f0 = (f0 === nothing || !isfinite(f0)) ? Inf : Float64(f0)
         if f0 <= best_f[]
