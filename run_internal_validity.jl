@@ -20,11 +20,11 @@
 #                 with the production draws (a different seed) so the loss floor
 #                 is genuine simulation error, not the trivial self-recovery 0.
 #
-#   Experiment 2  β+T coverage. A, Ωᴸ, Ωˢ fixed at θ₀; M reps draw
+#   Experiment 2  α+T coverage. A, Ωᴸ, Ωˢ fixed at θ₀; M reps draw
 #                 m_b = m(θ₀)+ε_b with ε_b ~ N(0, Σ_data) on the β+γ block,
-#                 re-estimate β+T only via the existing gamma_beta_only Step-3
+#                 re-estimate α+T only via the existing gamma_beta_only Step-3
 #                 path warm-started at θ₀, then Step-4 inference. Reports
-#                 coverage / bias / SD(θ̂)/mean(SE) per β+T parameter.
+#                 coverage / bias / SD(θ̂)/mean(SE) per α+T parameter.
 #
 # Outputs land under  internal_validity_<industry>/ .
 #
@@ -73,7 +73,7 @@ using StatsBase
 
 ############## Parse arguments ##############
 # Usage:
-#   julia run_internal_validity.jl <industry> <n_coef> <n_tau> [β₀...]
+#   julia run_internal_validity.jl <industry> <n_coef> <n_tau> [α₀...]
 # e.g.
 #   julia run_internal_validity.jl aero 4 1 0.5            # power-law, α₀ = 0.5
 #   julia run_internal_validity.jl aero 4 4 0.2 0.4 0.6 0.8
@@ -85,8 +85,8 @@ n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) :
 if !(n_coef in [1, 4, 5]); error("n_coef must be 1, 4 or 5, got: $n_coef"); end
 if !(n_tau  in [1, 4, 5]); error("n_tau must be 1, 4 or 5, got: $n_tau"); end
 
-# β₀ (trade-cost truth). CLI args beyond the first three; else a sensible default.
-beta0_cli = length(ARGS) >= 4 ? [parse(Float64, a) for a in ARGS[4:end]] : Float64[]
+# α₀ (trade-cost truth). CLI args beyond the first three; else a sensible default.
+alpha0_cli = length(ARGS) >= 4 ? [parse(Float64, a) for a in ARGS[4:end]] : Float64[]
 
 println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau")
 
@@ -103,7 +103,7 @@ const IV_ROOT = output_folder
 const SMOKE_TEST = true
 
 const RUN_EXP1 = true     # 10-start full-vector point recovery
-const RUN_EXP2 = true     # β+T coverage Monte Carlo
+const RUN_EXP2 = true     # α+T coverage Monte Carlo
 
 # Draw seeds. The truth m(θ₀) is generated with `randomise=true` draws seeded
 # DIFFERENTLY from the production U_DRAWS (which are deterministic,
@@ -141,15 +141,15 @@ NPZ.npzwrite(joinpath(IV_ROOT, "n_reg_coef.npy"), n_coef)
 # ─────────────────────────────────────────────────────────────────────────────
 # Layout / index helpers (raw parameter vector, see CLAUDE.md "Two-constant
 # parameter layout" and "T flat-indexing convention").
-#   [ Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T_active(s-major) ]
+#   [ Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | T_active(s-major) ]
 # ─────────────────────────────────────────────────────────────────────────────
-const BETA_T_START   = 1 + S + R_downstream + 1            # first β raw index
+const ALPHA_T_START   = 1 + S + R_downstream + 1            # first α (trade-cost) raw index
 const T_PARAM_OFFSET = 1 + S + R_downstream + N_TAU        # count before first T
 const T_FLAT_ACTIVE  = findall(T_MASK)                     # s-major active flat positions
 @assert length(T_FLAT_ACTIVE) == sum(T_MASK)
 
-# β+T columns within jacobian_param_indices (the only params β+γ moments identify)
-const GB_COLS      = findall(i -> i >= BETA_T_START, jacobian_param_indices)
+# α+T columns within jacobian_param_indices (the only params β+γ moments identify)
+const GB_COLS      = findall(i -> i >= ALPHA_T_START, jacobian_param_indices)
 const GB_PARAM_IDX = jacobian_param_indices[GB_COLS]
 const GB_LABELS    = PARAM_LABELS[GB_COLS]
 const GB_INDICES   = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))   # β then γ moments
@@ -159,14 +159,14 @@ const N_GAM_LOC    = length(BLOCK_RANGES[5])
 const GB_BLOCK_RANGES = (1:N_REG_LOC, (N_REG_LOC + 1):(N_REG_LOC + N_GAM_LOC))
 const GB_BLOCK_NAMES  = ("reg_coef", "gamma_ls")
 
-# For each β+T identified raw param position, the per-sector reference T raw value
+# For each α+T identified raw param position, the per-sector reference T raw value
 # in a parameter vector — used to put raw T onto the T_ref=1 (identified) gauge.
-# β params map to a gauge factor of 1.0 (no normalization).
+# α params map to a gauge factor of 1.0 (no normalization).
 """
     gauge_factors(theta) -> Vector (length N_GB params)
 
-Per β+T parameter, the scale that `unpack_params` divides out:
- - β  → 1.0
+Per α+T parameter, the scale that `unpack_params` divides out:
+ - α  → 1.0
  - T_sr → theta[ref-raw-index(sector s)]  (so T_sr / factor == normalized T)
 """
 function gauge_factors(theta::Vector{Float64})
@@ -194,22 +194,22 @@ function build_theta0()
     A_grav = copy(emp_pi_r_full) .^ (1 / abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
     A_grav ./= sum(A_grav)
 
-    # β₀: CLI vector if supplied, else a monotone default. Enforce β₁ ≤ … ≤ β_K.
-    if isempty(beta0_cli)
-        beta0 = N_TAU == 1 ? [0.5] : collect(range(0.2, 0.8; length = N_TAU))
+    # α₀: CLI vector if supplied, else a monotone default. Enforce α₁ ≤ … ≤ α_K.
+    if isempty(alpha0_cli)
+        alpha0 = N_TAU == 1 ? [0.5] : collect(range(0.2, 0.8; length = N_TAU))
     else
-        length(beta0_cli) == N_TAU ||
-            error("β₀ has length $(length(beta0_cli)) but N_TAU=$N_TAU")
-        beta0 = copy(beta0_cli)
+        length(alpha0_cli) == N_TAU ||
+            error("α₀ has length $(length(alpha0_cli)) but N_TAU=$N_TAU")
+        alpha0 = copy(alpha0_cli)
     end
-    issorted(beta0) || error("β₀ must satisfy β₁ ≤ … ≤ β_K (got $beta0)")
+    issorted(alpha0) || error("α₀ must satisfy α₁ ≤ … ≤ α_K (got $alpha0)")
 
     # T_gravity active, s-major (identical to Stage-0 T_init_nz).
     T_grav_nz = vec(permutedims(T_rs_init))[T_MASK]
 
-    theta0 = vcat([agg_labor_share], agg_industry_share, A_grav, beta0, T_grav_nz)
+    theta0 = vcat([agg_labor_share], agg_industry_share, A_grav, alpha0, T_grav_nz)
     @assert length(theta0) == 1 + S + R_downstream + N_TAU + sum(T_MASK)
-    return theta0, beta0
+    return theta0, alpha0
 end
 
 # Flatten a SMM moment tuple → masked moment vector (MOMENT_MASK order).
@@ -236,10 +236,10 @@ end
 
 # Normalized (gauge-fixed) raw parameter vector, in jacobian layout order.
 function normalized_raw(theta::Vector{Float64})
-    OmegaL, Omega_s, A, beta, Tvec = unpack_params(theta)   # Tvec = vec(T_mat), normalized
+    OmegaL, Omega_s, A, alpha, Tvec = unpack_params(theta)   # Tvec = vec(T_mat), normalized
     Tmat = reshape(Tvec, S, R)
     T_active_smajor = vec(permutedims(Tmat))[T_MASK]
-    return vcat(OmegaL, Omega_s, A, beta, T_active_smajor)
+    return vcat(OmegaL, Omega_s, A, alpha, T_active_smajor)
 end
 identified(theta::Vector{Float64}) = normalized_raw(theta)[jacobian_param_indices]
 
@@ -257,9 +257,9 @@ println("\n" * "="^70)
 println("SECTION 0/1: synthetic truth θ₀ and target moments")
 println("="^70)
 
-theta0, beta0 = build_theta0()
+theta0, alpha0 = build_theta0()
 NPZ.npzwrite(joinpath(IV_ROOT, "theta_0.npy"), theta0)
-println("θ₀ built: length $(length(theta0)), β₀ = $(round.(beta0, digits=4))")
+println("θ₀ built: length $(length(theta0)), α₀ = $(round.(alpha0, digits=4))")
 
 # Truth draws — independent of production U_DRAWS.
 truth_U, truth_W = generate_stratified_draws(N_rho, n_good;
@@ -287,7 +287,7 @@ for g in 1:n_good
     global min_ess = min(min_ess, 1.0 / s2)
 end
 
-# Jacobian at θ₀ (β+γ rows × β+T cols), and the W-weighted T screen.
+# Jacobian at θ₀ (β+γ rows × α+T cols), and the W-weighted T screen.
 J0, _, _, _ = compute_jacobian(theta0;
     param_indices = jacobian_param_indices,
     output_folder = IV_ROOT, output_subdir = "diag_theta0",
@@ -310,7 +310,7 @@ open(screen_diag_path, "w") do io
         @printf(io, "H[T,T] λ_min = %.6e   λ_max = %.6e   cond = %.3e\n",
                 minimum(ev), maximum(ev), maximum(ev) / max(minimum(ev), 1e-300))
     else
-        println(io, "H[T,T]: no T columns in β+T set.")
+        println(io, "H[T,T]: no T columns in α+T set.")
     end
     println(io, "\n(See stdout for full per-sector screen_T_identification output.)")
 end
@@ -321,7 +321,7 @@ println("Section-1 diagnostics written to $screen_diag_path")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A single full three-step run, seeded, into a given output folder.
-# Returns (θ̂_2, se_sw_betaT, ci95_betaT) for the β+T identified params.
+# Returns (θ̂_2, se_sw_alphaT, ci95_alphaT) for the α+T identified params.
 # ─────────────────────────────────────────────────────────────────────────────
 function run_full_three_step(start_theta::Vector{Float64}, seed::Int, subfolder::String)
     global output_folder
@@ -330,11 +330,11 @@ function run_full_three_step(start_theta::Vector{Float64}, seed::Int, subfolder:
     Random.seed!(seed)
     @everywhere Random.seed!($seed)
 
-    # Step 1: full optimisation, seeded at the perturbed start (β taken from the
-    # start, so no Stage-0 β search). Never warm-started AT θ₀.
+    # Step 1: full optimisation, seeded at the perturbed start (α taken from the
+    # start, so no Stage-0 α search). Never warm-started AT θ₀.
     theta_hat_1, _ = run_pso_optimization(;
         weight_matrix            = nothing,
-        skip_initial_beta_search = true,
+        skip_initial_alpha_search = true,
         warm_start_params        = start_theta,
         output_subfolder         = "step1",
         n_particles              = exp1_n_particles,
@@ -350,10 +350,10 @@ function run_full_three_step(start_theta::Vector{Float64}, seed::Int, subfolder:
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
                                         K = exp1_K_sim, output_folder = output_folder)
 
-    # Step 3: β+T only, efficient-weighted, warm-started at θ̂_1.
+    # Step 3: α+T only, efficient-weighted, warm-started at θ̂_1.
     theta_hat_2, _ = run_pso_optimization(;
         weight_matrix            = W_step3,
-        skip_initial_beta_search = true,
+        skip_initial_alpha_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
         gamma_beta_only          = true,
@@ -400,28 +400,28 @@ if RUN_EXP1
     n_id    = length(id0)
     thetahats = Matrix{Float64}(undef, length(theta0), exp1_n_starts)
     rel_err   = fill(NaN, exp1_n_starts)               # max|id(θ̂)-id0|/|id0|
-    max_zSE   = fill(NaN, exp1_n_starts)               # max |Δ|/SE on β+T (normalized gauge)
+    max_zSE   = fill(NaN, exp1_n_starts)               # max |Δ|/SE on α+T (normalized gauge)
 
     # `identified(·)` already returns T in the T_ref=1 (normalized) gauge, so the
     # POINT estimates need no further division. Only the raw inference SEs are
     # rescaled to this gauge below (se_norm = se_raw / ref_raw).
-    id0_betaT_norm = identified(theta0)[GB_COLS]       # normalized β+T truth
+    id0_alphaT_norm = identified(theta0)[GB_COLS]       # normalized α+T truth
 
     for k in 1:exp1_n_starts
         sseed = BASE_SEED + 10_000 * k
         rng   = MersenneTwister(sseed)
         # Multiplicative perturbation of θ₀, clamped to the data-anchored bounds
-        # implicitly enforced downstream by the PSO. ×LogUniform[0.5,2] on A,β,T;
+        # implicitly enforced downstream by the PSO. ×LogUniform[0.5,2] on A,α,T;
         # ×U[0.8,1.2] on Ωᴸ,Ωˢ.
         pert = copy(theta0)
         logu(r) = exp(log(0.5) + (log(2.0) - log(0.5)) * rand(r))
         unif(r) = 0.8 + 0.4 * rand(r)
         pert[1]                                   *= unif(rng)                       # Ω^L
         for i in 2:(1 + S);            pert[i]    *= unif(rng); end                  # Ω^s
-        for i in (S + 2):(BETA_T_START - 1); pert[i] *= logu(rng); end              # A
-        for i in BETA_T_START:length(theta0); pert[i] *= logu(rng); end             # β, T
-        # Keep β₀ monotonicity in the seed so Stage-0-skipped β start is valid.
-        bsl = BETA_T_START:(BETA_T_START + N_TAU - 1)
+        for i in (S + 2):(ALPHA_T_START - 1); pert[i] *= logu(rng); end              # A
+        for i in ALPHA_T_START:length(theta0); pert[i] *= logu(rng); end             # α, T
+        # Keep α₀ monotonicity in the seed so Stage-0-skipped α start is valid.
+        bsl = ALPHA_T_START:(ALPHA_T_START + N_TAU - 1)
         pert[bsl] .= sort(pert[bsl])
 
         println("\n--- Start $k/$exp1_n_starts (seed $sseed) ---")
@@ -430,7 +430,7 @@ if RUN_EXP1
 
         idh = identified(th2)
         rel_err[k] = maximum(abs.(idh .- id0) ./ max.(abs.(id0), 1e-12))
-        # |Δ|/SE on β+T is computed in the table block below by reloading the
+        # |Δ|/SE on α+T is computed in the table block below by reloading the
         # start's saved SEs (normalized to the T_ref=1 gauge).
     end
 
@@ -438,8 +438,8 @@ if RUN_EXP1
     # reload each start's saved SEs and compute normalized-gauge z-scores.
     open(joinpath(IV_ROOT, "exp1_recovery_table.txt"), "w") do io
         println(io, "Experiment 1 — point recovery ($(now()))")
-        println(io, "id0 length = $n_id   β+T params = $(length(GB_COLS))")
-        @printf(io, "%-8s %16s %16s\n", "start", "max_rel_err", "max|Δ|/SE(β+T)")
+        println(io, "id0 length = $n_id   α+T params = $(length(GB_COLS))")
+        @printf(io, "%-8s %16s %16s\n", "start", "max_rel_err", "max|Δ|/SE(α+T)")
         for k in 1:exp1_n_starts
             sf = joinpath(IV_ROOT, "exp1", "start_$k", "step3", "inference")
             th2 = thetahats[:, k]
@@ -448,9 +448,9 @@ if RUN_EXP1
             zse = NaN
             se_path = joinpath(sf, "se_theta_sandwich.npy")
             if isfile(se_path)
-                se_sw   = NPZ.npzread(se_path)            # raw units, β+T order
+                se_sw   = NPZ.npzread(se_path)            # raw units, α+T order
                 se_norm = se_sw ./ fh                     # raw SE → normalized gauge
-                zse     = maximum(abs.(pt_norm .- id0_betaT_norm) ./ max.(se_norm, 1e-12))
+                zse     = maximum(abs.(pt_norm .- id0_alphaT_norm) ./ max.(se_norm, 1e-12))
             end
             max_zSE[k] = zse
             @printf(io, "%-8d %16.4e %16.4f\n", k, rel_err[k], zse)
@@ -462,7 +462,7 @@ if RUN_EXP1
         @printf(io, "  max SD / |id0| = %.4e   (single basin if ≈ 0)\n",
                 maximum(disp ./ max.(abs.(id0), 1e-12)))
         n_pass = count(max_zSE .<= 2.0)
-        println(io, "\nPASS criterion (all within ~2 SE on β+T): $n_pass / $exp1_n_starts")
+        println(io, "\nPASS criterion (all within ~2 SE on α+T): $n_pass / $exp1_n_starts")
     end
 
     NPZ.npzwrite(joinpath(IV_ROOT, "exp1_thetahat_starts.npy"), thetahats)
@@ -470,11 +470,11 @@ if RUN_EXP1
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Experiment 2 — β+T coverage Monte Carlo
+# Experiment 2 — α+T coverage Monte Carlo
 # ─────────────────────────────────────────────────────────────────────────────
 if RUN_EXP2
     println("\n" * "="^70)
-    println("EXPERIMENT 2: β+T coverage (M=$exp2_M reps)")
+    println("EXPERIMENT 2: α+T coverage (M=$exp2_M reps)")
     println("="^70)
 
     # Restore the fixed truth target before building W/Ω at θ₀.
@@ -492,15 +492,15 @@ if RUN_EXP2
     Omega_0    = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
     L_data     = psd_sqrt(Sigma_data)
 
-    # Truth (normalized T_ref=1 gauge) for β+T. Point estimates come straight
+    # Truth (normalized T_ref=1 gauge) for α+T. Point estimates come straight
     # from identified(·); only raw SEs are rescaled per rep (se_raw / ref_raw).
-    truth_betaT    = identified(theta0)[GB_COLS]
-    p_betaT        = length(GB_COLS)
+    truth_alphaT    = identified(theta0)[GB_COLS]
+    p_alphaT        = length(GB_COLS)
 
     # Per-rep accumulators.
-    est_norm  = Matrix{Float64}(undef, p_betaT, exp2_M)   # normalized-gauge point estimates
-    se_norm   = Matrix{Float64}(undef, p_betaT, exp2_M)   # normalized-gauge SEs
-    covered   = falses(p_betaT, exp2_M)
+    est_norm  = Matrix{Float64}(undef, p_alphaT, exp2_M)   # normalized-gauge point estimates
+    se_norm   = Matrix{Float64}(undef, p_alphaT, exp2_M)   # normalized-gauge SEs
+    covered   = falses(p_alphaT, exp2_M)
 
     noise_rng = MersenneTwister(EXP2_NOISE_SEED)
 
@@ -512,7 +512,7 @@ if RUN_EXP2
         m_b[GB_INDICES] .+= eps_b
         set_synthetic_targets!(m_b)
 
-        # Re-estimate β+T only, warm-started at θ₀ (light polish).
+        # Re-estimate α+T only, warm-started at θ₀ (light polish).
         rep_dir = joinpath("exp2", "rep_$b")
         output_folder = joinpath(IV_ROOT, rep_dir)
         mkpath(output_folder)
@@ -521,7 +521,7 @@ if RUN_EXP2
 
         theta_hat_b, _ = run_pso_optimization(;
             weight_matrix            = W_step3_0,
-            skip_initial_beta_search = true,
+            skip_initial_alpha_search = true,
             warm_start_params        = theta0,
             output_subfolder         = "step3",
             gamma_beta_only          = true,
@@ -557,7 +557,7 @@ if RUN_EXP2
         seh = res["se_sw"] ./ fb
         est_norm[:, b] = ph
         se_norm[:, b]  = seh
-        covered[:, b]  = abs.(ph .- truth_betaT) .<= 1.96 .* seh
+        covered[:, b]  = abs.(ph .- truth_alphaT) .<= 1.96 .* seh
 
         if b % 10 == 0 || b == exp2_M
             @printf("  rep %d/%d done (pooled coverage so far = %.3f)\n",
@@ -567,7 +567,7 @@ if RUN_EXP2
 
     # ── Aggregate coverage / bias / SE-calibration ──────────────────────────
     cov_param  = vec(mean(covered; dims = 2))               # per-param coverage
-    bias_param = vec(mean(est_norm; dims = 2)) .- truth_betaT
+    bias_param = vec(mean(est_norm; dims = 2)) .- truth_alphaT
     sd_param   = vec(std(est_norm; dims = 2))
     se_param   = vec(mean(se_norm; dims = 2))
     ratio      = sd_param ./ max.(se_param, 1e-12)
@@ -578,11 +578,11 @@ if RUN_EXP2
     NPZ.npzwrite(joinpath(IV_ROOT, "exp2_se.npy"),        se_norm)
 
     open(joinpath(IV_ROOT, "exp2_coverage_table.txt"), "w") do io
-        println(io, "Experiment 2 — β+T coverage  ($(now()))   M=$exp2_M")
+        println(io, "Experiment 2 — α+T coverage  ($(now()))   M=$exp2_M")
         println(io, "Normalized (T_ref=1) gauge. CI₉₅ = θ̂ ± 1.96·SE_sandwich.")
         @printf(io, "%-22s %8s %12s %12s %12s %10s\n",
                 "param", "cover", "bias", "SD(θ̂)", "mean(SE)", "SD/SE")
-        for k in 1:p_betaT
+        for k in 1:p_alphaT
             @printf(io, "%-22s %8.3f %12.4e %12.4e %12.4e %10.3f\n",
                     GB_LABELS[k], cov_param[k], bias_param[k],
                     sd_param[k], se_param[k], ratio[k])
@@ -601,7 +601,7 @@ end
 open(joinpath(IV_ROOT, "summary.txt"), "w") do io
     println(io, "Internal-validity summary — $industry  ($(now()))")
     println(io, "N_REG=$N_REG  N_TAU=$N_TAU  n_good=$n_good  N_rho=$N_rho")
-    println(io, "β₀ = $(round.(beta0, digits=4))")
+    println(io, "α₀ = $(round.(alpha0, digits=4))")
     @printf(io, "min_g ESS_g (production draws) = %.1f / %d\n", min_ess, N_rho)
     println(io, "")
     println(io, "Artifacts:")

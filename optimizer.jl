@@ -7,7 +7,7 @@ This file owns everything that is independent of *which* optimizer runs:
 - `train_stage`     : the staged optimization builder — constructs bounds, warm
                       start, and the objective closure (in the log-space φ search
                       space for T), then calls `optimize_stage`.
-- `run_optimization`: the per-step orchestrator — Stage-0 β search, Stage-1 joint
+- `run_optimization`: the per-step orchestrator — Stage-0 α search, Stage-1 joint
                       fit, and (PSO only) the block-coordinate refinement loop, with
                       folder/report bookkeeping.
 - `get_param_start_index` / `get_n_T_params` : flat-layout helpers.
@@ -23,7 +23,7 @@ so `main.jl` / `run_optimization` never mention a specific optimizer. Legacy nam
 `train_stage_pso` / `run_pso_optimization` are retained as aliases at the bottom.
 
 Cross-file references (`parallel_pso_smm`, `parallel_cmaes_smm`,
-`parallel_SMM_safe`, `generate_initial_betas`, `generate_report`, `run_reporting`,
+`parallel_SMM_safe`, `generate_initial_alphas`, `generate_report`, `run_reporting`,
 `unpack_params`, `build_tau`, the φ transforms, and `OPTIMIZER_BACKEND`) all resolve
 at call time, so this file may be included before or after them as long as every
 file is `@everywhere include`d before any optimizer runs.
@@ -42,7 +42,7 @@ using Printf
 
 """
     optimize_stage(objective, lb, ub; x0, n_particles, max_iter,
-                   beta_constraint, beta_indices, verbose, backend, seed)
+                   alpha_constraint, alpha_indices, verbose, backend, seed)
 
 Dispatch to the selected optimizer backend. Returns `(best_x, best_f, history)`.
 `x0` is the warm start / incumbent (previous best), in the stage's search space:
@@ -56,8 +56,8 @@ function optimize_stage(
     x0::Union{Vector{Float64}, Nothing} = nothing,
     n_particles::Int = 70,
     max_iter::Int = 100,
-    beta_constraint::Bool = true,
-    beta_indices::UnitRange = 1:0,
+    alpha_constraint::Bool = true,
+    alpha_indices::UnitRange = 1:0,
     verbose::Bool = false,
     backend::Symbol = OPTIMIZER_BACKEND,
     seed::Int = 1,
@@ -68,8 +68,8 @@ function optimize_stage(
             x0 = x0,
             n_particles = n_particles,
             max_iter = max_iter,
-            beta_constraint = beta_constraint,
-            beta_indices = beta_indices,
+            alpha_constraint = alpha_constraint,
+            alpha_indices = alpha_indices,
             seed = seed,
             verbose = verbose,
         )
@@ -79,8 +79,8 @@ function optimize_stage(
             n_particles = n_particles,
             max_iter = max_iter,
             warm_start_particle = x0,
-            beta_constraint = beta_constraint,
-            beta_indices = beta_indices,
+            alpha_constraint = alpha_constraint,
+            alpha_indices = alpha_indices,
             verbose = verbose,
         )
     else
@@ -91,7 +91,7 @@ end
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Flat-layout helpers
-# Layout: [Ω^L(1), Ω^s(S), A(R_downstream), beta(N_TAU), T(sum(T_MASK))]
+# Layout: [Ω^L(1), Ω^s(S), A(R_downstream), alpha(N_TAU), T(sum(T_MASK))]
 # ═══════════════════════════════════════════════════════════════════════════
 
 """
@@ -106,7 +106,7 @@ function get_param_start_index(param_name::Symbol)
         return 2
     elseif param_name == :productivity
         return 2 + S
-    elseif param_name == :beta
+    elseif param_name == :alpha
         return 2 + S + R_downstream
     elseif param_name == :T
         return 2 + S + R_downstream + N_TAU
@@ -137,11 +137,11 @@ improvement across stages.
 # Arguments
 - `n_particles`: population size (PSO particles / CMA-ES λ)
 - `max_iter`: iteration/generation budget
-- `init_beta`: initial beta values (if starting fresh)
-- `variable_list`: which parameters to optimize (e.g., ["beta", "T"]); `nothing` = all
+- `init_alpha`: initial alpha values (if starting fresh)
+- `variable_list`: which parameters to optimize (e.g., ["alpha", "T"]); `nothing` = all
 - `last_stage_folder`: folder with previous stage results (`nothing` = fresh start)
 - `K`: which parameter set (column) to use from previous stage
-- `alpha`: search-radius multiplier
+- `radius`: search-radius multiplier
 - `second_stage`: legacy flag (unused live path)
 
 # Returns
@@ -152,11 +152,11 @@ improvement across stages.
 function train_stage(
     n_particles::Int,
     max_iter::Int;
-    init_beta = nothing,
+    init_alpha = nothing,
     variable_list = nothing,
     last_stage_folder = nothing,
     K = 1,
-    alpha = 0.1,
+    radius = 0.1,
     second_stage = false,
     method = false,
     u_draws::Union{Nothing, Matrix{Float64}} = nothing,
@@ -168,13 +168,13 @@ function train_stage(
     n_quad::Int = 200
 )
 
-    # ── Init-anchored search box for α (β) and T ─────────────────────────────
+    # ── Init-anchored search box for α and T ─────────────────────────────────
     # α and T are constrained to [BOUND_LO, BOUND_HI] × their INITIAL value in every
-    # stage: T to T_rs_init (the γ-inversion), β to TAU_PRIOR (the α prior). This
+    # stage: T to T_rs_init (the γ-inversion), α to TAU_PRIOR (the α prior). This
     # aligns the trust region with the theory-based warm start so PSO never drifts
-    # beyond a factor of 2 from it. The per-stage radius `alpha` still anneals INSIDE
+    # beyond a factor of 2 from it. The per-stage radius `radius` still anneals INSIDE
     # this box in continue stages. Falls back to the stage's starting value when no
-    # prior anchor is available (TAU_PRIOR === nothing → old ×0.5..×2 around init_beta).
+    # prior anchor is available (TAU_PRIOR === nothing → old ×0.5..×2 around init_alpha).
     BOUND_LO, BOUND_HI = 0.5, 2.0
     phi_anchor = t_levels_to_free_phi(vec(permutedims(T_rs_init))[T_MASK])  # φ of T_rs_init (N_T_FREE)
     T_phi_lo   = phi_anchor .+ log(BOUND_LO)
@@ -182,7 +182,7 @@ function train_stage(
 
     # Build bounds based on previous stage or initialization
     if last_stage_folder === nothing
-        # Fresh start - use init_beta
+        # Fresh start - use init_alpha
 
 
         A = copy(emp_pi_r_full).^(1/abs(epsilon)).*regional_wages[N_downstream_per_region .!= 0]  # analytical inversion
@@ -191,13 +191,13 @@ function train_stage(
         # T block is searched as free log-space φ (ref entries dropped). The box is
         # φ_init + [log(BOUND_LO), log(BOUND_HI)] ⇒ T ∈ [×0.5, ×2] × T_rs_init, centred
         # on the γ-inversion init (T_init is no longer ≡1, so the box must track it).
-        # β is boxed to [×0.5, ×2] × the α prior (TAU_PRIOR), else × init_beta.
-        beta_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_beta
+        # α is boxed to [×0.5, ×2] × the α prior (TAU_PRIOR), else × init_alpha.
+        alpha_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha
         lb = vcat(
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
-            beta_anchor .* BOUND_LO,
+            alpha_anchor .* BOUND_LO,
             T_phi_lo
         )
 
@@ -205,23 +205,23 @@ function train_stage(
             1.2*agg_labor_share,
             1.2 .* agg_industry_share,
             A .* 1.2,
-            beta_anchor .* BOUND_HI,
+            alpha_anchor .* BOUND_HI,
             T_phi_hi
         )
 
-        beta_constraint = true
-        beta_start = 1 + S + R_downstream + 1   # beta follows Ω^L, Ω^s, A in new layout
-        beta_indices = beta_start:(beta_start + N_TAU - 1)
+        alpha_constraint = true
+        alpha_start = 1 + S + R_downstream + 1   # alpha follows Ω^L, Ω^s, A in new layout
+        alpha_indices = alpha_start:(alpha_start + N_TAU - 1)
         best_params_prev = nothing
         # Use warm_start_override if provided (Step 3 warm-start from θ̂_1); convert
         # its level T block to the free-φ search space.
         warm_start = warm_start_override === nothing ? nothing : full_to_search(warm_start_override)
-        cached_tau = nothing  # Beta is being optimized in initial stage
+        cached_tau = nothing  # Alpha is being optimized in initial stage
 
     else
         # Continue from previous stage - load best params
         best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K]
-        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :beta, :T]
+        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :alpha, :T]
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
         # T from unpack_params is full S*R; reduce to non-zero entries, then map to
@@ -233,42 +233,42 @@ function train_stage(
         # Handle single variable or list
         var_list = isa(variable_list, String) ? [variable_list] : variable_list
 
-        # Check if beta is fixed — if so, precompute and cache tau
-        beta_is_fixed = !("beta" in var_list)
-        cached_tau = beta_is_fixed ? build_tau(params_dict[:beta]) : nothing
-        beta_is_fixed && println("[stage] Beta is fixed — tau precomputed and cached")
+        # Check if alpha is fixed — if so, precompute and cache tau
+        alpha_is_fixed = !("alpha" in var_list)
+        cached_tau = alpha_is_fixed ? build_tau(params_dict[:alpha]) : nothing
+        alpha_is_fixed && println("[stage] Alpha is fixed — tau precomputed and cached")
 
         # Build bounds for selected variables
-        # For most parameters: [value * alpha, value / alpha]
-        # For agg_labor_share_tech: [value * (1-alpha), value * (1+alpha)] to stay in [0,1]
+        # For most parameters: [value * radius, value / radius]
+        # For agg_labor_share_tech: [value * (1-radius), value * (1+radius)] to stay in [0,1]
         lb_parts = Vector{Float64}[]
         ub_parts = Vector{Float64}[]
 
         for v in var_list
             val = params_dict[Symbol(v)]
             if v == "agg_labor_share_tech"
-                # Symmetric percentage bounds: ±alpha around current value
-                lb_v = val .* (1 - alpha)
-                ub_v = val .* (1 + alpha)
+                # Symmetric percentage bounds: ±radius around current value
+                lb_v = val .* (1 - radius)
+                ub_v = val .* (1 + radius)
                 # Clamp to valid range [0.001, 1.0]
                 lb_v = max.(lb_v, 0.001)
                 ub_v = min.(ub_v, 1.0)
             elseif v == "T"
-                # val is φ (log space): the per-stage radius α gives the additive box
-                # φ ± |log α|, then clamped to the init-anchored [×0.5, ×2] × T_rs_init
+                # val is φ (log space): the per-stage radius gives the additive box
+                # φ ± |log radius|, then clamped to the init-anchored [×0.5, ×2] × T_rs_init
                 # box (T_phi_lo/T_phi_hi) so the search never leaves it in any stage.
-                lb_v = max.(val .+ log(alpha), T_phi_lo)
-                ub_v = min.(val .- log(alpha), T_phi_hi)
-            elseif v == "beta"
-                # Per-stage radius α around the incumbent, clamped to [×0.5, ×2] × the
+                lb_v = max.(val .+ log(radius), T_phi_lo)
+                ub_v = min.(val .- log(radius), T_phi_hi)
+            elseif v == "alpha"
+                # Per-stage radius around the incumbent, clamped to [×0.5, ×2] × the
                 # α prior (TAU_PRIOR); falls back to × the incumbent when no prior.
                 anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : val
-                lb_v = max.(val .* (1 - alpha), anchor .* BOUND_LO)
-                ub_v = min.(val .* (1 + alpha), anchor .* BOUND_HI)
+                lb_v = max.(val .* (1 - radius), anchor .* BOUND_LO)
+                ub_v = min.(val .* (1 + radius), anchor .* BOUND_HI)
             else
                 # Standard multiplicative bounds
-                lb_v = val .* alpha
-                ub_v = val ./ alpha
+                lb_v = val .* radius
+                ub_v = val ./ radius
             end
             push!(lb_parts, isa(lb_v, Number) ? [lb_v] : lb_v)
             push!(ub_parts, isa(ub_v, Number) ? [ub_v] : ub_v)
@@ -277,14 +277,14 @@ function train_stage(
         lb = vcat(lb_parts...)
         ub = vcat(ub_parts...)
 
-        # Check if beta is being optimized
-        beta_constraint = "beta" in var_list
-        if beta_constraint
-            beta_idx_in_var = findfirst(==("beta"), var_list)
-            beta_start = beta_idx_in_var == 1 ? 1 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(beta_idx_in_var-1)]) + 1
-            beta_indices = beta_start:(beta_start + N_TAU - 1)
+        # Check if alpha is being optimized
+        alpha_constraint = "alpha" in var_list
+        if alpha_constraint
+            alpha_idx_in_var = findfirst(==("alpha"), var_list)
+            alpha_start = alpha_idx_in_var == 1 ? 1 : sum([length(params_dict[Symbol(var_list[i])]) for i in 1:(alpha_idx_in_var-1)]) + 1
+            alpha_indices = alpha_start:(alpha_start + N_TAU - 1)
         else
-            beta_indices = 1:0
+            alpha_indices = 1:0
         end
 
         # Handle second stage T masking
@@ -393,8 +393,8 @@ function train_stage(
         x0 = warm_start,                   # CRITICAL: previous best (warm start / incumbent)
         n_particles = n_particles,
         max_iter = max_iter,
-        beta_constraint = beta_constraint,
-        beta_indices = beta_indices,
+        alpha_constraint = alpha_constraint,
+        alpha_indices = alpha_indices,
         verbose = true
     )
 
@@ -441,28 +441,28 @@ under `:cmaes` the loop collapses to the single joint Stage-1 run.
 
 # Keyword arguments
 - `weight_matrix`: SMM weight matrix passed to full_SMM (default: uses global Weight_matrix_custom)
-- `skip_initial_beta_search`: if true, skip Stage 0 LHS search (use warm_start_params beta)
+- `skip_initial_alpha_search`: if true, skip Stage 0 LHS search (use warm_start_params alpha)
 - `warm_start_params`: full parameter vector to warm-start Stage 1 (nothing = fresh start)
 - `output_subfolder`: subfolder under output_folder for all stage outputs
 - `max_loop`: number of refinement loops (PSO backend only; default 50)
 - `n_particles`, `max_iter_initial`, `max_iter_stage`: optimizer configuration
-- `beta_search_method`: "log_grid" or "lhs"
-- `beta_selection_criterion`: "reg_coef" or "score"
+- `alpha_search_method`: "log_grid" or "lhs"
+- `alpha_selection_criterion`: "reg_coef" or "score"
 """
 function run_optimization(;
     weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
-    skip_initial_beta_search::Bool = false,
+    skip_initial_alpha_search::Bool = false,
     warm_start_params::Union{Nothing, Vector{Float64}} = nothing,
     output_subfolder::String = "step1",
     max_loop::Int = 50,
     n_particles::Int = 100,
     max_iter_initial::Int = 200,
     max_iter_stage::Int = 50,
-    beta_search_method::String = "lhs",
-    beta_selection_criterion::String = "reg_coef",
-    length_range_beta::Int = 40,
+    alpha_search_method::String = "lhs",
+    alpha_selection_criterion::String = "reg_coef",
+    length_range_alpha::Int = 40,
     method::String = "original",
-    gamma_beta_only::Bool = false,          # step 3: fix structural params, optimize only beta+T
+    gamma_beta_only::Bool = false,          # step 3: fix structural params, optimize only alpha+T
     moments_loss_gamma_beta::Bool = false,  # step 3: compute loss on gamma_ls + reg_coef moments only
     analytical::Bool = false,              # GMM mode: closed-form moments (no simulation)
     n_quad::Int = 200                      # quadrature nodes for reg_coef block in analytical mode
@@ -476,47 +476,47 @@ function run_optimization(;
     best_fitness = Inf
     stage = 0
 
-    # ── Stage 0: LHS beta search ─────────────────────────────────────────────
-    if !skip_initial_beta_search
+    # ── Stage 0: LHS alpha search ─────────────────────────────────────────────
+    if !skip_initial_alpha_search
         println("\n" * "="^70)
-        println("[$output_subfolder] STAGE 0: Finding good initial beta values")
+        println("[$output_subfolder] STAGE 0: Finding good initial alpha values")
         println("="^70)
 
-        # Anchor the coarse β search to [×0.5, ×2] × the α prior (N_TAU==1) so the
-        # selected init_beta lands inside the prior-anchored Stage-1 box; else the
+        # Anchor the coarse α search to [×0.5, ×2] × the α prior (N_TAU==1) so the
+        # selected init_alpha lands inside the prior-anchored Stage-1 box; else the
         # historical [0.5, 1.5] range.
         if N_TAU == 1 && TAU_PRIOR !== nothing
-            beta_min = TAU_PRIOR[1] * 0.5
-            beta_max = TAU_PRIOR[1] * 2.0
+            alpha_min = TAU_PRIOR[1] * 0.5
+            alpha_max = TAU_PRIOR[1] * 2.0
         else
-            beta_min = 0.5
-            beta_max = 1.5
+            alpha_min = 0.5
+            alpha_max = 1.5
         end
-        println("Search is done $beta_search_method with min $beta_min and max $beta_max")
+        println("Search is done $alpha_search_method with min $alpha_min and max $alpha_max")
         if N_TAU == 1
-            length_range_beta = 10000
+            length_range_alpha = 10000
         end
-        if beta_search_method == "log_grid"
-            beta_candidates = generate_initial_betas("log_grid", N_TAU, beta_min, beta_max;
-                                                     log_grid_length=length_range_beta)
+        if alpha_search_method == "log_grid"
+            alpha_candidates = generate_initial_alphas("log_grid", N_TAU, alpha_min, alpha_max;
+                                                     log_grid_length=length_range_alpha)
         else
-            beta_candidates = generate_initial_betas("lhs", N_TAU, beta_min, beta_max;
+            alpha_candidates = generate_initial_alphas("lhs", N_TAU, alpha_min, alpha_max;
                                                      lhs_n_samples=10000)
         end
-        println("  Generated $(length(beta_candidates)) beta candidates")
+        println("  Generated $(length(alpha_candidates)) alpha candidates")
 
         A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A_init ./= sum(A_init)
         T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
-        # New layout: [Ω^L | Ω^s | A | β(N_TAU) | T] — beta is inserted between A and T
+        # New layout: [Ω^L | Ω^s | A | α(N_TAU) | T] — alpha is inserted between A and T
         init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
-        expanding_beta = [vcat(init_other_prefix, beta, T_init_nz) for beta in beta_candidates]
+        expanding_alpha = [vcat(init_other_prefix, alpha, T_init_nz) for alpha in alpha_candidates]
 
         results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                                                W_override=weight_matrix,
-                                               analytical=analytical, n_quad=n_quad), expanding_beta)
+                                               analytical=analytical, n_quad=n_quad), expanding_alpha)
 
-        if beta_selection_criterion == "reg_coef"
+        if alpha_selection_criterion == "reg_coef"
             reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_]
             reg_distances  = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
             best_idx = argmin(reg_distances)
@@ -524,21 +524,20 @@ function run_optimization(;
             scores = [r !== nothing ? r[1][1] : Inf for r in results_]
             best_idx = argmin(scores)
         end
-        init_beta  = beta_candidates[best_idx]
-        tau_label  = N_TAU == 1 ? "alpha" : "beta"
-        println("  Best initial $tau_label (trade-cost params, length $N_TAU): ",
-                round.(init_beta, digits=6))
-        if beta_selection_criterion == "reg_coef"
-            println("  Simulated reg_coef at best $tau_label: ",
+        init_alpha  = alpha_candidates[best_idx]
+        println("  Best initial alpha (trade-cost params, length $N_TAU): ",
+                round.(init_alpha, digits=6))
+        if alpha_selection_criterion == "reg_coef"
+            println("  Simulated reg_coef at best alpha: ",
                     round.(reg_coefs_sim[best_idx], digits=6))
             println("  Empirical  reg_coef:                  ",
                     round.(reg_coef, digits=6))
         end
     else
-        @assert warm_start_params !== nothing "skip_initial_beta_search=true requires warm_start_params"
-        beta_start_idx = S + R_downstream + 2   # new layout: [Ω^L | Ω^s(S) | A(Rd) | β(N_TAU) | T]
-        init_beta = warm_start_params[beta_start_idx:(beta_start_idx + N_TAU - 1)]
-        println("\n[$output_subfolder] Skipping Stage 0: using warm_start beta $(round.(init_beta, digits=6))")
+        @assert warm_start_params !== nothing "skip_initial_alpha_search=true requires warm_start_params"
+        alpha_start_idx = S + R_downstream + 2   # new layout: [Ω^L | Ω^s(S) | A(Rd) | α(N_TAU) | T]
+        init_alpha = warm_start_params[alpha_start_idx:(alpha_start_idx + N_TAU - 1)]
+        println("\n[$output_subfolder] Skipping Stage 0: using warm_start alpha $(round.(init_alpha, digits=6))")
     end
 
     # ── Stage 1: initial joint fit ───────────────────────────────────────────
@@ -550,28 +549,42 @@ function run_optimization(;
 
     if gamma_beta_only
         # Save warm_start_params as a seed folder so train_stage can treat it as a
-        # "previous stage" and restrict optimisation to beta+T only.
+        # "previous stage" and restrict optimisation to alpha+T only.
         @assert warm_start_params !== nothing "gamma_beta_only=true requires warm_start_params"
         seed_folder = joinpath(loop_base, "seed")
         mkpath(seed_folder)
         NPZ.npzwrite(joinpath(seed_folder, "best_params.npy"), reshape(warm_start_params, :, 1))
 
-        println("[$output_subfolder] gamma_beta_only: optimising β+T only (A_r/labor/industry fixed at θ̂_1)")
+        println("[$output_subfolder] gamma_beta_only: optimising α then T (decoupled; A_r/labor/industry fixed at θ̂_1)")
+        # Decoupled initial fit: α first (T held at the warm-start init), then T
+        # (α held at its just-fitted value). Each sub-stage is a single-variable
+        # train_stage; the α result seeds the T fit via a scratch folder.
         best_params, best_fitness, history = train_stage(
             n_particles, max_iter_initial;
-            variable_list     = ["beta", "T"],
+            variable_list     = ["alpha"],
             last_stage_folder = seed_folder,
-            K=1, alpha=0.5, second_stage=false, method=method,
+            K=1, radius=0.5, second_stage=false, method=method,
+            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+            moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+        )
+        seed_alpha_folder = joinpath(loop_base, "seed_alpha")
+        mkpath(seed_alpha_folder)
+        NPZ.npzwrite(joinpath(seed_alpha_folder, "best_params.npy"), reshape(best_params, :, 1))
+        best_params, best_fitness, history = train_stage(
+            n_particles, max_iter_initial;
+            variable_list     = ["T"],
+            last_stage_folder = seed_alpha_folder,
+            K=1, radius=0.5, second_stage=false, method=method,
             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
             moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
         )
     else
         best_params, best_fitness, history = train_stage(
             n_particles, max_iter_initial;
-            init_beta      = init_beta,
+            init_alpha      = init_alpha,
             variable_list  = nothing,
             last_stage_folder = nothing,
-            alpha          = 0.5,
+            radius          = 0.5,
             second_stage   = false,
             method         = method,
             u_draws        = U_DRAWS,
@@ -592,99 +605,100 @@ function run_optimization(;
                     analytical=analytical, n_quad=n_quad)
 
     # ── Refinement loops ─────────────────────────────────────────────────────
-    # PSO backend: the staged block-coordinate refinement (productivity → β+T →
-    # technical, or joint β+T for gamma_beta_only). CMA-ES backend: the general
+    # α and T are DECOUPLED: every loop refines α alone, then T alone (α first),
+    # so each sub-stage lets one block adapt to the other's latest update instead
+    # of moving them together in one joint step. PSO backend: the staged
+    # block-coordinate refinement (productivity → α → T → technical, or the
+    # α-then-T alternation for gamma_beta_only). CMA-ES backend: the general
     # (non-gamma_beta_only) case collapses all of this into the single joint
     # Stage 1 run above (it learns cross-block covariance directly and stops on
     # its own ftol/xtol), so those loops are skipped; the gamma_beta_only case
-    # instead alternates single-block CMA-ES runs (β-only, then T-only) — each
-    # is cheap (small λ, low dimension) and lets β adapt to the T update from the
-    # previous sub-stage and vice versa, which the joint Stage 1 run may have
-    # settled short of.
-    alpha_start, alpha_end = 0.3, 0.9
-    # gamma_beta_only: 2 sub-stages/loop under CMA-ES (β, T alternating), 1 under
-    # PSO (joint β+T); else: three sub-stages (PSO only — CMA-ES skips this case)
-    substages_per_loop = gamma_beta_only ? (OPTIMIZER_BACKEND == :cmaes ? 2 : 1) : 3
+    # runs the same α-then-T alternation.
+    radius_start, radius_end = 0.3, 0.9
+    # gamma_beta_only: 2 sub-stages/loop (α, then T — both backends).
+    # else: four sub-stages/loop (productivity, α, T, technical — PSO only;
+    # CMA-ES skips this case).
+    substages_per_loop = gamma_beta_only ? 2 : 4
     run_refinement = gamma_beta_only || OPTIMIZER_BACKEND != :cmaes
 
     for loop in (run_refinement ? (1:max_loop) : (1:0))
-        alpha = alpha_start + (loop - 1) * (alpha_end - alpha_start) / (max_loop - 1)
+        radius = radius_start + (loop - 1) * (radius_end - radius_start) / (max_loop - 1)
         past_loop_folder = loop == 1 ? loop_base : joinpath(loop_base, "epoch_$(loop-1)")
         loop_folder = joinpath(loop_base, "epoch_$loop")
         mkpath(loop_folder)
 
-        println("\n[$output_subfolder] LOOP $loop/$max_loop  alpha=$alpha")
+        println("\n[$output_subfolder] LOOP $loop/$max_loop  radius=$radius")
 
-        if gamma_beta_only && OPTIMIZER_BACKEND == :cmaes
-            max_iter_stage = 100
-            # Alternate single-block CMA-ES refinement: β alone, then T alone.
+        if gamma_beta_only
+            # Decoupled α/T refinement (both backends): α alone, then T alone.
             # A_r / labor / industry shares stay fixed at warm start throughout.
+            # Each sub-stage lets α adapt to the previous T update and vice versa.
+            OPTIMIZER_BACKEND == :cmaes && (max_iter_stage = 100)
             substage_folder = past_loop_folder
-            for var in ("beta", "T")
+            for var in ("alpha", "T")
                 best_params, best_fitness, history = train_stage(
                     n_particles, max_iter_stage;
                     variable_list     = [var],
                     last_stage_folder = joinpath(substage_folder, string(stage)),
-                    K=1, alpha=alpha, second_stage=false, method=method,
+                    K=1, radius=radius, second_stage=false, method=method,
                     u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                     moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
                 )
                 stage += 1
                 folder = joinpath(loop_folder, string(stage)); mkpath(folder)
                 NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-                generate_report(loop_folder, string(stage), 1, [var], best_params, string(alpha);
+                generate_report(loop_folder, string(stage), 1, [var], best_params, string(radius);
                                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                                 analytical=analytical, n_quad=n_quad)
                 substage_folder = loop_folder
             end
-        elseif gamma_beta_only
-            # PSO: joint β+T sub-stage (unchanged).
-            # Only optimise β and T; A_r / labor / industry shares are fixed at warm start
-            best_params, best_fitness, history = train_stage(
-                n_particles, max_iter_stage;
-                variable_list     = ["beta", "T"],
-                last_stage_folder = joinpath(past_loop_folder, string(stage)),
-                K=1, alpha=alpha, second_stage=false, method=method,
-                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
-            )
-            stage += 1
-            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
-            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
-                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
-                            analytical=analytical, n_quad=n_quad)
         else
             # Sub-stage 1: Productivity
-            alpha_prod = 0.7 + 0.2 * alpha
+            radius_prod = 0.7 + 0.2 * radius
             best_params, best_fitness, history = train_stage(
                 n_particles, max_iter_stage;
                 variable_list     = ["productivity"],
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
-                K=1, alpha=alpha_prod, second_stage=false, method=method,
+                K=1, radius=radius_prod, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(alpha_prod);
+            generate_report(loop_folder, string(stage), 1, ["productivity"], best_params, string(radius_prod);
                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                             analytical=analytical, n_quad=n_quad)
 
-            # Sub-stage 2: Spatial structure (β, T)
+            # Sub-stage 2a: Spatial structure — α alone (T held), decoupled from T
             best_params, best_fitness, history = train_stage(
                 n_particles, max_iter_stage;
-                variable_list     = ["beta", "T"],
+                variable_list     = ["alpha"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
-                K=1, alpha=alpha, second_stage=false, method=method,
+                K=1, radius=radius, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-            generate_report(loop_folder, string(stage), 1, ["beta", "T"], best_params, string(alpha);
+            generate_report(loop_folder, string(stage), 1, ["alpha"], best_params, string(radius);
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                            analytical=analytical, n_quad=n_quad)
+
+            # Sub-stage 2b: Spatial structure — T alone (α held at its 2a value)
+            best_params, best_fitness, history = train_stage(
+                n_particles, max_iter_stage;
+                variable_list     = ["T"],
+                last_stage_folder = joinpath(loop_folder, string(stage)),
+                K=1, radius=radius, second_stage=false, method=method,
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+            )
+            stage += 1
+            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+            generate_report(loop_folder, string(stage), 1, ["T"], best_params, string(radius);
                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                             analytical=analytical, n_quad=n_quad)
 
@@ -693,7 +707,7 @@ function run_optimization(;
                 n_particles, max_iter_stage;
                 variable_list     = ["agg_labor_share_tech", "agg_industry_share_tech"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
-                K=1, alpha=alpha, second_stage=false, method=method,
+                K=1, radius=radius, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
@@ -701,7 +715,7 @@ function run_optimization(;
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
             NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
             generate_report(loop_folder, string(stage), 1,
-                            ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(alpha);
+                            ["agg_labor_share_tech", "agg_industry_share_tech"], best_params, string(radius);
                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                             analytical=analytical, n_quad=n_quad)
         end

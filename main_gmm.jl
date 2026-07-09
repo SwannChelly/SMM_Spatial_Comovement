@@ -3,7 +3,7 @@
 # Three-step GMM:
 #   Step 1: identity-weighted PSO with analytical moments → θ̂_1
 #   Step 2: W_eff = Σ_data^{-1} (Σ_sim = 0 by construction) + θ̂_1 inference
-#   Step 3: efficient-weighted PSO (β+T only), warm-started at θ̂_1 → θ̂_2
+#   Step 3: efficient-weighted PSO (α+T only), warm-started at θ̂_1 → θ̂_2
 #   Step 4: Jacobian at θ̂_2 + GMM inference (separable from Step 3)
 #
 # Usage:
@@ -99,7 +99,7 @@ if run_step1
 
     theta_hat_1, _ = run_pso_optimization(;
         weight_matrix            = nothing,
-        skip_initial_beta_search = false,
+        skip_initial_alpha_search = false,
         warm_start_params        = nothing,
         output_subfolder         = "step1",
         max_loop                 = K,
@@ -203,13 +203,13 @@ if run_step2
     gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
     gb_block_names  = ("reg_coef", "gamma_ls")
 
-    # Restrict Jacobian columns to β+T (the only params β+γ moments identify)
-    beta_T_start = 1 + S + R_downstream + 1                       # first β raw index
-    gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
+    # Restrict Jacobian columns to α+T (the only params β+γ moments identify)
+    alpha_T_start = 1 + S + R_downstream + 1                       # first α (trade-cost) raw index
+    gb_cols      = findall(i -> i >= alpha_T_start, jacobian_param_indices)
     gb_param_idx = jacobian_param_indices[gb_cols]
 
-    n_beta_labels_s2 = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_cols])
-    @assert n_beta_labels_s2 == N_TAU "Step-2 inference: expected $N_TAU β/α labels in gb_cols, found $n_beta_labels_s2"
+    n_alpha_labels_s2 = count(l -> startswith(l, "alpha"), PARAM_LABELS[gb_cols])
+    @assert n_alpha_labels_s2 == N_TAU "Step-2 inference: expected $N_TAU α labels in gb_cols, found $n_alpha_labels_s2"
 
     # Correctness check: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
     Omega_gmm = Sigma_data_gb
@@ -259,7 +259,7 @@ else
     Sigma_data_gb = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data_gb.npy"))
 end
 
-############## STEP 3 — Efficient-weighted GMM (β+T optimisation only) ##############
+############## STEP 3 — Efficient-weighted GMM (α+T optimisation only) ##############
 
 step3_folder = joinpath(output_folder, "step3")
 mkpath(step3_folder)
@@ -271,7 +271,7 @@ if run_step3
 
     theta_hat_2, _ = run_pso_optimization(;
         weight_matrix            = W_eff,
-        skip_initial_beta_search = true,
+        skip_initial_alpha_search = true,
         warm_start_params        = theta_hat_1,
         output_subfolder         = "step3",
         max_loop                 = K,
@@ -351,17 +351,17 @@ if run_step4
     gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
     gb_block_names  = ("reg_coef", "gamma_ls")
 
-    # Restrict Jacobian columns to β+T (ensures G'WG full-rank, order condition)
-    beta_T_start = 1 + S + R_downstream + 1                       # first β raw index
-    gb_cols      = findall(i -> i >= beta_T_start, jacobian_param_indices)
+    # Restrict Jacobian columns to α+T (ensures G'WG full-rank, order condition)
+    alpha_T_start = 1 + S + R_downstream + 1                       # first α (trade-cost) raw index
+    gb_cols      = findall(i -> i >= alpha_T_start, jacobian_param_indices)
     gb_param_idx = jacobian_param_indices[gb_cols]
 
     # Correctness check 1: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
     Omega_gmm = Sigma_data_gb
     @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
-    # Correctness check 2: exactly N_TAU β/α labels in the restricted param columns.
-    n_beta_labels = count(l -> startswith(l, "alpha") || startswith(l, "beta"), PARAM_LABELS[gb_cols])
-    @assert n_beta_labels == N_TAU "Expected $N_TAU β/α labels in gb_cols, found $n_beta_labels — beta_T_start misaligned with N_TAU"
+    # Correctness check 2: exactly N_TAU α labels in the restricted param columns.
+    n_alpha_labels = count(l -> startswith(l, "alpha"), PARAM_LABELS[gb_cols])
+    @assert n_alpha_labels == N_TAU "Expected $N_TAU α labels in gb_cols, found $n_alpha_labels — alpha_T_start misaligned with N_TAU"
 
     J2_gb      = J2[gb_indices, gb_cols]
     sim_vec_gb = sim_vec_2[gb_indices]
@@ -370,7 +370,7 @@ if run_step4
     N_gb = length(gb_indices)
     n_gb_params = length(gb_param_idx)
     println("Step-4 inference: J2_gb is $(N_gb)×$(n_gb_params) " *
-            "($(N_gb) β+γ moments × $(n_gb_params) β+T params). " *
+            "($(N_gb) β+γ moments × $(n_gb_params) α+T params). " *
             "df = $(N_gb - n_gb_params)")
 
     # T-identification eigen-screen (diagnostic, print-only) at θ̂_2
@@ -422,8 +422,8 @@ function test_price_alignment(params; N_list = [2048, 8192, 32768], n_quad::Int 
 
     # Closed-form reference (the N→∞ target)
     moms_ana = compute_moments_analytical(params; n_quad = n_quad)
-    Ω_L, Ω_s, A, β, T_vec = unpack_params(params)
-    pr_ana = compute_prices_analytical(Ω_L, Ω_s, A, reshape(T_vec, S, R), build_tau(β))
+    Ω_L, Ω_s, A, α, T_vec = unpack_params(params)
+    pr_ana = compute_prices_analytical(Ω_L, Ω_s, A, reshape(T_vec, S, R), build_tau(α))
     c_ana  = pr_ana.c_tilde_r                       # length R_downstream
 
     rel(sim, ana) = maximum(abs.(vec(sim) .- vec(ana)) ./ (abs.(vec(ana)) .+ 1e-12))
