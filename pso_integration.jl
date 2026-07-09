@@ -58,6 +58,9 @@ function parallel_pso_smm(
     alpha_constraint::Bool = true,
     alpha_indices::UnitRange = 1:N_TAU,
     log_mask::Union{Nothing, Vector{Bool}} = nothing,
+    qmc_init::Bool = true,
+    reflect::Bool = true,
+    init_rng::AbstractRNG = Random.GLOBAL_RNG,
     verbose::Bool = false
 )
 
@@ -79,8 +82,22 @@ function parallel_pso_smm(
 
     # CRITICAL: Reserve one slot for warm start if provided
     n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
-    particles = [lb .+ rand(d) .* (ub .- lb) for _ in 1:n_random]
-    
+
+    # Initial swarm placement across the box. QMC (scrambled Sobol) gives a
+    # low-discrepancy net — no clumps/gaps, so the same particle budget covers a
+    # high-dimensional box far more evenly than i.i.d. uniform (fewer wasted,
+    # mutually-distant particles). The digital-shift scramble consumes `init_rng`,
+    # so successive stages/runs get distinct-but-well-spread swarms. `qmc_init=false`
+    # recovers the historical uniform-random draw.
+    if n_random == 0
+        particles = Vector{Vector{Float64}}()
+    elseif qmc_init
+        net = sobol_scrambled_net(n_random, d, init_rng)          # n_random × d in [0,1)
+        particles = [lb .+ net[i, :] .* (ub .- lb) for i in 1:n_random]
+    else
+        particles = [lb .+ rand(init_rng, d) .* (ub .- lb) for _ in 1:n_random]
+    end
+
     # Apply alpha constraint to random particles
     if alpha_constraint
         for i in 1:n_random
@@ -178,10 +195,19 @@ function parallel_pso_smm(
             
             # Update position
             particles[i] = particles[i] .+ velocities[i]
-            
+
             # Enforce bounds
-            particles[i] = clamp.(particles[i], lb, ub)
-            
+            if reflect
+                # Reflecting ("bounce") walls: mirror any out-of-box coordinate
+                # back inside and flip its velocity component, so particles bounce
+                # off the bounds instead of sticking to them. The old absorbing
+                # clamp left the outward velocity intact, pinning weakly-identified
+                # dims (flat T directions) to the wall for many iterations.
+                reflect_bounds!(particles[i], velocities[i], lb, ub)
+            else
+                particles[i] = clamp.(particles[i], lb, ub)
+            end
+
             # Enforce alpha constraint
             if alpha_constraint
                 particles[i] = enforce_alpha_constraint(particles[i], alpha_indices)
@@ -277,4 +303,32 @@ function enforce_alpha_constraint(params::Vector{Float64}, alpha_indices::UnitRa
     alphas_sorted = sort(alphas)
     params_new[alpha_indices] = alphas_sorted
     return params_new
+end
+
+
+"""
+    reflect_bounds!(pos, vel, lb, ub)
+
+Reflecting ("bounce") boundary condition, applied per coordinate and in place.
+Any position past a wall is mirrored back into `[lb, ub]` and the corresponding
+velocity component is negated, so a particle bounces off the bound rather than
+sticking to it (the outward velocity is reversed, not preserved). Because the
+caller clamps velocities to `±0.1·(ub−lb)` before the position update, a single
+step cannot overshoot the opposite wall; the trailing `clamp` is a safety net for
+degenerate cases (e.g. a warm start seeded on a bound, or `lb == ub`). Mutates and
+returns `(pos, vel)`.
+"""
+function reflect_bounds!(pos::Vector{Float64}, vel::Vector{Float64},
+                         lb::Vector{Float64}, ub::Vector{Float64})
+    @inbounds for k in eachindex(pos)
+        if pos[k] < lb[k]
+            pos[k] = lb[k] + (lb[k] - pos[k])   # mirror across lower wall
+            vel[k] = -vel[k]
+        elseif pos[k] > ub[k]
+            pos[k] = ub[k] - (pos[k] - ub[k])   # mirror across upper wall
+            vel[k] = -vel[k]
+        end
+        pos[k] = clamp(pos[k], lb[k], ub[k])    # safety: keep strictly in-box
+    end
+    return pos, vel
 end
