@@ -588,14 +588,16 @@ function plot_T_vs_initial(best_params, out_folder; label::String = "")
         Plots.plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash, label = "y = x (no change)")
 
         # Exploration-window borders. Each best-T coordinate is boxed to
-        # [BOUND_LO, BOUND_HI] = [0.8, 1.2] × its INITIAL value (optimizer.jl
-        # train_stage; the T-φ box is φ_init + [log0.8, log1.2]). Since the x-axis
-        # is the initial T, the borders are y = 0.8·x and y = 1.2·x — straight
-        # lines parallel to the diagonal in log-log. Points should sit between them.
-        bound_lo, bound_hi = 0.8, 1.2
-        Plots.plot!(p, [lo, hi], bound_hi .* [lo, hi];
-                    color = :firebrick, ls = :dot, label = "×0.8 / ×1.2 search window")
-        Plots.plot!(p, [lo, hi], bound_lo .* [lo, hi];
+        # [BOUND_LO, BOUND_HI] × its INITIAL value (optimizer.jl train_stage; the T-φ
+        # box is φ_init + [log BOUND_LO, log BOUND_HI]). BOUND_LO/BOUND_HI are the
+        # shared globals from load_parameters.jl — same source of truth as the optimizer.
+        # Since the x-axis is the initial T, the borders are y = BOUND_LO·x and
+        # y = BOUND_HI·x — straight lines parallel to the diagonal in log-log. Points
+        # should sit between them.
+        Plots.plot!(p, [lo, hi], BOUND_HI .* [lo, hi];
+                    color = :firebrick, ls = :dot,
+                    label = "×$(BOUND_LO) / ×$(BOUND_HI) search window")
+        Plots.plot!(p, [lo, hi], BOUND_LO .* [lo, hi];
                     color = :firebrick, ls = :dot, label = "")
 
         png = joinpath(out_folder, "T_best_vs_initial_alpha$(a_c).png")

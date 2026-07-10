@@ -172,10 +172,10 @@ function train_stage(
     # α and T are constrained to [BOUND_LO, BOUND_HI] × their INITIAL value in every
     # stage: T to T_rs_init (the γ-inversion), α to TAU_PRIOR (the α prior). This
     # aligns the trust region with the theory-based warm start so PSO never drifts
-    # beyond ±20% of it. The per-stage radius `radius` still anneals INSIDE
+    # beyond that factor of it. The per-stage radius `radius` still anneals INSIDE
     # this box in continue stages. Falls back to the stage's starting value when no
-    # prior anchor is available (TAU_PRIOR === nothing → ×0.8..×1.2 around init_alpha).
-    BOUND_LO, BOUND_HI = 0.8, 1.2
+    # prior anchor is available (TAU_PRIOR === nothing ⇒ box around init_alpha).
+    # BOUND_LO/BOUND_HI are the shared globals from load_parameters.jl.
     phi_anchor = t_levels_to_free_phi(vec(permutedims(T_rs_init))[T_MASK])  # φ of T_rs_init (N_T_FREE)
     T_phi_lo   = phi_anchor .+ log(BOUND_LO)
     T_phi_hi   = phi_anchor .+ log(BOUND_HI)
@@ -189,9 +189,9 @@ function train_stage(
         A ./= sum(A)
 
         # T block is searched as free log-space φ (ref entries dropped). The box is
-        # φ_init + [log(BOUND_LO), log(BOUND_HI)] ⇒ T ∈ [×0.8, ×1.2] × T_rs_init, centred
-        # on the γ-inversion init (T_init is no longer ≡1, so the box must track it).
-        # α is boxed to [×0.8, ×1.2] × the α prior (TAU_PRIOR), else × init_alpha.
+        # φ_init + [log(BOUND_LO), log(BOUND_HI)] ⇒ T ∈ [×BOUND_LO, ×BOUND_HI] × T_rs_init,
+        # centred on the γ-inversion init (T_init is no longer ≡1, so the box must track it).
+        # α is boxed to [×BOUND_LO, ×BOUND_HI] × the α prior (TAU_PRIOR), else × init_alpha.
         alpha_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha
         lb = vcat(
             0.8*agg_labor_share,
@@ -255,13 +255,13 @@ function train_stage(
                 ub_v = min.(ub_v, 1.0)
             elseif v == "T"
                 # val is φ (log space): the per-stage radius gives the additive box
-                # φ ± |log radius|, then clamped to the init-anchored [×0.8, ×1.2] × T_rs_init
-                # box (T_phi_lo/T_phi_hi) so the search never leaves it in any stage.
+                # φ ± |log radius|, then clamped to the init-anchored [×BOUND_LO, ×BOUND_HI]
+                # × T_rs_init box (T_phi_lo/T_phi_hi) so the search never leaves it in any stage.
                 lb_v = max.(val .+ log(radius), T_phi_lo)
                 ub_v = min.(val .- log(radius), T_phi_hi)
             elseif v == "alpha"
-                # Per-stage radius around the incumbent, clamped to [×0.8, ×1.2] × the
-                # α prior (TAU_PRIOR); falls back to × the incumbent when no prior.
+                # Per-stage radius around the incumbent, clamped to [×BOUND_LO, ×BOUND_HI] ×
+                # the α prior (TAU_PRIOR); falls back to × the incumbent when no prior.
                 anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : val
                 lb_v = max.(val .* (1 - radius), anchor .* BOUND_LO)
                 ub_v = min.(val .* (1 + radius), anchor .* BOUND_HI)
@@ -482,12 +482,12 @@ function run_optimization(;
         println("[$output_subfolder] STAGE 0: Finding good initial alpha values")
         println("="^70)
 
-        # Anchor the coarse α search to [×0.8, ×1.2] × the α prior (N_TAU==1) so the
-        # selected init_alpha lands inside the prior-anchored Stage-1 box; else the
+        # Anchor the coarse α search to [×BOUND_LO, ×BOUND_HI] × the α prior (N_TAU==1)
+        # so the selected init_alpha lands inside the prior-anchored Stage-1 box; else the
         # historical [0.5, 1.5] range.
         if N_TAU == 1 && TAU_PRIOR !== nothing
-            alpha_min = TAU_PRIOR[1] * 0.8
-            alpha_max = TAU_PRIOR[1] * 1.2
+            alpha_min = TAU_PRIOR[1] * BOUND_LO
+            alpha_max = TAU_PRIOR[1] * BOUND_HI
         else
             alpha_min = 0.5
             alpha_max = 1.5
