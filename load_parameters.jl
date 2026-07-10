@@ -537,6 +537,13 @@ end
 @everywhere const TAU_PRIOR = $((_prior_alpha !== nothing && n_tau == 1) ?
                                 [Float64(_prior_alpha)] : nothing)
 
+# Init-anchored PSO search-box multipliers. α and T are boxed to
+# [BOUND_LO, BOUND_HI] × their initial value in every stage (optimizer.jl
+# train_stage). Single source of truth so the optimizer bounds and the
+# T_best_vs_initial window lines (tools.jl plot_T_vs_initial) never drift apart.
+@everywhere const BOUND_LO = 0.5
+@everywhere const BOUND_HI = 2.0
+
 # ── Diagnostic: gravity vs γ-inversion T starting values (ref-normalized) ────
 # Saves a log-log scatter of the two initialisations (both rescaled per sector to
 # their reference region) and quantifies their gap versus distance. Since both

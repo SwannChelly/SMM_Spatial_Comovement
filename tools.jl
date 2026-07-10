@@ -583,9 +583,22 @@ function plot_T_vs_initial(best_params, out_folder; label::String = "")
             xlabel = "initial T / T_ref  (α=$a_i)",
             ylabel = "current best T / T_ref  (α=$a_c)",
             title  = ttl,
-            markersize = 5, markeralpha = 0.7, legend = false)
+            markersize = 5, markeralpha = 0.7, legend = :topleft, label = "")
         lo = min(minimum(xs), minimum(ys)); hi = max(maximum(xs), maximum(ys))
-        Plots.plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash)
+        Plots.plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash, label = "y = x (no change)")
+
+        # Exploration-window borders. Each best-T coordinate is boxed to
+        # [BOUND_LO, BOUND_HI] × its INITIAL value (optimizer.jl train_stage; the T-φ
+        # box is φ_init + [log BOUND_LO, log BOUND_HI]). BOUND_LO/BOUND_HI are the
+        # shared globals from load_parameters.jl — same source of truth as the optimizer.
+        # Since the x-axis is the initial T, the borders are y = BOUND_LO·x and
+        # y = BOUND_HI·x — straight lines parallel to the diagonal in log-log. Points
+        # should sit between them.
+        Plots.plot!(p, [lo, hi], BOUND_HI .* [lo, hi];
+                    color = :firebrick, ls = :dot,
+                    label = "×$(BOUND_LO) / ×$(BOUND_HI) search window")
+        Plots.plot!(p, [lo, hi], BOUND_LO .* [lo, hi];
+                    color = :firebrick, ls = :dot, label = "")
 
         png = joinpath(out_folder, "T_best_vs_initial_alpha$(a_c).png")
         Plots.savefig(p, png)

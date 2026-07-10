@@ -60,6 +60,7 @@ function parallel_pso_smm(
     log_mask::Union{Nothing, Vector{Bool}} = nothing,
     qmc_init::Bool = true,
     reflect::Bool = true,
+    bounce_damping::Float64 = 0.5,
     init_rng::AbstractRNG = Random.GLOBAL_RNG,
     verbose::Bool = false
 )
@@ -202,8 +203,11 @@ function parallel_pso_smm(
                 # back inside and flip its velocity component, so particles bounce
                 # off the bounds instead of sticking to them. The old absorbing
                 # clamp left the outward velocity intact, pinning weakly-identified
-                # dims (flat T directions) to the wall for many iterations.
-                reflect_bounds!(particles[i], velocities[i], lb, ub)
+                # dims (flat T directions) to the wall for many iterations. The
+                # velocity is reversed AND shrunk by `bounce_damping` (SPSO-2011 /
+                # pyswarms "invert" convention, default 0.5) so the bounce dissipates
+                # energy instead of oscillating across the box at full speed.
+                reflect_bounds!(particles[i], velocities[i], lb, ub, bounce_damping)
             else
                 particles[i] = clamp.(particles[i], lb, ub)
             end
@@ -307,26 +311,30 @@ end
 
 
 """
-    reflect_bounds!(pos, vel, lb, ub)
+    reflect_bounds!(pos, vel, lb, ub, damping=0.5)
 
 Reflecting ("bounce") boundary condition, applied per coordinate and in place.
 Any position past a wall is mirrored back into `[lb, ub]` and the corresponding
-velocity component is negated, so a particle bounces off the bound rather than
-sticking to it (the outward velocity is reversed, not preserved). Because the
-caller clamps velocities to `±0.1·(ub−lb)` before the position update, a single
-step cannot overshoot the opposite wall; the trailing `clamp` is a safety net for
-degenerate cases (e.g. a warm start seeded on a bound, or `lb == ub`). Mutates and
-returns `(pos, vel)`.
+velocity component is reversed and shrunk by `damping` (`vel ← −damping·vel`), so
+the particle bounces off the bound and loses energy rather than sticking to it (the
+old absorbing clamp left the outward velocity intact). This is the position-mirror
+("reflective") + velocity-"invert"/shrink combination used by SPSO-2011 (`−0.5·v`)
+and pyswarms; `damping=1.0` gives a lossless reflection. Because the caller clamps
+velocities to `±0.1·(ub−lb)` before the position update, a single step cannot
+overshoot the opposite wall; the trailing `clamp` is a safety net for degenerate
+cases (e.g. a warm start seeded on a bound, or `lb == ub`). Mutates and returns
+`(pos, vel)`.
 """
 function reflect_bounds!(pos::Vector{Float64}, vel::Vector{Float64},
-                         lb::Vector{Float64}, ub::Vector{Float64})
+                         lb::Vector{Float64}, ub::Vector{Float64},
+                         damping::Float64 = 0.5)
     @inbounds for k in eachindex(pos)
         if pos[k] < lb[k]
             pos[k] = lb[k] + (lb[k] - pos[k])   # mirror across lower wall
-            vel[k] = -vel[k]
+            vel[k] = -damping * vel[k]
         elseif pos[k] > ub[k]
             pos[k] = ub[k] - (pos[k] - ub[k])   # mirror across upper wall
-            vel[k] = -vel[k]
+            vel[k] = -damping * vel[k]
         end
         pos[k] = clamp(pos[k], lb[k], ub[k])    # safety: keep strictly in-box
     end
