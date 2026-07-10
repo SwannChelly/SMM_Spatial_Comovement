@@ -175,7 +175,7 @@ function train_stage(
     # beyond ±20% of it. The per-stage radius `radius` still anneals INSIDE
     # this box in continue stages. Falls back to the stage's starting value when no
     # prior anchor is available (TAU_PRIOR === nothing → ×0.8..×1.2 around init_alpha).
-    BOUND_LO, BOUND_HI = 0.8, 1.2
+    BOUND_LO, BOUND_HI = 0.5, 2
     phi_anchor = t_levels_to_free_phi(vec(permutedims(T_rs_init))[T_MASK])  # φ of T_rs_init (N_T_FREE)
     T_phi_lo   = phi_anchor .+ log(BOUND_LO)
     T_phi_hi   = phi_anchor .+ log(BOUND_HI)
