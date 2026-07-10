@@ -38,8 +38,7 @@ SMM_Spatial_Comovement/
 ├── optimizer.jl            # backend-neutral search: staging, bounds, loops
 ├── tools.jl                # inference, Jacobian, weight matrix, reporting
 │
-├── analysis.ipynb          # post-run analysis notebook (Python)
-├── requirements.py / requirements_py.txt   # Python deps for the notebook
+├── analysis.ipynb          # post-run analysis notebook (Python; installs its own deps)
 │
 ├── optimizers/             # interchangeable search engines (--optimizer=…)
 │   ├── pso_integration.jl      #   Particle Swarm Optimization (default)
@@ -77,11 +76,8 @@ Each subfolder contains a short `files.md` describing its files.
 julia pkg.jl
 ```
 
-**Python** (only for `analysis.ipynb`):
-
-```bash
-pip install -r requirements_py.txt
-```
+**Python** (only for `analysis.ipynb`): the notebook installs its own dependencies
+in its first cell — just open and run it, no separate setup needed.
 
 **Input data.** Each industry needs a `baseline_<industry>/` folder (e.g.
 `baseline_aero/`) holding the empirical inputs — distances, wages, sectoral shares,
