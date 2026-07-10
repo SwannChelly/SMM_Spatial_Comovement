@@ -112,6 +112,51 @@ different estimators.
 
 ---
 
+## 5b. Simulation draws — per-sector Sobol nets (non-standard, deliberate)
+
+This section documents a choice in the SMM engine that is *not* the textbook default,
+because it matters for correctness.
+
+**The problem.** To simulate the model we need, for each variety `ρ`, a productivity
+draw for every region `r'` that could supply it. Those draws should be **independent
+across regions** — that independence is exactly what makes the Ricardian "pick the
+cheapest region" a genuine random selection. If we draw them by plain Monte Carlo
+(`--draws=mc`), independence holds but the moments are noisy. If instead we draw a
+single high-dimensional **quasi-Monte-Carlo (Sobol) net** over all regions at once,
+we get low variance — but Sobol coordinates are *jointly* low-discrepancy, i.e. they
+are **correlated by construction across dimensions**. Feeding correlated "productivity"
+coordinates into a min-over-regions operator distorts *which region wins*, biasing the
+sourcing shares `γ_{r'rs}`. So the naive fix (a global Sobol net) trades noise for bias.
+
+**The choice (`--draws=sobol`, the default).** We keep the variance reduction of Sobol
+but restore cross-region independence:
+
+- **One low-dimensional Sobol net per sector.** For each sector `s` we build a Sobol
+  net whose dimension is only the number of active regions in that sector — because the
+  Ricardian coupling (`min` over suppliers) lives *within a sector, across its regions*,
+  not across sectors. Keeping the net low-dimensional is where equidistribution actually
+  pays off; different sectors get independent nets.
+- **A digital shift (scramble) that decorrelates the coordinates.** Each net is
+  randomized by a base-2 *digital shift* (an XOR of the fixed-point bits with a
+  per-dimension random mask drawn from an explicit RNG). This preserves the Sobol net's
+  equidistribution, dissolves the degenerate all-zeros Sobol origin, and — crucially —
+  drives the pairwise correlation between region-coordinates down to ≈ 1/√N, so within a
+  sector the draws **behave like independent draws** across regions. That is the sense in
+  which the scheme "mimics independence across regions."
+- **Flat weights.** Every draw carries weight `1/N`, so the simulator's winner-weight
+  computation is exact and the estimator stays **unbiased** for the min-coupled moments
+  (the same guarantee as plain `--draws=qmc`), while achieving lower simulation variance
+  on thick, multi-region sectors.
+
+The scramble is seeded explicitly: a **frozen seed** during optimization (so the loss is
+deterministic and the search reproducible) and an **independent seed per replication**
+when estimating simulation variance (Step 2 / the Jacobian). Alternative draw methods
+remain available — `qmc` (stratified uniform), `mc` (plain Monte Carlo), and `is`
+(importance sampling, biased for the min-coupled moments and kept only for the distance
+regression's tail) — but `sobol` is the default for the reasons above.
+
+---
+
 ## 6. The moments we match
 
 Estimation matches five blocks of moments (empirical vs. model):
@@ -142,8 +187,13 @@ elasticity `α`.
 | `Ω^L` | `agg_labor_share_tech` | labor share in production |
 | `Ω^s` | `agg_industry_share_tech` | sectoral input shares |
 | `A_r` | `productivity` | downstream productivity by region |
-| `α` (β) | `alpha` | trade-cost elasticity/bin coefficients (`N_TAU` of them) |
+| `α` | `alpha` | trade-cost elasticity (`N_TAU` of them: one power-law coefficient, or one per distance bin) |
 | `T_{sr}` | `T` | Fréchet scale / comparative advantage by sector-region |
+
+The only trade-cost parameter is `α`. The distance regression coefficients of block 4
+(`reg_coef`) — sometimes written `β` in the extensive-margin regression of Section 6 —
+are **moments the model matches, not parameters.** The moment count `N_REG` and the
+parameter count `N_TAU` are independent.
 
 The full parameter vector is laid out as `[Ω^L | Ω^s | A | α | T]`. Only the T
 entries with a non-zero empirical sourcing share are free (`T_MASK`), and within each
@@ -166,6 +216,6 @@ the estimator forms the weighted distance to the empirical moments,
    loss(θ) = (m_sim(θ) − m_emp)' · W · (m_sim(θ) − m_emp),
 ```
 
-and searches for the θ that minimizes it. The three-step efficient weighting scheme
-(building `W`, computing standard errors, the Hansen J-test) and the search itself
-are described in `optimizer.md` and in the README.
+and searches for the θ that minimizes it. The search itself is described in
+`optimizer.md`; the three-step efficient weighting scheme, the standard errors, and the
+Hansen J-test are in `inference.md`. The README ties both to how you run the code.

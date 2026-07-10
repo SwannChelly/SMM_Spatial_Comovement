@@ -147,8 +147,12 @@ pkill -f 'julia.*main'              # stop
 Both entry points run a **three-step efficient estimator**:
 
 1. **Step 1 — first fit.** Minimize the identity-weighted distance between model and
-   data moments → θ̂₁. Under PSO this is Stage 0 (α search) + Stage 1 (joint fit) +
-   block-coordinate refinement loops; under CMA-ES it is a single adaptive run. See
+   data moments → θ̂₁. The trade-cost elasticity α is **not** searched: it is read from
+   the extensive-margin distance regression (the `prior_alpha` in `stats.csv`). Given
+   that α, the comparative-advantage scales T are initialized by inverting the observed
+   sourcing shares (a closed-form fixed point). From this theory-based starting point a
+   **global joint search** over all parameters runs — under PSO a joint fit plus
+   block-coordinate refinement loops; under CMA-ES a single adaptive run. See
    [`documentation/optimizer.md`](documentation/optimizer.md).
 2. **Step 2 — efficient weight matrix.** Build `W = (Σ_data + Σ_sim)^{-1}`, where
    `Σ_data` is the bootstrap moment covariance and `Σ_sim` the simulation covariance
@@ -156,7 +160,9 @@ Both entry points run a **three-step efficient estimator**:
 3. **Step 3 — efficient fit.** Re-optimize the trade-cost and comparative-advantage
    parameters (α, T) under `W`, warm-started at θ̂₁ → θ̂₂.
 4. **Step 4 — inference.** Jacobian at θ̂₂, delta-method standard errors (efficient
-   and sandwich), fitted-moment SEs, and the Hansen J over-identification test.
+   and sandwich), fitted-moment SEs, and the Hansen J over-identification test. The
+   derivation and the reports are in
+   [`documentation/inference.md`](documentation/inference.md).
 
 Results are written under `reporting_<industry>/` (or `reporting_gmm_<industry>/`),
 one folder per step, with parameter estimates, reports, dashboards, and the
@@ -174,11 +180,16 @@ one folder per step, with parameter estimates, reports, dashboards, and the
 | Ω^L | `agg_labor_share_tech` | labor share in production |
 | Ω^s | `agg_industry_share_tech` | sectoral input shares |
 | A_r | `productivity` | downstream productivity by region |
-| α (β) | `alpha` | trade-cost elasticity / per-bin coefficients (`n_tau` of them) |
+| α | `alpha` | trade-cost elasticity — one power-law coefficient (`n_tau=1`) or one per distance bin (`n_tau=4/5`) |
 | T_{sr} | `T` | Fréchet scale — comparative advantage by sector-region |
 
 **Fixed** (calibrated outside the loop, read from `stats.csv`): demand elasticity ε,
 substitution elasticities λ, ν, ν_s, and the Fréchet shape θ.
+
+> **Note on notation.** The only trade-cost parameter is α. The `reg_coef` distance
+> coefficients (block 4 of the moments, sometimes written β in the extensive-margin
+> regression) are **moments the model matches, not parameters it estimates**. The
+> `--n_coef` moments and the `--n_tau` α-parameters are independent counts.
 
 ---
 
@@ -195,6 +206,7 @@ See the `files.md` in `test/` and `extras/` for details.
 
 ## Further reading
 
-- [`documentation/model.md`](documentation/model.md) — the model, in equations.
+- [`documentation/model.md`](documentation/model.md) — the model, in equations (incl. the per-sector Sobol draw scheme).
 - [`documentation/optimizer.md`](documentation/optimizer.md) — PSO and CMA-ES.
+- [`documentation/inference.md`](documentation/inference.md) — standard errors, the Jacobian, and the Hansen J-test.
 - [`CLAUDE.md`](CLAUDE.md) — implementation reference, invariants, and changelog.

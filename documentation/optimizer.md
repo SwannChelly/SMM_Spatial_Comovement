@@ -91,9 +91,14 @@ evaluated **in parallel** across CPU workers.
 
 `optimizer.jl` runs PSO in **stages** (`run_optimization`):
 
-1. **Stage 0** — a coarse search over the trade-cost `α` alone to find a good
-   starting value that matches the distance regression.
-2. **Stage 1** — one joint PSO fit over *all* parameters.
+1. **Warm start (no α search).** In the production runs (`main.jl` / `main_gmm.jl`) the
+   trade-cost elasticity α is **not** searched: it is read from the extensive-margin
+   distance regression (`prior_alpha` in `stats.csv`), and the comparative-advantage
+   scales T are initialized by the closed-form γ-inversion given that α. The optimizer
+   is started from this theory-based point (`skip_initial_alpha_search=true`). The code
+   *does* contain an optional coarse α search ("Stage 0", an LHS/log-grid scan) for use
+   when no prior is supplied, but the standard pipeline skips it.
+2. **Stage 1** — one joint PSO fit over *all* parameters, from the warm start above.
 3. **Refinement loops** — repeated **block-coordinate** passes: each loop refines one
    group of parameters at a time (productivity `A`, then `α`, then `T`, then the
    technical shares), with the search radius annealing from wide to narrow. This
