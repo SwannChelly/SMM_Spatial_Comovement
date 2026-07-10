@@ -18,8 +18,8 @@ using CSV
 using DataFrames
 
 # Include model functions
-include("model_CP.jl")
-include("tools.jl")
+include("../model_CP.jl")
+include("../tools.jl")
 
 """
     compute_amplification_weights(params, industry; output_folder="./amplification_output")

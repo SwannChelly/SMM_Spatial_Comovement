@@ -63,12 +63,12 @@ using LinearAlgebra
 using Statistics, Printf
 using StatsBase
 
-@everywhere include("model_CP.jl")
-@everywhere include("tools.jl")
-@everywhere include("model_analytical.jl")
-@everywhere include("pso_integration.jl")      # PSO backend
-@everywhere include("cmaes_integration.jl")    # CMA-ES backend
-@everywhere include("optimizer.jl")            # backend-neutral hub (defines run_optimization / run_pso_optimization)
+@everywhere include("../model_CP.jl")
+@everywhere include("../tools.jl")
+@everywhere include("../model_analytical.jl")
+@everywhere include("../optimizers/pso_integration.jl")      # PSO backend
+@everywhere include("../optimizers/cmaes_integration.jl")    # CMA-ES backend
+@everywhere include("../optimizer.jl")            # backend-neutral hub (defines run_optimization / run_pso_optimization)
 @everywhere include("run_untargeted_validation.jl")
 
 ############## Parse arguments ##############
@@ -135,7 +135,7 @@ exp2_K_jac          = SMOKE_TEST ? 2   : 20    # per-rep Jacobian replications
 const EXP2_NOISE_SEED = 555_000
 
 ############## Load real baseline constants + masks ##############
-include("load_parameters.jl")
+include("../load_parameters.jl")
 NPZ.npzwrite(joinpath(IV_ROOT, "n_reg_coef.npy"), n_coef)
 
 # ─────────────────────────────────────────────────────────────────────────────
