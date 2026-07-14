@@ -43,10 +43,10 @@ using Distributed
 @everywhere using NPZ
 using LinearAlgebra, Statistics, Printf
 
-@everywhere include("model_CP.jl")
-@everywhere include("tools.jl")
-@everywhere include("model_analytical.jl")
-@everywhere include("pso_integration.jl")
+@everywhere include("../model_CP.jl")
+@everywhere include("../tools.jl")
+@everywhere include("../model_analytical.jl")
+@everywhere include("../optimizers/pso_integration.jl")
 
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
@@ -57,7 +57,7 @@ input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$industry"
 mkpath(output_folder)
 
-include("load_parameters.jl")
+include("../load_parameters.jl")
 
 println("\n" * "="^72)
 println("Phase-2 GATE G2: extensive-margin geometry   (industry=$industry  N_REG=$N_REG  N_TAU=$N_TAU)")

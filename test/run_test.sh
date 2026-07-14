@@ -56,7 +56,7 @@ for val in "$N_COEF" "$N_TAU"; do
     fi
 done
 
-JULIA_SCRIPT="SMM_Spatial_Comovement/run_internal_validity.jl"
+JULIA_SCRIPT="SMM_Spatial_Comovement/test/run_internal_validity.jl"
 if [ ! -f "$JULIA_SCRIPT" ]; then
     echo "Error: $JULIA_SCRIPT not found"
     exit 1

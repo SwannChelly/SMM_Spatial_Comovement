@@ -4,7 +4,7 @@
 # Step 2: build W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1} at θ̂_1
 # Step 3: efficient-weighted PSO → θ̂_2, warm-started at θ̂_1
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
-# Legacy entry point: main_pso.jl (unchanged, identity weights only)
+# Optimizer backend (PSO / CMA-ES) is selected via OPTIMIZER_BACKEND; see optimizer.jl.
 
 using Distributed
 using Dates
@@ -38,10 +38,10 @@ using StatsBase
 @everywhere include("model_CP.jl")
 @everywhere include("tools.jl")
 @everywhere include("model_analytical.jl")
-@everywhere include("pso_integration.jl")      # PSO backend
-@everywhere include("cmaes_integration.jl")    # CMA-ES backend
+@everywhere include("optimizers/pso_integration.jl")      # PSO backend
+@everywhere include("optimizers/cmaes_integration.jl")    # CMA-ES backend
 @everywhere include("optimizer.jl")            # backend-neutral hub: optimize_stage, train_stage, run_optimization
-@everywhere include("run_untargeted_validation.jl")
+@everywhere include("test/run_untargeted_validation.jl")
 
 ############## Parse arguments ##############
 
