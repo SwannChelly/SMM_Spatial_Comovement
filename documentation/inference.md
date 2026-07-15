@@ -76,17 +76,15 @@ Two details matter:
   draws each), and the per-entry standard deviation across replications, `J_sd`, is
   reported as a direct read-out of how much simulation noise remains in `G`.
 
-- **The perturbation scale.** **Every** parameter uses a **log-space central step**
-  (there is no additive step anymore): a parameter is perturbed as `θ_j · exp(±δ)`, and
-  the log-space slope `(m₊ − m₋)/(2δ)` is converted back to raw units by dividing by
-  `θ_j` (chain rule `∂m/∂θ = (∂m/∂lnθ)·(1/θ)`). A log step is **scale-invariant** — it
-  never crosses zero, never hits an absolute floor, and never trips the Fréchet
-  `max(T, ε)` clamp — which matters because the T entries alone span several orders of
-  magnitude. The step size is per column: the **T scales** use `δ = t_log_step_rel`
-  (a larger `1e-2`, since they enter multiplicatively and span a wide range), while the
-  head parameters (Ω, A, α) use `δ = step_rel = 1e-4`. All columns require `θ_j > 0`
-  (asserted). The stored column is always the raw derivative `∂m/∂θ_j`, so the variance
-  formulas are unaffected in units.
+- **The perturbation scale.** **Every** parameter uses the **same log-space central
+  step** (there is no additive step anymore): a parameter is perturbed as `θ_j · exp(±δ)`
+  with a single `δ = step_rel = 1e-4`, and the log-space slope `(m₊ − m₋)/(2δ)` is
+  converted back to raw units by dividing by `θ_j` (chain rule
+  `∂m/∂θ = (∂m/∂lnθ)·(1/θ)`). A log step is **scale-invariant** — it never crosses zero,
+  never hits an absolute floor, and never trips the Fréchet `max(T, ε)` clamp — which
+  matters because the T entries alone span several orders of magnitude. All columns
+  require `θ_j > 0` (asserted). The stored column is always the raw derivative
+  `∂m/∂θ_j`, so the variance formulas are unaffected in units.
 
 ### GMM — exact derivatives by automatic differentiation
 

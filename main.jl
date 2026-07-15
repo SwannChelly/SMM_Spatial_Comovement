@@ -161,7 +161,6 @@ if run_step2
         filename      = "jacobian_all.npy",
         K             = 50,
         step_rel      = 1e-4,
-        step_abs      = 1e-9,
         base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
     )
 
@@ -222,7 +221,6 @@ if run_step2
             filename      = "jacobian_2x2_ana.npy",
             K             = 1,
             step_rel      = 1e-4,
-            step_abs      = 1e-9,
             base_seed     = 3_000_000,
             analytical    = true,
             analytical_ad = true,   # exact closed-form AD ⇒ the Jacobian channel is FD-noise-free
@@ -296,7 +294,6 @@ if run_step4
         filename      = "jacobian_all_step3.npy",
         K             = 50,
         step_rel      = 1e-4,
-        step_abs      = 1e-9,
         base_seed     = 1_000_000
     )
 
@@ -387,7 +384,6 @@ if run_step4
             filename      = "jacobian_2x2_ana.npy",
             K             = 1,
             step_rel      = 1e-4,
-            step_abs      = 1e-9,
             base_seed     = 4_000_000,
             analytical    = true,
             analytical_ad = true,   # exact closed-form AD ⇒ the Jacobian channel is FD-noise-free
