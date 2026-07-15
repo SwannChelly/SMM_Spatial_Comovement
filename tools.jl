@@ -1345,38 +1345,36 @@ Saves J, J_elast, J_sd, J_elast_sd, and the param-index map under
 `<output_folder>/<output_subdir>/`. Prints per-block max/mean |elasticity| and the
 mean-relative-noise ratio σ/|μ| for entries above a magnitude floor.
 
-# Step regimes (two)
-Columns are partitioned by their flat parameter position:
-  - **T columns** (strictly-positive, multiplicatively-entering trade-cost levels;
-    flat index `≥ 1 + S + R_downstream + N_TAU + 1`) use a **log-space central step**:
-    perturbed points are `θ_j·exp(±δ)` with `δ = step_rel`. The central difference in
-    log space, `(m₊ − m₋)/(2δ)`, is converted **back to raw units** by dividing by `θ_j`:
-        J[:,k] = (m₊ − m₋) / (2·δ·θ_j)        # chain rule ∂m/∂θ = (∂m/∂lnθ)·(1/θ)
-    The log step is scale-invariant (never crosses zero, immune to the additive floor)
-    and is purely a numerical-accuracy device — the **stored column is raw `∂m/∂θ_j`**,
-    identical in meaning and units to the additive case, so `G'WG` inference is unaffected.
-  - **All other columns** (`Ω^L`, `Ω^s`, `A`, `β`/`α`) use the **additive central step**
-    `h_j = max(|θ_j|·step_rel, step_abs)`, unchanged.
-Both regimes store derivatives in raw units `∂m/∂θ`; `J_elast` is derived from raw `J`.
+# Step regime (log step for every column)
+**Every** parameter is perturbed with a scale-invariant **log-space central step** —
+the additive step has been removed. Perturbed points are `θ_j·exp(±δ)`, and the log-space
+central difference `(m₊ − m₋)/(2δ)` is converted **back to raw units** by dividing by `θ_j`:
+    J[:,k] = (m₊ − m₋) / (2·δ·θ_j)        # chain rule ∂m/∂θ = (∂m/∂lnθ)·(1/θ)
+The log step is scale-invariant (never crosses zero, immune to any additive floor, never
+straddles the Fréchet clamp) and is purely a numerical-accuracy device — the **stored
+column is raw `∂m/∂θ_j`**, so `G'WG` inference is unaffected. The step size is per column:
+the T block uses `δ = t_log_step_rel`; all other columns (`Ω^L`, `Ω^s`, `A`, `β`/`α`) use
+`δ = step_rel`. It requires `θ_j > 0` for every active column (asserted). `J_elast` is
+derived from raw `J`.
 
 # Arguments
 - `theta`         : parameter vector at which to evaluate.
 - `K`             : number of independent draw replications to average (default 20).
 - `param_indices` : `nothing` → all parameters; otherwise restrict to these columns.
-- `step_rel`/`step_abs` : additive-column FD step `h_j = max(|θ_j|·step_rel, step_abs)`.
-                    For log (T) columns, `step_rel` is reinterpreted as the dimensionless
-                    log step `δ`; `step_abs` is not used there.
+- `step_rel`      : dimensionless log step `δ` for the non-T columns (`Ω^L`, `Ω^s`, `A`,
+                    `β`/`α`). `t_log_step_rel` is the (larger) log step for the T columns.
+- `step_abs`      : retained for signature/call-site compatibility; no longer used (the
+                    additive step it floored has been removed).
 - `base_seed`     : seed offset; replication k uses `MersenneTwister(base_seed + k)`.
                     Must not collide with seeds used elsewhere (e.g. Σ_sim).
 - `output_subdir` : subfolder under output_folder for saved files (default "step2").
-- `t_log_step`    : route T columns through the log step + raw-unit back-conversion
-                    (default `true`). Set `false` to recover the byte-identical additive
-                    behaviour for every column.
-- `check_symmetry`: print a per-(T-)column forward-vs-backward asymmetry diagnostic
-                    (default `false`); flags columns whose one-sided slopes diverge by
+- `t_log_step`    : retained for call-site compatibility; the log step now applies to
+                    every column unconditionally, so this flag no longer toggles a regime.
+- `check_symmetry`: print a per-column forward-vs-backward asymmetry diagnostic
+                    (default `true`); flags columns whose one-sided slopes diverge by
                     more than 10× the across-replication `J_sd` (nonlinear/clamped regime).
-- `richardson_check`: recompute T columns at `2δ` and report the relative gap to the `δ`
-                    estimate (default `false`); diagnostic only, returned `J` is unchanged.
+- `richardson_check`: recompute every column at `2δ` and report the relative gap to the `δ`
+                    estimate (default `true`); diagnostic only, returned `J` is unchanged.
 
 # Exact analytical Jacobian (AD)
 - `analytical_ad` : with `analytical=true`, compute the closed-form Jacobian by
@@ -1474,38 +1472,34 @@ function compute_jacobian(theta::Vector{Float64};
         return J, J_elast, J_sd, J_elast_sd
     end
 
-    # ── Column classification: log-step (T) vs additive-step (everything else) ──
-    # T parameters are strictly positive and enter the moments multiplicatively
-    # (Fréchet scale T^{1/θ}, shares T(wτ)^{-θ}/Φ), so a scale-invariant log step is
-    # both justified and immune to the additive floor. Layout is
-    # [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T], so the first T flat index is:
+    # ── Column classification: every column now takes a scale-invariant LOG step ──
+    # The additive step has been removed. All parameters are perturbed multiplicatively
+    # (θ·exp(±δ)) and the log-space central difference is converted back to raw units by
+    # the chain rule ∂m/∂θ = (∂m/∂lnθ)·(1/θ). The log step never crosses zero, is immune
+    # to any additive floor, and never straddles the Fréchet clamp. The T block keeps the
+    # larger step `t_log_step_rel`; all other columns use `step_rel`.
+    # Layout is [Ω^L(1) | Ω^s(S) | A(R_downstream) | β(N_TAU) | T], first T flat index:
     T_first = 1 + S + R_downstream #+ N_TAU +1 ( uncomment to remove alpha)
-    use_log = [t_log_step && (indices[k] >= T_first) for k in 1:n_perturb]
-    # A stray zero/negative in the log set would give exp-steps of 0 or a 1/θ blow-up;
-    # T_MASK already excludes zeros, so this should never fire — fail loudly if it does.
+    is_T    = [indices[k] >= T_first for k in 1:n_perturb]
+    use_log = trues(n_perturb)   # log step for ALL columns (additive step removed)
+    # The log step needs θ > 0 (θ·exp(±δ) stays positive and 1/θ stays finite). T_MASK
+    # excludes zero T, and the head params (Ω, A, β/α) are positive at any sane estimate
+    # — fail loudly if a non-positive column is asked to take a log step.
     for k in 1:n_perturb
-        if use_log[k]
-            @assert theta[indices[k]] > 0 (
-                "Log-step Jacobian requires T_{sr} > 0, but theta[$(indices[k])] = " *
-                "$(theta[indices[k]]); a zero/negative T column must not take a log step.")
-        end
+        @assert theta[indices[k]] > 0 (
+            "Log-step Jacobian requires θ > 0, but theta[$(indices[k])] = " *
+            "$(theta[indices[k]]); a zero/negative column cannot take a log step.")
     end
 
-    # Additive step (used for non-log columns); δ is the dimensionless log step.
-    h = [max(abs(theta[indices[k]]) * step_rel, step_abs) for k in 1:n_perturb]
-    δ = [use_log[k] ? t_log_step_rel : step_rel for k in 1:n_perturb]
+    # δ is the dimensionless log step (larger for the T block).
+    δ = [is_T[k] ? t_log_step_rel : step_rel for k in 1:n_perturb]
 
     # Pre-build perturbed parameter vectors (shared across replications)
     plus_params  = [copy(theta) for _ in 1:n_perturb]
     minus_params = [copy(theta) for _ in 1:n_perturb]
     for (k, j) in enumerate(indices)
-        if use_log[k]
-            plus_params[k][j]  = theta[j] * exp(δ[k])
-            minus_params[k][j] = theta[j] * exp(-δ[k])
-        else
-            plus_params[k][j]  += h[k]
-            minus_params[k][j] -= h[k]
-        end
+        plus_params[k][j]  = theta[j] * exp(δ[k])
+        minus_params[k][j] = theta[j] * exp(-δ[k])
     end
 
     println("Computing Jacobian: $K replications × $(2 * n_perturb + 1) evaluations each...")
@@ -1541,15 +1535,11 @@ function compute_jacobian(theta::Vector{Float64};
         J_elast_k = zeros(N_moments, n_perturb)
 
         for kk in 1:n_perturb
-            if use_log[kk]
-                # Chain-rule conversion to raw units: ∂m/∂θ = (∂m/∂lnθ)·(1/θ).
-                # This division by θ_j keeps the stored column in raw `∂m/∂θ` units
-                # so G'WG inference is unchanged in scale.
-                J_k[:, kk] = (plus_results[kk] .- minus_results[kk]) ./
-                             (2 * δ[kk] * theta[indices[kk]])
-            else
-                J_k[:, kk] = (plus_results[kk] .- minus_results[kk]) ./ (2 * h[kk])
-            end
+            # Chain-rule conversion to raw units: ∂m/∂θ = (∂m/∂lnθ)·(1/θ).
+            # This division by θ_j keeps the stored column in raw `∂m/∂θ` units
+            # so G'WG inference is unchanged in scale.
+            J_k[:, kk] = (plus_results[kk] .- minus_results[kk]) ./
+                         (2 * δ[kk] * theta[indices[kk]])
         end
 
         for kk in 1:n_perturb, mm in 1:N_moments
@@ -1564,12 +1554,8 @@ function compute_jacobian(theta::Vector{Float64};
             J_fwd_k = zeros(N_moments, n_perturb)
             J_bwd_k = zeros(N_moments, n_perturb)
             for kk in 1:n_perturb
-                if use_log[kk]
-                    dp = theta[indices[kk]] * (exp(δ[kk]) - 1)    # forward raw increment
-                    dm = theta[indices[kk]] * (1 - exp(-δ[kk]))   # backward raw increment
-                else
-                    dp = h[kk]; dm = h[kk]
-                end
+                dp = theta[indices[kk]] * (exp(δ[kk]) - 1)    # forward raw increment
+                dm = theta[indices[kk]] * (1 - exp(-δ[kk]))   # backward raw increment
                 J_fwd_k[:, kk] = (plus_results[kk] .- m0_k) ./ dp
                 J_bwd_k[:, kk] = (m0_k .- minus_results[kk]) ./ dm
             end
@@ -1580,7 +1566,6 @@ function compute_jacobian(theta::Vector{Float64};
         if richardson_check
             J_rich_k = fill(NaN, N_moments, n_perturb)
             for kk in 1:n_perturb
-                use_log[kk] || continue
                 j = indices[kk]
                 pp = copy(theta); pp[j] = theta[j] * exp(2 * δ[kk])
                 mm = copy(theta); mm[j] = theta[j] * exp(-2 * δ[kk])
@@ -1630,7 +1615,7 @@ function compute_jacobian(theta::Vector{Float64};
         # |J|-relative fallback (K==1 has no sd to compare against).
         thresh = K > 1 ? (10 .* J_sd) : (0.1 .* abs.(J))
         log_cols = findall(use_log)
-        println("\nForward/backward symmetry check (T/log columns only):")
+        println("\nForward/backward symmetry check (all columns take the log step):")
         if isempty(log_cols)
             println("  (no log columns)")
         else
@@ -1676,7 +1661,7 @@ function compute_jacobian(theta::Vector{Float64};
             ((active_T_flat[t] - 1) ÷ R) + 1
         end
 
-        println("\nRichardson step-doubling check (J(δ) vs J(2δ), T columns):")
+        println("\nRichardson step-doubling check (J(δ) vs J(2δ), all columns):")
         println("  [worst-gap moment, its sector vs the param's, and |J| there;")
         println("   a large gap on a ~0 CROSS-sector derivative is a benign artefact]")
         if isempty(log_cols)

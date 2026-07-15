@@ -76,17 +76,17 @@ Two details matter:
   draws each), and the per-entry standard deviation across replications, `J_sd`, is
   reported as a direct read-out of how much simulation noise remains in `G`.
 
-- **The perturbation scale.** The step size is chosen per parameter type:
-  - Most parameters (Ω, A, α) use an **additive** central step
-    `h_j = max(|θ_j| · step_rel, step_abs)` with `step_rel = 1e-4`, `step_abs = 1e-9`.
-    Relative where the parameter is sizable, with a small absolute floor near zero.
-  - The **T scales use a log-space step**: they are strictly positive and enter
-    multiplicatively, so they are perturbed as `θ_j · exp(±δ)` with `δ = step_rel`, and
-    the log-space slope `(m₊ − m₋)/(2δ)` is converted back to raw units by dividing by
-    `θ_j`. A log step is **scale-invariant** — it never crosses zero, never hits the
-    additive floor, and never trips the Fréchet `max(T, ε)` clamp — which matters
-    because T entries span several orders of magnitude. The stored column is still the
-    raw derivative `∂m/∂θ_j`, so the variance formulas are unaffected in units.
+- **The perturbation scale.** **Every** parameter uses a **log-space central step**
+  (there is no additive step anymore): a parameter is perturbed as `θ_j · exp(±δ)`, and
+  the log-space slope `(m₊ − m₋)/(2δ)` is converted back to raw units by dividing by
+  `θ_j` (chain rule `∂m/∂θ = (∂m/∂lnθ)·(1/θ)`). A log step is **scale-invariant** — it
+  never crosses zero, never hits an absolute floor, and never trips the Fréchet
+  `max(T, ε)` clamp — which matters because the T entries alone span several orders of
+  magnitude. The step size is per column: the **T scales** use `δ = t_log_step_rel`
+  (a larger `1e-2`, since they enter multiplicatively and span a wide range), while the
+  head parameters (Ω, A, α) use `δ = step_rel = 1e-4`. All columns require `θ_j > 0`
+  (asserted). The stored column is always the raw derivative `∂m/∂θ_j`, so the variance
+  formulas are unaffected in units.
 
 ### GMM — exact derivatives by automatic differentiation
 
@@ -197,7 +197,7 @@ The empirical moments carry sampling error `Σ_data` (bootstrapped) and, in SMM,
 model moments carry simulation error `Σ_sim` (estimated by re-simulation); their sum
 `Ω = Σ_data + Σ_sim` is both the efficient weight `W = Ω^{-1}` and the meat of the
 variance. The moment sensitivities `G = ∂m/∂θ` are taken by fixed-draw central
-differences (log-step for the positive, multiplicative T scales; exact AD in GMM). The
+differences (a scale-invariant log-step on every column; exact AD in GMM). The
 delta method then gives the efficient variance `(G'WG)^{-1}` and the robust sandwich
 `(G'WG)^{-1} G'WΩWG (G'WG)^{-1}`, which agree when `W = Ω^{-1}`; the Hansen J tests the
 over-identifying restrictions. All of it is written to `inference/` as arrays plus a
