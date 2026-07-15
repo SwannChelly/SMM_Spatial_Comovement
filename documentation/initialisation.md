@@ -130,10 +130,31 @@ $$
 \underbrace{\sum_i F_{ir} = s_r \sum_i K_{ir} T_i = s_r (KT)_r = \omega_r}_{\text{marges colonnes} = \omega}.
 $$
 
-**Traduction.** Trouver `T` revient exactement à trouver deux rééchelonnements diagonaux
-positifs $\operatorname{diag}(T)$ et $\operatorname{diag}(s)$ qui transforment la matrice
-**fixe et positive** `K` en une matrice `F` ayant des **marges imposées** : sommes de
-lignes = `γ`, sommes de colonnes = `ω`.
+Deux natures différentes, à bien distinguer :
+
+- La marge **colonne** `= ω` est **automatique** : elle découle de la définition
+  $s_r = \omega_r/(KT)_r$ et vaut `ω` *pour tout `T`*. Ce n'est pas une cible qu'on impose,
+  c'est l'adding-up des parts ($\sum_i \gamma_{ir} = 1$ pour chaque acheteur).
+- La marge **ligne** est la vraie cible — mais seulement **en proportions**. En effet, en
+  sommant sur `i` la relation du modèle et en réutilisant l'adding-up,
+  $$
+  \sum_i \gamma_i(T) = \sum_r \omega_r \underbrace{\sum_i \frac{T_i K_{ir}}{(KT)_r}}_{=\,1}
+  = \sum_r \omega_r .
+  $$
+  **Le modèle produit donc toujours un `γ` de total $\sum_r\omega_r$, quel que soit `T`**
+  (c'est le pendant de l'invariance d'échelle du §1.4 : $\gamma(cT)=\gamma(T)$). Le *niveau*
+  total de `γ` est verrouillé, pas ciblable ; `T` ne peut reproduire que les **proportions**
+  `γ_i / Σγ`.
+
+> **Attention — la compatibilité $\sum_i\gamma_i=\sum_r\omega_r$ n'est pas satisfaite ici.**
+> Dans l'application, $\sum_r\omega_r = 1$ (poids `Ê = emp_pi_r` renormalisés) mais
+> $\sum_i\gamma_i = \texttt{domestic\_share} < 1$ : une part de la demande fuit vers des
+> vendeurs *étrangers* absents de l'ensemble des régions. Ce total manquant **ne porte
+> aucune information sur la géométrie `T` région-à-région**. On travaille donc en version
+> **projective** : on renormalise la cible à `Σω` (passage aux parts
+> $\tilde\gamma_i = \gamma_i\cdot\Sigma\omega/\Sigma\gamma$) — légitime *précisément parce
+> que* le scale de `T` est libre. Après ce geste, $\sum_i\tilde\gamma_i = \sum_r\omega_r$
+> et le théorème ci-dessous s'applique tel quel.
 
 Ce problème porte un nom : c'est le **problème de mise à l'échelle matricielle**, aussi
 appelé **problème de Sinkhorn** (ou RAS chez les économistes, ou « bridge de Schrödinger »
@@ -148,11 +169,19 @@ en probabilités). Et pour ce problème, il existe un **théorème d'unicité**.
 > et le couple `(T, s)` est **unique à la transformation d'échelle près**
 > $(T, s) \mapsto (cT,\; s/c)$.
 
-Dans notre cas `K_{r'r} = d_{r'r}^{-\alpha\theta}` : **toutes les distances sont finies,
-donc toutes les entrées de `K` sont strictement positives**. L'hypothèse du théorème est
-donc *automatiquement satisfaite*. La liberté d'échelle `c` du théorème est exactement
-notre indétermination de la partie 1.4 : en fixant `T_1 = 1` on la supprime, et il reste
-un **`T` unique**.
+Deux hypothèses à vérifier dans notre cas.
+
+- **Positivité de `K`** : avec `K_{r'r} = d_{r'r}^{-\alpha\theta}`, toutes les distances
+  sont finies, donc toutes les entrées sont strictement positives. ✔ *automatique*.
+- **Compatibilité des marges** : $\sum_i\gamma_i = \sum_r\omega_r$. Elle est **fausse
+  telle quelle** ($\Sigma\gamma=\texttt{domestic\_share}<1=\Sigma\omega$). On la rétablit
+  par la renormalisation projective du §2.1 (remplacer `γ` par
+  $\tilde\gamma = \gamma\cdot\Sigma\omega/\Sigma\gamma$), autorisée par la liberté d'échelle
+  de `T`. ✔ *après passage aux proportions*.
+
+Les deux hypothèses étant assurées, le théorème donne un couple `(T, s)` unique à l'échelle
+près. Cette liberté d'échelle `c` est exactement l'indétermination de la partie 1.4 : en
+fixant `T_1 = 1` on la supprime, et il reste un **`T` unique**.
 
 **Réponse à la question de la partie 1.5 : oui, `T` est unique, et l'unicité est *globale*.**
 Ce n'est pas seulement « localement, si le jacobien est de plein rang » — c'est vrai partout.
@@ -188,6 +217,18 @@ linéaires : c'est un grand classique, c'est convexe. Le terme $-\sum_i \gamma_i
 linéaire, donc convexe aussi. Donc `g` est convexe. Pour une fonction convexe, **tout point
 critique est un minimum global** : l'existence d'une solution de l'inversion équivaut à
 l'existence d'un minimiseur de `g`.
+
+> **Compatibilité et bornitude.** Le long de la direction d'échelle $a \mapsto a + c\mathbf 1$
+> on a $g(a+c\mathbf 1) = g(a) + c\,(\Sigma\omega - \Sigma\gamma)$. Si $\Sigma\gamma\neq\Sigma\omega$,
+> `g` est donc **non bornée** (elle file vers $-\infty$ dans cette direction) : pas de
+> minimiseur global — c'est la traduction analytique de « le total de `γ` n'est pas ciblable ».
+> On utilise donc la cible renormalisée $\tilde\gamma$ (avec $\Sigma\tilde\gamma=\Sigma\omega$,
+> §2.1) ; alors le terme d'échelle s'annule, `g` est plate dans la seule direction $\mathbf 1$
+> et strictement convexe partout ailleurs (Étape 3), d'où un minimiseur unique sur la tranche
+> `T_1 = 1`. (Minimiser `g` avec la cible brute `γ` sur cette tranche « marcherait » aussi
+> numériquement, mais ferait absorber tout le déséquilibre `Σω − Σγ` par la seule région de
+> référence — un choix asymétrique ; la renormalisation répartit proprement l'écart en
+> proportions, ce que fait aussi l'itération Sinkhorn du §3.)
 
 **Étape 3 — `g` est *strictement* convexe, sauf dans une seule direction.**
 La hessienne de `g` vaut
@@ -343,7 +384,10 @@ n'y bascule que si le conditionnement l'exige.
 3. Comme `K = d^{-\alpha\theta} > 0`, le **théorème de Sinkhorn** garantit un `T` **unique**
    à l'échelle près ; la normalisation `T_1 = 1` (ou à la région de référence) le fixe
    complètement. L'unicité est **globale**, prouvée par la stricte convexité (modulo échelle)
-   du potentiel `g`.
+   du potentiel `g`. Comme $\Sigma\gamma=\texttt{domestic\_share}\neq\Sigma\omega=1$ (fuite vers
+   l'étranger), on travaille en version **projective** : seules les *proportions* de `γ_ls` sont
+   ciblables — le total est verrouillé à `Σω` par l'adding-up — donc on renormalise la cible à
+   `Σω`, ce que l'itération Sinkhorn (renormalisation par passe) fait automatiquement.
 4. La non-unicité **n'arrive jamais** pour `K > 0` ; le seul risque pratique est une
    **identification faible** (mauvais conditionnement), pas une ambiguïté de solution.
 5. L'initialisation du code (`invert_T_from_gamma`) **est** l'algorithme de Sinkhorn (amorti,
