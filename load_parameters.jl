@@ -376,6 +376,18 @@ optimizer_backend_local = (@isdefined(optimizer_backend)) ? optimizer_backend : 
 @assert optimizer_backend_local in (:pso, :cmaes, :tiktak) "optimizer_backend must be :pso, :cmaes or :tiktak, got :$optimizer_backend_local"
 @everywhere const OPTIMIZER_BACKEND = $(QuoteNode(optimizer_backend_local))
 
+# Draw count for INFERENCE (Jacobian + Σ_sim), decoupled from the optimization draw
+# count N_rho. The optimizer's loss uses N_rho draws (U_DRAWS); the Jacobian (`compute_jacobian`)
+# and the Σ_sim estimate (`build_step3_weight_matrix`) resample with N_RHO_INFERENCE draws
+# instead. Inference wants MANY more draws than the optimizer (the fixed-draw Jacobian /
+# Σ_sim are simulation-noisy — e.g. the reg_coef column noise), so this can be set well
+# above N_rho without slowing the search. The entry point may define `n_rho_inference`;
+# default = N_rho (byte-identical to before).
+n_rho_inference_local = (@isdefined(n_rho_inference)) ? n_rho_inference : N_rho
+@assert n_rho_inference_local >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference_local"
+@everywhere const N_RHO_INFERENCE = $(n_rho_inference_local)
+println("\n N_rho (optimization) = $N_rho ; N_RHO_INFERENCE (Jacobian + Σ_sim) = $N_RHO_INFERENCE")
+
 println("Generating draws (method = :$DRAW_METHOD)...")
 u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)
 @everywhere const U_DRAWS        = $u_draws_local

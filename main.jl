@@ -82,6 +82,13 @@ profile_T = length(ARGS) >= 7 && !isempty(strip(ARGS[7])) ?
     (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : false
 println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO (invert_T_ge); outputs → *_profiled/" : "")
 
+# Draw count for INFERENCE (Jacobian + Σ_sim), decoupled from the optimization draw
+# count (K_sim/N_rho). Inference is simulation-noisy (the fixed-draw Jacobian and Σ_sim),
+# so it benefits from many more draws than the search; picked up by load_parameters.jl
+# into N_RHO_INFERENCE. 8th positional arg (run.sh --n_rho_inf=); default 10000 (= N_rho).
+n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 10000
+@assert n_rho_inference >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference"
+
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
 run_2x2_test = true
@@ -179,7 +186,7 @@ if run_step2
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
         K             = 50,
-        step_rel      = 1e-4,
+        step_rel      = 1e-2,
         base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
     )
 
@@ -239,7 +246,7 @@ if run_step2
             output_subdir = "step2",
             filename      = "jacobian_2x2_ana.npy",
             K             = 1,
-            step_rel      = 1e-4,
+            step_rel      = 1e-2,
             base_seed     = 3_000_000,
             analytical    = true,
             analytical_ad = true,   # exact closed-form AD ⇒ the Jacobian channel is FD-noise-free
@@ -318,7 +325,7 @@ if run_step4
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
         K             = 50,
-        step_rel      = 1e-4,
+        step_rel      = 1e-2,
         base_seed     = 1_000_000
     )
 
@@ -408,7 +415,7 @@ if run_step4
             output_subdir = "step3",
             filename      = "jacobian_2x2_ana.npy",
             K             = 1,
-            step_rel      = 1e-4,
+            step_rel      = 1e-2,
             base_seed     = 4_000_000,
             analytical    = true,
             analytical_ad = true,   # exact closed-form AD ⇒ the Jacobian channel is FD-noise-free
