@@ -215,7 +215,7 @@ function parallel_tiktak_smm(
         push!(history["best_params"], to_real(gbest_z))
 
         if verbose
-            println("[TikTak] local searches $i–$j / $n_keep : best loss = $(round(gbest_f, digits=6))")
+            println("[TikTak] local searches $(i)-$(j) / $n_keep : best loss = $(round(gbest_f, digits=6))")
             flush(stdout)
         end
         i = j + 1
