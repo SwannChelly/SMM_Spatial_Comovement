@@ -55,7 +55,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(1000)
+@everywhere const N_rho               = $(10000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const P_alpha             = $(coefs[4, "value"]) #Prior on alpha
 @everywhere const lambda              = $(0.5)
@@ -350,7 +350,7 @@ BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_ga
 @everywhere const BLOCK_NAMES  = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
 
 w_vec = ones(N_moments)
-#w_vec[BLOCK_RANGES_local[4]] .= 100.0
+w_vec[BLOCK_RANGES_local[4]] .= 100.0
 Weight_matrix_custom_local = Diagonal(w_vec)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
@@ -542,7 +542,7 @@ end
 # train_stage). Single source of truth so the optimizer bounds and the
 # T_best_vs_initial window lines (tools.jl plot_T_vs_initial) never drift apart.
 @everywhere const BOUND_LO = 0.1
-@everywhere const BOUND_HI = 2
+@everywhere const BOUND_HI = 10
 
 # ── Diagnostic: gravity vs γ-inversion T starting values (ref-normalized) ────
 # Saves a log-log scatter of the two initialisations (both rescaled per sector to

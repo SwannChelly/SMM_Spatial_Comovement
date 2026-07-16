@@ -1,8 +1,8 @@
 ##### Three-Step SMM — main.jl #####
 # Entry point implementing the three-step efficient SMM estimator.
 # Step 1: identity-weighted PSO → θ̂_1
-# Step 2: build W_step3 = (Σ_data + (1+1/K)·Σ_sim)^{-1} at θ̂_1
-# Step 3: efficient-weighted PSO → θ̂_2, warm-started at θ̂_1
+# Step 2: build W_step3 = (Σ_data + Σ_sim)^{-1} at θ̂_1
+# Step 3: efficient-weighted  PSO → θ̂_2, warm-started at θ̂_1
 # ps aux | grep '[j]ulia' | awk '{print $2}' | xargs kill -9
 # Optimizer backend (PSO / CMA-ES) is selected via OPTIMIZER_BACKEND; see optimizer.jl.
 
@@ -60,12 +60,12 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
 @assert optimizer_backend in (:pso, :cmaes) "optimizer must be pso|cmaes, got :$optimizer_backend"
 
-K = 20
+K = 5
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
-run_step3 = true
-run_step4 = true
+run_step3 = false
+run_step4 = false
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
