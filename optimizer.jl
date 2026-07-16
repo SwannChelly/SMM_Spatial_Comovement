@@ -165,8 +165,20 @@ function train_stage(
     warm_start_override::Union{Nothing, Vector{Float64}} = nothing,
     moment_blocks::Union{Nothing, Vector{Int}} = nothing,
     analytical::Bool = false,
-    n_quad::Int = 200
+    n_quad::Int = 200,
+    profile_T::Bool = false
 )
+
+    # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────
+    # When profile_T, the T block is NOT searched: to each particle's head
+    # (Ω^L, Ω^s, A, α) we assign T*(α,Ω,A) = invert_T_ge(...), collapsing the
+    # search by ~N_T_REDUCED dimensions. `profiled_theta` (a top-level function in
+    # profiling.jl, so it serializes across the PSO pmap) overwrites the T block of
+    # a full LEVEL vector with that inversion; it is applied in the objective and
+    # the final reconstruction. profile_T=false ⇒ every branch below is the
+    # historical path, byte-identical.
+    nhead_lvl     = 1 + S + R_downstream + N_TAU         # [Ω^L|Ω^s|A|α] length
+    T_PLACEHOLDER = vec(permutedims(T_rs_init))[T_MASK]  # inert filler (overwritten)
 
     # ── Init-anchored search box for α and T ─────────────────────────────────
     # α and T are constrained to [BOUND_LO, BOUND_HI] × their INITIAL value in every
@@ -193,12 +205,15 @@ function train_stage(
         # centred on the γ-inversion init (T_init is no longer ≡1, so the box must track it).
         # α is boxed to [×BOUND_LO, ×BOUND_HI] × the α prior (TAU_PRIOR), else × init_alpha.
         alpha_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha
+        # profile_T ⇒ the T (φ) block is dropped from the search space entirely.
+        T_lb_block = profile_T ? Float64[] : T_phi_lo
+        T_ub_block = profile_T ? Float64[] : T_phi_hi
         lb = vcat(
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
             alpha_anchor .* BOUND_LO,
-            T_phi_lo
+            T_lb_block
         )
 
         ub = vcat(
@@ -206,7 +221,7 @@ function train_stage(
             1.2 .* agg_industry_share,
             A .* 1.2,
             alpha_anchor .* BOUND_HI,
-            T_phi_hi
+            T_ub_block
         )
 
         alpha_constraint = true
@@ -214,8 +229,10 @@ function train_stage(
         alpha_indices = alpha_start:(alpha_start + N_TAU - 1)
         best_params_prev = nothing
         # Use warm_start_override if provided (Step 3 warm-start from θ̂_1); convert
-        # its level T block to the free-φ search space.
-        warm_start = warm_start_override === nothing ? nothing : full_to_search(warm_start_override)
+        # its level T block to the free-φ search space. profile_T ⇒ head only (the
+        # search vector carries no T block); the level and search heads coincide.
+        warm_start = warm_start_override === nothing ? nothing :
+            (profile_T ? warm_start_override[1:nhead_lvl] : full_to_search(warm_start_override))
         cached_tau = nothing  # Alpha is being optimized in initial stage
 
     else
@@ -358,8 +375,13 @@ function train_stage(
                 end
             end
         else
-            x_full = search_to_full(x_stage)
+            # profile_T fresh start: x_stage is head-only ⇒ append an inert T block
+            # (overwritten by profiled_theta below). Otherwise expand φ → levels.
+            x_full = profile_T ? vcat(x_stage, T_PLACEHOLDER) : search_to_full(x_stage)
         end
+
+        # T-profiling: replace the (searched-or-stale) T block with T*(α,Ω,A).
+        profile_T && (x_full = profiled_theta(x_full))
 
         # Evaluate SMM (or analytical GMM)
         result = parallel_SMM_safe(x_full, false, second_stage, method, false;
@@ -418,8 +440,12 @@ function train_stage(
             end
         end
     else
-        final_params = search_to_full(best_params)
+        final_params = profile_T ? vcat(best_params, T_PLACEHOLDER) : search_to_full(best_params)
     end
+
+    # T-profiling: the returned θ carries T*(α̂,Ω̂,Â) so downstream reporting and
+    # Step-4 inference (which keeps the full T columns) see the profiled T.
+    profile_T && (final_params = profiled_theta(final_params))
 
     return final_params, best_fitness, history
 end
@@ -465,7 +491,8 @@ function run_optimization(;
     gamma_beta_only::Bool = false,          # step 3: fix structural params, optimize only alpha+T
     moments_loss_gamma_beta::Bool = false,  # step 3: compute loss on gamma_ls + reg_coef moments only
     analytical::Bool = false,              # GMM mode: closed-form moments (no simulation)
-    n_quad::Int = 200                      # quadrature nodes for reg_coef block in analytical mode
+    n_quad::Int = 200,                     # quadrature nodes for reg_coef block in analytical mode
+    profile_T::Bool = false                # Design A: profile T out of the search (profiling.jl)
 )
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
@@ -565,19 +592,24 @@ function run_optimization(;
             last_stage_folder = seed_folder,
             K=1, radius=0.5, second_stage=false, method=method,
             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-            moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+            moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
+            profile_T=profile_T
         )
-        seed_alpha_folder = joinpath(loop_base, "seed_alpha")
-        mkpath(seed_alpha_folder)
-        NPZ.npzwrite(joinpath(seed_alpha_folder, "best_params.npy"), reshape(best_params, :, 1))
-        best_params, best_fitness, history = train_stage(
-            n_particles, max_iter_initial;
-            variable_list     = ["T"],
-            last_stage_folder = seed_alpha_folder,
-            K=1, radius=0.5, second_stage=false, method=method,
-            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-            moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
-        )
+        # profile_T ⇒ T is profiled inside the α stage (its objective assigns
+        # T*(α,Ω,A)); the separate T sub-stage is not needed.
+        if !profile_T
+            seed_alpha_folder = joinpath(loop_base, "seed_alpha")
+            mkpath(seed_alpha_folder)
+            NPZ.npzwrite(joinpath(seed_alpha_folder, "best_params.npy"), reshape(best_params, :, 1))
+            best_params, best_fitness, history = train_stage(
+                n_particles, max_iter_initial;
+                variable_list     = ["T"],
+                last_stage_folder = seed_alpha_folder,
+                K=1, radius=0.5, second_stage=false, method=method,
+                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+            )
+        end
     else
         best_params, best_fitness, history = train_stage(
             n_particles, max_iter_initial;
@@ -593,7 +625,8 @@ function run_optimization(;
             warm_start_override = warm_start_params,
             moment_blocks  = moment_blocks,
             analytical     = analytical,
-            n_quad         = n_quad
+            n_quad         = n_quad,
+            profile_T      = profile_T
         )
     end
 
@@ -618,7 +651,9 @@ function run_optimization(;
     # gamma_beta_only: 2 sub-stages/loop (α, then T — both backends).
     # else: four sub-stages/loop (productivity, α, T, technical — PSO only;
     # CMA-ES skips this case).
-    substages_per_loop = gamma_beta_only ? 2 : 4
+    # profile_T drops the standalone T sub-stage from each loop: gamma_beta_only
+    # goes 2→1 (α only), the joint path 4→3 (productivity, α, technical).
+    substages_per_loop = gamma_beta_only ? (profile_T ? 1 : 2) : (profile_T ? 3 : 4)
     run_refinement = gamma_beta_only || OPTIMIZER_BACKEND != :cmaes
 
     for loop in (run_refinement ? (1:max_loop) : (1:0))
@@ -635,14 +670,17 @@ function run_optimization(;
             # Each sub-stage lets α adapt to the previous T update and vice versa.
             OPTIMIZER_BACKEND == :cmaes && (max_iter_stage = 100)
             substage_folder = past_loop_folder
-            for var in ("alpha", "T")
+            # profile_T ⇒ refine α alone (T is profiled inside its objective); the
+            # standalone T sub-stage is dropped.
+            for var in (profile_T ? ("alpha",) : ("alpha", "T"))
                 best_params, best_fitness, history = train_stage(
                     n_particles, max_iter_stage;
                     variable_list     = [var],
                     last_stage_folder = joinpath(substage_folder, string(stage)),
                     K=1, radius=radius, second_stage=false, method=method,
                     u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                    moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+                    moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
+                    profile_T=profile_T
                 )
                 stage += 1
                 folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -661,7 +699,8 @@ function run_optimization(;
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
                 K=1, radius=radius_prod, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
+                profile_T=profile_T
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -677,7 +716,8 @@ function run_optimization(;
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K=1, radius=radius, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
+                profile_T=profile_T
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)
@@ -686,21 +726,26 @@ function run_optimization(;
                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                             analytical=analytical, n_quad=n_quad)
 
-            # Sub-stage 2b: Spatial structure — T alone (α held at its 2a value)
-            best_params, best_fitness, history = train_stage(
-                n_particles, max_iter_stage;
-                variable_list     = ["T"],
-                last_stage_folder = joinpath(loop_folder, string(stage)),
-                K=1, radius=radius, second_stage=false, method=method,
-                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
-            )
-            stage += 1
-            folder = joinpath(loop_folder, string(stage)); mkpath(folder)
-            NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
-            generate_report(loop_folder, string(stage), 1, ["T"], best_params, string(radius);
-                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
-                            analytical=analytical, n_quad=n_quad)
+            # Sub-stage 2b: Spatial structure — T alone (α held at its 2a value).
+            # profile_T ⇒ skipped: T is profiled inside every objective, so the
+            # α (2a) output already carries the up-to-date T*; technical (3) below
+            # continues directly from it (its stage counter is not advanced here).
+            if !profile_T
+                best_params, best_fitness, history = train_stage(
+                    n_particles, max_iter_stage;
+                    variable_list     = ["T"],
+                    last_stage_folder = joinpath(loop_folder, string(stage)),
+                    K=1, radius=radius, second_stage=false, method=method,
+                    u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
+                    moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+                )
+                stage += 1
+                folder = joinpath(loop_folder, string(stage)); mkpath(folder)
+                NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(best_params, :, 1))
+                generate_report(loop_folder, string(stage), 1, ["T"], best_params, string(radius);
+                                u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                                analytical=analytical, n_quad=n_quad)
+            end
 
             # Sub-stage 3: Technical coefficients
             best_params, best_fitness, history = train_stage(
@@ -709,7 +754,8 @@ function run_optimization(;
                 last_stage_folder = joinpath(loop_folder, string(stage)),
                 K=1, radius=radius, second_stage=false, method=method,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
-                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
+                moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
+                profile_T=profile_T
             )
             stage += 1
             folder = joinpath(loop_folder, string(stage)); mkpath(folder)

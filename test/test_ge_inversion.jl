@@ -105,10 +105,18 @@ n_free = length(free_coords)
 # (1) ROUND-TRIP
 # ═══════════════════════════════════════════════════════════════════════════════
 println("\n" * "-"^72)
-println("(1) ROUND-TRIP: recover T_true from its own γ_ls")
+println("(1) ROUND-TRIP: recover T_true from its own γ_ls  (perturbed start)")
 println("-"^72)
-res_rt = invert_T_ge(α, Ω_L, Ω_s, A; target = γ_target, T_init = copy(T_rs_init),
-                     max_iter = 2000, tol = 1e-12, damping = 0.5)
+# Start AWAY from T_true (×LogUniform[0.5,2] on active coords) so this is a genuine
+# recovery test, not the identity — otherwise T_init==T_true and it converges in 0
+# steps, which also leaves the residual history too short to report a contraction.
+rng_rt = MersenneTwister(777)
+T_start_rt = copy(T_true)
+for (s, r) in free_coords
+    T_start_rt[s, r] *= exp(log(2.0) * (2 * rand(rng_rt) - 1))
+end
+res_rt = invert_T_ge(α, Ω_L, Ω_s, A; target = γ_target, T_init = T_start_rt,
+                     max_iter = 2000, tol = 1e-12, damping = 0.9)
 rt_err = 0.0
 for (s, r) in free_coords
     global rt_err

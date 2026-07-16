@@ -41,6 +41,7 @@ using StatsBase
 @everywhere include("optimizers/pso_integration.jl")      # PSO backend
 @everywhere include("optimizers/cmaes_integration.jl")    # CMA-ES backend
 @everywhere include("optimizer.jl")            # backend-neutral hub: optimize_stage, train_stage, run_optimization
+@everywhere include("profiling.jl")            # T-profiling (invert_T_ge); inert unless profile_T=true
 @everywhere include("test/run_untargeted_validation.jl")
 
 ############## Parse arguments ##############
@@ -66,6 +67,16 @@ run_step2 = true
 run_step3 = true
 run_step4 = true
 
+# ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
+# When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
+# mapped to T*(α,Ω,A) = invert_T_ge(...) inside the objective, collapsing the search
+# by ~N_T_REDUCED dims. The γ_ls block becomes juste-identified (loss≈0); reg_coef is
+# fit by (α,Ω,A) alone. Step-4 inference is UNCHANGED — it already keeps the full T
+# columns, so T's CIs are preserved at the profiled point. Outputs go to a separate
+# folder so the joint-search artifacts are never overwritten. false ⇒ byte-identical
+# to the joint estimator. (SMM path only: the loss's reg_coef stays simulation-based.)
+profile_T = false
+
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
 run_2x2_test = true
@@ -82,7 +93,9 @@ end
 println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend")
 
 input_folder  = "./baseline_$industry"
-output_folder = "./reporting_$industry"
+# profile_T ⇒ isolate all step1..4 artifacts under a distinct tree (plan §6), so the
+# joint-search reporting is never overwritten and the two estimators stay comparable.
+output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "")
 mkpath(output_folder)
 
 ############## Load and distribute constants ##############
@@ -118,7 +131,8 @@ if run_step1
         warm_start_params        = warm_start,
         output_subfolder         = "step1",
         max_loop                 = K,
-        max_iter_initial         = 200
+        max_iter_initial         = 200,
+        profile_T                = profile_T
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
@@ -263,7 +277,8 @@ if run_step3
         max_loop                 = K,
         gamma_beta_only          = true,
         moments_loss_gamma_beta  = true,
-        max_iter_initial         = 200
+        max_iter_initial         = 200,
+        profile_T                = profile_T
     )
 
     NPZ.npzwrite(joinpath(output_folder, "step3", "theta_hat_2.npy"), theta_hat_2)
@@ -285,6 +300,11 @@ if run_step4
     end
 
     # ── Jacobian at θ̂_2 — all parameters ────────────────────────────────────
+    # Phase 3 (T-profiling): θ̂_2 carries the profiled T*(α̂,Ω̂,Â), and this Jacobian
+    # perturbs EVERY column (T included). The α+T restriction below (gb_cols) then
+    # keeps the full T columns, so the standard GMM inference returns T's joint CIs
+    # at the profiled point — no delta method. Inference is identical to the joint
+    # estimator; only the SEARCH that produced θ̂_2 differed.
     println("\nComputing Jacobian at θ̂_2 (base_seed=1_000_000 to avoid collision with Σ_sim seeds)...")
     J2, J2_elast, J2_sd, J2_elast_sd = compute_jacobian(
         theta_hat_2;

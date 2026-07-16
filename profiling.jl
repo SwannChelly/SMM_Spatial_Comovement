@@ -86,8 +86,13 @@ end
 """
     invert_T_ge(alpha, Omega_L, Omega_s, A;
                 target = emp_gamma_ls, T_init = copy(T_rs_init),
-                max_iter = 500, tol = 1e-9, damping = 0.5, verbose = false)
+                max_iter = 500, tol = 1e-9, damping = 0.9, verbose = false)
         -> (T::(S,R), iters, converged::Bool, resid, resid_hist)
+
+`damping` is the log-space relaxation δ (δ=1 is pure Sinkhorn). Phase-0 measured
+the undamped map as a strong contraction (ρ_full≈0.01 at the aero calibration),
+so the default is 0.9 (fast) rather than the very conservative 0.5; drop it toward
+0.5 if a far-from-init particle ever oscillates.
 
 Profile T by the GE-Sinkhorn inversion of `target` (default: observed
 `emp_gamma_ls`). The damped multiplicative update, per active (s,r), is
@@ -106,7 +111,7 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
                      target::AbstractMatrix = emp_gamma_ls,
                      T_init::AbstractMatrix = copy(T_rs_init),
                      max_iter::Int = 500, tol::Float64 = 1e-9,
-                     damping::Float64 = 0.5, verbose::Bool = false)
+                     damping::Float64 = 0.9, verbose::Bool = false)
     tau   = build_tau(alpha)
     T_mat = Matrix{Float64}(undef, S, R)
     T_mat .= T_init
@@ -156,6 +161,29 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
     converged = resid < tol
     return (T = T_mat, iters = iters, converged = converged,
             resid = resid, resid_hist = resid_hist)
+end
+
+
+"""
+    profiled_theta(x_levels) -> Vector{Float64}
+
+Given a full LEVEL parameter vector `x_levels = [Ω^L | Ω^s | A | α | T]`, return a
+copy whose T block is replaced by the profiled `T*(α,Ω,A) = invert_T_ge(...)`. The
+head is normalized exactly as `unpack_params` reads it (Ω^s ÷ sum, A ÷ A[1]) before
+the inversion, and the reduced T* block is written in s-major `T_MASK` order. This
+is the single interception point the optimizer uses when `profile_T=true`; kept a
+top-level (`@everywhere`) function so it serializes cleanly across the PSO's `pmap`
+workers (a nested closure calling `invert_T_ge` would not).
+"""
+function profiled_theta(x_levels::AbstractVector)
+    ΩL = x_levels[1]
+    Ωs = x_levels[2:(1 + S)];                      Ωs = Ωs ./ sum(Ωs)
+    A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
+    α  = x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)]
+    res = invert_T_ge(α, ΩL, Ωs, A)
+    xf = copy(x_levels)
+    xf[(2 + S + R_downstream + N_TAU):end] = vec(permutedims(res.T))[T_MASK]
+    return xf
 end
 
 
