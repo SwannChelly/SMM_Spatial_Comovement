@@ -1,8 +1,5 @@
 
 
-
-
-
 ---------
 
 # Meilleure estimation de $\alpha$
@@ -118,7 +115,21 @@ ii) Ca suppose que l'algorithme d'optimisation n'est pas coincé dans un minimum
 
 Même si le modèle est bien spécifié (il est injectif), il est possible que certaines directions du modèle ne soit pas informatives (espace propre avec des directions très proche du noyau / plates) ce qui a pour effet d'élargir les intervalles de confiance. C'est le cas notamment quand la jacobienne est très proche de $0$ sur certaines entrées. 
 
-_A compléter_. 
+Pour le montrer, concentrons nous sur la Jacobienne des $\gamma$ par rapport à $T$. Tout d'abord cette Jacobienne est diagonale par block si jamais les effets entre les secteurs sont faibles. Ensuite on a :
+
+$$
+J_{r'k} = \frac{1}{T_k} \sum_r w_r \gamma_{r'r}(\mathbf{1}\{r'=k\} - \gamma_{r'r})
+$$
+
+où $\gamma_{r'r}$ est la part du sourcing de $r$ fait auprès de $r'$. La jacobienne est très faible si les parts sont proches de 0 ou de 1 (peu identifiante). 
+
+L'estimateur de Sandwich est $Var(\Theta) = (J'WJ)^-1 J'W \Omega W J (J'WJ)^{-1}$ où $W$ est la matrice de pondération de l'estimation (l'identité dans le premier passage) et $\Omega$ la matrice de variance-covariance du modèle qui encode le bruit de simulation et le bruit des données ($\Omega = \Omega_{data} + \Omega_{simulation}$).
+
+Dans la première passe, on suppose que $W = \Omega = I$ alors $Var(\Theta) = ((J'J)^{-1})^2 = Q Diag(\lambda^2)^{-1} Q'$. Avec $Diag(\lambda)$ la matrice des valeurs propres de $J'J$.  On peut montrer que $$\max_{||u|| = 1} Var(u\Theta) = \frac{1}{\lambda_{min}}$$. Si $\lambda_{min}$ est petit alors il existe une direction dans l'espace des paramètres le long de laquelle l'optimisation distingue très mal les paramètres. De plus on peut montrer que $\lambda_{min} < \min_r \gamma_{r}$ donc si jamais on a des faibles quantité alors on va avoir une forte variance. 
+
+Le bon ratio à regarder est le "condition number", le rapport entre les valeurs propres. J'observe qu'il est raisonnable dans le cas de ma matrice. 
+
+
 **4) L'algorithme ne converge pas vers un point d'équilibre stable**
 
 Toute la discussion précédente suppose que l'on est bien au vecteur optimal $\Theta^*$. Mais il se peut que l'on n'y soit pas. 
@@ -222,6 +233,13 @@ Deux boucles emboîtées : la boucle interne (Sinkhorn) résout $T$ à $w$ fixé
 
 L'intervalle de confiance est construit de la même manière que précédemment : on calcule l'estimateur sandwich à partir de la Jacobienne simulée au point optimal et on utilise la matrice identité comme matrice de poids. 
 
+
+**6) Variance de $T$**
+
+Aujourd'hui les $T$ ont des IC qui couvrent 0. Deux commentaires : 
+
+1) Etant donné que $T > 0$, est-ce que l'on doit utiliser un autre estimateur de la variance ? 
+2) Ce qu'on mesure c'est plutôt le ratio $T/T_{ref}$. Est-ce qu'on doit plutôt tester la différence entre $T$ et $T_{ref}$ (test de Wald à 1) ?
 
 
 
