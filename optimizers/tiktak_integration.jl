@@ -79,9 +79,12 @@ full/real parameter vector to a scalar loss (or `nothing`/`Inf` on failure). `x0
 the warm start (previous best); may be `nothing`.
 
 Contract-mapped budget knobs:
-- `n_particles` → `n_restarts`, the number of local searches (kept best Sobol points).
+- `n_particles` → `n_restarts` K, the number of local searches (kept best Sobol points).
 - `max_iter`    → Nelder-Mead iteration budget per local search.
-Pre-test draws = `sobol_multiplier · n_restarts` (TikTak keeps the best `n_restarts`).
+Pre-test draws are dimension-aware: `clamp(points_per_dim·d, K, sobol_multiplier·K)`
+— a high-dim joint stage hits the `sobol_multiplier·K` cap (the old flat budget),
+a low-dim block-coordinate stage uses far fewer, keeping the successive-block
+refinement cheap. TikTak keeps the best `K` legitimate pre-test points.
 """
 function parallel_tiktak_smm(
     objective::Function,
@@ -92,7 +95,8 @@ function parallel_tiktak_smm(
     max_iter::Union{Int, Nothing} = nothing,      # → Nelder-Mead iterations / search
     alpha_constraint::Bool = true,
     alpha_indices::UnitRange = 1:0,
-    sobol_multiplier::Int = 100,                   # pretest draws = multiplier · K
+    sobol_multiplier::Int = 100,                   # pretest cap = multiplier · K
+    points_per_dim::Int = 500,                     # dimension-aware pretest target
     theta_min::Float64 = 0.1,                      # blend-weight floor
     theta_max::Float64 = 0.995,                    # blend-weight ceiling
     seed::Int = 1,
@@ -117,7 +121,12 @@ function parallel_tiktak_smm(
 
     K         = n_particles === nothing ? 70 : max(1, n_particles)
     n_iter    = max_iter === nothing ? 200 : max_iter
-    n_sobol   = max(K, sobol_multiplier * K)
+    # Dimension-aware pretest: `points_per_dim · d` points, floored at K (need ≥ K to
+    # keep) and capped at `sobol_multiplier · K`. A high-dim joint stage hits the cap
+    # (unchanged from a flat multiplier·K); a low-dim block-coordinate stage (e.g. the
+    # 1-D α sub-stage) uses far fewer, so the successive-block refinement stays cheap
+    # instead of re-running a saturated 10k-point pretest per sub-stage.
+    n_sobol   = clamp(points_per_dim * d, K, sobol_multiplier * K)
     rng       = MersenneTwister(seed)
 
     history = Dict{String, Any}(

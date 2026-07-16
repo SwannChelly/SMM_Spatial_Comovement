@@ -652,22 +652,23 @@ function run_optimization(;
     # ── Refinement loops ─────────────────────────────────────────────────────
     # α and T are DECOUPLED: every loop refines α alone, then T alone (α first),
     # so each sub-stage lets one block adapt to the other's latest update instead
-    # of moving them together in one joint step. PSO backend: the staged
+    # of moving them together in one joint step. PSO AND TikTak run the staged
     # block-coordinate refinement (productivity → α → T → technical, or the
-    # α-then-T alternation for gamma_beta_only). Global backends (CMA-ES, TikTak):
-    # the general (non-gamma_beta_only) case collapses all of this into the single
-    # joint Stage 1 run above — CMA-ES learns cross-block covariance directly, TikTak
-    # multistarts the whole box — so those loops are skipped; the gamma_beta_only case
-    # still runs the α-then-T alternation.
+    # α-then-T alternation for gamma_beta_only): each sub-stage re-runs the backend
+    # on one parameter block (warm-started at the incumbent, monotone-floored), so
+    # TikTak gets the same successive-block descent PSO does. Only CMA-ES collapses
+    # the general (non-gamma_beta_only) case into the single joint Stage 1 run above
+    # (it learns cross-block covariance directly and stops on its own ftol/xtol);
+    # the gamma_beta_only α-then-T alternation still runs for every backend.
     radius_start, radius_end = 0.3, 0.9
     # gamma_beta_only: 2 sub-stages/loop (α, then T — all backends).
-    # else: four sub-stages/loop (productivity, α, T, technical — PSO only;
-    # CMA-ES and TikTak skip this case).
+    # else: four sub-stages/loop (productivity, α, T, technical — PSO & TikTak;
+    # CMA-ES skips this case).
     # profile_T drops the standalone T sub-stage from each loop: gamma_beta_only
     # goes 2→1 (α only), the joint path 4→3 (productivity, α, technical).
     substages_per_loop = gamma_beta_only ? (profile_T ? 1 : 2) : (profile_T ? 3 : 4)
-    global_backend = OPTIMIZER_BACKEND in (:cmaes, :tiktak)
-    run_refinement = gamma_beta_only || !global_backend
+    # Only CMA-ES skips the joint-path block-coordinate refinement; PSO and TikTak run it.
+    run_refinement = gamma_beta_only || OPTIMIZER_BACKEND != :cmaes
 
     for loop in (run_refinement ? (1:max_loop) : (1:0))
         radius = radius_start + (loop - 1) * (radius_end - radius_start) / (max_loop - 1)

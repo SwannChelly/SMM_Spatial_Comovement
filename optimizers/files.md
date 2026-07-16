@@ -23,12 +23,14 @@ economics of what each optimizer does, see `../documentation/optimizer.md`.
 
 TikTak's parallelism: the pre-test is `pmap`ped across all workers; the local
 searches run in batches of `nworkers()` (each search serial on one worker, blending
-toward the incumbent as it stood at batch start — the parallel-TikTak trade-off).
+toward the incumbent as it stood at batch start — the parallel-TikTak trade-off). The
+pre-test size is dimension-aware — `clamp(points_per_dim·d, K, sobol_multiplier·K)` —
+so a low-dim block-coordinate sub-stage doesn't re-run a saturated high-dim pre-test.
 
-Like CMA-ES, TikTak is treated as a genuinely *global* optimizer, so
-`run_optimization` runs it as one joint search per SMM step rather than through the
-PSO block-coordinate refinement loops (except the `gamma_beta_only` α-then-T path,
-which every backend runs).
+Like PSO, TikTak runs `run_optimization`'s **staged block-coordinate refinement**
+(productivity → α → T → technical, and the `gamma_beta_only` α-then-T alternation):
+each sub-stage re-runs TikTak on one block, warm-started at the incumbent and
+monotone-floored. Only CMA-ES collapses the joint path into a single Stage-1 run.
 
 All three share the small helper `enforce_alpha_constraint`, which keeps the
 trade-cost parameters α ordered (α₁ ≤ α₂ ≤ … ) after every move.
