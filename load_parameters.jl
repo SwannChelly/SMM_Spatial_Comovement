@@ -369,10 +369,11 @@ draw_method_local = (@isdefined(draw_method)) ? draw_method : :sobol
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
 
 # Optimizer backend. The entry point may define `optimizer_backend`; default :pso
-# (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step. Both search
-# T in log space via the φ maps above.
+# (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step; :tiktak runs
+# one joint TikTak multistart (Sobol pretest + Nelder-Mead) per step. All three
+# search T in log space via the φ maps above.
 optimizer_backend_local = (@isdefined(optimizer_backend)) ? optimizer_backend : :pso
-@assert optimizer_backend_local in (:pso, :cmaes) "optimizer_backend must be :pso or :cmaes, got :$optimizer_backend_local"
+@assert optimizer_backend_local in (:pso, :cmaes, :tiktak) "optimizer_backend must be :pso, :cmaes or :tiktak, got :$optimizer_backend_local"
 @everywhere const OPTIMIZER_BACKEND = $(QuoteNode(optimizer_backend_local))
 
 println("Generating draws (method = :$DRAW_METHOD)...")

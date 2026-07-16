@@ -3,7 +3,7 @@ Optimization layer — backend-neutral hub.
 
 This file owns everything that is independent of *which* optimizer runs:
 
-- `optimize_stage`  : the single dispatch seam (PSO vs CMA-ES on `OPTIMIZER_BACKEND`).
+- `optimize_stage`  : the single dispatch seam (PSO / CMA-ES / TikTak on `OPTIMIZER_BACKEND`).
 - `train_stage`     : the staged optimization builder — constructs bounds, warm
                       start, and the objective closure (in the log-space φ search
                       space for T), then calls `optimize_stage`.
@@ -16,8 +16,9 @@ The concrete optimizers live in the backend files and honor one contract:
 
     (objective, lb, ub; x0, ...) -> (best_x::Vector, best_f::Float64, history::Dict)
 
-  - PSO   : `parallel_pso_smm`   (pso_integration.jl)
-  - CMA-ES: `parallel_cmaes_smm` (cmaes_integration.jl)
+  - PSO   : `parallel_pso_smm`    (pso_integration.jl)
+  - CMA-ES: `parallel_cmaes_smm`  (cmaes_integration.jl)
+  - TikTak: `parallel_tiktak_smm` (tiktak_integration.jl)
 
 so `main.jl` / `run_optimization` never mention a specific optimizer. Legacy names
 `train_stage_pso` / `run_pso_optimization` are retained as aliases at the bottom.
@@ -47,7 +48,7 @@ using Printf
 Dispatch to the selected optimizer backend. Returns `(best_x, best_f, history)`.
 `x0` is the warm start / incumbent (previous best), in the stage's search space:
 for PSO it becomes the guaranteed warm-start particle; for CMA-ES the initial mean
-plus incumbent floor.
+plus incumbent floor; for TikTak a pre-test candidate plus incumbent floor.
 """
 function optimize_stage(
     objective::Function,
@@ -73,6 +74,17 @@ function optimize_stage(
             seed = seed,
             verbose = verbose,
         )
+    elseif backend == :tiktak
+        return parallel_tiktak_smm(
+            objective, lb, ub;
+            x0 = x0,
+            n_particles = n_particles,
+            max_iter = max_iter,
+            alpha_constraint = alpha_constraint,
+            alpha_indices = alpha_indices,
+            seed = seed,
+            verbose = verbose,
+        )
     elseif backend == :pso
         return parallel_pso_smm(
             objective, lb, ub;
@@ -84,7 +96,7 @@ function optimize_stage(
             verbose = verbose,
         )
     else
-        error("Unknown optimizer backend :$backend (expected :pso or :cmaes)")
+        error("Unknown optimizer backend :$backend (expected :pso, :cmaes or :tiktak)")
     end
 end
 
@@ -642,19 +654,20 @@ function run_optimization(;
     # so each sub-stage lets one block adapt to the other's latest update instead
     # of moving them together in one joint step. PSO backend: the staged
     # block-coordinate refinement (productivity → α → T → technical, or the
-    # α-then-T alternation for gamma_beta_only). CMA-ES backend: the general
-    # (non-gamma_beta_only) case collapses all of this into the single joint
-    # Stage 1 run above (it learns cross-block covariance directly and stops on
-    # its own ftol/xtol), so those loops are skipped; the gamma_beta_only case
-    # runs the same α-then-T alternation.
+    # α-then-T alternation for gamma_beta_only). Global backends (CMA-ES, TikTak):
+    # the general (non-gamma_beta_only) case collapses all of this into the single
+    # joint Stage 1 run above — CMA-ES learns cross-block covariance directly, TikTak
+    # multistarts the whole box — so those loops are skipped; the gamma_beta_only case
+    # still runs the α-then-T alternation.
     radius_start, radius_end = 0.3, 0.9
-    # gamma_beta_only: 2 sub-stages/loop (α, then T — both backends).
+    # gamma_beta_only: 2 sub-stages/loop (α, then T — all backends).
     # else: four sub-stages/loop (productivity, α, T, technical — PSO only;
-    # CMA-ES skips this case).
+    # CMA-ES and TikTak skip this case).
     # profile_T drops the standalone T sub-stage from each loop: gamma_beta_only
     # goes 2→1 (α only), the joint path 4→3 (productivity, α, technical).
     substages_per_loop = gamma_beta_only ? (profile_T ? 1 : 2) : (profile_T ? 3 : 4)
-    run_refinement = gamma_beta_only || OPTIMIZER_BACKEND != :cmaes
+    global_backend = OPTIMIZER_BACKEND in (:cmaes, :tiktak)
+    run_refinement = gamma_beta_only || !global_backend
 
     for loop in (run_refinement ? (1:max_loop) : (1:0))
         radius = radius_start + (loop - 1) * (radius_end - radius_start) / (max_loop - 1)

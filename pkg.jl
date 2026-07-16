@@ -8,7 +8,7 @@ Pkg.add("Plots")
 Pkg.add("CSV")
 Pkg.add("FixedEffectModels")
 Pkg.add("RDatasets")
-Pkg.add("Optim")
+Pkg.add("Optim")              # Nelder-Mead local solver for the TikTak optimizer backend
 Pkg.add("ProgressMeter")
 Pkg.add("SharedArrays")
 Pkg.add("StatsBase")

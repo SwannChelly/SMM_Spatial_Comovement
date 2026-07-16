@@ -1,7 +1,8 @@
 # `optimizers/` — optimizer backends
 
-These two files are the *interchangeable engines* that search the parameter space.
-They are selected at run time with `--optimizer=pso` (default) or `--optimizer=cmaes`.
+These files are the *interchangeable engines* that search the parameter space.
+They are selected at run time with `--optimizer=pso` (default), `--optimizer=cmaes`,
+or `--optimizer=tiktak`.
 
 Both obey **one contract** so the rest of the code never needs to know which one is
 running:
@@ -18,6 +19,16 @@ economics of what each optimizer does, see `../documentation/optimizer.md`.
 |------|------|
 | `pso_integration.jl` | **Particle Swarm Optimization** (default). A population of candidate parameter vectors ("particles") that move through the search space, pulled toward each particle's own best point and the swarm's global best. Includes the *warm-start particle* trick that guarantees the loss never worsens from one stage to the next. |
 | `cmaes_integration.jl` | **CMA-ES** (Covariance Matrix Adaptation Evolution Strategy). An adaptive Gaussian search that learns the shape (covariance) of the good region and rescales its steps accordingly. Wraps the `CMAEvolutionStrategy` library, runs on a normalized unit cube, and tracks an incumbent so it too never returns a point worse than its warm start. |
+| `tiktak_integration.jl` | **TikTak** (Guvenen multistart; [serdarozkan/TikTak](https://github.com/serdarozkan/TikTak)). A global multistart method: (1) a **pre-test** evaluates a large scrambled-Sobol net and keeps the best `n_restarts` legitimate points, then (2) runs a **local search** from each — but started at a convex combination `(1−θᵢ)·sᵢ + θᵢ·z*` pulled toward the best optimum `z*` found so far, with `θᵢ = clamp((i/K)^{1/2}, 0.1, 0.995)` growing with the restart index, so late starts *refine* the incumbent. Local solver is **Nelder-Mead** (`Optim.jl`, no new dependency; Brent for the 1-D single-α sub-stage), pluggable for a DFNLS/BOBYQA engine. Like CMA-ES it runs on the normalized unit cube and floors the result at the warm start. Well-suited to the Sinkhorn-reduced (`profile_T`) parameter space. |
 
-Both share the small helper `enforce_alpha_constraint`, which keeps the trade-cost
-parameters α ordered (α₁ ≤ α₂ ≤ … ) after every move.
+TikTak's parallelism: the pre-test is `pmap`ped across all workers; the local
+searches run in batches of `nworkers()` (each search serial on one worker, blending
+toward the incumbent as it stood at batch start — the parallel-TikTak trade-off).
+
+Like CMA-ES, TikTak is treated as a genuinely *global* optimizer, so
+`run_optimization` runs it as one joint search per SMM step rather than through the
+PSO block-coordinate refinement loops (except the `gamma_beta_only` α-then-T path,
+which every backend runs).
+
+All three share the small helper `enforce_alpha_constraint`, which keeps the
+trade-cost parameters α ordered (α₁ ≤ α₂ ≤ … ) after every move.

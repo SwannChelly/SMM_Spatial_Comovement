@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes] [--profile_T=true|false]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false]
 #
 # Examples:
 #   ./run.sh aero
@@ -13,20 +13,21 @@
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm --n_quad=500
 #   ./run.sh aero --n_coef=4 --draws=mc
 #   ./run.sh aero --n_coef=4 --optimizer=cmaes
+#   ./run.sh aero --n_coef=4 --n_tau=1 --optimizer=tiktak --profile_T=true  # multistart on the Sinkhorn-reduced space
 #   ./run.sh aero --n_coef=4 --n_tau=1 --profile_T=true   # profile T out of the PSO (SMM only)
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes] [--profile_T=true|false]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false]"
     echo "  industry   : aero, auto, car, both"
     echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
     echo "  --mode     : smm (default) or gmm (analytical, faster, exact SEs)"
     echo "  --n_quad   : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
     echo "  --draws    : Fréchet draw method: sobol (default), mc, is, or sobol"
-    echo "  --optimizer: pso (default) or cmaes (SMM only)"
+    echo "  --optimizer: pso (default), cmaes, or tiktak (multistart; SMM only)"
     echo "  --profile_T: true|false (default false; SMM only) — profile T out of the PSO via invert_T_ge; outputs → reporting_<ind>_profiled/"
     exit 1
 fi
@@ -72,8 +73,8 @@ if [ "$DRAWS" != "qmc" ] && [ "$DRAWS" != "mc" ] && [ "$DRAWS" != "is" ] && [ "$
     exit 1
 fi
 
-if [ "$OPTIMIZER" != "pso" ] && [ "$OPTIMIZER" != "cmaes" ]; then
-    echo "Error: --optimizer must be pso or cmaes (got: $OPTIMIZER)"
+if [ "$OPTIMIZER" != "pso" ] && [ "$OPTIMIZER" != "cmaes" ] && [ "$OPTIMIZER" != "tiktak" ]; then
+    echo "Error: --optimizer must be pso, cmaes, or tiktak (got: $OPTIMIZER)"
     exit 1
 fi
 
