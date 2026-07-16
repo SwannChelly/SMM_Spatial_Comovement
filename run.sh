@@ -117,9 +117,9 @@ run_industry() {
     if [ "$MODE" = "gmm" ]; then
         local reporting_folder="reporting_gmm_${ind}"
     elif [ "$PROFILE_T" = "true" ]; then
-        local reporting_folder="reporting_${ind}_profiled"   # matches main.jl output_folder
+        local reporting_folder="reporting_${ind}_profiled_${OPTIMIZER}"   # matches main.jl output_folder
     else
-        local reporting_folder="reporting_${ind}"
+        local reporting_folder="reporting_${ind}_${OPTIMIZER}"   # matches main.jl output_folder
     fi
     local log_file="${reporting_folder}/logs.log"
     local baseline_folder="baseline_${ind}"
@@ -168,9 +168,9 @@ else
     if [ "$MODE" = "gmm" ]; then
         echo "Monitor: tail -f reporting_gmm_${INDUSTRY}/logs.log"
     elif [ "$PROFILE_T" = "true" ]; then
-        echo "Monitor: tail -f reporting_${INDUSTRY}_profiled/logs.log"
+        echo "Monitor: tail -f reporting_${INDUSTRY}_profiled_${OPTIMIZER}/logs.log"
     else
-        echo "Monitor: tail -f reporting_${INDUSTRY}/logs.log"
+        echo "Monitor: tail -f reporting_${INDUSTRY}_${OPTIMIZER}/logs.log"
     fi
     echo "Stop:    pkill -f 'julia.*main'"
 fi
