@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes] [--profile_T=true|false]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N]
 #
 # Examples:
 #   ./run.sh aero
@@ -13,21 +13,23 @@
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm --n_quad=500
 #   ./run.sh aero --n_coef=4 --draws=mc
 #   ./run.sh aero --n_coef=4 --optimizer=cmaes
+#   ./run.sh aero --n_coef=4 --n_tau=1 --optimizer=tiktak --profile_T=true  # multistart on the Sinkhorn-reduced space
 #   ./run.sh aero --n_coef=4 --n_tau=1 --profile_T=true   # profile T out of the PSO (SMM only)
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes] [--profile_T=true|false]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N]"
     echo "  industry   : aero, auto, car, both"
     echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
     echo "  --mode     : smm (default) or gmm (analytical, faster, exact SEs)"
     echo "  --n_quad   : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
     echo "  --draws    : Fréchet draw method: sobol (default), mc, is, or sobol"
-    echo "  --optimizer: pso (default) or cmaes (SMM only)"
+    echo "  --optimizer: pso (default), cmaes, or tiktak (multistart; SMM only)"
     echo "  --profile_T: true|false (default false; SMM only) — profile T out of the PSO via invert_T_ge; outputs → reporting_<ind>_profiled/"
+    echo "  --n_rho_inf: draw count for inference (Jacobian + Σ_sim), decoupled from N_rho (default: 10000)"
     exit 1
 fi
 
@@ -42,6 +44,7 @@ N_QUAD="200"
 DRAWS="sobol"    # Fréchet draw method: sobol (default), mc, is, qmc
 OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
 PROFILE_T="false"  # SMM only: profile T out of the PSO via invert_T_ge
+N_RHO_INF="10000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
 
 for arg in "$@"; do
     case "$arg" in
@@ -52,6 +55,7 @@ for arg in "$@"; do
         --draws=*)  DRAWS="${arg#--draws=}" ;;
         --optimizer=*) OPTIMIZER="${arg#--optimizer=}" ;;
         --profile_T=*) PROFILE_T="${arg#--profile_T=}" ;;
+        --n_rho_inf=*) N_RHO_INF="${arg#--n_rho_inf=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -72,8 +76,8 @@ if [ "$DRAWS" != "qmc" ] && [ "$DRAWS" != "mc" ] && [ "$DRAWS" != "is" ] && [ "$
     exit 1
 fi
 
-if [ "$OPTIMIZER" != "pso" ] && [ "$OPTIMIZER" != "cmaes" ]; then
-    echo "Error: --optimizer must be pso or cmaes (got: $OPTIMIZER)"
+if [ "$OPTIMIZER" != "pso" ] && [ "$OPTIMIZER" != "cmaes" ] && [ "$OPTIMIZER" != "tiktak" ]; then
+    echo "Error: --optimizer must be pso, cmaes, or tiktak (got: $OPTIMIZER)"
     exit 1
 fi
 
@@ -128,14 +132,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T
+    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf
     # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
         local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
         echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF)"
     fi
     echo "Logs: $log_file"
 

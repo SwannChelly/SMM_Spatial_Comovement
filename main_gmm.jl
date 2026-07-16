@@ -47,6 +47,7 @@ using StatsBase
 @everywhere include("tools.jl")
 @everywhere include("optimizers/pso_integration.jl")      # PSO backend
 @everywhere include("optimizers/cmaes_integration.jl")    # CMA-ES backend
+@everywhere include("optimizers/tiktak_integration.jl")   # TikTak (multistart) backend
 @everywhere include("optimizer.jl")            # backend-neutral hub (defines run_optimization / run_pso_optimization)
 
 ############## Parse arguments ##############
@@ -185,7 +186,7 @@ if run_step2
         output_subdir = "step2",
         filename      = "jacobian_all.npy",
         K             = 1,
-        step_rel      = 1e-4,
+        step_rel      = 1e-2,
         base_seed     = 0,
         analytical    = true,
         analytical_ad = true,
@@ -306,7 +307,7 @@ if run_step4
         output_subdir = "step3",
         filename      = "jacobian_all_step3.npy",
         K             = 1,
-        step_rel      = 1e-4,
+        step_rel      = 1e-2,
         base_seed     = 1_000_000,
         analytical    = true,
         analytical_ad = true,

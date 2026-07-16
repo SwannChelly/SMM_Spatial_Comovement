@@ -55,7 +55,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(10000)
+@everywhere const N_rho               = $(1000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const P_alpha             = $(coefs[4, "value"]) #Prior on alpha
 @everywhere const lambda              = $(0.5)
@@ -369,11 +369,24 @@ draw_method_local = (@isdefined(draw_method)) ? draw_method : :sobol
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
 
 # Optimizer backend. The entry point may define `optimizer_backend`; default :pso
-# (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step. Both search
-# T in log space via the φ maps above.
+# (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step; :tiktak runs
+# one joint TikTak multistart (Sobol pretest + Nelder-Mead) per step. All three
+# search T in log space via the φ maps above.
 optimizer_backend_local = (@isdefined(optimizer_backend)) ? optimizer_backend : :pso
-@assert optimizer_backend_local in (:pso, :cmaes) "optimizer_backend must be :pso or :cmaes, got :$optimizer_backend_local"
+@assert optimizer_backend_local in (:pso, :cmaes, :tiktak) "optimizer_backend must be :pso, :cmaes or :tiktak, got :$optimizer_backend_local"
 @everywhere const OPTIMIZER_BACKEND = $(QuoteNode(optimizer_backend_local))
+
+# Draw count for INFERENCE (Jacobian + Σ_sim), decoupled from the optimization draw
+# count N_rho. The optimizer's loss uses N_rho draws (U_DRAWS); the Jacobian (`compute_jacobian`)
+# and the Σ_sim estimate (`build_step3_weight_matrix`) resample with N_RHO_INFERENCE draws
+# instead. Inference wants MANY more draws than the optimizer (the fixed-draw Jacobian /
+# Σ_sim are simulation-noisy — e.g. the reg_coef column noise), so this can be set well
+# above N_rho without slowing the search. The entry point may define `n_rho_inference`;
+# default = N_rho (byte-identical to before).
+n_rho_inference_local = (@isdefined(n_rho_inference)) ? n_rho_inference : N_rho
+@assert n_rho_inference_local >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference_local"
+@everywhere const N_RHO_INFERENCE = $(n_rho_inference_local)
+println("\n N_rho (optimization) = $N_rho ; N_RHO_INFERENCE (Jacobian + Σ_sim) = $N_RHO_INFERENCE")
 
 println("Generating draws (method = :$DRAW_METHOD)...")
 u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)

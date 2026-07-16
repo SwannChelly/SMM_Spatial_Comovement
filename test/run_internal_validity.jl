@@ -292,7 +292,7 @@ J0, _, _, _ = compute_jacobian(theta0;
     param_indices = jacobian_param_indices,
     output_folder = IV_ROOT, output_subdir = "diag_theta0",
     filename = "jacobian_theta0.npy",
-    K = exp1_K_jac, step_rel = 1e-4, base_seed = 7_000_000)
+    K = exp1_K_jac, step_rel = 1e-2, base_seed = 7_000_000)
 J0_gb = J0[GB_INDICES, GB_COLS]
 W0    = Matrix(Weight_matrix_custom[GB_INDICES, GB_INDICES])
 
@@ -368,7 +368,7 @@ function run_full_three_step(start_theta::Vector{Float64}, seed::Int, subfolder:
         param_indices = jacobian_param_indices,
         output_folder = output_folder, output_subdir = "step3",
         filename = "jacobian_all_step3.npy",
-        K = exp1_K_jac, step_rel = 1e-4, base_seed = 1_000_000)
+        K = exp1_K_jac, step_rel = 1e-2, base_seed = 1_000_000)
 
     Omega_inf = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
     _, sm2    = full_SMM(theta_hat_2; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
@@ -536,7 +536,7 @@ if RUN_EXP2
             param_indices = jacobian_param_indices,
             output_folder = output_folder, output_subdir = "step3",
             filename = "jacobian_step3.npy",
-            K = exp2_K_jac, step_rel = 1e-4, base_seed = 2_000_000 + b)
+            K = exp2_K_jac, step_rel = 1e-2, base_seed = 2_000_000 + b)
 
         _, smb  = full_SMM(theta_hat_b; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
         sim_vec = masked_moments(smb)
