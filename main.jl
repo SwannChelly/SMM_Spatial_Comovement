@@ -107,7 +107,7 @@ println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau |
 input_folder  = "./baseline_$industry"
 # profile_T ⇒ isolate all step1..4 artifacts under a distinct tree (plan §6), so the
 # joint-search reporting is never overwritten and the two estimators stay comparable.
-output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "")
+output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "") * "_$optimizer_backend"
 mkpath(output_folder)
 
 ############## Load and distribute constants ##############
