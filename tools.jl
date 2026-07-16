@@ -1385,7 +1385,7 @@ every active column (asserted). `J_elast` is derived from raw `J`.
 function compute_jacobian(theta::Vector{Float64};
                           K::Int = 50,
                           param_indices::Union{Nothing, Vector{Int}} = nothing,
-                          step_rel::Float64 = 1e-4,
+                          step_rel::Float64 = 1e-2,
                           output_folder::String = ".",
                           filename::String = "jacobian.npy",
                           base_seed::Int = 0,
