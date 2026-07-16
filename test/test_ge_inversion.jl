@@ -273,13 +273,13 @@ end
 println("\n" * "-"^72)
 println("(4) COST: invert_T_ge vs one full_SMM loss vs one analytical eval")
 println("-"^72)
-# warm the JIT
-invert_T_ge(α, Ω_L, Ω_s, A; target = emp_gamma_ls, max_iter = 200, tol = 1e-9)
+# warm the JIT (use the production default: the domestic-share-balanced γ̃ target)
+invert_T_ge(α, Ω_L, Ω_s, A; target = emp_gamma_ls_tilde, max_iter = 200, tol = 1e-9)
 t_inv = @elapsed for _ in 1:5
-    invert_T_ge(α, Ω_L, Ω_s, A; target = emp_gamma_ls, max_iter = 500, tol = 1e-9)
+    invert_T_ge(α, Ω_L, Ω_s, A; target = emp_gamma_ls_tilde, max_iter = 500, tol = 1e-9)
 end
 t_inv /= 5
-@printf("  invert_T_ge (real emp_gamma_ls target): %.4f s / call\n", t_inv)
+@printf("  invert_T_ge (balanced γ̃ target):        %.4f s / call\n", t_inv)
 
 t_ana = NaN
 try
@@ -303,9 +303,10 @@ catch e
     @printf("  full_SMM timing skipped (%s)\n", sprint(showerror, e))
 end
 
-# Convergence against the REAL data target (may lack an exact fixed point under
-# misspecification, but Sinkhorn still converges to the best profile match).
-res_emp = invert_T_ge(α, Ω_L, Ω_s, A; target = emp_gamma_ls, max_iter = 1000, tol = 1e-9)
+# Convergence against the REAL data target (balanced γ̃ = emp_gamma_ls/domestic_share,
+# the production default). May lack an exact fixed point under misspecification, but
+# Sinkhorn still converges to the best profile match.
+res_emp = invert_T_ge(α, Ω_L, Ω_s, A; target = emp_gamma_ls_tilde, max_iter = 1000, tol = 1e-9)
 @printf("  real-data inversion: iters=%d converged=%s resid=%.2e\n",
         res_emp.iters, res_emp.converged, res_emp.resid)
 

@@ -85,7 +85,7 @@ end
 
 """
     invert_T_ge(alpha, Omega_L, Omega_s, A;
-                target = emp_gamma_ls, T_init = copy(T_rs_init),
+                target = emp_gamma_ls_tilde, T_init = copy(T_rs_init),
                 max_iter = 500, tol = 1e-9, damping = 0.9, verbose = false)
         -> (T::(S,R), iters, converged::Bool, resid, resid_hist)
 
@@ -94,21 +94,26 @@ the undamped map as a strong contraction (ρ_full≈0.01 at the aero calibration
 so the default is 0.9 (fast) rather than the very conservative 0.5; drop it toward
 0.5 if a far-from-init particle ever oscillates.
 
-Profile T by the GE-Sinkhorn inversion of `target` (default: observed
-`emp_gamma_ls`). The damped multiplicative update, per active (s,r), is
+Profile T by the GE-Sinkhorn inversion of `target`. The default target is the
+DOMESTIC-SHARE-BALANCED γ̃ = `emp_gamma_ls_tilde` = emp_gamma_ls / domestic_share,
+whose per-sector total is 1 — matching the expenditure (column) margin ω, so the
+Sinkhorn margins are COMPATIBLE (Σ row = Σ column) as the theorem requires. Passing
+the raw `emp_gamma_ls` (Σ_r = domestic_share < 1) would leave the transport problem
+unbalanced; the per-sector reference gauge absorbs the neutral scale so the returned
+T is identical either way, but the balanced target makes the precondition explicit
+(initialisation.md §2.1). The damped multiplicative update, per active (s,r), is
 
     T⁺[s,r] = T[s,r] · ( target[r,s] / γ_model[r,s] )^damping ,   then T[s,·] /= T[s,ref]
 
 where γ_model = `gamma_ls_analytical(..., T)` carries the endogenous expenditure.
 Only the profile of `target` is matched (its total is not identified — the
-per-sector reference renormalization absorbs the neutral scale, exactly as in
-`invert_T_from_gamma` and initialisation.md §2.1). Deterministic ⇒ no noise added
-to the outer PSO. Returns the reference-normalized (S,R) T and convergence info;
-`converged=false` (resid ≥ tol at max_iter) signals the caller to fall back on
-`T_init`.
+per-sector reference renormalization absorbs the neutral scale). Deterministic ⇒ no
+noise added to the outer PSO. Returns the reference-normalized (S,R) T and
+convergence info; `converged=false` (resid ≥ tol at max_iter) signals the caller to
+fall back on `T_init`.
 """
 function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
-                     target::AbstractMatrix = emp_gamma_ls,
+                     target::AbstractMatrix = emp_gamma_ls_tilde,
                      T_init::AbstractMatrix = copy(T_rs_init),
                      max_iter::Int = 500, tol::Float64 = 1e-9,
                      damping::Float64 = 0.9, verbose::Bool = false)

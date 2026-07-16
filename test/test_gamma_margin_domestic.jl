@@ -181,12 +181,33 @@ else
     println()
 end
 
+# ── (5) SINKHORN-BALANCED TARGET: emp_gamma_ls_tilde sums to 1 per sector ─────
+# The inversion (invert_T_from_gamma / invert_T_ge) matches the DOMESTIC γ against
+# the expenditure margin ω (Σ ω = 1). Sinkhorn's theorem needs compatible margins,
+# so the code rescales the target to γ̃ = emp_gamma_ls / domestic_share (Σ_r = 1).
+# Verify that const exists and its per-sector total is 1 (= Σ ω), i.e. the margin
+# condition Σ γ̃ = Σ ω now holds for the object actually fed to the solver.
+println("\n[5] Sinkhorn-balanced target  γ̃ = emp_gamma_ls / domestic_share  (Σ_r γ̃ = 1):")
+tilde_ok = true
+if isdefined(Main, :emp_gamma_ls_tilde)
+    tilde_sum = vec(sum(emp_gamma_ls_tilde, dims = 1))     # (S,), should be ≈ 1
+    tilde_dev = abs.(tilde_sum .- 1)
+    tilde_ok  = maximum(tilde_dev) < TOL_MARGIN
+    @printf("  per-sector Σ_r γ̃: range [%.6f, %.6f]   max |Σγ̃ − 1| = %.3e   [< %.0e]  ⇒ %s\n",
+            minimum(tilde_sum), maximum(tilde_sum), maximum(tilde_dev),
+            TOL_MARGIN, tilde_ok ? "PASS" : "FAIL")
+    println("  ⇒ balanced against the expenditure margin ω (Σ ω = 1): Sinkhorn precondition met.")
+else
+    tilde_ok = false
+    println("  ✗ const emp_gamma_ls_tilde is not defined — the balanced target was not built.")
+end
+
 # ── Verdict ──────────────────────────────────────────────────────────────────
 println("\n" * "="^76)
-all_ok = margin_ok && recon_ok && tinit_ok && isempty(bad_dom) && !intl_detected
+all_ok = margin_ok && recon_ok && tinit_ok && tilde_ok && isempty(bad_dom) && !intl_detected
 if all_ok
-    println("VERDICT: PASS — the γ targets are DOMESTIC shares (Σ_r γ = domestic_share)")
-    println("         and correctly seed the T starting values.")
+    println("VERDICT: PASS — the γ targets are DOMESTIC shares (Σ_r γ = domestic_share),")
+    println("         balanced to γ̃ (Σ = 1) for Sinkhorn, and correctly seed T.")
 else
     println("VERDICT: FAIL — see the flagged section(s) above.")
     !margin_ok      && println("  · γ-margin condition violated (Σγ ≠ domestic_share).")
@@ -194,5 +215,6 @@ else
     !isempty(bad_dom) && println("  · domestic_share out of (0,1].")
     !recon_ok       && println("  · raw vs post-load sector totals disagree.")
     !tinit_ok       && println("  · T_rs_init has non-finite / no active entries.")
+    !tilde_ok       && println("  · balanced target emp_gamma_ls_tilde missing or Σγ̃ ≠ 1.")
 end
 println("="^76)
