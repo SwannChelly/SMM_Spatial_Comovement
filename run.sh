@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes] [--profile_T=true|false]
 #
 # Examples:
 #   ./run.sh aero
@@ -13,12 +13,13 @@
 #   ./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm --n_quad=500
 #   ./run.sh aero --n_coef=4 --draws=mc
 #   ./run.sh aero --n_coef=4 --optimizer=cmaes
+#   ./run.sh aero --n_coef=4 --n_tau=1 --profile_T=true   # profile T out of the PSO (SMM only)
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes] [--profile_T=true|false]"
     echo "  industry   : aero, auto, car, both"
     echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
@@ -26,6 +27,7 @@ if [ -z "$1" ]; then
     echo "  --n_quad   : Gauss-Legendre nodes for reg_coef (GMM only, default: 200)"
     echo "  --draws    : Fréchet draw method: sobol (default), mc, is, or sobol"
     echo "  --optimizer: pso (default) or cmaes (SMM only)"
+    echo "  --profile_T: true|false (default false; SMM only) — profile T out of the PSO via invert_T_ge; outputs → reporting_<ind>_profiled/"
     exit 1
 fi
 
@@ -39,6 +41,7 @@ MODE="smm"
 N_QUAD="200"
 DRAWS="sobol"    # Fréchet draw method: sobol (default), mc, is, qmc
 OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
+PROFILE_T="false"  # SMM only: profile T out of the PSO via invert_T_ge
 
 for arg in "$@"; do
     case "$arg" in
@@ -48,6 +51,7 @@ for arg in "$@"; do
         --n_quad=*) N_QUAD="${arg#--n_quad=}" ;;
         --draws=*)  DRAWS="${arg#--draws=}" ;;
         --optimizer=*) OPTIMIZER="${arg#--optimizer=}" ;;
+        --profile_T=*) PROFILE_T="${arg#--profile_T=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -73,6 +77,18 @@ if [ "$OPTIMIZER" != "pso" ] && [ "$OPTIMIZER" != "cmaes" ]; then
     exit 1
 fi
 
+if [ "$PROFILE_T" != "true" ] && [ "$PROFILE_T" != "false" ]; then
+    echo "Error: --profile_T must be true or false (got: $PROFILE_T)"
+    exit 1
+fi
+
+# T-profiling is an SMM-only feature (Design A: the loss's reg_coef must stay
+# simulation-based; GMM's analytical reg_coef is FKG-biased). Ignore it under GMM.
+if [ "$MODE" = "gmm" ] && [ "$PROFILE_T" = "true" ]; then
+    echo "Warning: --profile_T is ignored in GMM mode (SMM-only); proceeding without profiling."
+    PROFILE_T="false"
+fi
+
 if [ "$MODE" = "gmm" ]; then
     JULIA_SCRIPT="SMM_Spatial_Comovement/main_gmm.jl"
 else
@@ -96,6 +112,8 @@ run_industry() {
 
     if [ "$MODE" = "gmm" ]; then
         local reporting_folder="reporting_gmm_${ind}"
+    elif [ "$PROFILE_T" = "true" ]; then
+        local reporting_folder="reporting_${ind}_profiled"   # matches main.jl output_folder
     else
         local reporting_folder="reporting_${ind}"
     fi
@@ -110,14 +128,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau K_sim draws optimizer
+    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T
     # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
         local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
         echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T)"
     fi
     echo "Logs: $log_file"
 
@@ -145,6 +163,8 @@ else
     echo ""
     if [ "$MODE" = "gmm" ]; then
         echo "Monitor: tail -f reporting_gmm_${INDUSTRY}/logs.log"
+    elif [ "$PROFILE_T" = "true" ]; then
+        echo "Monitor: tail -f reporting_${INDUSTRY}_profiled/logs.log"
     else
         echo "Monitor: tail -f reporting_${INDUSTRY}/logs.log"
     fi

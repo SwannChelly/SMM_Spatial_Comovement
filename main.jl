@@ -75,7 +75,10 @@ run_step4 = true
 # columns, so T's CIs are preserved at the profiled point. Outputs go to a separate
 # folder so the joint-search artifacts are never overwritten. false ⇒ byte-identical
 # to the joint estimator. (SMM path only: the loss's reg_coef stays simulation-based.)
-profile_T = false
+# 7th positional arg (run.sh --profile_T=true|false); default false.
+profile_T = length(ARGS) >= 7 && !isempty(strip(ARGS[7])) ?
+    (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : false
+println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO (invert_T_ge); outputs → *_profiled/" : "")
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
