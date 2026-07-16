@@ -64,10 +64,10 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 5
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
-run_step3 = false
-run_step4 = false
+run_step3 = true
+run_step4 = true
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
@@ -86,7 +86,7 @@ println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO
 # count (K_sim/N_rho). Inference is simulation-noisy (the fixed-draw Jacobian and Σ_sim),
 # so it benefits from many more draws than the search; picked up by load_parameters.jl
 # into N_RHO_INFERENCE. 8th positional arg (run.sh --n_rho_inf=); default 10000 (= N_rho).
-n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 10000
+n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 1000
 @assert n_rho_inference >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference"
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
