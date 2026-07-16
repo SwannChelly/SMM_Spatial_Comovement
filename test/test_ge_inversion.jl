@@ -111,6 +111,7 @@ res_rt = invert_T_ge(α, Ω_L, Ω_s, A; target = γ_target, T_init = copy(T_rs_i
                      max_iter = 2000, tol = 1e-12, damping = 0.5)
 rt_err = 0.0
 for (s, r) in free_coords
+    global rt_err
     rt_err = max(rt_err, abs(log(res_rt.T[s, r]) - log(T_true[s, r])))
 end
 @printf("  iters=%d  converged=%s  final resid=%.2e\n", res_rt.iters, res_rt.converged, res_rt.resid)
@@ -238,6 +239,7 @@ rng = MersenneTwister(12345)
 sols = Vector{Matrix{Float64}}()
 n_conv = 0
 for b in 1:10
+    global n_conv
     Ti = copy(T_true)
     for (s, r) in free_coords
         Ti[s, r] *= exp(log(2.0) * (2 * rand(rng) - 1))   # ×LogUniform[0.5,2]
@@ -249,6 +251,7 @@ for b in 1:10
 end
 max_spread = 0.0
 for (s, r) in free_coords
+    global max_spread
     vals = [log(sol[s, r]) for sol in sols]
     max_spread = max(max_spread, maximum(vals) - minimum(vals))
 end
@@ -272,6 +275,7 @@ t_inv /= 5
 
 t_ana = NaN
 try
+    global t_ana
     compute_moments_analytical(θ0; n_quad = 200)
     t_ana = @elapsed compute_moments_analytical(θ0; n_quad = 200)
     @printf("  compute_moments_analytical:             %.4f s / call  (inversion = %.2f×)\n",
@@ -282,6 +286,7 @@ end
 
 t_smm = NaN
 try
+    global t_smm
     full_SMM(θ0; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)   # warm
     t_smm = @elapsed full_SMM(θ0; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
     @printf("  full_SMM loss (outer-loop unit):        %.4f s / call  (inversion = %.1f%% of a loss)\n",
