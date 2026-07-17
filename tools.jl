@@ -2287,7 +2287,17 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
 
     # ── ∂T*/∂α by central LOG-step FD on invert_T_ge (deterministic, no draws) ──
     # The α section of PARAM_LABELS is laid out b=1:N_TAU, so alpha_pos[jj] ↔ α[jj].
-    # Rows of J_T follow vec(permutedims(T*))[T_MASK] (s-major) = the T_pos order.
+    # `vec(permutedims(T*))[T_MASK]` gives ALL active T entries (length sum(T_MASK),
+    # s-major), INCLUDING the per-sector reference regions. The gb Jacobian columns
+    # (gb_param_idx[T_pos]) are the *identified* T params, which drop those reference
+    # regions. Map full-reduced-T positions → identified columns via the raw layout:
+    # T_reduced position k has raw index (1+S+R_downstream+N_TAU)+k, so subtracting
+    # that offset from each gb T raw index gives its slot in the full reduced-T vector.
+    T_offset  = 1 + S + R_downstream + N_TAU          # raw index just before the reduced-T block
+    T_red_pos = gb_param_idx[T_pos] .- T_offset        # positions within vec(permutedims(·))[T_MASK]
+    @assert all(1 .<= T_red_pos .<= sum(T_MASK)) (
+        "T reduced-position mapping out of range: got $(extrema(T_red_pos)), " *
+        "reduced-T length $(sum(T_MASK)) — layout offset misaligned.")
     δ   = step_rel
     J_T = zeros(n_T, n_alpha)
     for jj in 1:n_alpha
@@ -2298,8 +2308,8 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         (resP.converged && resM.converged) ||
             @warn "compute_T_delta_inference: invert_T_ge did not converge for α[$jj] " *
                   "(resid₊=$(round(resP.resid, sigdigits=3)), resid₋=$(round(resM.resid, sigdigits=3)))."
-        dT = (vec(permutedims(resP.T))[T_MASK] .- vec(permutedims(resM.T))[T_MASK]) ./ (2δ * α[jj])
-        J_T[:, jj] = dT
+        dT_full = (vec(permutedims(resP.T))[T_MASK] .- vec(permutedims(resM.T))[T_MASK]) ./ (2δ * α[jj])
+        J_T[:, jj] = dT_full[T_red_pos]                # restrict to the identified T columns
     end
 
     # ── Propagate the α-variance (sandwich / efficient / noiseless Ω=I) ──────────
