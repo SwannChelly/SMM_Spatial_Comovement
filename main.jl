@@ -47,8 +47,8 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
-n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
+n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
 # Draw method for the Fréchet inverse-CDF transform: :qmc (default, unbiased for
@@ -64,16 +64,16 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 5
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
-run_step3 = true
-run_step4 = true
+run_step3 = false
+run_step4 = false
 
 # Reuse a previously-saved Jacobian instead of recomputing it (the expensive
 # K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
 # Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
 # present, else fall back to computing. Set false to always recompute.
-load_jacobian = false
+load_jacobian = true
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
@@ -85,7 +85,7 @@ load_jacobian = false
 # to the joint estimator. (SMM path only: the loss's reg_coef stays simulation-based.)
 # 7th positional arg (run.sh --profile_T=true|false); default false.
 profile_T = length(ARGS) >= 7 && !isempty(strip(ARGS[7])) ?
-    (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : false
+    (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : true
 println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO (invert_T_ge); outputs → *_profiled/" : "")
 
 # Draw count for INFERENCE (Jacobian + Σ_sim), decoupled from the optimization draw
