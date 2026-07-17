@@ -1738,6 +1738,37 @@ function compute_jacobian(theta::Vector{Float64};
         end
     end
 
+    # ── reg_coef Jacobian noise-to-signal (σ/|μ|) w.r.t. the T parameters ────────
+    # The α report above gives the per-moment noise ratio of reg_coef vs the single
+    # α column. Here we summarise the FULL reg_coef × T Jacobian block: per entry the
+    # noise-to-signal ratio σ/|μ| = J_sd/|J| (the θ/m elasticity rescaling cancels, so
+    # it is scale-free). High and dispersed ⇒ the fixed-draw FD Jacobian of the
+    # extensive-margin (reg_coef) moments on T is simulation-noise dominated — the
+    # motivation for a larger N_RHO_INFERENCE. Print-only; J is unchanged.
+    T_cols_ns = findall(l -> startswith(l, "T["), PARAM_LABELS)
+    if !isempty(BLOCK_RANGES[4]) && !isempty(T_cols_ns)
+        sub_mu = abs.(J_elast[BLOCK_RANGES[4], T_cols_ns])
+        sub_sd = J_elast_sd[BLOCK_RANGES[4], T_cols_ns]
+        signif = sub_mu .> 1e-3
+        ns     = sub_sd[signif] ./ sub_mu[signif]
+        n_tot  = length(sub_mu); n_sig = count(signif)
+        println("\nreg_coef Jacobian noise-to-signal (σ/|μ|) vs T " *
+                "($(length(T_cols_ns)) T cols × $(length(BLOCK_RANGES[4])) reg_coef rows):")
+        @printf("  entries: %d total, %d with |elast|>1e-3 (%.1f%% usable signal)\n",
+                n_tot, n_sig, 100 * n_sig / max(n_tot, 1))
+        if !isempty(ns)
+            qs = quantile(ns, [0.0, 0.25, 0.5, 0.75, 0.90, 0.99, 1.0])
+            @printf("  min=%.3g  q25=%.3g  median=%.3g  mean=%.3g  q75=%.3g  q90=%.3g  q99=%.3g  max=%.3g\n",
+                    qs[1], qs[2], qs[3], mean(ns), qs[4], qs[5], qs[6], qs[7])
+            @printf("  std=%.3g   share σ/|μ|>1: %.1f%%   share >0.5: %.1f%%\n",
+                    std(ns),
+                    100 * count(>(1.0), ns) / length(ns),
+                    100 * count(>(0.5), ns) / length(ns))
+        else
+            println("  (no reg_coef × T entries above the |elast|>1e-3 signal floor)")
+        end
+    end
+
     return J, J_elast, J_sd, J_elast_sd
 end
 
@@ -1772,6 +1803,10 @@ moment-residual SEs, and Hansen J-test.
 - `se_theta_sandwich.npy`     : √diag(Var_sandwich)
 - `t_stats.npy`               : θ̂_active ./ se_theta
 - `ci_95.npy`                 : (p × 2) matrix of [lower, upper]
+- `var_theta_identity.npy`    : (G'G)^{-1}  — noiseless Ω=I reference variance
+- `se_theta_identity.npy`     : √diag((G'G)^{-1})  — SE with no data/sim noise (W=Ω=I)
+- `t_stats_identity.npy`      : θ̂_active ./ se_theta_identity
+- `ci_95_identity.npy`        : (p × 2) [lower, upper] under Ω=I
 - `se_moments_fitted.npy`     : √diag(J · Var_eff · J')
 - `se_moment_residuals.npy`   : √max(diag(Ω - J · Var_eff · J'), 0)
 - `J_stat.txt`                : Hansen J statistic, df, p-value
@@ -1833,6 +1868,28 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     ci_95   = hcat(theta_active .- 1.96 .* se_sw,
                    theta_active .+ 1.96 .* se_sw)
 
+    # ── 3b. Noiseless / identity-weight variance (W = Ω = I) ─────────────────
+    # Reference case "no data noise & no simulation noise": setting Ω = I ⇒ W = I,
+    # the efficient and sandwich variances collapse to a single (G'G)^{-1}, so one
+    # SE column suffices. This isolates the identification geometry of the Jacobian
+    # from the Ω weighting/units built by build_step3_weight_matrix. Same
+    # PD-guarded inverse as GtWG above.
+    GtG = Symmetric(G' * G)
+    GtG_inv = try
+        inv(cholesky(GtG))
+    catch
+        @warn "G'G is not positive-definite; applying eigenvalue floor (identity-Ω SEs)."
+        Fi = eigen(GtG)
+        λi = max.(Fi.values, Fi.values[end] * 1e-10)
+        Symmetric(Fi.vectors * Diagonal(1.0 ./ λi) * Fi.vectors')
+    end
+    GtG_inv       = (Matrix(GtG_inv) .+ Matrix(GtG_inv)') ./ 2
+    Var_identity  = GtG_inv
+    se_identity   = sqrt.(max.(diag(Var_identity), 0.0))
+    t_identity    = theta_active ./ se_identity
+    ci_identity   = hcat(theta_active .- 1.96 .* se_identity,
+                         theta_active .+ 1.96 .* se_identity)
+
     # ── 4. Fitted-moment and residual SEs ────────────────────────────────────
     Var_m = G * Var_sandwich * G'
     Var_m = (Var_m .+ Var_m') ./ 2
@@ -1860,6 +1917,11 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     NPZ.npzwrite(joinpath(inf_dir, "ci_95.npy"),                ci_95)
     NPZ.npzwrite(joinpath(inf_dir, "se_moments_fitted.npy"),    se_m_fitted)
     NPZ.npzwrite(joinpath(inf_dir, "se_moment_residuals.npy"),  se_m_resid)
+    # Noiseless / identity-weight (Ω = I) parameter inference.
+    NPZ.npzwrite(joinpath(inf_dir, "var_theta_identity.npy"),   Var_identity)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_identity.npy"),    se_identity)
+    NPZ.npzwrite(joinpath(inf_dir, "t_stats_identity.npy"),     t_identity)
+    NPZ.npzwrite(joinpath(inf_dir, "ci_95_identity.npy"),       ci_identity)
 
     # ── 6b. γ_ls fitted-moment plot with SE bars (first dashboard panel) ─────
     # The subsystem passed here is β+γ in β-then-γ order, so the γ block is
@@ -2007,26 +2069,27 @@ function compute_smm_inference(theta_hat::Vector{Float64},
 
         # Parameter table
         println(io, "\n--- Parameter estimates (active parameters) ---")
+        # `se_I` is the noiseless (Ω = I) SE column: no data/simulation-noise weighting.
         _has_plab = param_labels !== nothing && length(param_labels) == p
         header = _has_plab ?
-            @sprintf("  %-22s  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
-                     "param", "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi") :
-            @sprintf("  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
-                     "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi")
+            @sprintf("  %-22s  %-6s  %-12s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                     "param", "idx", "theta", "se_eff", "se_sw", "se_I(Ω=I)", "ratio", "t-stat", "CI_lo", "CI_hi") :
+            @sprintf("  %-6s  %-12s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                     "idx", "theta", "se_eff", "se_sw", "se_I(Ω=I)", "ratio", "t-stat", "CI_lo", "CI_hi")
         println(io, header)
         println(io, "  " * "-"^(length(header)-2))
         for i in 1:p
             ratio = se_eff[i] > 0 ? se_sw[i] / se_eff[i] : NaN
             if _has_plab
-                @printf(io, "  %-22s  %-6d  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                @printf(io, "  %-22s  %-6d  %-12.6f  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
                         param_labels[i], param_indices[i],
-                        theta_active[i], se_eff[i], se_sw[i],
+                        theta_active[i], se_eff[i], se_sw[i], se_identity[i],
                         isnan(ratio) ? -999.0 : ratio, t_stats[i],
                         ci_95[i, 1], ci_95[i, 2])
             else
-                @printf(io, "  %-6d  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                @printf(io, "  %-6d  %-12.6f  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
                         param_indices[i],
-                        theta_active[i], se_eff[i], se_sw[i],
+                        theta_active[i], se_eff[i], se_sw[i], se_identity[i],
                         isnan(ratio) ? -999.0 : ratio, t_stats[i],
                         ci_95[i, 1], ci_95[i, 2])
             end
@@ -2086,6 +2149,10 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         println(io, "    across estimation steps.")
         println(io, "  * Σ_data is non-zero only on the γ_ls and reg_coef blocks. Residual SEs")
         println(io, "    on labor/industry/π_r reflect simulator variance only.")
+        println(io, "  * se_I(Ω=I) is the NOISELESS reference SE: it sets Ω = I (⇒ W = I), i.e.")
+        println(io, "    no data noise and no simulation noise. Efficient and sandwich variances")
+        println(io, "    then coincide at (G'G)^{-1}, so a single column is reported. It isolates")
+        println(io, "    the Jacobian's identification geometry from the Ω weighting/units.")
         if eig_floored
             @printf(io, "  * Eigenvalue floor of %.4e was applied to GtWG during inversion.\n",
                     floor_val)
@@ -2103,6 +2170,10 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         "Var_sandwich"  => Var_sandwich,
         "se_eff"        => se_eff,
         "se_sw"         => se_sw,
+        "se_identity"   => se_identity,
+        "Var_identity"  => Var_identity,
+        "t_identity"    => t_identity,
+        "ci_identity"   => ci_identity,
         "t_stats"       => t_stats,
         "ci_95"         => ci_95,
         "se_m_fitted"   => se_m_fitted,
