@@ -1837,10 +1837,10 @@ moment-residual SEs, and Hansen J-test.
 - `se_theta_sandwich.npy`     : √diag(Var_sandwich)
 - `t_stats.npy`               : θ̂_active ./ se_theta
 - `ci_95.npy`                 : (p × 2) matrix of [lower, upper]
-- `var_theta_identity.npy`    : (G'G)^{-1}  — noiseless Ω=I reference variance
-- `se_theta_identity.npy`     : √diag((G'G)^{-1})  — SE with no data/sim noise (W=Ω=I)
-- `t_stats_identity.npy`      : θ̂_active ./ se_theta_identity
-- `ci_95_identity.npy`        : (p × 2) [lower, upper] under Ω=I
+- `var_theta_regcoef.npy`     : (G'WG)^{-1} G'W Ω_β W G (G'WG)^{-1}  — reg_coef-only variance
+- `se_theta_regcoef.npy`      : √diag(Var_regcoef)  — SE from the reg_coef (β) moment error alone
+- `t_stats_regcoef.npy`       : θ̂_active ./ se_theta_regcoef
+- `ci_95_regcoef.npy`         : (p × 2) [lower, upper] from the reg_coef-only SE
 - `se_moments_fitted.npy`     : √diag(J · Var_eff · J')
 - `se_moment_residuals.npy`   : √max(diag(Ω - J · Var_eff · J'), 0)
 - `J_stat.txt`                : Hansen J statistic, df, p-value
@@ -1902,27 +1902,30 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     ci_95   = hcat(theta_active .- 1.96 .* se_sw,
                    theta_active .+ 1.96 .* se_sw)
 
-    # ── 3b. Noiseless / identity-weight variance (W = Ω = I) ─────────────────
-    # Reference case "no data noise & no simulation noise": setting Ω = I ⇒ W = I,
-    # the efficient and sandwich variances collapse to a single (G'G)^{-1}, so one
-    # SE column suffices. This isolates the identification geometry of the Jacobian
-    # from the Ω weighting/units built by build_step3_weight_matrix. Same
-    # PD-guarded inverse as GtWG above.
-    GtG = Symmetric(G' * G)
-    GtG_inv = try
-        inv(cholesky(GtG))
-    catch
-        @warn "G'G is not positive-definite; applying eigenvalue floor (identity-Ω SEs)."
-        Fi = eigen(GtG)
-        λi = max.(Fi.values, Fi.values[end] * 1e-10)
-        Symmetric(Fi.vectors * Diagonal(1.0 ./ λi) * Fi.vectors')
+    # ── 3b. reg_coef-only variance: isolate the β (reg_coef) moment error ────────
+    # Sandwich variance with Ω replaced by Ω_β — a covariance that is ZERO on every
+    # moment block except reg_coef, where it keeps only the DIAGONAL (the reg_coef
+    # moment variances). This isolates the part of the parameter covariance driven
+    # purely by the reg_coef (β) sampling error, holding all other moment noise
+    # (γ_ls, …) at zero — the standard block-contribution decomposition of the
+    # sandwich, using the SAME weight W as the main inference:
+    #   Var_regcoef = (G'WG)^{-1} · G'W Ω_β W G · (G'WG)^{-1}.
+    Omega_beta = zeros(size(Omega))
+    rc_pos = findfirst(==("reg_coef"), collect(block_names))
+    if rc_pos !== nothing
+        for i in block_ranges[rc_pos]
+            Omega_beta[i, i] = Omega[i, i]        # diagonal (variance) only
+        end
+    else
+        @warn "compute_smm_inference: no 'reg_coef' block in block_names; reg_coef-only Var is 0."
     end
-    GtG_inv       = (Matrix(GtG_inv) .+ Matrix(GtG_inv)') ./ 2
-    Var_identity  = GtG_inv
-    se_identity   = sqrt.(max.(diag(Var_identity), 0.0))
-    t_identity    = theta_active ./ se_identity
-    ci_identity   = hcat(theta_active .- 1.96 .* se_identity,
-                         theta_active .+ 1.96 .* se_identity)
+    middle_beta   = G' * W * Omega_beta * W * G
+    Var_regcoef   = Var_eff * middle_beta * Var_eff
+    Var_regcoef   = (Var_regcoef .+ Var_regcoef') ./ 2
+    se_regcoef    = sqrt.(max.(diag(Var_regcoef), 0.0))
+    t_regcoef     = theta_active ./ se_regcoef
+    ci_regcoef    = hcat(theta_active .- 1.96 .* se_regcoef,
+                         theta_active .+ 1.96 .* se_regcoef)
 
     # ── 4. Fitted-moment and residual SEs ────────────────────────────────────
     Var_m = G * Var_sandwich * G'
@@ -1951,11 +1954,11 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     NPZ.npzwrite(joinpath(inf_dir, "ci_95.npy"),                ci_95)
     NPZ.npzwrite(joinpath(inf_dir, "se_moments_fitted.npy"),    se_m_fitted)
     NPZ.npzwrite(joinpath(inf_dir, "se_moment_residuals.npy"),  se_m_resid)
-    # Noiseless / identity-weight (Ω = I) parameter inference.
-    NPZ.npzwrite(joinpath(inf_dir, "var_theta_identity.npy"),   Var_identity)
-    NPZ.npzwrite(joinpath(inf_dir, "se_theta_identity.npy"),    se_identity)
-    NPZ.npzwrite(joinpath(inf_dir, "t_stats_identity.npy"),     t_identity)
-    NPZ.npzwrite(joinpath(inf_dir, "ci_95_identity.npy"),       ci_identity)
+    # reg_coef-only (β moment error) parameter inference: sandwich with Ω_β.
+    NPZ.npzwrite(joinpath(inf_dir, "var_theta_regcoef.npy"),    Var_regcoef)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_regcoef.npy"),     se_regcoef)
+    NPZ.npzwrite(joinpath(inf_dir, "t_stats_regcoef.npy"),      t_regcoef)
+    NPZ.npzwrite(joinpath(inf_dir, "ci_95_regcoef.npy"),        ci_regcoef)
 
     # ── 6b. γ_ls fitted-moment plot with SE bars (first dashboard panel) ─────
     # The subsystem passed here is β+γ in β-then-γ order, so the γ block is
@@ -2103,13 +2106,14 @@ function compute_smm_inference(theta_hat::Vector{Float64},
 
         # Parameter table
         println(io, "\n--- Parameter estimates (active parameters) ---")
-        # `se_I` is the noiseless (Ω = I) SE column: no data/simulation-noise weighting.
+        # `se_reg(Σβ)` isolates the β (reg_coef) moment error: sandwich with Ω_β
+        # (reg_coef diagonal only, 0 elsewhere) — the SE contribution from reg_coef.
         _has_plab = param_labels !== nothing && length(param_labels) == p
         header = _has_plab ?
             @sprintf("  %-22s  %-6s  %-12s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
-                     "param", "idx", "theta", "se_eff", "se_sw", "se_I(Ω=I)", "ratio", "t-stat", "CI_lo", "CI_hi") :
+                     "param", "idx", "theta", "se_eff", "se_sw", "se_reg(Σβ)", "ratio", "t-stat", "CI_lo", "CI_hi") :
             @sprintf("  %-6s  %-12s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
-                     "idx", "theta", "se_eff", "se_sw", "se_I(Ω=I)", "ratio", "t-stat", "CI_lo", "CI_hi")
+                     "idx", "theta", "se_eff", "se_sw", "se_reg(Σβ)", "ratio", "t-stat", "CI_lo", "CI_hi")
         println(io, header)
         println(io, "  " * "-"^(length(header)-2))
         for i in 1:p
@@ -2117,13 +2121,13 @@ function compute_smm_inference(theta_hat::Vector{Float64},
             if _has_plab
                 @printf(io, "  %-22s  %-6d  %-12.6f  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
                         param_labels[i], param_indices[i],
-                        theta_active[i], se_eff[i], se_sw[i], se_identity[i],
+                        theta_active[i], se_eff[i], se_sw[i], se_regcoef[i],
                         isnan(ratio) ? -999.0 : ratio, t_stats[i],
                         ci_95[i, 1], ci_95[i, 2])
             else
                 @printf(io, "  %-6d  %-12.6f  %-12.6f  %-12.6f  %-12.6f  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
                         param_indices[i],
-                        theta_active[i], se_eff[i], se_sw[i], se_identity[i],
+                        theta_active[i], se_eff[i], se_sw[i], se_regcoef[i],
                         isnan(ratio) ? -999.0 : ratio, t_stats[i],
                         ci_95[i, 1], ci_95[i, 2])
             end
@@ -2183,10 +2187,11 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         println(io, "    across estimation steps.")
         println(io, "  * Σ_data is non-zero only on the γ_ls and reg_coef blocks. Residual SEs")
         println(io, "    on labor/industry/π_r reflect simulator variance only.")
-        println(io, "  * se_I(Ω=I) is the NOISELESS reference SE: it sets Ω = I (⇒ W = I), i.e.")
-        println(io, "    no data noise and no simulation noise. Efficient and sandwich variances")
-        println(io, "    then coincide at (G'G)^{-1}, so a single column is reported. It isolates")
-        println(io, "    the Jacobian's identification geometry from the Ω weighting/units.")
+        println(io, "  * se_reg(Σβ) isolates the reg_coef (β) moment error: it is the sandwich SE")
+        println(io, "    computed with Ω replaced by Ω_β — zero on every block except reg_coef,")
+        println(io, "    where only the diagonal (the reg_coef moment variances) is kept, and the")
+        println(io, "    SAME weight W. It is the part of each parameter's SE attributable purely")
+        println(io, "    to the reg_coef sampling error, holding all other moment noise at zero.")
         if eig_floored
             @printf(io, "  * Eigenvalue floor of %.4e was applied to GtWG during inversion.\n",
                     floor_val)
@@ -2204,10 +2209,10 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         "Var_sandwich"  => Var_sandwich,
         "se_eff"        => se_eff,
         "se_sw"         => se_sw,
-        "se_identity"   => se_identity,
-        "Var_identity"  => Var_identity,
-        "t_identity"    => t_identity,
-        "ci_identity"   => ci_identity,
+        "se_regcoef"    => se_regcoef,
+        "Var_regcoef"   => Var_regcoef,
+        "t_regcoef"     => t_regcoef,
+        "ci_regcoef"    => ci_regcoef,
         "t_stats"       => t_stats,
         "ci_95"         => ci_95,
         "se_m_fitted"   => se_m_fitted,
@@ -2237,10 +2242,11 @@ Var(α̂):
 `invert_T_ge` (perturb α·exp(±δ), chain-rule back to raw α units by 1/α — the same
 convention as `compute_jacobian`). Var(α̂) is the α-block of the parameter
 covariance already produced by `compute_smm_inference` (passed via `inf_result`);
-we propagate the **sandwich**, **efficient**, AND **noiseless Ω=I** α-variances, so
-the three T-delta SE columns show how much of T's inherited width is data/sim noise
-vs pure identification geometry. `V_T` has rank ≤ N_TAU (rank 1 if N_TAU==1): with
-Ω,A fixed, T lives on the N_TAU-dimensional curve traced by α.
+we propagate the **sandwich**, **efficient**, AND **reg_coef-only** α-variances
+(the last from Ω_β — reg_coef diagonal only, 0 elsewhere), so `se_delta_reg`
+isolates the part of T's inherited width due to the reg_coef (β) moment error
+alone. `V_T` has rank ≤ N_TAU (rank 1 if N_TAU==1): with Ω,A fixed, T lives on the
+N_TAU-dimensional curve traced by α.
 
 This is the closed-form counterpart of "at zero data/sim noise, T's CI is entirely
 inherited from the other parameters' CI". It is exact for the profiled estimator
@@ -2253,7 +2259,7 @@ from T*(α̂), so read it as "if T were pinned to the Sinkhorn image".
 # Saves (under output_folder/inference/)
 - `se_theta_T_delta.npy`          : √diag(V_T) using the sandwich Var(α̂)
 - `se_theta_T_delta_eff.npy`      : … using the efficient Var(α̂)
-- `se_theta_T_delta_identity.npy` : … using the Ω=I Var(α̂)  (noiseless reference)
+- `se_theta_T_delta_regcoef.npy`  : … using the reg_coef-only Var(α̂) (Ω_β)
 - `var_theta_T_delta.npy`         : V_T (sandwich)
 - `t_stats_T_delta.npy`           : T̂ ./ se_delta  (t-stat from the delta-method SE)
 - `ci_95_T_delta.npy`             : (n_T × 2) [lower, upper] = T̂ ± 1.96·se_delta
@@ -2313,7 +2319,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         J_T[:, jj] = dT_full[T_red_pos]                # restrict to the identified T columns
     end
 
-    # ── Propagate the α-variance (sandwich / efficient / noiseless Ω=I) ──────────
+    # ── Propagate the α-variance (sandwich / efficient / reg_coef-only Ω_β) ──────
     Va_sw  = inf_result["Var_sandwich"][alpha_pos, alpha_pos]
     Va_eff = inf_result["Var_eff"][alpha_pos, alpha_pos]
     VT_sw  = J_T * Va_sw  * J_T';  VT_sw  = (VT_sw  .+ VT_sw')  ./ 2
@@ -2321,11 +2327,11 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
     se_T_sw  = sqrt.(max.(diag(VT_sw),  0.0))
     se_T_eff = sqrt.(max.(diag(VT_eff), 0.0))
 
-    se_T_I = fill(NaN, n_T)
-    if haskey(inf_result, "Var_identity")
-        Va_I = inf_result["Var_identity"][alpha_pos, alpha_pos]
-        VT_I = J_T * Va_I * J_T'
-        se_T_I = sqrt.(max.(diag(VT_I), 0.0))
+    se_T_reg = fill(NaN, n_T)
+    if haskey(inf_result, "Var_regcoef")
+        Va_reg = inf_result["Var_regcoef"][alpha_pos, alpha_pos]
+        VT_reg = J_T * Va_reg * J_T'
+        se_T_reg = sqrt.(max.(diag(VT_reg), 0.0))
     end
 
     # t-stat and 95% CI from the delta-method SE (se_delta), centered at T̂.
@@ -2338,7 +2344,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
     # ── Save arrays ─────────────────────────────────────────────────────────────
     NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta.npy"),          se_T_sw)
     NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_eff.npy"),      se_T_eff)
-    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_identity.npy"), se_T_I)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_regcoef.npy"),  se_T_reg)
     NPZ.npzwrite(joinpath(inf_dir, "var_theta_T_delta.npy"),         VT_sw)
     NPZ.npzwrite(joinpath(inf_dir, "t_stats_T_delta.npy"),           t_T_delta)
     NPZ.npzwrite(joinpath(inf_dir, "ci_95_T_delta.npy"),             ci_T)
@@ -2366,19 +2372,19 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         println(io, "counterfactual under the joint estimator.\n")
         println(io, "  se_delta      : √diag(V_T), sandwich Var(α̂)  — the headline delta SE")
         println(io, "  se_delta_eff  : … efficient Var(α̂)")
-        println(io, "  se_delta_I    : … noiseless Ω=I Var(α̂)  (identification geometry only)")
+        println(io, "  se_delta_reg  : … reg_coef-only Var(α̂) (Ω_β: reg_coef diag, 0 elsewhere)")
         println(io, "  se_joint      : the T-as-free sandwich SE from compute_smm_inference")
         println(io, "  ratio         : se_delta / se_joint  (≪1 ⟹ pinning T to T*(α) tightens a lot)")
         println(io, "  t_delta, CI   : t-stat = T̂/se_delta and 95% CI = T̂ ± 1.96·se_delta\n")
         hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
                        "T[sector-region]", "T̂", "se_delta", "se_delta_eff",
-                       "se_delta_I", "se_joint", "ratio", "t_delta", "CI_lo", "CI_hi")
+                       "se_delta_reg", "se_joint", "ratio", "t_delta", "CI_lo", "CI_hi")
         println(io, hdr)
         println(io, "  " * "-"^(length(hdr)-2))
         for i in 1:n_T
             @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
                     T_labels[i], T_hat_active[i], se_T_sw[i], se_T_eff[i],
-                    se_T_I[i], se_T_joint[i], isnan(ratios[i]) ? -999.0 : ratios[i],
+                    se_T_reg[i], se_T_joint[i], isnan(ratios[i]) ? -999.0 : ratios[i],
                     isnan(t_T_delta[i]) ? -999.0 : t_T_delta[i], ci_T[i, 1], ci_T[i, 2])
         end
         println(io, "\n--- Summary (se_delta / se_joint over T) ---")
@@ -2387,13 +2393,14 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
                 isempty(valid_r) ? NaN : median(valid_r),
                 isempty(valid_r) ? NaN : minimum(valid_r),
                 isempty(valid_r) ? NaN : maximum(valid_r))
-        @printf(io, "  mean se_delta: %.4e   mean se_delta_I: %.4e   mean se_joint: %.4e\n",
-                mean(se_T_sw), mean(se_T_I), mean(se_T_joint))
+        @printf(io, "  mean se_delta: %.4e   mean se_delta_reg: %.4e   mean se_joint: %.4e\n",
+                mean(se_T_sw), mean(se_T_reg), mean(se_T_joint))
         println(io, "\n--- Caveats ---")
         println(io, "  * Θ = α only: Ω^L, Ω^s, A are treated as fixed (their SMM-final-step status).")
         println(io, "    A full-head delta method would add their covariance — not propagated here.")
-        println(io, "  * ∂T*/∂α is a deterministic FD on invert_T_ge; simulation noise enters ONLY")
-        println(io, "    through Var(α̂). se_delta_I removes even the α data/sim noise (Ω=I).")
+        println(io, "  * ∂T*/∂α is a deterministic FD on invert_T_ge; simulation noise enters through")
+        println(io, "    Var(α̂). se_delta_reg propagates ONLY the reg_coef (β) moment error into α̂,")
+        println(io, "    isolating T's CI width due to the reg_coef error alone.")
         println(io, "\n" * "="^72)
     end
 
@@ -2406,7 +2413,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         "Var_T_delta"   => VT_sw,
         "se_T_delta"    => se_T_sw,
         "se_T_delta_eff"=> se_T_eff,
-        "se_T_delta_I"  => se_T_I,
+        "se_T_delta_reg"=> se_T_reg,
         "t_T_delta"     => t_T_delta,
         "ci_T_delta"    => ci_T,
         "se_T_joint"    => se_T_joint,
