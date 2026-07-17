@@ -221,7 +221,7 @@ if run_step2
         param_labels = PARAM_LABELS[gb_cols],
         label        = "SMM step2 θ̂_1")
 
-    compute_smm_inference(
+    inf_res_1 = compute_smm_inference(
          theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
          param_indices         = gb_param_idx,
          empirical_moments_vec = emp_vec_gb,
@@ -236,6 +236,14 @@ if run_step2
          moment_labels = MOMENT_LABELS[gb_indices]    # NEW: names for kept moments (rows of J)
 
     )
+
+    # ── Delta-method T CIs at θ̂_1: T = T*(α) via invert_T_ge, Ω,A fixed (additive) ──
+    # Same construction as Step 4; propagates Var(α̂_1) through ∂T*/∂α alongside the
+    # joint (T-as-free) CIs. Written under step2/inference/.
+    compute_T_delta_inference(
+        theta_hat_1, inf_res_1, gb_param_idx, PARAM_LABELS[gb_cols];
+        output_folder = joinpath(output_folder, "step2"),
+        industry      = industry)
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test
