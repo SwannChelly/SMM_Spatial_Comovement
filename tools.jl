@@ -2255,7 +2255,8 @@ from T*(α̂), so read it as "if T were pinned to the Sinkhorn image".
 - `se_theta_T_delta_eff.npy`      : … using the efficient Var(α̂)
 - `se_theta_T_delta_identity.npy` : … using the Ω=I Var(α̂)  (noiseless reference)
 - `var_theta_T_delta.npy`         : V_T (sandwich)
-- `ci_95_T_delta.npy`             : (n_T × 2) [lower, upper], centered at T̂
+- `t_stats_T_delta.npy`           : T̂ ./ se_delta  (t-stat from the delta-method SE)
+- `ci_95_T_delta.npy`             : (n_T × 2) [lower, upper] = T̂ ± 1.96·se_delta
 - `jacobian_T_wrt_alpha.npy`      : ∂T*/∂α  (n_T × N_TAU)
 - `inference_T_delta.txt`         : human-readable summary + vs-joint comparison
 """
@@ -2327,6 +2328,8 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         se_T_I = sqrt.(max.(diag(VT_I), 0.0))
     end
 
+    # t-stat and 95% CI from the delta-method SE (se_delta), centered at T̂.
+    t_T_delta = [se_T_sw[i] > 0 ? T_hat_active[i] / se_T_sw[i] : NaN for i in 1:n_T]
     ci_T = hcat(T_hat_active .- 1.96 .* se_T_sw, T_hat_active .+ 1.96 .* se_T_sw)
 
     # Joint (T-as-free) sandwich SE for the same T params, for comparison.
@@ -2337,6 +2340,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
     NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_eff.npy"),      se_T_eff)
     NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_identity.npy"), se_T_I)
     NPZ.npzwrite(joinpath(inf_dir, "var_theta_T_delta.npy"),         VT_sw)
+    NPZ.npzwrite(joinpath(inf_dir, "t_stats_T_delta.npy"),           t_T_delta)
     NPZ.npzwrite(joinpath(inf_dir, "ci_95_T_delta.npy"),             ci_T)
     NPZ.npzwrite(joinpath(inf_dir, "jacobian_T_wrt_alpha.npy"),      J_T)
 
@@ -2364,16 +2368,18 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         println(io, "  se_delta_eff  : … efficient Var(α̂)")
         println(io, "  se_delta_I    : … noiseless Ω=I Var(α̂)  (identification geometry only)")
         println(io, "  se_joint      : the T-as-free sandwich SE from compute_smm_inference")
-        println(io, "  ratio         : se_delta / se_joint  (≪1 ⟹ pinning T to T*(α) tightens a lot)\n")
-        hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s",
+        println(io, "  ratio         : se_delta / se_joint  (≪1 ⟹ pinning T to T*(α) tightens a lot)")
+        println(io, "  t_delta, CI   : t-stat = T̂/se_delta and 95% CI = T̂ ± 1.96·se_delta\n")
+        hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
                        "T[sector-region]", "T̂", "se_delta", "se_delta_eff",
-                       "se_delta_I", "se_joint", "ratio")
+                       "se_delta_I", "se_joint", "ratio", "t_delta", "CI_lo", "CI_hi")
         println(io, hdr)
         println(io, "  " * "-"^(length(hdr)-2))
         for i in 1:n_T
-            @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f\n",
+            @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
                     T_labels[i], T_hat_active[i], se_T_sw[i], se_T_eff[i],
-                    se_T_I[i], se_T_joint[i], isnan(ratios[i]) ? -999.0 : ratios[i])
+                    se_T_I[i], se_T_joint[i], isnan(ratios[i]) ? -999.0 : ratios[i],
+                    isnan(t_T_delta[i]) ? -999.0 : t_T_delta[i], ci_T[i, 1], ci_T[i, 2])
         end
         println(io, "\n--- Summary (se_delta / se_joint over T) ---")
         @printf(io, "  mean ratio: %.4f   median: %.4f   min: %.4f   max: %.4f\n",
@@ -2401,6 +2407,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         "se_T_delta"    => se_T_sw,
         "se_T_delta_eff"=> se_T_eff,
         "se_T_delta_I"  => se_T_I,
+        "t_T_delta"     => t_T_delta,
         "ci_T_delta"    => ci_T,
         "se_T_joint"    => se_T_joint,
     )
