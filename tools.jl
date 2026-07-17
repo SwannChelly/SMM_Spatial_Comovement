@@ -1399,10 +1399,44 @@ function compute_jacobian(theta::Vector{Float64};
                           check_symmetry::Bool = true,
                           richardson_check::Bool = true,
                           richardson_rel_tol = 0.05,
+                          load_existing::Bool = false,
                           draw_method::Symbol = DRAW_METHOD)
     print(DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
+
+    # ── Optional: load a previously-saved Jacobian instead of recomputing ────────
+    # Reads back the exact five files this function writes (J + _elasticity/_sd/
+    # _elasticity_sd/_param_indices) from output_folder/output_subdir/filename. Same
+    # return shape ⇒ drop-in for any call site. If the primary file is missing we
+    # fall through and compute (with a warning), so a first run still populates it.
+    if load_existing
+        out_dir = joinpath(output_folder, output_subdir)
+        jpath   = joinpath(out_dir, filename)
+        if isfile(jpath)
+            epath   = joinpath(out_dir, replace(filename, ".npy" => "_elasticity.npy"))
+            sdpath  = joinpath(out_dir, replace(filename, ".npy" => "_sd.npy"))
+            esdpath = joinpath(out_dir, replace(filename, ".npy" => "_elasticity_sd.npy"))
+            ipath   = joinpath(out_dir, replace(filename, ".npy" => "_param_indices.npy"))
+            J          = NPZ.npzread(jpath)
+            J_elast    = isfile(epath)   ? NPZ.npzread(epath)   : zeros(size(J))
+            J_sd       = isfile(sdpath)  ? NPZ.npzread(sdpath)  : zeros(size(J))
+            J_elast_sd = isfile(esdpath) ? NPZ.npzread(esdpath) : zeros(size(J))
+            @assert size(J, 2) == n_perturb (
+                "Loaded Jacobian $jpath has $(size(J,2)) columns but $n_perturb params " *
+                "were requested — delete the file or fix param_indices.")
+            if isfile(ipath)
+                saved_idx = vec(Int.(NPZ.npzread(ipath)))
+                (length(saved_idx) == length(indices) && all(saved_idx .== collect(indices))) ||
+                    @warn "compute_jacobian(load_existing): saved param_indices differ from " *
+                          "requested; using the loaded Jacobian as-is (columns assumed aligned)."
+            end
+            println("Loaded Jacobian from $jpath ($(size(J,1))×$(size(J,2))) — skipping recomputation.")
+            return J, J_elast, J_sd, J_elast_sd
+        else
+            @warn "compute_jacobian(load_existing=true) but $jpath not found — computing from scratch."
+        end
+    end
 
     # ── Exact analytical Jacobian via forward-mode AD (no finite-difference step) ──
     # When both flags are set, ForwardDiff differentiates the closed-form analytical

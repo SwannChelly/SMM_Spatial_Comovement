@@ -69,6 +69,12 @@ run_step2 = true
 run_step3 = true
 run_step4 = true
 
+# Reuse a previously-saved Jacobian instead of recomputing it (the expensive
+# K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
+# Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
+# present, else fall back to computing. Set false to always recompute.
+load_jacobian = false
+
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
 # mapped to T*(α,Ω,A) = invert_T_ge(...) inside the objective, collapsing the search
@@ -187,7 +193,8 @@ if run_step2
         filename      = "jacobian_all.npy",
         K             = 50,
         step_rel      = 1e-2,
-        base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
+        base_seed     = 2_000_000,  # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
+        load_existing = load_jacobian
     )
 
     # Inference at θ̂_1 using efficient weight W_step3 and Ω from step2/
@@ -334,7 +341,8 @@ if run_step4
         filename      = "jacobian_all_step3.npy",
         K             = 50,
         step_rel      = 1e-2,
-        base_seed     = 1_000_000
+        base_seed     = 1_000_000,
+        load_existing = load_jacobian
     )
 
     # Rank of J2
