@@ -47,8 +47,8 @@ using StatsBase
 
 ############## Parse arguments ##############
 
-industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
-n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
+industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
+n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
 # Draw method for the Fréchet inverse-CDF transform: :qmc (default, unbiased for
@@ -64,10 +64,16 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 5
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
-run_step3 = true
-run_step4 = true
+run_step3 = false
+run_step4 = false
+
+# Reuse a previously-saved Jacobian instead of recomputing it (the expensive
+# K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
+# Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
+# present, else fall back to computing. Set false to always recompute.
+load_jacobian = true
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
@@ -79,7 +85,7 @@ run_step4 = true
 # to the joint estimator. (SMM path only: the loss's reg_coef stays simulation-based.)
 # 7th positional arg (run.sh --profile_T=true|false); default false.
 profile_T = length(ARGS) >= 7 && !isempty(strip(ARGS[7])) ?
-    (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : false
+    (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : true
 println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO (invert_T_ge); outputs → *_profiled/" : "")
 
 # Draw count for INFERENCE (Jacobian + Σ_sim), decoupled from the optimization draw
@@ -187,7 +193,8 @@ if run_step2
         filename      = "jacobian_all.npy",
         K             = 50,
         step_rel      = 1e-2,
-        base_seed     = 2_000_000   # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
+        base_seed     = 2_000_000,  # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
+        load_existing = load_jacobian
     )
 
     # Inference at θ̂_1 using efficient weight W_step3 and Ω from step2/
@@ -221,7 +228,7 @@ if run_step2
         param_labels = PARAM_LABELS[gb_cols],
         label        = "SMM step2 θ̂_1")
 
-    compute_smm_inference(
+    inf_res_1 = compute_smm_inference(
          theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
          param_indices         = gb_param_idx,
          empirical_moments_vec = emp_vec_gb,
@@ -236,6 +243,14 @@ if run_step2
          moment_labels = MOMENT_LABELS[gb_indices]    # NEW: names for kept moments (rows of J)
 
     )
+
+    # ── Delta-method T CIs at θ̂_1: T = T*(α) via invert_T_ge, Ω,A fixed (additive) ──
+    # Same construction as Step 4; propagates Var(α̂_1) through ∂T*/∂α alongside the
+    # joint (T-as-free) CIs. Written under step2/inference/.
+    compute_T_delta_inference(
+        theta_hat_1, inf_res_1, gb_param_idx, PARAM_LABELS[gb_cols];
+        output_folder = joinpath(output_folder, "step2"),
+        industry      = industry)
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test
@@ -326,7 +341,8 @@ if run_step4
         filename      = "jacobian_all_step3.npy",
         K             = 50,
         step_rel      = 1e-2,
-        base_seed     = 1_000_000
+        base_seed     = 1_000_000,
+        load_existing = load_jacobian
     )
 
     # Rank of J2
@@ -392,7 +408,7 @@ if run_step4
         param_labels = PARAM_LABELS[gb_cols],
         label        = "SMM step4 θ̂_2")
 
-    compute_smm_inference(
+    inf_res = compute_smm_inference(
         theta_hat_2, J2_gb, W_step3, Omega_inf;
         param_indices         = gb_param_idx,
         empirical_moments_vec = emp_vec_gb,
@@ -405,6 +421,16 @@ if run_step4
         gamma_ref_map   = GAMMA_REF_MAP,
         param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
         moment_labels = MOMENT_LABELS[gb_indices])    # NEW: names for kept moments (rows of J)
+
+    # ── Delta-method T CIs: T = T*(α) via invert_T_ge, Ω,A fixed (additive) ──────
+    # Propagates Var(α̂) through ∂T*/∂α, giving T's inherited CIs alongside the joint
+    # (T-as-free) CIs above. Exact for the profiled estimator; a Sinkhorn-pinned
+    # counterfactual under the joint estimator. profiling.jl (invert_T_ge) is
+    # included @everywhere, so this resolves in both modes.
+    compute_T_delta_inference(
+        theta_hat_2, inf_res, gb_param_idx, PARAM_LABELS[gb_cols];
+        output_folder = joinpath(output_folder, "step3"),
+        industry      = industry)
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test
