@@ -392,7 +392,7 @@ if run_step4
         param_labels = PARAM_LABELS[gb_cols],
         label        = "SMM step4 θ̂_2")
 
-    compute_smm_inference(
+    inf_res = compute_smm_inference(
         theta_hat_2, J2_gb, W_step3, Omega_inf;
         param_indices         = gb_param_idx,
         empirical_moments_vec = emp_vec_gb,
@@ -405,6 +405,16 @@ if run_step4
         gamma_ref_map   = GAMMA_REF_MAP,
         param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
         moment_labels = MOMENT_LABELS[gb_indices])    # NEW: names for kept moments (rows of J)
+
+    # ── Delta-method T CIs: T = T*(α) via invert_T_ge, Ω,A fixed (additive) ──────
+    # Propagates Var(α̂) through ∂T*/∂α, giving T's inherited CIs alongside the joint
+    # (T-as-free) CIs above. Exact for the profiled estimator; a Sinkhorn-pinned
+    # counterfactual under the joint estimator. profiling.jl (invert_T_ge) is
+    # included @everywhere, so this resolves in both modes.
+    compute_T_delta_inference(
+        theta_hat_2, inf_res, gb_param_idx, PARAM_LABELS[gb_cols];
+        output_folder = joinpath(output_folder, "step3"),
+        industry      = industry)
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test

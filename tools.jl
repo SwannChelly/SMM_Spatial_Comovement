@@ -2186,6 +2186,184 @@ end
 
 
 """
+    compute_T_delta_inference(theta_hat, inf_result, gb_param_idx, param_labels_gb;
+                              output_folder, industry="", step_rel=1e-2,
+                              target=emp_gamma_ls) -> Dict
+
+Delta-method confidence intervals for the comparative-advantage block **T**,
+treating T as the deterministic GE-Sinkhorn image `T*(α, Ω, A)` of the OTHER
+parameters (via `invert_T_ge`) rather than as a free parameter. Here **Θ = α
+only**: Ω^L, Ω^s, A are held fixed at their θ̂ values — they ARE fixed in the SMM's
+`gamma_beta_only` final step — so all of T's inherited uncertainty flows from
+Var(α̂):
+
+    V_T = (∂T*/∂α) · Var(α̂) · (∂T*/∂α)'
+
+`∂T*/∂α` is a fixed-draw-free central **log-step** finite difference on
+`invert_T_ge` (perturb α·exp(±δ), chain-rule back to raw α units by 1/α — the same
+convention as `compute_jacobian`). Var(α̂) is the α-block of the parameter
+covariance already produced by `compute_smm_inference` (passed via `inf_result`);
+we propagate the **sandwich**, **efficient**, AND **noiseless Ω=I** α-variances, so
+the three T-delta SE columns show how much of T's inherited width is data/sim noise
+vs pure identification geometry. `V_T` has rank ≤ N_TAU (rank 1 if N_TAU==1): with
+Ω,A fixed, T lives on the N_TAU-dimensional curve traced by α.
+
+This is the closed-form counterpart of "at zero data/sim noise, T's CI is entirely
+inherited from the other parameters' CI". It is exact for the profiled estimator
+(`profile_T=true`, where T̂ = T*(α̂,Ω̂,Â)); under the joint estimator T̂ may differ
+from T*(α̂), so read it as "if T were pinned to the Sinkhorn image".
+
+**ADDITIVE** — does not touch the joint (T-as-free) CIs from
+`compute_smm_inference`.
+
+# Saves (under output_folder/inference/)
+- `se_theta_T_delta.npy`          : √diag(V_T) using the sandwich Var(α̂)
+- `se_theta_T_delta_eff.npy`      : … using the efficient Var(α̂)
+- `se_theta_T_delta_identity.npy` : … using the Ω=I Var(α̂)  (noiseless reference)
+- `var_theta_T_delta.npy`         : V_T (sandwich)
+- `ci_95_T_delta.npy`             : (n_T × 2) [lower, upper], centered at T̂
+- `jacobian_T_wrt_alpha.npy`      : ∂T*/∂α  (n_T × N_TAU)
+- `inference_T_delta.txt`         : human-readable summary + vs-joint comparison
+"""
+function compute_T_delta_inference(theta_hat::Vector{Float64},
+                                   inf_result::Dict,
+                                   gb_param_idx::Vector{Int},
+                                   param_labels_gb::Vector{String};
+                                   output_folder::String = ".",
+                                   industry::String = "",
+                                   step_rel::Float64 = 1e-2,
+                                   target::AbstractMatrix = emp_gamma_ls)
+    inf_dir = joinpath(output_folder, "inference")
+    mkpath(inf_dir)
+
+    # Locate α and T columns within the gb parameter vector (β/α-then-T order).
+    alpha_pos = findall(l -> startswith(l, "alpha"), param_labels_gb)
+    T_pos     = findall(l -> startswith(l, "T["),   param_labels_gb)
+    if isempty(alpha_pos) || isempty(T_pos)
+        @warn "compute_T_delta_inference: no α or no T columns in gb params; skipping."
+        return Dict{String,Any}()
+    end
+    n_alpha = length(alpha_pos)
+    n_T     = length(T_pos)
+
+    # Head + α at θ̂, normalized exactly as invert_T_ge / unpack_params read them.
+    ΩL, Ωs, A, α, Tvec = unpack_params(theta_hat)
+    T_hat_mat    = reshape(Tvec, S, R)               # (S,R) ref-normalized warm start
+    T_hat_active = theta_hat[gb_param_idx[T_pos]]     # reported T̂ (CI centers)
+
+    # ── ∂T*/∂α by central LOG-step FD on invert_T_ge (deterministic, no draws) ──
+    # The α section of PARAM_LABELS is laid out b=1:N_TAU, so alpha_pos[jj] ↔ α[jj].
+    # Rows of J_T follow vec(permutedims(T*))[T_MASK] (s-major) = the T_pos order.
+    δ   = step_rel
+    J_T = zeros(n_T, n_alpha)
+    for jj in 1:n_alpha
+        αp = copy(α); αp[jj] *= exp(δ)
+        αm = copy(α); αm[jj] *= exp(-δ)
+        resP = invert_T_ge(αp, ΩL, Ωs, A; target=target, T_init=copy(T_hat_mat))
+        resM = invert_T_ge(αm, ΩL, Ωs, A; target=target, T_init=copy(T_hat_mat))
+        (resP.converged && resM.converged) ||
+            @warn "compute_T_delta_inference: invert_T_ge did not converge for α[$jj] " *
+                  "(resid₊=$(round(resP.resid, sigdigits=3)), resid₋=$(round(resM.resid, sigdigits=3)))."
+        dT = (vec(permutedims(resP.T))[T_MASK] .- vec(permutedims(resM.T))[T_MASK]) ./ (2δ * α[jj])
+        J_T[:, jj] = dT
+    end
+
+    # ── Propagate the α-variance (sandwich / efficient / noiseless Ω=I) ──────────
+    Va_sw  = inf_result["Var_sandwich"][alpha_pos, alpha_pos]
+    Va_eff = inf_result["Var_eff"][alpha_pos, alpha_pos]
+    VT_sw  = J_T * Va_sw  * J_T';  VT_sw  = (VT_sw  .+ VT_sw')  ./ 2
+    VT_eff = J_T * Va_eff * J_T';  VT_eff = (VT_eff .+ VT_eff') ./ 2
+    se_T_sw  = sqrt.(max.(diag(VT_sw),  0.0))
+    se_T_eff = sqrt.(max.(diag(VT_eff), 0.0))
+
+    se_T_I = fill(NaN, n_T)
+    if haskey(inf_result, "Var_identity")
+        Va_I = inf_result["Var_identity"][alpha_pos, alpha_pos]
+        VT_I = J_T * Va_I * J_T'
+        se_T_I = sqrt.(max.(diag(VT_I), 0.0))
+    end
+
+    ci_T = hcat(T_hat_active .- 1.96 .* se_T_sw, T_hat_active .+ 1.96 .* se_T_sw)
+
+    # Joint (T-as-free) sandwich SE for the same T params, for comparison.
+    se_T_joint = inf_result["se_sw"][T_pos]
+
+    # ── Save arrays ─────────────────────────────────────────────────────────────
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta.npy"),          se_T_sw)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_eff.npy"),      se_T_eff)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_identity.npy"), se_T_I)
+    NPZ.npzwrite(joinpath(inf_dir, "var_theta_T_delta.npy"),         VT_sw)
+    NPZ.npzwrite(joinpath(inf_dir, "ci_95_T_delta.npy"),             ci_T)
+    NPZ.npzwrite(joinpath(inf_dir, "jacobian_T_wrt_alpha.npy"),      J_T)
+
+    # ── Human-readable summary ──────────────────────────────────────────────────
+    T_labels = param_labels_gb[T_pos]
+    sv_JT    = svdvals(J_T)
+    rank_JT  = count(sv_JT .> (isempty(sv_JT) ? 0.0 : sv_JT[1] * 1e-8))
+    ratios   = [se_T_joint[i] > 0 ? se_T_sw[i] / se_T_joint[i] : NaN for i in 1:n_T]
+    valid_r  = filter(!isnan, ratios)
+
+    open(joinpath(inf_dir, "inference_T_delta.txt"), "w") do io
+        println(io, "="^72)
+        println(io, "DELTA-METHOD T INFERENCE   V_T = (∂T*/∂α) Var(α̂) (∂T*/∂α)'")
+        println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
+        println(io, "  Θ scope    : α only (Ω^L, Ω^s, A held fixed at θ̂)")
+        println(io, "  n_T        : $n_T   n_α (N_TAU) : $n_alpha   rank(∂T*/∂α) : $rank_JT")
+        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS UTC"))")
+        println(io, "="^72)
+        println(io, "\nT is the deterministic GE-Sinkhorn image T*(α,Ω,A) (invert_T_ge). With")
+        println(io, "Ω,A fixed, T's uncertainty is entirely inherited from Var(α̂), so V_T has")
+        println(io, "rank ≤ N_TAU: the T SEs below are perfectly collinear across entries when")
+        println(io, "N_TAU==1. Exact for the profiled estimator (T̂ = T*(α̂)); a Sinkhorn-pinned")
+        println(io, "counterfactual under the joint estimator.\n")
+        println(io, "  se_delta      : √diag(V_T), sandwich Var(α̂)  — the headline delta SE")
+        println(io, "  se_delta_eff  : … efficient Var(α̂)")
+        println(io, "  se_delta_I    : … noiseless Ω=I Var(α̂)  (identification geometry only)")
+        println(io, "  se_joint      : the T-as-free sandwich SE from compute_smm_inference")
+        println(io, "  ratio         : se_delta / se_joint  (≪1 ⟹ pinning T to T*(α) tightens a lot)\n")
+        hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s",
+                       "T[sector-region]", "T̂", "se_delta", "se_delta_eff",
+                       "se_delta_I", "se_joint", "ratio")
+        println(io, hdr)
+        println(io, "  " * "-"^(length(hdr)-2))
+        for i in 1:n_T
+            @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f\n",
+                    T_labels[i], T_hat_active[i], se_T_sw[i], se_T_eff[i],
+                    se_T_I[i], se_T_joint[i], isnan(ratios[i]) ? -999.0 : ratios[i])
+        end
+        println(io, "\n--- Summary (se_delta / se_joint over T) ---")
+        @printf(io, "  mean ratio: %.4f   median: %.4f   min: %.4f   max: %.4f\n",
+                isempty(valid_r) ? NaN : mean(valid_r),
+                isempty(valid_r) ? NaN : median(valid_r),
+                isempty(valid_r) ? NaN : minimum(valid_r),
+                isempty(valid_r) ? NaN : maximum(valid_r))
+        @printf(io, "  mean se_delta: %.4e   mean se_delta_I: %.4e   mean se_joint: %.4e\n",
+                mean(se_T_sw), mean(se_T_I), mean(se_T_joint))
+        println(io, "\n--- Caveats ---")
+        println(io, "  * Θ = α only: Ω^L, Ω^s, A are treated as fixed (their SMM-final-step status).")
+        println(io, "    A full-head delta method would add their covariance — not propagated here.")
+        println(io, "  * ∂T*/∂α is a deterministic FD on invert_T_ge; simulation noise enters ONLY")
+        println(io, "    through Var(α̂). se_delta_I removes even the α data/sim noise (Ω=I).")
+        println(io, "\n" * "="^72)
+    end
+
+    println("Delta-method T inference saved to: $(joinpath(inf_dir, "inference_T_delta.txt"))")
+    @printf("  mean se_delta/se_joint over T = %.4f  (rank ∂T*/∂α = %d)\n",
+            isempty(valid_r) ? NaN : mean(valid_r), rank_JT)
+
+    return Dict(
+        "J_T_wrt_alpha" => J_T,
+        "Var_T_delta"   => VT_sw,
+        "se_T_delta"    => se_T_sw,
+        "se_T_delta_eff"=> se_T_eff,
+        "se_T_delta_I"  => se_T_I,
+        "ci_T_delta"    => ci_T,
+        "se_T_joint"    => se_T_joint,
+    )
+end
+
+
+"""
     run_2x2_inference_test(theta_hat, J_sim_gb, J_ana_gb, gb_param_idx,
                            emp_vec_gb, sim_vec_gb, Sigma_data, Sigma_sim,
                            gamma_ref_map, gb_block_ranges, gb_block_names,
