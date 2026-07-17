@@ -123,6 +123,13 @@ $\tilde\gamma = \gamma \cdot (\sum\omega / \sum\gamma) = \gamma / s_{\text{dom}}
 $\sum\tilde\gamma = \sum\omega$. C'est légitime **précisément parce que** le scale de `T` est
 libre (N1) : matcher `γ` « à une constante près » = matcher `γ̃`.
 
+> **Dans le code.** Cette cible balancée est le const `emp_gamma_ls_tilde` =
+> `emp_gamma_ls ./ domestic_share` (`load_parameters.jl`, SECTION 3, $\sum_r = 1$). C'est la
+> cible par défaut de l'inversion d'initialisation `invert_T_from_gamma` **et** de l'inversion
+> de profilage `invert_T_ge` (`profiling.jl`). La jauge de référence $T_{\text{ref}}=1$ rend le
+> `T` retourné identique à celui qu'on obtiendrait avec la `γ` brute, mais la précondition de
+> compatibilité des marges de Sinkhorn est ainsi **explicitement** satisfaite.
+
 **Conclusion de 2.1.** Trouver `T` = trouver deux rééchelonnements diagonaux positifs
 $\operatorname{diag}(T)$, $\operatorname{diag}(s)$ qui envoient la matrice **fixe et positive**
 `K` sur une matrice `F` aux marges $(\tilde\gamma, \omega)$. C'est le **problème de Sinkhorn**

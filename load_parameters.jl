@@ -145,6 +145,25 @@ if gamma_threshold != 0
 end
 println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
 @everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)
+
+# ── Projective (domestic-share-balanced) γ target for the Sinkhorn inversion ──
+# The observed γ_ls are DOMESTIC sourcing shares: per sector they sum to
+# domestic_share[s] < 1 (the rest is imported / out-of-system), NOT to 1. The
+# comparative-advantage inversion (invert_T_from_gamma below, and the profiling
+# invert_T_ge) is a matrix-scaling / Sinkhorn problem whose ROW margin is this γ
+# and whose COLUMN margin is the expenditure distribution ω = exp_{s,dr} — which
+# sums to 1. Sinkhorn's theorem requires COMPATIBLE margins (Σ row = Σ column), so
+# the target must be renormalized to the same total as ω:
+#
+#     emp_gamma_ls_tilde[r,s] = emp_gamma_ls[r,s] / domestic_share[s]   ⇒  Σ_r = 1.
+#
+# This is the "version projective" γ̃ = γ / s_dom of documentation/initialisation.md
+# §2.1. It is legitimate because T is identified only up to a per-sector scale
+# (the reference-region gauge T[s,ref]=1 absorbs the total), so matching γ "up to a
+# constant" is matching γ̃ — the returned T is unchanged, but the balanced margins
+# make the Sinkhorn precondition hold exactly rather than by cancellation.
+emp_gamma_ls_tilde_local = emp_gamma_ls_local ./ reshape(max.(domestic_share_local, 1e-12), 1, S_)
+@everywhere const emp_gamma_ls_tilde = $(emp_gamma_ls_tilde_local)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -470,6 +489,11 @@ Returns an (S, R_full) matrix with active (s,r) entries set to the inverted
 comparative advantage (per-sector normalized to the reference region) and
 inactive entries left at 0. Uses trade costs τ[r,dr] = exp(α · log max(d,1))
 (the power-law N_TAU==1 form in build_tau, evaluated at the α prior) and wages ≡ 1.
+
+The Sinkhorn row target is the DOMESTIC-SHARE-BALANCED γ̃ = emp_gamma_ls /
+domestic_share (Σ_r γ̃ = 1), so it is compatible with the expenditure column
+margin Ê (Σ = 1) as Sinkhorn's theorem requires (initialisation.md §2.1). The
+per-sector reference gauge makes the returned T identical to the raw-γ inversion.
 """
 function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
                              tol::Float64=1e-11, damping::Float64=0.5)
@@ -485,8 +509,11 @@ function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
         isempty(regions_s) && continue
         ref = T_REF_REGION_local[s] > 0 ? T_REF_REGION_local[s] : regions_s[1]
         # Initialise at the observed shares (positive), normalized to the ref region.
+        # Uses the domestic-share-balanced target γ̃ (Σ_r = 1 = Σ ω) so the row/column
+        # margins are Sinkhorn-compatible (initialisation.md §2.1); the ref gauge makes
+        # this identical to the raw-γ inversion but keeps the precondition explicit.
         for r in regions_s
-            T[s, r] = max(emp_gamma_ls_local[r, s], 1e-12)
+            T[s, r] = max(emp_gamma_ls_tilde_local[r, s], 1e-12)
         end
         T[s, regions_s] ./= T[s, ref]
         for it in 1:max_iter
@@ -505,7 +532,7 @@ function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
                 for dr in 1:R_down_
                     Phi[dr] > 1e-300 && (M += tau_negθ[r, dr] * Ê[dr] / Phi[dr])
                 end
-                γ  = max(emp_gamma_ls_local[r, s], 1e-12)
+                γ  = max(emp_gamma_ls_tilde_local[r, s], 1e-12)   # balanced target γ̃ (Σ_r=1)
                 Tr = M > 1e-300 ? γ / M : T[s, r]
                 T_new[r] = exp((1 - damping) * log(T[s, r]) + damping * log(Tr))
             end

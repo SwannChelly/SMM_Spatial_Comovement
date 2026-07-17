@@ -12,6 +12,7 @@ loading as `main.jl`, so it sees the exact same moments and masks.
 | `run_untargeted_validation.jl` | **Out-of-sample check.** Feeds calibrated parameters into `../extras/untargeted_moments.jl` to simulate demand shocks and reproduce the paper's Table 2 comovement regression — moments that were *not* used in estimation. |
 | `test_extensive_margin.jl` | Geometry screen (Phase-2 "GATE G2") for the analytical `reg_coef` moment — see the detailed note below. |
 | `test_t_reorder.jl` | Guard test for the s-major flattening convention of the T parameters. Asserts the T-parameter axis and the γ-moment axis enumerate the (sector, region) pairs in the same order — a silent mismatch would fit the wrong T. |
+| `test_gamma_margin_domestic.jl` | **Are the γ_ls targets DOMESTIC shares, not international?** Checks the margin / adding-up identity `Σ_r γ_ls[r,s] = domestic_share[s]` (implied by `γ_ls[r,s] = (X_ls[r,s]/X_s[s])·domestic_share[s]`) on the exact `emp_gamma_ls.npy` array that seeds the T starting values (`invert_T_from_gamma`). Classifies each sector domestic (Σγ ≈ domestic_share) vs international (Σγ ≈ 1 while domestic_share < 1) and flags the international case, since total/import-inclusive shares normalized to 1 would silently mis-anchor the comparative-advantage search box. Usage: `julia test/test_gamma_margin_domestic.jl aero 4 1`. Print-only. |
 
 ## `test_extensive_margin.jl` in depth
 
