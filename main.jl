@@ -62,18 +62,18 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
 @assert optimizer_backend in (:pso, :cmaes, :tiktak) "optimizer must be pso|cmaes|tiktak, got :$optimizer_backend"
 
-K = 5
+K = 20
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
-run_step3 = false
-run_step4 = false
+run_step3 = true
+run_step4 = true
 
 # Reuse a previously-saved Jacobian instead of recomputing it (the expensive
 # K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
 # Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
 # present, else fall back to computing. Set false to always recompute.
-load_jacobian = true
+load_jacobian = false
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
@@ -92,7 +92,7 @@ println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO
 # count (K_sim/N_rho). Inference is simulation-noisy (the fixed-draw Jacobian and Σ_sim),
 # so it benefits from many more draws than the search; picked up by load_parameters.jl
 # into N_RHO_INFERENCE. 8th positional arg (run.sh --n_rho_inf=); default 10000 (= N_rho).
-n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 1000
+n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 4000
 @assert n_rho_inference >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference"
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
