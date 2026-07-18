@@ -176,6 +176,19 @@ top-level (`@everywhere`) function so it serializes cleanly across the PSO's `pm
 workers (a nested closure calling `invert_T_ge` would not).
 """
 function profiled_theta(x_levels::AbstractVector)
+    return profiled_theta_full(x_levels).theta
+end
+
+
+"""
+    profiled_theta_full(x_levels) -> (theta, converged::Bool, resid, iters)
+
+Same as `profiled_theta` but also surfaces the `invert_T_ge` convergence status of
+the T inversion for this particle. Used both by `profiled_theta` (which keeps only
+`.theta`) and by the PSO per-report T-convergence diagnostic (which keeps only the
+`.converged` flag). Kept top-level so it serializes across the `pmap` workers.
+"""
+function profiled_theta_full(x_levels::AbstractVector)
     ΩL = x_levels[1]
     Ωs = x_levels[2:(1 + S)];                      Ωs = Ωs ./ sum(Ωs)
     A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
@@ -183,7 +196,28 @@ function profiled_theta(x_levels::AbstractVector)
     res = invert_T_ge(α, ΩL, Ωs, A)
     xf = copy(x_levels)
     xf[(2 + S + R_downstream + N_TAU):end] = vec(permutedims(res.T))[T_MASK]
-    return xf
+    return (theta = xf, converged = res.converged, resid = res.resid, iters = res.iters)
+end
+
+
+"""
+    profiled_theta_converged(x_levels) -> Bool
+
+Whether the GE-Sinkhorn T inversion converged for a given head particle. Skips the
+T-block scatter that `profiled_theta_full` does (only the flag is needed), so it is
+the cheap probe the PSO report runs over the whole swarm. Any error in the inversion
+(non-finite head, etc.) is treated as non-converged.
+"""
+function profiled_theta_converged(x_levels::AbstractVector)::Bool
+    try
+        ΩL = x_levels[1]
+        Ωs = x_levels[2:(1 + S)];                      Ωs = Ωs ./ sum(Ωs)
+        A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
+        α  = x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)]
+        return invert_T_ge(α, ΩL, Ωs, A).converged
+    catch
+        return false
+    end
 end
 
 

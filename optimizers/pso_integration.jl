@@ -62,7 +62,8 @@ function parallel_pso_smm(
     reflect::Bool = true,
     bounce_damping::Float64 = 0.5,
     init_rng::AbstractRNG = Random.GLOBAL_RNG,
-    verbose::Bool = false
+    verbose::Bool = false,
+    t_conv_probe::Union{Function, Nothing} = nothing
 )
 
     d = length(lb)
@@ -277,6 +278,17 @@ function parallel_pso_smm(
             println("[PSO] Iteration $iter/$max_iter ($(round(t_elapsed, digits=2))s):")
             println("  Best fitness:     $(round(g_best_fitness, digits=6))")
             println("  Mean fitness:     $(round(mean(filter(isfinite, fitness)), digits=6))")
+
+            # T-profiling health: how many particles carry a non-converged (fallback)
+            # T from the GE-Sinkhorn inversion. Probed over the current swarm (same
+            # positions just evaluated); `nothing` when not profiling.
+            if t_conv_probe !== nothing
+                conv = pmap(p -> t_conv_probe(_fwd(p)), particles)
+                n_tot = length(conv)
+                n_bad = count(c -> !(c === true), conv)
+                println("  T non-converged:  $n_bad/$n_tot particles " *
+                        "($(round(100 * n_bad / max(n_tot, 1), digits=1))%)")
+            end
 
             # Keep existing improvement logging below...
             if last_printed_iter > 0

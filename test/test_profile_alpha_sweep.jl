@@ -46,11 +46,19 @@ using LinearAlgebra, Statistics, Printf
 industry = length(ARGS) >= 1 ? ARGS[1] : "aero"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
+# 4th arg: reporting folder to anchor θ̂ on. DEFAULT = the NON-profiled PSO run
+# (reporting_<industry>_pso), i.e. the free-T fit where α≈0.30 with a good reg_coef
+# fit — that is the θ̂ whose T̂ we hold fixed in regime (B). main.jl writes the
+# profiled run to reporting_<industry>_profiled_pso; pass it explicitly to anchor
+# on the profiled (α≈0.02) estimate instead.
+optimizer_backend = :pso
 K_sim    = 10000
 
 input_folder  = "./baseline_$industry"
-output_folder = "./reporting_$industry"
+output_folder = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? String(ARGS[4]) :
+                "./reporting_$(industry)_$(optimizer_backend)"
 mkpath(output_folder)
+@printf("Anchoring θ̂ / W_step3 on: %s\n", output_folder)
 
 include("../load_parameters.jl")
 include("../profiling.jl")
@@ -114,9 +122,11 @@ emp_reg   = emp_vec[reg_range]
 emp_gam   = emp_vec[gam_range]
 @printf("Empirical reg_coef: %s\n", string(round.(emp_reg, digits=4)))
 
-"""Simulated moments at a full level θ, masked and block-sliced."""
+"""Simulated moments at a full level θ, masked and block-sliced.
+Note: full_SMM(θ; simulation=false) returns (loss, moments_tuple); we take the
+tuple. (simulation=true returns the X_ls trade matrix, not moments — do not use.)"""
 function eval_moments(θ)
-    sim = full_SMM(θ, true; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
+    _, sim = full_SMM(θ; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
     sim_vec = vcat([vec(sim[i]) for i in 1:5]...)[MOMENT_MASK]
     return sim_vec
 end

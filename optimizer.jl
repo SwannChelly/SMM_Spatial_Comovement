@@ -62,6 +62,7 @@ function optimize_stage(
     verbose::Bool = false,
     backend::Symbol = OPTIMIZER_BACKEND,
     seed::Int = 1,
+    t_conv_probe::Union{Function, Nothing} = nothing,
 )
     if backend == :cmaes
         return parallel_cmaes_smm(
@@ -94,6 +95,7 @@ function optimize_stage(
             alpha_constraint = alpha_constraint,
             alpha_indices = alpha_indices,
             verbose = verbose,
+            t_conv_probe = t_conv_probe,
         )
     else
         error("Unknown optimizer backend :$backend (expected :pso, :cmaes or :tiktak)")
@@ -363,8 +365,10 @@ function train_stage(
         @assert length(warm_start) == length(lb) "Warm start dimension mismatch!"
     end
 
-    # Define objective function
-    function objective(x_stage)
+    # Reconstruct the full (level) parameter vector from a stage particle, BEFORE
+    # T-profiling. Factored out so both `objective` and the T-convergence probe
+    # (below) build x_full through the exact same path.
+    function build_x_full(x_stage)
         if last_stage_folder !== nothing
             # Reconstruct full parameter vector
             x_full = copy(best_params_prev)
@@ -386,11 +390,17 @@ function train_stage(
                     x_full[param_start:(param_start + var_len - 1)] = x_stage[stage_start:stage_end]
                 end
             end
+            return x_full
         else
             # profile_T fresh start: x_stage is head-only ⇒ append an inert T block
             # (overwritten by profiled_theta below). Otherwise expand φ → levels.
-            x_full = profile_T ? vcat(x_stage, T_PLACEHOLDER) : search_to_full(x_stage)
+            return profile_T ? vcat(x_stage, T_PLACEHOLDER) : search_to_full(x_stage)
         end
+    end
+
+    # Define objective function
+    function objective(x_stage)
+        x_full = build_x_full(x_stage)
 
         # T-profiling: replace the (searched-or-stale) T block with T*(α,Ω,A).
         profile_T && (x_full = profiled_theta(x_full))
@@ -421,6 +431,12 @@ function train_stage(
     println("Dimension: $(length(lb))")
     println("="^60)
 
+    # Under profiling, expose a swarm-level T-convergence probe: maps a stage
+    # particle to whether its GE-Sinkhorn T inversion converged. The backend runs
+    # it over the whole swarm at each periodic report so the log shows how many
+    # particles carry a non-converged (fallback) T. `nothing` when not profiling.
+    t_conv_probe = profile_T ? (x_stage -> profiled_theta_converged(build_x_full(x_stage))) : nothing
+
     best_params, best_fitness, history = optimize_stage(
         objective,
         lb, ub;
@@ -429,7 +445,8 @@ function train_stage(
         max_iter = max_iter,
         alpha_constraint = alpha_constraint,
         alpha_indices = alpha_indices,
-        verbose = true
+        verbose = true,
+        t_conv_probe = t_conv_probe,
     )
 
     # If optimizing subset, reconstruct full vector (T: φ → level, ref = 1)
