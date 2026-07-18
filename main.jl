@@ -214,6 +214,11 @@ if run_step2
     emp_vec_gb = emp_vec[gb_indices]
     Weight_matrix_inference = Weight_matrix_custom[gb_indices, gb_indices]
 
+    # Non-inferred head params (Ω^L, Ω^s, A): shown in the report for reference only.
+    head_cols   = findall(i -> i < alpha_T_start, jacobian_param_indices)
+    head_labels = PARAM_LABELS[head_cols]
+    head_values = theta_hat_1[jacobian_param_indices[head_cols]]
+
     # T-identification eigen-screen (diagnostic, print-only) at θ̂_1
     screen_T_identification(theta_hat_1;
         J            = J_gb,
@@ -233,8 +238,9 @@ if run_step2
          block_names           = gb_block_names,
          gamma_ref_map   = GAMMA_REF_MAP,
          param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
-         moment_labels = MOMENT_LABELS[gb_indices]    # NEW: names for kept moments (rows of J)
-
+         moment_labels = MOMENT_LABELS[gb_indices],    # NEW: names for kept moments (rows of J)
+         display_labels = head_labels,   # NEW: non-inferred head params (value only)
+         display_values = head_values
     )
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
@@ -379,6 +385,11 @@ if run_step4
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
+    # Non-inferred head params (Ω^L, Ω^s, A): shown in the report for reference only.
+    head_cols   = findall(i -> i < alpha_T_start, jacobian_param_indices)
+    head_labels = PARAM_LABELS[head_cols]
+    head_values = theta_hat_2[jacobian_param_indices[head_cols]]
+
     n_gb_moments = length(gb_indices)
     n_gb_params  = length(gb_param_idx)
     println("Step-3 inference: J2_gb is $(n_gb_moments)×$(n_gb_params) " *
@@ -404,7 +415,9 @@ if run_step4
         block_names           = gb_block_names,
         gamma_ref_map   = GAMMA_REF_MAP,
         param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
-        moment_labels = MOMENT_LABELS[gb_indices])    # NEW: names for kept moments (rows of J)
+        moment_labels = MOMENT_LABELS[gb_indices],    # NEW: names for kept moments (rows of J)
+        display_labels = head_labels,   # NEW: non-inferred head params (value only)
+        display_values = head_values)
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test
