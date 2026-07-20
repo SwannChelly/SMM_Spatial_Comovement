@@ -219,6 +219,11 @@ if run_step2
     sim_vec_gb = sim_vec_1[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
+    # Non-inferred head params (Ω^L, Ω^s, A): shown in the report for reference only.
+    head_cols   = findall(i -> i < alpha_T_start, jacobian_param_indices)
+    head_labels = PARAM_LABELS[head_cols]
+    head_values = theta_hat_1[jacobian_param_indices[head_cols]]
+
     # Step-1 weight matrix: θ̂_1 was estimated with the IDENTITY-weighted criterion
     # (run_pso_optimization called with weight_matrix=nothing → Weight_matrix_custom),
     # NOT with W_eff = Σ_data^{-1}. Inference at θ̂_1 must use that same W, otherwise
@@ -245,7 +250,9 @@ if run_step2
         block_names           = gb_block_names,
         gamma_ref_map         = GAMMA_REF_MAP,
         param_labels          = PARAM_LABELS[gb_cols],
-        moment_labels         = MOMENT_LABELS[gb_indices]
+        moment_labels         = MOMENT_LABELS[gb_indices],
+        display_labels        = head_labels,
+        display_values        = head_values
     )
 
     println("Step 2 complete. W_eff, Jacobian, and θ̂_1 inference saved.")
@@ -366,6 +373,11 @@ if run_step4
     sim_vec_gb = sim_vec_2[gb_indices]
     emp_vec_gb = emp_vec[gb_indices]
 
+    # Non-inferred head params (Ω^L, Ω^s, A): shown in the report for reference only.
+    head_cols   = findall(i -> i < alpha_T_start, jacobian_param_indices)
+    head_labels = PARAM_LABELS[head_cols]
+    head_values = theta_hat_2[jacobian_param_indices[head_cols]]
+
     N_gb = length(gb_indices)
     n_gb_params = length(gb_param_idx)
     println("Step-4 inference: J2_gb is $(N_gb)×$(n_gb_params) " *
@@ -391,7 +403,9 @@ if run_step4
         block_names           = gb_block_names,
         gamma_ref_map         = GAMMA_REF_MAP,
         param_labels          = PARAM_LABELS[gb_cols],
-        moment_labels         = MOMENT_LABELS[gb_indices]
+        moment_labels         = MOMENT_LABELS[gb_indices],
+        display_labels        = head_labels,
+        display_values        = head_values
     )
 
     # Add GMM-mode note to inference summary

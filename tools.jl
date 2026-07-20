@@ -1861,7 +1861,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                gamma_ref_map = nothing,   # NEW: per-sector γ ref reconstruction
                                Var_m_full   = nothing,
                                param_labels  = nothing,   # NEW: names for active params (cols of J)
-                               moment_labels = nothing)    # NEW: names for kept moments (rows of J))    # optional override; default uses local Var_m
+                               moment_labels = nothing,    # NEW: names for kept moments (rows of J))
+                               display_labels = nothing,   # NEW: names of non-inferred params to display (value only)
+                               display_values = nothing)   # NEW: values of those non-inferred params (no SE/CI)    # optional override; default uses local Var_m
 
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
@@ -2132,6 +2134,28 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                         ci_95[i, 1], ci_95[i, 2])
             end
         end
+
+        # Display-only (non-inferred) parameters: value shown for reference, but
+        # inference does not target them, so SE / t-stat / CI columns are blank ("—").
+        if display_labels !== nothing && display_values !== nothing &&
+           length(display_labels) == length(display_values) && !isempty(display_labels)
+            println(io, "\n--- Other parameters (not inferred; value only, no CI) ---")
+            if _has_plab
+                @printf(io, "  %-22s  %-6s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s\n",
+                        "param", "idx", "theta", "se_eff", "se_sw", "ratio", "t-stat", "CI_lo", "CI_hi")
+                for j in 1:length(display_labels)
+                    @printf(io, "  %-22s  %-6s  %-12.6f  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s\n",
+                            display_labels[j], "-", display_values[j],
+                            "-", "-", "-", "-", "-", "-")
+                end
+            else
+                @printf(io, "  %-22s  %-12s\n", "param", "theta")
+                for j in 1:length(display_labels)
+                    @printf(io, "  %-22s  %-12.6f\n", display_labels[j], display_values[j])
+                end
+            end
+        end
+
         # Sandwich vs efficient ratio
         println(io, "\n--- Sandwich/efficient SE ratio (mean close to 1 ⟹ W ≈ Ω^{-1}) ---")
         ratios = [se_eff[i] > 0 ? se_sw[i] / se_eff[i] : NaN for i in 1:p]
