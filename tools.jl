@@ -298,21 +298,6 @@ function distance_bin(d, n_bins=N_REG)
         else
             return 0
         end
-    elseif n_bins == 3
-        # 3-bin version — base (omitted) category is d ≤ 50 km. Keeps the 4-bin
-        # base (≤50) and first bin (50-100) exactly; coarsens the tail by merging
-        # 100-150 and 150-200 into a single 100-200 bin.
-        # ⚠ These edges MUST match the empirical reg_coef_*.npy specification. If your
-        # empirical 3-bin scheme uses different edges, change the cutoffs below.
-        if 50 < d <= 100
-            return 1
-        elseif 100 < d <= 200
-            return 2
-        elseif d > 200
-            return 3
-        else
-            return 0
-        end
     elseif n_bins == 1
         return 0
     else
