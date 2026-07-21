@@ -86,10 +86,12 @@ function load_theta()
           "or run an estimation for this (industry, N_REG, N_TAU) config first.")
 end
 
-theta = load_theta()
+# NOTE: `theta` is a reserved global const (the Fréchet dispersion in load_parameters.jl),
+# so the loaded estimate must use a different name.
+theta_hat = load_theta()
 
 # ── Solve the network once at θ̂ (shared linkages / draws for both regressions) ─
-net = solve_network(theta; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+net = solve_network(theta_hat; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 n_links = sum(net.linkages_flat .> 0)
 @printf("\nNetwork solved: %d firm-level linkages over %d supplier pairs × %d draws.\n",
         n_links, n_good, size(net.linkages_flat, 1))
