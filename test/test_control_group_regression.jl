@@ -104,23 +104,24 @@ reg_without = fast_weighted_regression(net.linkages_flat, net.z_flat, net.sample
 
 # ── Distance-bin composition: how many supplier vs control pairs land in each bin ─
 # (N_REG > 1 only; for N_REG == 1 the single regressor is continuous log-distance.)
+# `let` gives the loops a local scope so the counters aren't top-level soft-scope globals.
 if N_REG > 1
-    sup_per_bin  = zeros(Int, N_REG)
-    ctrl_per_bin = zeros(Int, N_REG)
-    sup_base = 0; ctrl_base = 0        # base (omitted) category, DistBin == 0
-    for g in 1:n_good
-        b = DistBin[GOOD_R[g], CLOSEST_DOWNSTREAM_REGION[GOOD_R[g]]]
-        (b >= 1 && b <= N_REG) ? (sup_per_bin[b] += 1) : (sup_base += 1)
-    end
-    for c in 1:N_CONTROL
-        b = DistBin[CONTROL_R[c], CLOSEST_DOWNSTREAM_REGION[CONTROL_R[c]]]
-        (b >= 1 && b <= N_REG) ? (ctrl_per_bin[b] += 1) : (ctrl_base += 1)
-    end
-    println("\nDistance-bin composition (pair counts; 'base' = omitted category, DistBin==0):")
-    @printf("  %-8s %12s %12s\n", "bin", "supplier", "control")
-    @printf("  %-8s %12d %12d\n", "base", sup_base, ctrl_base)
-    for b in 1:N_REG
-        @printf("  %-8d %12d %12d\n", b, sup_per_bin[b], ctrl_per_bin[b])
+    let sup_per_bin = zeros(Int, N_REG), ctrl_per_bin = zeros(Int, N_REG),
+        sup_base = 0, ctrl_base = 0        # base (omitted) category, DistBin == 0
+        for g in 1:n_good
+            b = DistBin[GOOD_R[g], CLOSEST_DOWNSTREAM_REGION[GOOD_R[g]]]
+            (b >= 1 && b <= N_REG) ? (sup_per_bin[b] += 1) : (sup_base += 1)
+        end
+        for c in 1:N_CONTROL
+            b = DistBin[CONTROL_R[c], CLOSEST_DOWNSTREAM_REGION[CONTROL_R[c]]]
+            (b >= 1 && b <= N_REG) ? (ctrl_per_bin[b] += 1) : (ctrl_base += 1)
+        end
+        println("\nDistance-bin composition (pair counts; 'base' = omitted category, DistBin==0):")
+        @printf("  %-8s %12s %12s\n", "bin", "supplier", "control")
+        @printf("  %-8s %12d %12d\n", "base", sup_base, ctrl_base)
+        for b in 1:N_REG
+            @printf("  %-8d %12d %12d\n", b, sup_per_bin[b], ctrl_per_bin[b])
+        end
     end
 end
 
