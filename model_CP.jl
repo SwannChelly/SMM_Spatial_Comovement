@@ -830,14 +830,19 @@ Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
 function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64})
 
-    n_regressors = N_REG + 1  # distance bins + log_productivity
+    # Distance-bin dummies only. The size/productivity control (log z) is NO LONGER
+    # a regressor: the control-only (filter==2) observations appended below have no
+    # productivity (comparative advantage ≡ 0 / z ≡ −∞), so the extensive-margin
+    # regression drops the log-z column entirely for consistency. z_flat is still
+    # built by solve_network (needed for the Ricardian selection) but not regressed on.
+    n_regressors = N_REG  # distance bins
 
     # Row count from the passed draws (not the global N_rho const), so callers
     # may pass a different number of varieties (e.g. the price-alignment test).
     N_rho_eff = size(sample_weights, 1)
 
-    # All good pairs are valid (n_good entries, each with N_rho_eff varieties)
-    N_valid = n_good * N_rho_eff
+    # Rows: n_good supplier pairs + N_CONTROL control-only pairs, each × N_rho_eff.
+    N_valid = (n_good + N_CONTROL) * N_rho_eff
 
     y = Vector{Float64}(undef, N_valid)
     X = zeros(N_valid, n_regressors)
@@ -869,7 +874,40 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
                     X[idx, b] = 1.0
                 end
             end
-            X[idx, n_regressors] = log(z_flat[rho, g])
+        end
+    end
+
+    # ── Control-only (filter==2) pairs: N_rho_eff rows of y=0 per pair ───────────
+    # Exogenous zeros of the extensive margin: sector-regions with only control-group
+    # firms. They contribute additional distance observations (no supplier, y=0) at
+    # their distance-to-nearest-downstream bin, sharing the (sector × nearest-down)
+    # fixed effect. Flat weight 1/N_rho_eff ⇒ each control pair carries total weight 1,
+    # matching a supplier pair (whose sample_weights column sums to 1). No log-z term.
+    w_ctrl = 1.0 / N_rho_eff
+    for c in 1:N_CONTROL
+        s = CONTROL_S[c]
+        r = CONTROL_R[c]
+        dr = CLOSEST_DOWNSTREAM_REGION[r]
+        group_id = (s - 1) * R_downstream + dr
+        if N_REG == 1
+            log_dist = LOG_CLOSEST_DIST[r]
+        else
+            b = DistBin[r, dr]
+        end
+
+        for rho in 1:N_rho_eff
+            idx += 1
+            y[idx] = 0.0
+            w[idx] = w_ctrl
+            fe_group[idx] = group_id
+
+            if N_REG == 1
+                X[idx, 1] = log_dist
+            else
+                if b > 0 && b <= N_REG
+                    X[idx, b] = 1.0
+                end
+            end
         end
     end
 

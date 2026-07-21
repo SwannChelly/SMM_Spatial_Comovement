@@ -176,8 +176,15 @@ emp_gamma_ls_tilde_local = emp_gamma_ls_local ./ reshape(max.(domestic_share_loc
 # ═══════════════════════════════════════════════════════════════════════════
 
 # T-mask will be used to isolate the sector-region on which to estimate comparative advantage.
-T_mask_local         = vec(permutedims(X_rs_local)) .> 0 # s-major (region-minor): identical to T_mask_moment_local / γ-moment convention
-T_mask_moment_local  = vec(permutedims(X_rs_local)) .> 0 # Vec flattens column per column.  So we have all region within the first sector and so on
+# Active set = (filter_N_upstream status == 1) AND (X_rs > 0): sector-regions with
+# ACTUAL suppliers, that we simulate through the Ricardian selection. Status 0 (drop,
+# as before with X_rs==0) and status 2 (control-only, no suppliers) are excluded from
+# the T active set / all moment blocks; status-2 pairs enter ONLY the extensive-margin
+# regression as extra y=0 distance observations (see CONTROL_S/CONTROL_R below and
+# fast_weighted_regression / compute_regression_quadrature).
+active_mat_local     = (filter_N_upstream_local .== 1) .& (X_rs_local .> 0)  # (S, R_full)
+T_mask_local         = vec(permutedims(active_mat_local)) # s-major (region-minor): identical to T_mask_moment_local / γ-moment convention
+T_mask_moment_local  = vec(permutedims(active_mat_local)) # Vec flattens column per column.  So we have all region within the first sector and so on
 @everywhere const T_MASK        = $T_mask_local
 @everywhere const T_MASK_MOMENT = $T_mask_moment_local
 
@@ -202,6 +209,22 @@ W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 @everywhere const SECTOR_GOOD_REGIONS  = $SECTOR_GOOD_REGIONS_local
 @everywhere const SR_TO_GOOD           = $SR_TO_GOOD_local
 @everywhere const W_RS_FLAT            = $W_RS_FLAT_local
+
+# ── Control-only (s,r) pairs: filter_N_upstream status == 2 ──────────────────
+# These sector-regions have ONLY control-group firms (no suppliers). We treat their
+# comparative advantage as null (productivity −∞): they are NOT simulated in the
+# Ricardian selection and carry no T/γ/π_r moment. They enter the extensive-margin
+# regression only, as additional y=0 observations at their distance-to-nearest-
+# downstream bin (see fast_weighted_regression). Enumerated s-major to mirror GOOD_S/R.
+control_indices_local = findall(filter_N_upstream_local .== 2)   # CartesianIndex(s, r)
+CONTROL_S_local       = [ci[1] for ci in control_indices_local]
+CONTROL_R_local       = [ci[2] for ci in control_indices_local]
+n_control_local       = length(control_indices_local)
+@everywhere const CONTROL_S = $CONTROL_S_local
+@everywhere const CONTROL_R = $CONTROL_R_local
+@everywhere const N_CONTROL = $n_control_local
+println("Control-only (filter==2) sector-region pairs: $n_control_local " *
+        "(extensive-margin y=0 observations, not simulated).")
 
 
 

@@ -117,8 +117,11 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
     u_nodes = (nodes_raw .+ 1) ./ 2
     gl_wts  = weights_raw ./ 2
 
-    N_total = n_good * n_quad
-    n_reg   = N_REG + 1
+    # n_good supplier pairs (n_quad quadrature nodes each) + N_CONTROL control-only
+    # pairs (one y=0 row each). Distance-bin dummies only — the log-z control column
+    # is dropped, mirroring fast_weighted_regression (control pairs have no z).
+    N_total = n_good * n_quad + N_CONTROL
+    n_reg   = N_REG
     y        = Vector{FT}(undef, N_total)
     X        = zeros(FT, N_total, n_reg)
     w_arr    = Vector{Float64}(undef, N_total)
@@ -171,7 +174,28 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
             else
                 (b > 0 && b <= N_REG) && (X[idx, b] = FT(1.0))
             end
-            X[idx, n_reg] = log(z_k)
+        end
+    end
+
+    # ── Control-only (filter==2) pairs: one y=0 row each ────────────────────────
+    # Exogenous extensive-margin zeros. No quadrature over z (no productivity); a
+    # single y=0 observation at the pair's distance bin, weight 1 (matching a supplier
+    # pair, whose n_quad Gauss-Legendre weights sum to 1), sharing the (sector ×
+    # nearest-downstream) fixed effect. No log-z term.
+    for c in 1:N_CONTROL
+        r_p = CONTROL_R[c]
+        s   = CONTROL_S[c]
+        dr0 = CLOSEST_DOWNSTREAM_REGION[r_p]
+        gid = (s - 1) * R_downstream + dr0
+        idx += 1
+        y[idx]        = zero(FT)
+        w_arr[idx]    = 1.0
+        fe_group[idx] = gid
+        if N_REG == 1
+            X[idx, 1] = FT(LOG_CLOSEST_DIST[r_p])
+        else
+            b = DistBin[r_p, dr0]
+            (b > 0 && b <= N_REG) && (X[idx, b] = FT(1.0))
         end
     end
 
