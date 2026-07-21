@@ -489,15 +489,15 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 # "prior_alpha" with the number in the "value" column. Returns nothing if absent.
 function _read_prior_alpha(coefs_df)
     cols = names(coefs_df)
-    if "prior_alpha" in cols
-        vals = collect(skipmissing(coefs_df[!, "prior_alpha"]))
+    if "reg_coef_cloglog" in cols
+        vals = collect(skipmissing(coefs_df[!, "reg_coef_cloglog"]))
         !isempty(vals) && return Float64(vals[1])
     end
     if "value" in cols
         for cname in cols
             col = coefs_df[!, cname]
             idx = findfirst(x -> x isa AbstractString &&
-                                 lowercase(strip(x)) == "prior_alpha", col)
+                                 lowercase(strip(x)) == "reg_coef_cloglog", col)
             idx !== nothing && return Float64(coefs_df[idx, "value"])
         end
     end
