@@ -16,9 +16,17 @@
 #                    joint search, where α moves reg_coef through the DIRECT τ=d^α
 #                    trade-cost channel with T free to absorb γ_ls separately.
 #
-# For each α and regime it prints the reg_coef loss (block 4), the γ_ls loss
-# (block 5), the combined β+γ loss (W_step3 if available, else identity), the
-# reg_coef vector, and — for the profiled regime — invert_T_ge's convergence.
+# For each α and regime it prints the reg_coef loss (block 4), the combined β+γ
+# loss (W_step3 if available, else identity), the reg_coef vector, and — for the
+# profiled regime — invert_T_ge's convergence.
+#
+# CONTROL-GROUP EXTENSION: at each α it computes reg_coef BOTH with and without the
+# control-group y=0 rows (filter==2 regions; fast_weighted_regression include_control
+# true/false). invert_T_ge pins γ_ls from supplier pairs only, so T*(α) is identical
+# in both variants — only the reg_coef regressand changes. This tests whether the
+# far-distance control zeros (which invert_T_ge cannot fill: control T≡0) break the
+# τ/T*(α) cancellation and restore an interior α* under profiling. The verdict reports
+# the reg_coef-loss minimiser α* for each of {profiled, fixed-T} × {with, without}.
 #
 # EXPECTED (the mechanism): under FIXED-T the reg_coef loss has a clear interior
 # minimum near α ≈ 0.3 (α steepens reg_coef via τ, identifying it). Under PROFILED
@@ -140,59 +148,94 @@ function block_losses(sim_vec)
     return reg_loss, gam_loss, gb_loss, sim_vec[reg_range]
 end
 
+# reg_coef WITHOUT the control-group y=0 rows (supplier pairs only), at the SAME
+# network/draws. `include_control` toggles ONLY the appended filter==2 rows; the
+# log-z size control is dropped in both variants. Profiling (invert_T_ge) pins γ_ls
+# from the supplier pairs alone, so T*(α) is IDENTICAL with or without controls —
+# the only thing that differs between the two variants is the reg_coef regressand.
+function reg_coef_without_control(θ)
+    net = solve_network(θ; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
+    fast_weighted_regression(net.linkages_flat, net.z_flat, net.sample_weights;
+                             include_control = false)
+end
+reg_loss_of(rc) = sum((emp_reg .- rc).^2)
+rc_str(v) = string(round.(v[1:min(end, 4)], digits = 3))
+
 # ── α grid ────────────────────────────────────────────────────────────────────
 α_grid = collect(range(0.02, 0.60, length = 15))
+
+println("\nHYPOTHESIS: the control-group zeros (476 filter==2 regions, more frequent at")
+println("far distances) anchor the far end of the extensive margin at y=0 — a place")
+println("invert_T_ge CANNOT follow (control T stays 0). So the τ/T*(α) cancellation that")
+println("flattens the supplier-only reg_coef may break once controls are in, restoring an")
+println("interior α*. We test this by computing reg_coef WITH vs WITHOUT controls at each α.")
+println("NOTE: the reg_loss uses the on-disk empirical target; for the WITH-control column")
+println("to be an absolute fit, that target must itself be the with-control spec.")
 
 println("\n" * "-"^72)
 println("(A) PROFILED regime  —  T = invert_T_ge(α)  (γ_ls pinned to data ∀α)")
 println("-"^72)
-@printf("  %-6s  %-5s  %-5s  %-11s  %-11s  %-11s  %-11s  %s\n",
-        "α", "conv", "iters", "resid", "reg_loss", "gam_loss", "βγ_loss", "reg_coef[1..]")
-prof_reg = Float64[]; prof_gb = Float64[]
+@printf("  %-5s %-4s %-4s  %-10s %-10s %-10s  %-16s %-16s\n",
+        "α", "cv", "it", "regL(ctrl)", "regL(noctrl)", "βγ_loss",
+        "reg_coef ctrl", "reg_coef noctrl")
+prof_reg_wc = Float64[]; prof_reg_wo = Float64[]; prof_gb = Float64[]
 for a in α_grid
     res = invert_T_ge([a], Ω_L, Ω_s, A; T_init = copy(T_hat))
     θa  = assemble_theta(Ω_L, Ω_s, A, [a], res.T)
     sim = eval_moments(θa)
-    rl, gl, gbl, rc = block_losses(sim)
-    push!(prof_reg, rl); push!(prof_gb, gbl)
-    @printf("  %-6.3f  %-5s  %-5d  %-11.3e  %-11.3e  %-11.3e  %-11.3e  %s\n",
-            a, res.converged ? "yes" : "NO", res.iters, res.resid, rl, gl, gbl,
-            string(round.(rc[1:min(end,4)], digits=3)))
+    rl_wc, gl, gbl, rc_wc = block_losses(sim)
+    rc_wo = reg_coef_without_control(θa)
+    rl_wo = reg_loss_of(rc_wo)
+    push!(prof_reg_wc, rl_wc); push!(prof_reg_wo, rl_wo); push!(prof_gb, gbl)
+    @printf("  %-5.3f %-4s %-4d  %-10.3e %-10.3e %-10.3e  %-16s %-16s\n",
+            a, res.converged ? "y" : "N", res.iters, rl_wc, rl_wo, gbl,
+            rc_str(rc_wc), rc_str(rc_wo))
 end
 
 println("\n" * "-"^72)
 println("(B) FIXED-T regime  —  T = T̂ held constant (α moves reg_coef via τ=d^α)")
 println("-"^72)
-@printf("  %-6s  %-11s  %-11s  %-11s  %s\n",
-        "α", "reg_loss", "gam_loss", "βγ_loss", "reg_coef[1..]")
-fix_reg = Float64[]; fix_gb = Float64[]
+@printf("  %-5s  %-10s %-10s %-10s  %-16s %-16s\n",
+        "α", "regL(ctrl)", "regL(noctrl)", "βγ_loss", "reg_coef ctrl", "reg_coef noctrl")
+fix_reg_wc = Float64[]; fix_reg_wo = Float64[]; fix_gb = Float64[]
 for a in α_grid
     θa  = assemble_theta(Ω_L, Ω_s, A, [a], T_hat)
     sim = eval_moments(θa)
-    rl, gl, gbl, rc = block_losses(sim)
-    push!(fix_reg, rl); push!(fix_gb, gbl)
-    @printf("  %-6.3f  %-11.3e  %-11.3e  %-11.3e  %s\n",
-            a, rl, gl, gbl, string(round.(rc[1:min(end,4)], digits=3)))
+    rl_wc, gl, gbl, rc_wc = block_losses(sim)
+    rc_wo = reg_coef_without_control(θa)
+    rl_wo = reg_loss_of(rc_wo)
+    push!(fix_reg_wc, rl_wc); push!(fix_reg_wo, rl_wo); push!(fix_gb, gbl)
+    @printf("  %-5.3f  %-10.3e %-10.3e %-10.3e  %-16s %-16s\n",
+            a, rl_wc, rl_wo, gbl, rc_str(rc_wc), rc_str(rc_wo))
 end
 
 # ── Verdict ────────────────────────────────────────────────────────────────────
 println("\n" * "="^72)
-println("VERDICT")
+println("VERDICT — does the control group restore an interior α under profiling?")
 println("="^72)
-ia_prof = argmin(prof_reg); ia_fix = argmin(fix_reg)
-ig_prof = argmin(prof_gb);  ig_fix = argmin(fix_gb)
-@printf("  reg_coef-loss minimiser:  PROFILED α*=%.3f   FIXED-T α*=%.3f\n",
-        α_grid[ia_prof], α_grid[ia_fix])
-@printf("  β+γ-loss   minimiser:     PROFILED α*=%.3f   FIXED-T α*=%.3f\n",
-        α_grid[ig_prof], α_grid[ig_fix])
+ia_prof_wc = argmin(prof_reg_wc); ia_prof_wo = argmin(prof_reg_wo)
+ia_fix_wc  = argmin(fix_reg_wc);  ia_fix_wo  = argmin(fix_reg_wo)
+@printf("  reg_coef-loss minimiser α*:\n")
+@printf("     PROFILED   with-control %.3f     without-control %.3f\n",
+        α_grid[ia_prof_wc], α_grid[ia_prof_wo])
+@printf("     FIXED-T    with-control %.3f     without-control %.3f\n",
+        α_grid[ia_fix_wc], α_grid[ia_fix_wo])
 println()
-if α_grid[ia_prof] <= α_grid[2] && α_grid[ia_fix] >= α_grid[max(1,end÷3)]
-    println("  ⇒ CONFIRMED: profiling drives the reg_coef optimum to the α→0 boundary,")
-    println("    while with T fixed the same reg_coef has an interior optimum at larger α.")
-    println("    The exact-γ_ls T*(α) adjustment cancels α's τ-channel leverage on reg_coef;")
-    println("    profiling out T profiles out most of α's identification.")
+boundary = α_grid[2]                                   # "at the α→0 boundary" cutoff
+prof_wc_interior = α_grid[ia_prof_wc] > boundary
+prof_wo_boundary = α_grid[ia_prof_wo] <= boundary
+if prof_wc_interior && prof_wo_boundary
+    println("  ⇒ HYPOTHESIS SUPPORTED: without controls the profiled reg_coef optimum sits")
+    println("    at the α→0 boundary, but WITH the control-group zeros it moves to an interior")
+    println("    α*. The far-distance zeros (which invert_T_ge cannot fill, control T≡0) break")
+    println("    the τ/T*(α) cancellation and re-identify α even under exact-γ_ls profiling.")
+elseif !prof_wc_interior
+    println("  ⇒ HYPOTHESIS NOT SUPPORTED: the profiled reg_coef optimum stays at/near α→0")
+    println("    even WITH the control group. The control zeros are α-invariant, so they add")
+    println("    a fixed anchor but do not re-create α-sensitivity strong enough to overcome")
+    println("    the T*(α) flattening — profiling still profiles out α's identification.")
 else
-    println("  ⇒ Inspect the two tables: compare where reg_loss is minimised and how the")
-    println("    reg_coef vector moves with α in each regime (flattening under profiling).")
+    println("  ⇒ MIXED: inspect the tables — compare the with- vs without-control reg_coef")
+    println("    vectors and where each loss is minimised in the profiled regime.")
 end
 println("="^72)
