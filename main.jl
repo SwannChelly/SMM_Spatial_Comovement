@@ -62,7 +62,7 @@ draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[
 optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip(ARGS[6])) : :pso
 @assert optimizer_backend in (:pso, :cmaes, :tiktak) "optimizer must be pso|cmaes|tiktak, got :$optimizer_backend"
 
-K = 2
+K = 20
 
 run_step1 = true#true
 run_step2 = true
@@ -92,7 +92,7 @@ println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO
 # count (K_sim/N_rho). Inference is simulation-noisy (the fixed-draw Jacobian and Σ_sim),
 # so it benefits from many more draws than the search; picked up by load_parameters.jl
 # into N_RHO_INFERENCE. 8th positional arg (run.sh --n_rho_inf=); default 10000 (= N_rho).
-n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 4000
+n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 1000
 @assert n_rho_inference >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference"
 
 # Extensive-margin regression method: :cloglog (default — correct complementary-log-log

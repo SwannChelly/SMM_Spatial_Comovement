@@ -441,7 +441,7 @@ BLOCK_RANGES_local = compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_ga
 @everywhere const BLOCK_NAMES  = ("labor", "industry", "pi_r", "reg_coef", "gamma_ls")
 
 w_vec = ones(N_moments)
-w_vec[BLOCK_RANGES_local[4]] .= 100.0
+w_vec[BLOCK_RANGES_local[4]] .= 1.0
 Weight_matrix_custom_local = Diagonal(w_vec)
 @everywhere const Weight_matrix_custom = $Weight_matrix_custom_local
 
