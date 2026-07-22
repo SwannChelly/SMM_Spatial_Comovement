@@ -829,16 +829,26 @@ using analytical weighted OLS with group demeaning (Frisch-Waugh-Lovell).
 Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
 function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
-                                  include_control::Bool=true)
+                                  include_control::Bool=true,
+                                  include_size_control::Bool=!include_control)
 
-    # Distance-bin dummies only. The size/productivity control (log z) is NO LONGER
-    # a regressor: the control-only (filter==2) observations appended below have no
-    # productivity (comparative advantage ≡ 0 / z ≡ −∞), so the extensive-margin
-    # regression drops the log-z column entirely for consistency. z_flat is still
-    # built by solve_network (needed for the Ricardian selection) but not regressed on.
-    # NOTE: log z is dropped in BOTH regimes (include_control true or false); the toggle
-    # only adds/removes the control-group y=0 rows, never the productivity column.
-    n_regressors = N_REG  # distance bins
+    # Regressors: N_REG distance-bin dummies, plus (optionally) a log-z size control.
+    # The size control and the control group are MUTUALLY EXCLUSIVE by construction:
+    # the control-only (filter==2) firms have no productivity (z ≡ −∞), so they cannot
+    # carry a log-z regressor. Hence the default couples them — size control ON only
+    # when the control group is OFF (include_size_control = !include_control):
+    #   • include_control=true  (production): control y=0 rows appended, NO log-z column.
+    #   • include_control=false (diagnostic): supplier pairs only, log-z size control ADDED
+    #     — conditioning on productivity purges the T-through-z omitted-variable confound,
+    #       so the distance slope loads on the trade-cost/α channel (see identification note).
+    # z_flat is always built by solve_network for the Ricardian selection; it is regressed
+    # on only when include_size_control is true.
+    @assert !(include_control && include_size_control) "size control needs firm productivity; " *
+        "the control group (filter==2) has z ≡ −∞, so include_control and include_size_control " *
+        "cannot both be true"
+    n_size       = include_size_control ? 1 : 0
+    n_regressors = N_REG + n_size          # distance bins (+ log-z size control)
+    size_col     = N_REG + 1               # column index of the log-z control (if present)
 
     # Row count from the passed draws (not the global N_rho const), so callers
     # may pass a different number of varieties (e.g. the price-alignment test).
@@ -879,6 +889,10 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
                 if b > 0 && b <= N_REG
                     X[idx, b] = 1.0
                 end
+            end
+
+            if include_size_control
+                X[idx, size_col] = log(z_flat[rho, g])   # size/productivity control
             end
         end
     end
