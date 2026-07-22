@@ -19,7 +19,13 @@ include("../model_CP.jl")   # brings in _cloglog_irls
 # GLM.jl cloglog slope on a named coefficient (FE as dummies via @formula).
 glm_slope(m, name) = coef(m)[findfirst(==(name), coefnames(m))]
 
-function report(label, b_mine, b_glm; tol = 1e-5)
+# Both fits must reach the SAME optimum. GLM.jl's default deviance tolerance
+# (rtol=1e-6) stops slightly before the MLE (β off by ~1e-4); tighten it so the
+# comparison is MLE-vs-MLE, not convergence-noise. Same for our IRLS.
+const GLMKW  = (maxiter = 500, atol = 1e-12, rtol = 1e-12)
+const IRLSKW = (max_iter = 300, tol = 1e-12)
+
+function report(label, b_mine, b_glm; tol = 1e-6)
     d = maximum(abs.(b_mine .- b_glm))
     @printf("\n[%s]\n", label)
     @printf("  %-8s %16s %16s\n", "coef", "IRLS (mine)", "GLM.jl")
@@ -47,10 +53,10 @@ let
     η  = a[fe] .+ β[1] .* x1 .+ β[2] .* x2
     y  = Float64.(rand(n) .< (1 .- exp.(-exp.(η))))
 
-    b_mine = _cloglog_irls(y, hcat(x1, x2), ones(n), fe)
+    b_mine = _cloglog_irls(y, hcat(x1, x2), ones(n), fe; IRLSKW...)
 
     df = DataFrame(y = y, x1 = x1, x2 = x2, fe = categorical(fe))
-    m  = glm(@formula(y ~ x1 + x2 + fe), df, Binomial(), CloglogLink())
+    m  = glm(@formula(y ~ x1 + x2 + fe), df, Binomial(), CloglogLink(); GLMKW...)
     b_glm = [glm_slope(m, "x1"), glm_slope(m, "x2")]
 
     report("A: continuous + FE, unweighted", b_mine, b_glm)
@@ -68,11 +74,11 @@ let
     η   = a[fe] .+ D * βb .+ βz .* xz
     y   = Float64.(rand(n) .< (1 .- exp.(-exp.(η))))
 
-    b_mine = _cloglog_irls(y, hcat(D, xz), ones(n), fe)
+    b_mine = _cloglog_irls(y, hcat(D, xz), ones(n), fe; IRLSKW...)
 
     df = DataFrame(y = y, b1 = D[:,1], b2 = D[:,2], b3 = D[:,3], xz = xz,
                    fe = categorical(fe))
-    m  = glm(@formula(y ~ b1 + b2 + b3 + xz + fe), df, Binomial(), CloglogLink())
+    m  = glm(@formula(y ~ b1 + b2 + b3 + xz + fe), df, Binomial(), CloglogLink(); GLMKW...)
     b_glm = [glm_slope(m, "b1"), glm_slope(m, "b2"), glm_slope(m, "b3"), glm_slope(m, "xz")]
 
     report("B: distance-bin dummies + size + FE", b_mine, b_glm)
@@ -91,11 +97,11 @@ let
     y  = Float64.(rand(n) .< (1 .- exp.(-exp.(η))))
     wint = Float64.(rand(1:4, n))              # integer frequency weights
 
-    b_mine = _cloglog_irls(y, hcat(x1, x2), wint, fe)
+    b_mine = _cloglog_irls(y, hcat(x1, x2), wint, fe; IRLSKW...)
 
     ridx = reduce(vcat, [fill(i, Int(wint[i])) for i in 1:n])   # expand
     dfE  = DataFrame(y = y[ridx], x1 = x1[ridx], x2 = x2[ridx], fe = categorical(fe[ridx]))
-    mE   = glm(@formula(y ~ x1 + x2 + fe), dfE, Binomial(), CloglogLink())
+    mE   = glm(@formula(y ~ x1 + x2 + fe), dfE, Binomial(), CloglogLink(); GLMKW...)
     b_glm = [glm_slope(mE, "x1"), glm_slope(mE, "x2")]
 
     report("C: frequency-weighted vs expanded GLM", b_mine, b_glm)
