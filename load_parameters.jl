@@ -298,10 +298,59 @@ X_dr_local = X_dr_local[N_downstream_per_region_local .!= 0]
 emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full  = $(emp_pi_r_local)
 @everywhere const emp_pi_r       = $(emp_pi_r_local)
-if n_coef == 1
-    reg_coef_local = [coefs[3, "value"]]
+# ── Regression method for the extensive-margin moment (block 4) ──────────────
+# :lpm     — linear probability model (fast_weighted_regression); distance coef is
+#            the slope of P(supplier), and the target is reg_coef_$(n_coef).npy.
+# :cloglog — complementary-log-log (fast_cloglog_regression); distance coef is +αθ
+#            (outcome not_supply), and the target is reg_coef_cloglog_$(n_coef).npy.
+# The entry point may define `reg_method`; default :lpm (backward-compatible; GMM's
+# analytical quadrature is LPM-convention). main.jl (SMM) defaults it to :cloglog.
+reg_method_local = (@isdefined(reg_method)) ? Symbol(reg_method) : :lpm
+@assert reg_method_local in (:lpm, :cloglog) "reg_method must be :lpm or :cloglog, got :$reg_method_local"
+@everywhere const REG_METHOD = $(QuoteNode(reg_method_local))
+
+# Whether the control group (filter==2, y=0 rows) enters the extensive-margin
+# regression. false ⇒ supplier pairs only WITH the log-z size control (the two are
+# coupled in fast_*_regression). The entry point may define `include_control`; default
+# true (production). Consumed by compute_moments.
+include_control_local = (@isdefined(include_control)) ? Bool(include_control) : true
+@everywhere const INCLUDE_CONTROL = $(include_control_local)
+println("reg_method = :$reg_method_local ; include_control (control group) = $include_control_local")
+
+# Read a scalar stat by name from stats.csv (a column named `name`, else a row whose
+# label column equals `name`, with the number in `value`). Returns nothing if absent.
+function _read_named_value(coefs_df, name::AbstractString)
+    cols = names(coefs_df)
+    if name in cols
+        vals = collect(skipmissing(coefs_df[!, name]))
+        !isempty(vals) && return Float64(vals[1])
+    end
+    if "value" in cols
+        for cname in cols
+            col = coefs_df[!, cname]
+            idx = findfirst(x -> x isa AbstractString &&
+                                 lowercase(strip(x)) == lowercase(name), col)
+            idx !== nothing && return Float64(coefs_df[idx, "value"])
+        end
+    end
+    return nothing
+end
+
+if reg_method_local == :cloglog
+    if n_coef == 1
+        _rc = _read_named_value(coefs, "reg_coef_cloglog_1")
+        _rc === nothing && error("reg_method=:cloglog with n_coef=1 needs a `reg_coef_cloglog_1` " *
+                                 "entry (column or labeled row) in stats.csv")
+        reg_coef_local = [_rc]
+    else
+        reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_cloglog_$(n_coef).npy"))
+    end
 else
-    reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))
+    if n_coef == 1
+        reg_coef_local = [coefs[3, "value"]]
+    else
+        reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))
+    end
 end
 @everywhere const reg_coef = $reg_coef_local
 # N_REG: number of reg_coef moments (distance-bin regression coefficients).
@@ -485,24 +534,9 @@ println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── Read the α prior on trade costs from stats.csv (robust to layout) ────────
-# Accepts either a column named "prior_alpha" or a row whose label column equals
-# "prior_alpha" with the number in the "value" column. Returns nothing if absent.
-function _read_prior_alpha(coefs_df)
-    cols = names(coefs_df)
-    if "reg_coef_cloglog" in cols
-        vals = collect(skipmissing(coefs_df[!, "reg_coef_cloglog"]))
-        !isempty(vals) && return Float64(vals[1])
-    end
-    if "value" in cols
-        for cname in cols
-            col = coefs_df[!, cname]
-            idx = findfirst(x -> x isa AbstractString &&
-                                 lowercase(strip(x)) == "reg_coef_cloglog", col)
-            idx !== nothing && return Float64(coefs_df[idx, "value"])
-        end
-    end
-    return nothing
-end
+# The prior is the empirical cloglog distance slope, stored as `reg_coef_cloglog_1`
+# (a column or a labeled row; with θ=1 the slope equals α). Returns nothing if absent.
+_read_prior_alpha(coefs_df) = _read_named_value(coefs_df, "reg_coef_cloglog_1")
 
 """
     invert_T_from_gamma(prior_alpha; max_iter=1000, tol=1e-11, damping=0.5)

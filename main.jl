@@ -95,6 +95,19 @@ println("profile_T = $profile_T", profile_T ? " — T is profiled out of the PSO
 n_rho_inference = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? parse(Int, strip(ARGS[8])) : 4000
 @assert n_rho_inference >= 1 "n_rho_inference must be ≥ 1, got $n_rho_inference"
 
+# Extensive-margin regression method: :cloglog (default — correct complementary-log-log
+# link, distance coef = αθ) or :lpm (linear probability model). 9th positional arg
+# (run.sh --reg=). Read by load_parameters.jl into REG_METHOD; the empirical target
+# (reg_coef_cloglog_* vs reg_coef_*) is selected to match.
+reg_method = length(ARGS) >= 9 && !isempty(strip(ARGS[9])) ? Symbol(strip(ARGS[9])) : :cloglog
+@assert reg_method in (:lpm, :cloglog) "reg_method must be lpm|cloglog, got :$reg_method"
+
+# Whether the no-supplier control group (filter==2, y=0 rows) enters the extensive-margin
+# regression. false ⇒ supplier pairs only WITH the log-z size control (coupled). 10th
+# positional arg (run.sh --controls=true|false). Read by load_parameters.jl into INCLUDE_CONTROL.
+include_control = length(ARGS) >= 10 && !isempty(strip(ARGS[10])) ?
+    (lowercase(strip(ARGS[10])) in ("true", "1", "yes")) : true
+
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
 run_2x2_test = true
@@ -108,7 +121,7 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend")
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control")
 
 input_folder  = "./baseline_$industry"
 # profile_T ⇒ isolate all step1..4 artifacts under a distinct tree (plan §6), so the

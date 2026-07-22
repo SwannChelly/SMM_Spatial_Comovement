@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false]
 #
 # Examples:
 #   ./run.sh aero
@@ -15,12 +15,14 @@
 #   ./run.sh aero --n_coef=4 --optimizer=cmaes
 #   ./run.sh aero --n_coef=4 --n_tau=1 --optimizer=tiktak --profile_T=true  # multistart on the Sinkhorn-reduced space
 #   ./run.sh aero --n_coef=4 --n_tau=1 --profile_T=true   # profile T out of the PSO (SMM only)
+#   ./run.sh aero --n_coef=4 --reg=lpm                    # linear-probability extensive margin (default: cloglog)
+#   ./run.sh aero --n_coef=4 --controls=false             # drop the no-supplier control group (adds the size control)
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false]"
     echo "  industry   : aero, auto, car, both"
     echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
@@ -30,6 +32,8 @@ if [ -z "$1" ]; then
     echo "  --optimizer: pso (default), cmaes, or tiktak (multistart; SMM only)"
     echo "  --profile_T: true|false (default false; SMM only) — profile T out of the PSO via invert_T_ge; outputs → reporting_<ind>_profiled/"
     echo "  --n_rho_inf: draw count for inference (Jacobian + Σ_sim), decoupled from N_rho (default: 10000)"
+    echo "  --reg      : extensive-margin regression link — cloglog (default, coef=αθ) or lpm (linear prob.); SMM only, target file selected to match"
+    echo "  --controls : include the no-supplier control group (filter==2) — true (default) or false (⇒ supplier pairs only, WITH the size control); SMM only"
     exit 1
 fi
 
@@ -45,6 +49,8 @@ DRAWS="sobol"    # Fréchet draw method: sobol (default), mc, is, qmc
 OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
 PROFILE_T="false"  # SMM only: profile T out of the PSO via invert_T_ge
 N_RHO_INF="10000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
+REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (default) or lpm
+CONTROLS="true"  # SMM only: include the no-supplier control group (filter==2) in the reg
 
 for arg in "$@"; do
     case "$arg" in
@@ -56,6 +62,8 @@ for arg in "$@"; do
         --optimizer=*) OPTIMIZER="${arg#--optimizer=}" ;;
         --profile_T=*) PROFILE_T="${arg#--profile_T=}" ;;
         --n_rho_inf=*) N_RHO_INF="${arg#--n_rho_inf=}" ;;
+        --reg=*)      REG="${arg#--reg=}" ;;
+        --controls=*) CONTROLS="${arg#--controls=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -83,6 +91,16 @@ fi
 
 if [ "$PROFILE_T" != "true" ] && [ "$PROFILE_T" != "false" ]; then
     echo "Error: --profile_T must be true or false (got: $PROFILE_T)"
+    exit 1
+fi
+
+if [ "$REG" != "cloglog" ] && [ "$REG" != "lpm" ]; then
+    echo "Error: --reg must be cloglog or lpm (got: $REG)"
+    exit 1
+fi
+
+if [ "$CONTROLS" != "true" ] && [ "$CONTROLS" != "false" ]; then
+    echo "Error: --controls must be true or false (got: $CONTROLS)"
     exit 1
 fi
 
@@ -133,14 +151,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf
+    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf reg controls
     # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
         local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
         echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF $REG $CONTROLS"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF, reg=$REG, controls=$CONTROLS)"
     fi
     echo "Logs: $log_file"
 

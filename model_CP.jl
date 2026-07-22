@@ -1193,10 +1193,17 @@ function compute_moments(network, params)
     gamma_ls = X_ls ./ X_s .* reshape(domestic_share, 1, S)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 4. Regression: P(supplier) vs distance bins (analytical weighted OLS)
+    # 4. Regression: extensive margin vs distance bins.
+    #    REG_METHOD selects the link (:lpm linear-probability, or :cloglog — the correct
+    #    complementary-log-log with distance coef = αθ). INCLUDE_CONTROL toggles the
+    #    control-group (filter==2) y=0 rows; when false the log-z size control is added
+    #    (the two are coupled in fast_*_regression). The empirical target loaded in
+    #    load_parameters.jl matches REG_METHOD.
     # ─────────────────────────────────────────────────────────────────────────
     sw = network.sample_weights
-    reg_coef = fast_weighted_regression(linkages_flat, z_flat, sw)
+    reg_coef = REG_METHOD == :cloglog ?
+        fast_cloglog_regression(linkages_flat, z_flat, sw; include_control=INCLUDE_CONTROL) :
+        fast_weighted_regression(linkages_flat, z_flat, sw; include_control=INCLUDE_CONTROL)
 
     
     # ─────────────────────────────────────────────────────────────────────────
