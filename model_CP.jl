@@ -957,6 +957,171 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
 end
 
 
+##################### Fast cloglog (IRLS over the FWL kernel) ###################
+
+"""
+    _cloglog_irls(y, X, w, fe_group; max_iter=50, tol=1e-9, eta_clamp=30.0) -> β
+
+Fit a complementary-log-log GLM  `P(y=1) = 1 − exp(−exp(η))`, `η = Xβ + a_{fe}`,
+by IRLS. The single categorical fixed effect `fe_group` is absorbed via **weighted
+within-group demeaning** each iteration (Frisch–Waugh–Lovell — exact for ONE FE
+dimension), so no dummy matrix is built. This is the nonlinear analogue of the
+`fast_weighted_regression` kernel: each IRLS step is a weighted LS on the demeaned
+design. `w` are analytic (observation) weights. Returns the coefficient vector `β`
+(length `size(X,2)`); the fixed effects are profiled out.
+
+The IRLS quantities for cloglog: with `μ = 1 − exp(−exp(η))`,
+`dμ/dη = e^{η}(1−μ)`, working response `z = η + (y−μ)/(dμ/dη)`, and IRLS weight
+`W = w·(dμ/dη)² / (μ(1−μ))`.
+"""
+function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
+                       w::AbstractVector{<:Real}, fe_group::AbstractVector{<:Integer};
+                       max_iter::Int=50, tol::Float64=1e-9, eta_clamp::Float64=30.0)
+    n, k = size(X)
+    yf = Float64.(y); Xf = Float64.(X); wf = Float64.(w)
+
+    # Precompute group → row indices once (weighted within-transform is one pass/FE).
+    groups  = unique(fe_group)
+    rows_of = Dict(g => findall(==(g), fe_group) for g in groups)
+
+    # Init: μ shrunk toward 0.5 (avoids η = ±∞ at all-0 / all-1 starts), η = cloglog link.
+    μ = (yf .+ 0.5) ./ 2
+    η = clamp.(log.(.-log.(1 .- μ)), -eta_clamp, eta_clamp)
+
+    β = zeros(k)
+    for _ in 1:max_iter
+        μ    = clamp.(1 .- exp.(.-exp.(η)), 1e-12, 1 - 1e-12)
+        dμdη = exp.(η) .* (1 .- μ)                       # e^{η}·e^{−e^{η}}
+        zwork = η .+ (yf .- μ) ./ dμdη                   # working response
+        W    = wf .* (dμdη .^ 2) ./ (μ .* (1 .- μ))      # IRLS × analytic weights
+
+        # Weighted within-group demeaning (FWL) of zwork and each X column.
+        zt = copy(zwork); Xt = copy(Xf)
+        for g in groups
+            r  = rows_of[g]
+            sw = sum(@view W[r])
+            sw < 1e-300 && continue
+            zt[r] .-= sum(W[r] .* zwork[r]) / sw
+            @inbounds for j in 1:k
+                Xt[r, j] .-= sum(W[r] .* Xf[r, j]) / sw
+            end
+        end
+
+        # Weighted LS on the demeaned system: (Xt' W Xt) β = Xt' W zt.
+        WXt   = W .* Xt
+        β_new = (Xt' * WXt) \ (Xt' * (W .* zt))
+
+        # Rebuild η = Xβ + a_fe, with a_g = weighted group mean of (zwork − Xβ).
+        resid = zwork .- Xf * β_new
+        η_new = Xf * β_new
+        for g in groups
+            r  = rows_of[g]
+            sw = sum(@view W[r])
+            sw < 1e-300 && continue
+            η_new[r] .+= sum(W[r] .* resid[r]) / sw
+        end
+        η_new = clamp.(η_new, -eta_clamp, eta_clamp)
+
+        Δ = maximum(abs.(β_new .- β))
+        β = β_new; η = η_new
+        Δ < tol && break
+    end
+    return β
+end
+
+"""
+    fast_cloglog_regression(linkages_flat, z_flat, sample_weights; kwargs...) -> Vector (N_REG)
+
+Complementary-log-log extensive-margin regression, fit by IRLS over the weighted-FWL
+kernel (`_cloglog_irls`). Drop-in sibling of `fast_weighted_regression` (same design:
+distance-bin regressors + optional log-z size control + optional control-group rows,
+same `(sector × nearest-downstream)` FE), but the correct nonlinear link instead of a
+linear probability model.
+
+The outcome is `not_supply = 1 − supplier`, so with `P(not_supply)=1−exp(−exp(η))` the
+distance coefficient equals **αθ** (the empirical `reg_coef_cloglog` convention — note the
+SIGN/OUTCOME differ from `fast_weighted_regression`, which returns the LPM slope of
+`P(supplier)`). Under this specification the coefficients are, in the single-destination
+limit, `β_distance = θα` and `β_logz = −θ`, so conditioning on size (`include_size_control`)
+purges the T-through-productivity confound and loads the distance slope on α.
+Returns the `N_REG` distance coefficients.
+"""
+function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
+                                 include_control::Bool=true,
+                                 include_size_control::Bool=!include_control,
+                                 max_iter::Int=50, tol::Float64=1e-9)
+    @assert !(include_control && include_size_control) "size control needs firm productivity; " *
+        "control firms (filter==2) have z ≡ −∞"
+    n_size       = include_size_control ? 1 : 0
+    n_regressors = N_REG + n_size
+    size_col     = N_REG + 1
+    N_rho_eff    = size(sample_weights, 1)
+    n_ctrl_eff   = include_control ? N_CONTROL : 0
+    N_valid      = (n_good + n_ctrl_eff) * N_rho_eff
+
+    y        = Vector{Float64}(undef, N_valid)
+    X        = zeros(N_valid, n_regressors)
+    w        = Vector{Float64}(undef, N_valid)
+    fe_group = Vector{Int}(undef, N_valid)
+
+    idx = 0
+    for g in 1:n_good
+        s = GOOD_S[g]; r = GOOD_R[g]
+        dr = CLOSEST_DOWNSTREAM_REGION[r]
+        group_id = (s - 1) * R_downstream + dr
+        local b, log_dist
+        if N_REG == 1
+            log_dist = LOG_CLOSEST_DIST[r]
+        else
+            b = DistBin[r, dr]
+        end
+        for rho in 1:N_rho_eff
+            idx += 1
+            y[idx] = linkages_flat[rho, g] > 0 ? 0.0 : 1.0   # not_supply
+            w[idx] = sample_weights[rho, g]
+            fe_group[idx] = group_id
+            if N_REG == 1
+                X[idx, 1] = log_dist
+            else
+                (b > 0 && b <= N_REG) && (X[idx, b] = 1.0)
+            end
+            if include_size_control
+                X[idx, size_col] = log(z_flat[rho, g])
+            end
+        end
+    end
+
+    if include_control
+        w_ctrl = 1.0 / N_rho_eff
+        for c in 1:N_CONTROL
+            s = CONTROL_S[c]; r = CONTROL_R[c]
+            dr = CLOSEST_DOWNSTREAM_REGION[r]
+            group_id = (s - 1) * R_downstream + dr
+            local b, log_dist
+            if N_REG == 1
+                log_dist = LOG_CLOSEST_DIST[r]
+            else
+                b = DistBin[r, dr]
+            end
+            for rho in 1:N_rho_eff
+                idx += 1
+                y[idx] = 1.0                 # control firms never supply → not_supply=1
+                w[idx] = w_ctrl
+                fe_group[idx] = group_id
+                if N_REG == 1
+                    X[idx, 1] = log_dist
+                else
+                    (b > 0 && b <= N_REG) && (X[idx, b] = 1.0)
+                end
+            end
+        end
+    end
+
+    β = _cloglog_irls(y, X, w, fe_group; max_iter=max_iter, tol=tol)
+    return β[1:N_REG]
+end
+
+
 ##################### Moment Computation ###################
 
 """

@@ -209,6 +209,27 @@ for a in α_grid
             a, rl_wc, rl_wo, gbl, rc_str(rc_wc), rc_str(rc_wo))
 end
 
+# ── (C) LINEAR MPL vs CLOGLOG, both size-controlled (profiled regime) ─────────
+# Does the correct nonlinear link (cloglog, coef = αθ) restore the α-sensitivity that
+# the linear probability model lacks? Both use include_control=false ⇒ supplier pairs
+# only WITH the log-z size control (no control group), so it is an apples-to-apples
+# link comparison on the same design. If the cloglog reg_coef moves with α while the
+# MPL one is flat, the link — not the moment — was killing α's identification.
+println("\n" * "-"^72)
+println("(C) PROFILED regime — reg_coef: LINEAR MPL vs CLOGLOG (both size-controlled)")
+println("-"^72)
+@printf("  %-6s  %-24s  %-24s\n", "α", "MPL reg_coef (P(supplier))", "cloglog reg_coef (αθ)")
+for a in α_grid
+    res = invert_T_ge([a], Ω_L, Ω_s, A; T_init = copy(T_hat))
+    θa  = assemble_theta(Ω_L, Ω_s, A, [a], res.T)
+    net = solve_network(θa; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
+    rc_lin  = fast_weighted_regression(net.linkages_flat, net.z_flat, net.sample_weights;
+                                       include_control = false)
+    rc_clog = fast_cloglog_regression(net.linkages_flat, net.z_flat, net.sample_weights;
+                                      include_control = false)
+    @printf("  %-6.3f  %-24s  %-24s\n", a, rc_str(rc_lin), rc_str(rc_clog))
+end
+
 # ── Verdict ────────────────────────────────────────────────────────────────────
 println("\n" * "="^72)
 println("VERDICT — does the control group restore an interior α under profiling?")

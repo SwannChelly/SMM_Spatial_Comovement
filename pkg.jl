@@ -7,6 +7,7 @@ Pkg.add("Distributions")
 Pkg.add("Plots")
 Pkg.add("CSV")
 Pkg.add("FixedEffectModels")
+Pkg.add("GLM")                # cloglog GLM: verification of _cloglog_irls (test/test_cloglog_verify.jl)
 Pkg.add("RDatasets")
 Pkg.add("Optim")              # Nelder-Mead local solver for the TikTak optimizer backend
 Pkg.add("ProgressMeter")
