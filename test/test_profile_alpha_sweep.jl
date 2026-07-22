@@ -3,6 +3,9 @@
 #
 #     julia test/test_profile_alpha_sweep.jl aero 4 1
 #     julia test/test_profile_alpha_sweep.jl auto 1
+#  Args: industry [n_coef] [n_tau] [run_folder] [reg_method] [include_control]
+#     julia test/test_profile_alpha_sweep.jl auto 4 1 ./reporting_auto_profiled_pso cloglog false
+#         → cloglog link, NO control group (supplier pairs + size control), on the profiled run
 #
 # Observed puzzle: without profiling (T searched freely) the estimator lands at
 # α ≈ 0.30 with a GOOD reg_coef fit; with profile_T=true (T = invert_T_ge(α,…) so
@@ -62,11 +65,22 @@ n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) :
 optimizer_backend = :pso
 K_sim    = 10000
 
+# 5th/6th args: extensive-margin config for the whole sweep (target + eval_moments).
+#   reg_method      (5th) : :cloglog (default) or :lpm
+#   include_control (6th) : true (default) or false ⇒ supplier pairs only WITH the
+#                           size control (coupled). MUST be set BEFORE load_parameters
+#                           so REG_METHOD/INCLUDE_CONTROL and the empirical target match.
+reg_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :cloglog
+@assert reg_method in (:lpm, :cloglog) "reg_method must be lpm|cloglog, got :$reg_method"
+include_control = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ?
+    (lowercase(strip(ARGS[6])) in ("true", "1", "yes")) : true
+
 input_folder  = "./baseline_$industry"
 output_folder = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? String(ARGS[4]) :
                 "./reporting_$(industry)_$(optimizer_backend)"
 mkpath(output_folder)
 @printf("Anchoring θ̂ / W_step3 on: %s\n", output_folder)
+@printf("Config: reg_method=:%s  include_control(group)=%s\n", reg_method, include_control)
 
 include("../load_parameters.jl")
 include("../profiling.jl")
@@ -153,10 +167,13 @@ end
 # log-z size control is dropped in both variants. Profiling (invert_T_ge) pins γ_ls
 # from the supplier pairs alone, so T*(α) is IDENTICAL with or without controls —
 # the only thing that differs between the two variants is the reg_coef regressand.
+# Regression function for the CHOSEN link (REG_METHOD), so the "without control" arm
+# and the loss match the config (cloglog by default).
+_reg_fn(link) = link == :cloglog ? fast_cloglog_regression : fast_weighted_regression
 function reg_coef_without_control(θ)
     net = solve_network(θ; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
-    fast_weighted_regression(net.linkages_flat, net.z_flat, net.sample_weights;
-                             include_control = false)
+    _reg_fn(REG_METHOD)(net.linkages_flat, net.z_flat, net.sample_weights;
+                        include_control = false)
 end
 reg_loss_of(rc) = sum((emp_reg .- rc).^2)
 rc_str(v) = string(round.(v[1:min(end, 4)], digits = 3))
