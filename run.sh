@@ -33,7 +33,7 @@ if [ -z "$1" ]; then
     echo "  --profile_T: true|false (default false; SMM only) — profile T out of the PSO via invert_T_ge; outputs → reporting_<ind>_profiled/"
     echo "  --n_rho_inf: draw count for inference (Jacobian + Σ_sim), decoupled from N_rho (default: 10000)"
     echo "  --reg      : extensive-margin regression link — cloglog (default, coef=αθ) or lpm (linear prob.); SMM only, target file selected to match"
-    echo "  --controls : include the no-supplier control group (filter==2) — true (default) or false (⇒ supplier pairs only, WITH the size control); SMM only"
+    echo "  --controls : include the no-supplier control group (filter==2) — true  or false (default) (⇒ supplier pairs only, WITH the size control); SMM only"
     exit 1
 fi
 
@@ -50,7 +50,7 @@ OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
 PROFILE_T="false"  # SMM only: profile T out of the PSO via invert_T_ge
 N_RHO_INF="10000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
 REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (default) or lpm
-CONTROLS="true"  # SMM only: include the no-supplier control group (filter==2) in the reg
+CONTROLS="false"  # SMM only: include the no-supplier control group (filter==2) in the reg
 
 for arg in "$@"; do
     case "$arg" in
