@@ -82,140 +82,6 @@ function generate_initial_alphas(method::String, n_alpha::Int, lb::Real, ub::Rea
 end
 
 
-function generate_halton_grid(n_needed::Int, batchsize::Int=1024, init=false, init_alpha=ones(5), last_stage_folder=nothing, K=1, variable=nothing, radius=0.1, second_stage=false)
-    """
-
-    Generate a Halton grid of size P x n with P the size of the parameter set and n the number of parameter sets to test.
-    This Halton grid function allows condition on the parameters and is much faster than the previous one. 
-
-    """
-    A = copy(N_downstream_per_region[N_downstream_per_region .!= 0])
-    A ./= sum(A)
-    if init
-        return vcat([[agg_labor_share], agg_industry_share, A, ones(N_TAU), ones(S*R)]...)
-    end
-    if last_stage_folder == nothing
-        lb_alpha, lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_T = init_alpha.*0.5, 0.8*agg_labor_share, 0.8.*agg_industry_share, 0.01.*A, 0.1*ones(S*R)
-        ub_alpha, ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_T = init_alpha.*2, 1.2*agg_labor_share, 1.2.*agg_industry_share, A.*10, 100*ones(S*R)
-
-        lb = vcat(lb_agg_labor_share_tech, lb_agg_industry_share_tech, lb_prod, lb_alpha, lb_T)
-        ub = vcat(ub_agg_labor_share_tech, ub_agg_industry_share_tech, ub_prod, ub_alpha, ub_T)
-        condition = true
-    else
-        best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:,K] # Load best params.
-        names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :alpha, :T]
-        vals = unpack_params(best_params)
-        params_dict = Dict(names .=> vals)
-        
-        # Handle variable as either a single string or a list
-        variable_list = isa(variable, String) ? [variable] : variable
-        
-        # Build lb and ub by concatenating bounds for each variable in the list
-        lb = vcat([params_dict[Symbol(v)] ./ radius for v in variable_list]...)
-        ub = vcat([params_dict[Symbol(v)] .* radius for v in variable_list]...)
-        
-        # Set condition based on whether "alpha" is in the variable list
-        condition = "alpha" in variable_list
-        
-        # Apply special constraints for specific variables
-        for (var_idx, v) in enumerate(variable_list)
-            if v == "agg_labor_share_tech"
-                # Find the indices corresponding to this variable
-                idx_start = var_idx == 1 ? 1 : sum([length(params_dict[Symbol(variable_list[i])]) for i in 1:(var_idx-1)]) + 1
-                idx_end = idx_start + length(params_dict[:agg_labor_share_tech]) - 1
-                lb[idx_start:idx_end] .= 0.001
-                ub[idx_start:idx_end] .= 1
-                condition = false
-            end
-        end
-        
-        if "T" in variable_list && second_stage
-            # Find indices for T in the concatenated arrays
-            t_position = findfirst(==("T"), variable_list)
-            idx_before_T = t_position == 1 ? 0 : sum([length(params_dict[Symbol(variable_list[i])]) for i in 1:(t_position-1)])
-            
-            mask = vec(mask_emp_gamma_ls)
-            t_length = length(params_dict[:T])
-            t_indices = (idx_before_T + 1):(idx_before_T + t_length)
-            
-            lb_T = lb[t_indices][mask.==1]
-            ub_T = ub[t_indices][mask.==1]
-            
-            # Rebuild lb and ub with masked T values
-            lb = vcat(lb[1:idx_before_T], lb_T, (idx_before_T + t_length < length(lb)) ? lb[idx_before_T + t_length + 1:end] : Float64[])
-            ub = vcat(ub[1:idx_before_T], ub_T, (idx_before_T + t_length < length(ub)) ? ub[idx_before_T + t_length + 1:end] : Float64[])
-        end
-    end
-    
-
-    
-    d = length(lb)
-    accepted = Vector{Vector{Float64}}(undef, 0)
-
-    # Create a Halton point generator in dimension d
-    hp = HaltonPoint(d)  # yields a lazy sequence of points in [0,1]^d
-
-    idx = 1
-    while length(accepted) < n_needed
-        # get a batch of raw Halton points
-        batch_raw = collect(hp[idx : idx + batchsize - 1])  # Vector of Vectors (each length d)
-        # Each point is in [0,1]^d
-
-        for raw in batch_raw
-            # scale each component
-            scaled = lb .+ (ub .- lb) .* raw
-
-            # apply your condition
-            if condition
-                alpha_start = 1 + S + R_downstream + 1
-                alphas = scaled[alpha_start:(alpha_start + N_TAU - 1)]
-                if issorted(alphas)
-                    push!(accepted, scaled)
-                    if length(accepted) >= n_needed
-                        break
-                    end
-                end
-            else
-                push!(accepted, scaled)
-                if length(accepted) >= n_needed
-                    break
-                end
-            end
-        end
-
-        idx += batchsize
-    end
-    
-    if last_stage_folder != nothing
-        names = ["agg_labor_share_tech", "agg_industry_share_tech", "productivity", "alpha", "T"]
-        variable_list = isa(variable, String) ? [variable] : variable
-        
-        if "T" in variable_list && second_stage
-            accepted = [assign_T_with_mask(params_dict[:T], sample) for sample in accepted]
-        end
-        
-        keyfun(x) = isa(first(keys(params_dict)), Symbol) ? Symbol(x) : x
-        
-        # Helper function to get the slice of k corresponding to parameter p
-        function get_param_slice(k, p)
-            if !(p in variable_list)
-                return params_dict[keyfun(p)]
-            else
-                var_idx = findfirst(==(p), variable_list)
-                idx_start = var_idx == 1 ? 1 : sum([length(params_dict[Symbol(variable_list[i])]) for i in 1:(var_idx-1)]) + 1
-                idx_end = idx_start + length(params_dict[keyfun(p)]) - 1
-                return k[idx_start:idx_end]
-            end
-        end
-        
-        accepted = [vcat([get_param_slice(k, p) for p in names]...) for k in accepted]
-        
-        push!(accepted, best_params) # We add the last best parameter. 
-        return accepted
-    end
-    return accepted
-end
-
 
 function assign_T_with_mask(true_T,sample)    
     mask = vec(mask_emp_gamma_ls)
@@ -224,7 +90,7 @@ function assign_T_with_mask(true_T,sample)
     return accept 
 end
 
-function parallel_SMM(params, simulation, second_stage, method;
+function parallel_SMM(params, simulation, second_stage;
                       precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                       sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
@@ -232,14 +98,14 @@ function parallel_SMM(params, simulation, second_stage, method;
                       moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                       analytical::Bool=false,
                       n_quad::Int=200)
-    return full_SMM(params, simulation, second_stage, method;
+    return full_SMM(params, simulation, second_stage;
                     precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
                     W_override=W_override, moment_blocks=moment_blocks,
                     analytical=analytical, n_quad=n_quad)
 end
 
 
-function parallel_SMM_safe(params, simulation = false, second_stage = false, method = "original", show_err = true;
+function parallel_SMM_safe(params, simulation = false, second_stage = false, show_err = true;
                            precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                            u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                            sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
@@ -247,13 +113,8 @@ function parallel_SMM_safe(params, simulation = false, second_stage = false, met
                            moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                            analytical::Bool=false,
                            n_quad::Int=200)
-    # Backward compatibility: convert Bool to String
-    if method isa Bool
-        method = method ? "normalize" : "original"
-    end
-
     try
-        result = parallel_SMM(params, simulation, second_stage, method;
+        result = parallel_SMM(params, simulation, second_stage;
                               precomputed_tau=precomputed_tau, u_draws=u_draws, sample_weights=sample_weights,
                               W_override=W_override, moment_blocks=moment_blocks,
                               analytical=analytical, n_quad=n_quad)
@@ -305,21 +166,17 @@ function distance_bin(d, n_bins=N_REG)
     end
 end
 
-function train_stage_one(n, init_alpha, params_list = nothing, second_stage = false, method = "original";
+function train_stage_one(n, init_alpha, params_list = nothing, second_stage = false;
                         u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                         sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
                         analytical::Bool=false,
                         n_quad::Int=200)
-    # Backward compatibility: convert Bool to String
-    if method isa Bool
-        method = method ? "normalize" : "original"
-    end
-
     t1 = time()
     if params_list == nothing
-        params_list = generate_halton_grid(n,2000,false,init_alpha)
+        error("train_stage_one now requires an explicit params_list " *
+              "(the legacy generate_halton_grid initialiser was removed).")
     end
-    f = params -> parallel_SMM_safe(params, false, second_stage, method, true;
+    f = params -> parallel_SMM_safe(params, false, second_stage, true;
                                     u_draws=u_draws, sample_weights=sample_weights,
                                     analytical=analytical, n_quad=n_quad)
     results = pmap(f, params_list)
@@ -1395,6 +1252,14 @@ every active column (asserted). `J_elast` is derived from raw `J`.
                     more than 10× the across-replication `J_sd` (nonlinear/clamped regime).
 - `richardson_check`: recompute every column at `2δ` and report the relative gap to the `δ`
                     estimate (default `true`); diagnostic only, returned `J` is unchanged.
+- `profile_T`     : T-profiling (SMM only). When `true`, every evaluated parameter
+                    vector is routed through `profiled_theta` first, so its T block is
+                    replaced by the Sinkhorn image `T*(α,Ω,A)`. Perturbing an α/head
+                    column then moves T accordingly ⇒ the returned column is the TOTAL
+                    derivative `dm/dα` along the profiled manifold ("only α perturbed,
+                    T computed accordingly") — no ∂m/∂T-as-free-parameter is formed.
+                    Restrict `param_indices` to the head/α columns (a T column is inert,
+                    `profiled_theta` overwrites it). Incompatible with `analytical=true`.
 
 # Exact analytical Jacobian (AD)
 - `analytical_ad` : with `analytical=true`, compute the closed-form Jacobian by
@@ -1424,10 +1289,23 @@ function compute_jacobian(theta::Vector{Float64};
                           richardson_check::Bool = true,
                           richardson_rel_tol = 0.05,
                           load_existing::Bool = false,
+                          profile_T::Bool = false,
                           draw_method::Symbol = DRAW_METHOD)
-    print(DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
+
+    # ── T-profiling: perturb only the head/α; T follows via the Sinkhorn image ──
+    # Under `profile_T`, T is NOT a free parameter — it is the deterministic image
+    # T*(α,Ω,A) = invert_T_ge(...). So every evaluated parameter vector is first
+    # routed through `profiled_theta` (profiling.jl), which overwrites its T block
+    # with T*(α,Ω,A). A perturbation of an α (or head) column then moves T
+    # accordingly, so the returned column is the TOTAL derivative dm/dα along the
+    # profiled manifold — exactly "only α perturbed, T computed accordingly". No
+    # ∂m/∂T-as-free-parameter is ever formed. Restrict `param_indices` to the head/α
+    # columns when profiling (perturbing a T column is inert — profiled_theta
+    # overwrites it — so its column would be ~0). Analytical mode is SMM-only-profiled
+    # ⇒ not supported here.
+    @assert !(profile_T && analytical) "compute_jacobian: profile_T is not supported with analytical=true (profiling is SMM-only)."
 
     # ── Optional: load a previously-saved Jacobian instead of recomputing ────────
     # Reads back the exact five files this function writes (J + _elasticity/_sd/
@@ -1572,7 +1450,10 @@ function compute_jacobian(theta::Vector{Float64};
                                                  randomise = true,
                                                  rng       = MersenneTwister(base_seed + k))
             eval_one = p -> begin
-                _, m = full_SMM(p; u_draws=u_k, sample_weights=w_k)
+                # Under profiling, reconstruct T = T*(α,Ω,A) before evaluating, so a
+                # perturbation of α/head moves T accordingly (total derivative).
+                p_eval = profile_T ? profiled_theta(p) : p
+                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k)
                 vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
             end
         end
@@ -2743,21 +2624,24 @@ end
 
 
 """
-    run_profiled_inference(theta_hat, J_full, gb_indices, gb_cols, gb_param_idx,
+    run_profiled_inference(theta_hat, G_alpha_full, gb_indices, gb_param_idx,
         W, Omega, Sigma_data, emp_vec_gb, sim_vec_gb; kwargs...) -> (inf_alpha, inf_T)
 
 Orchestrates the **profiling-path** inference at a profiled estimate θ̂ (where
-`T̂ = T*(α̂,Ω̂,Â)`). It (1) builds the α-reduced TOTAL Jacobian along the profiled
-manifold, `G_α = ∂m/∂α + ∂m/∂T · ∂T*/∂α`, (2) runs `compute_smm_inference` on
+`T̂ = T*(α̂,Ω̂,Â)`). `G_alpha_full` is the **direct profiled Jacobian** dm/dα
+(all moment rows × N_TAU), computed by `compute_jacobian(...; profile_T=true,
+param_indices = α-only)` — i.e. ONLY α is perturbed and T follows via the Sinkhorn
+image, so no ∂m/∂T-as-free-parameter is ever formed. This routine (1) slices it to
+the β+γ rows → the α-reduced Jacobian `G_α`, (2) runs `compute_smm_inference` on
 `G_α` alone → the profiled α CI (T shown value-only in the report), and (3) runs
-`compute_profiled_T_inference` → the correlated α+γ CI for T. Both write under
-`output_folder/inference/`. Used at Step 2 (θ̂_1) and Step 4 (θ̂_2) when
-`profile_T=true`; the joint (non-profiled) path keeps the standard α+T inference.
+`compute_profiled_T_inference` → the correlated α+γ CI for T (using `∂T*/∂α` from
+`_dTstar_dalpha` for the T delta). Both write under `output_folder/inference/`.
+Used at Step 2 (θ̂_1) and Step 4 (θ̂_2) when `profile_T=true`; the joint
+(non-profiled) path keeps the standard α+T inference.
 """
 function run_profiled_inference(theta_hat::Vector{Float64},
-                                J_full::Matrix{Float64},
+                                G_alpha_full::Matrix{Float64},
                                 gb_indices::Vector{Int},
-                                gb_cols::Vector{Int},
                                 gb_param_idx::Vector{Int},
                                 W::Matrix{Float64},
                                 Omega::Matrix{Float64},
@@ -2776,8 +2660,6 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                                 head_values = Float64[],
                                 step_rel::Float64 = 1e-2,
                                 target::AbstractMatrix = emp_gamma_ls)
-    J_gb = J_full[gb_indices, gb_cols]                       # β+γ rows × α+T cols
-
     # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
     dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
                          step_rel=step_rel, target=target)
@@ -2786,8 +2668,14 @@ function run_profiled_inference(theta_hat::Vector{Float64},
     T_pos     = dTa.T_pos
     f_alpha   = dTa.J_T
 
-    # ── Total profiled α Jacobian: G_α = ∂m/∂α + ∂m/∂T · ∂T*/∂α (β+γ rows × N_TAU)
-    G_alpha = J_gb[:, alpha_pos] .+ J_gb[:, T_pos] * f_alpha
+    # ── Direct profiled α Jacobian: dm/dα (only α perturbed, T follows) ──────────
+    # G_alpha_full was built with profile_T=true over the α columns (in the SAME
+    # order as PARAM_LABELS' α section = alpha_pos), so its N_TAU columns align with
+    # alpha_pos. Slice to the β+γ rows.
+    @assert size(G_alpha_full, 2) == length(alpha_pos) (
+        "run_profiled_inference: G_alpha_full has $(size(G_alpha_full,2)) columns " *
+        "but $(length(alpha_pos)) α params — pass a profiled α-only Jacobian.")
+    G_alpha = G_alpha_full[gb_indices, :]                    # β+γ rows × N_TAU
     alpha_param_idx = gb_param_idx[alpha_pos]
 
     # ── Profiled α inference (reduced Jacobian) — T shown value-only in report ──

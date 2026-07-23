@@ -1302,77 +1302,27 @@ end
 ##################### Loss Function ###################
 
 """
-    loss_function(simulated_moments, emp, W, method="original")
+    loss_function(simulated_moments, emp, W; moment_indices=nothing)
 
-Compute loss between empirical and simulated moments.
-
-# Methods
-- "original": Raw squared difference
-- "normalize": Difference scaled by sqrt of moment group size
-- "hybrid": Percentage deviation for non-zero, absolute for zeros
+Compute the GMM/SMM loss `err * W * err'` between empirical and simulated moments,
+where `err = emp − sim` (raw difference) over the masked moment vector. When
+`moment_indices` is given, both the residual and `W` are restricted to those moments
+(a pre-restricted `W` of matching size is used as-is).
 """
-function loss_function(simulated_moments, emp, W, method="original";
+function loss_function(simulated_moments, emp, W;
                        moment_indices::Union{Nothing, Vector{Int}} = nothing)
 
-    if method isa Bool
-        method = method ? "normalize" : "original"
-    end
-
-    if moment_indices !== nothing && method == "log"
-        error("moment_indices subsetting is not compatible with method=\"log\"")
-    end
-
-    square_size = sqrt.(vcat([fill(length(vec(m)), length(vec(m))) for m in simulated_moments]...))
     sim_flat = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
-
-    sim_flat    = sim_flat[MOMENT_MASK]
-    square_size = square_size[MOMENT_MASK]
-    emp_flat    = vec(emp)
+    sim_flat = sim_flat[MOMENT_MASK]
+    emp_flat = vec(emp)
 
     if moment_indices !== nothing
-        sim_flat    = sim_flat[moment_indices]
-        square_size = square_size[moment_indices]
-        emp_flat    = emp_flat[moment_indices]
+        sim_flat = sim_flat[moment_indices]
+        emp_flat = emp_flat[moment_indices]
     end
 
-    N = length(sim_flat)
-
-    if method == "original"
-        err = reshape(emp_flat - sim_flat, (1, N))
-
-    elseif method == "normalize"
-        err = reshape((emp_flat - sim_flat) ./ square_size, (1, N))
-
-    elseif method == "log"
-        # Block boundaries in the masked moment vector:
-        #   [1 : n_good]              labor share + industry shares + pi_r → log
-        #   [n_good+1 : n_good+N_REG] reg_coef (negative, level deviation) → level
-        #   [n_good+N_REG+1 : end]   gamma_ls                              → log
-        eps = 1e-12
-        err = zeros(N)
-
-        # Log blocks: all strictly positive moments
-        log_end   = n_good
-        reg_start = n_good + 1
-        reg_end   = n_good + N_REG
-        pi_start  = n_good + N_REG + 1
-
-        err[1:log_end] = log.(max.(emp_flat[1:log_end], eps)) .-
-                         log.(max.(sim_flat[1:log_end], eps))
-
-        # Level block: reg_coef (negative coefficients, log undefined)
-        err[reg_start:reg_end] = emp_flat[reg_start:reg_end] .-
-                                 sim_flat[reg_start:reg_end]
-
-        # Log block: pi_r
-        err[pi_start:end] = log.(max.(emp_flat[pi_start:end], eps)) .-
-                            log.(max.(sim_flat[pi_start:end], eps))
-
-        err = reshape(err, (1, N))
-
-    else
-        error("Unknown method: $method. Use 'original', 'normalize', or 'log'.")
-    end
+    N   = length(sim_flat)
+    err = reshape(emp_flat - sim_flat, (1, N))
 
     W = isnothing(W) ? I(N) : W
     if moment_indices !== nothing && !isa(W, UniformScaling)
@@ -1388,7 +1338,7 @@ end
 
 
 """
-    full_SMM(params, simulation=false, second_stage=false, method="original";
+    full_SMM(params, simulation=false, second_stage=false;
              analytical=false, n_quad=200, ...)
 
 Full SMM evaluation: compute loss and return moments.
@@ -1397,7 +1347,7 @@ When `analytical=true`, uses compute_moments_analytical (closed-form EK formulas
 + Gauss-Legendre quadrature for reg_coef). The simulation/u_draws/sample_weights
 kwargs are ignored in analytical mode.
 """
-function full_SMM(params, simulation=false, second_stage=false, method="original";
+function full_SMM(params, simulation=false, second_stage=false;
                   precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                   u_draws::Union{Nothing, Matrix{Float64}}=nothing,
                   sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
@@ -1431,6 +1381,6 @@ function full_SMM(params, simulation=false, second_stage=false, method="original
     if simulation
         return simulated_moments
     else
-        return loss_function(moments, emp, W, method; moment_indices=moment_indices), simulated_moments
+        return loss_function(moments, emp, W; moment_indices=moment_indices), simulated_moments
     end
 end

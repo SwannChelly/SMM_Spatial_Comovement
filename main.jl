@@ -248,12 +248,26 @@ if run_step2
 
     if profile_T
         # ── Profiling path ────────────────────────────────────────────────────
-        # α CI from the α-reduced TOTAL Jacobian G_α = ∂m/∂α + ∂m/∂T·∂T*/∂α; T CI
-        # from the correlated α+γ delta method (γ = emp_gamma_ls Sinkhorn target,
-        # its data noise Σ_data). Written under step2/inference/.
+        # Only α is perturbed and T follows via the Sinkhorn image T*(α,Ω,A): the
+        # DIRECT profiled Jacobian dm/dα (compute_jacobian(profile_T=true) over the α
+        # columns only). α CI runs on that reduced Jacobian; T CI is the correlated
+        # α+γ delta method (γ = emp_gamma_ls Sinkhorn target, its data noise Σ_data).
+        # Written under step2/inference/.
+        alpha_raw_indices = gb_param_idx[findall(l -> startswith(l, "alpha"), PARAM_LABELS[gb_cols])]
+        Jp1, _, _, _ = compute_jacobian(
+            theta_hat_1;
+            param_indices = alpha_raw_indices,
+            profile_T     = true,
+            output_folder = output_folder,
+            output_subdir = "step2",
+            filename      = "jacobian_profiled_alpha.npy",
+            K             = 50,
+            step_rel      = 1e-2,
+            base_seed     = 6_000_000,  # disjoint from J1 (2e6), Σ_sim (1:K_sim), step3 (1e6)
+            load_existing = load_jacobian)
         Sigma_data_s2 = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
         run_profiled_inference(
-            theta_hat_1, J1, gb_indices, gb_cols, gb_param_idx,
+            theta_hat_1, Jp1, gb_indices, gb_param_idx,
             Matrix(Weight_matrix_inference), Omega_step2, Sigma_data_s2,
             emp_vec_gb, sim_vec_gb;
             output_folder    = joinpath(output_folder, "step2"),
@@ -455,15 +469,28 @@ if run_step4
 
     if profile_T
         # ── Profiling path (Phase 3) ──────────────────────────────────────────
-        # α CI from the α-reduced TOTAL Jacobian G_α = ∂m/∂α + ∂m/∂T·∂T*/∂α (the
-        # γ_ls moments are juste-identified along T*(α), so this isolates α on the
-        # reg_coef τ-channel). T CI from the correlated α+γ delta method: propagates
-        # Var(α̂) AND the DATA noise of the γ_ls Sinkhorn target (Σ_data), with their
-        # covariance. Replaces the joint α+T inference (which needed the noisy ∂m/∂T
-        # as a free-parameter column).
+        # Only α is perturbed and T follows via the Sinkhorn image T*(α,Ω,A): the
+        # DIRECT profiled Jacobian dm/dα (compute_jacobian(profile_T=true) over the α
+        # columns). The γ_ls moments are juste-identified along T*(α), so this
+        # isolates α on the reg_coef τ-channel — no ∂m/∂T-as-free-parameter is
+        # formed. α CI runs on that reduced Jacobian; T CI is the correlated α+γ
+        # delta method: propagates Var(α̂) AND the DATA noise of the γ_ls Sinkhorn
+        # target (Σ_data), with their covariance.
+        alpha_raw_indices = gb_param_idx[findall(l -> startswith(l, "alpha"), PARAM_LABELS[gb_cols])]
+        Jp2, _, _, _ = compute_jacobian(
+            theta_hat_2;
+            param_indices = alpha_raw_indices,
+            profile_T     = true,
+            output_folder = output_folder,
+            output_subdir = "step3",
+            filename      = "jacobian_profiled_alpha_step3.npy",
+            K             = 50,
+            step_rel      = 1e-2,
+            base_seed     = 7_000_000,  # disjoint from J2 (1e6), Σ_sim (1:K_sim), step2 (6e6)
+            load_existing = load_jacobian)
         Sigma_data_s4 = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
         run_profiled_inference(
-            theta_hat_2, J2, gb_indices, gb_cols, gb_param_idx,
+            theta_hat_2, Jp2, gb_indices, gb_param_idx,
             W_step3, Omega_inf, Sigma_data_s4, emp_vec_gb, sim_vec_gb;
             output_folder    = joinpath(output_folder, "step3"),
             industry         = industry,

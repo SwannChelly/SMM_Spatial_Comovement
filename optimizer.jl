@@ -172,7 +172,6 @@ function train_stage(
     K = 1,
     radius = 0.1,
     second_stage = false,
-    method = false,
     u_draws::Union{Nothing, Matrix{Float64}} = nothing,
     sample_weights::Union{Nothing, Matrix{Float64}} = nothing,
     weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
@@ -406,7 +405,7 @@ function train_stage(
         profile_T && (x_full = profiled_theta(x_full))
 
         # Evaluate SMM (or analytical GMM)
-        result = parallel_SMM_safe(x_full, false, second_stage, method, false;
+        result = parallel_SMM_safe(x_full, false, second_stage, false;
                                    precomputed_tau=cached_tau, u_draws=u_draws, sample_weights=sample_weights,
                                    W_override=weight_matrix, moment_blocks=moment_blocks,
                                    analytical=analytical, n_quad=n_quad)
@@ -516,7 +515,6 @@ function run_optimization(;
     alpha_search_method::String = "lhs",
     alpha_selection_criterion::String = "reg_coef",
     length_range_alpha::Int = 40,
-    method::String = "original",
     gamma_beta_only::Bool = false,          # step 3: fix structural params, optimize only alpha+T
     moments_loss_gamma_beta::Bool = false,  # step 3: compute loss on gamma_ls + reg_coef moments only
     analytical::Bool = false,              # GMM mode: closed-form moments (no simulation)
@@ -619,7 +617,7 @@ function run_optimization(;
             n_particles, max_iter_initial;
             variable_list     = ["alpha"],
             last_stage_folder = seed_folder,
-            K=1, radius=0.5, second_stage=false, method=method,
+            K=1, radius=0.5, second_stage=false,
             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
             moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
             profile_T=profile_T
@@ -634,7 +632,7 @@ function run_optimization(;
                 n_particles, max_iter_initial;
                 variable_list     = ["T"],
                 last_stage_folder = seed_alpha_folder,
-                K=1, radius=0.5, second_stage=false, method=method,
+                K=1, radius=0.5, second_stage=false,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
             )
@@ -647,7 +645,6 @@ function run_optimization(;
             last_stage_folder = nothing,
             radius          = 0.5,
             second_stage   = false,
-            method         = method,
             u_draws        = U_DRAWS,
             sample_weights = SAMPLE_WEIGHTS,
             weight_matrix  = weight_matrix,
@@ -708,7 +705,7 @@ function run_optimization(;
                     n_particles, max_iter_stage;
                     variable_list     = [var],
                     last_stage_folder = joinpath(substage_folder, string(stage)),
-                    K=1, radius=radius, second_stage=false, method=method,
+                    K=1, radius=radius, second_stage=false,
                     u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                     moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
                     profile_T=profile_T
@@ -728,7 +725,7 @@ function run_optimization(;
                 n_particles, max_iter_stage;
                 variable_list     = ["productivity"],
                 last_stage_folder = joinpath(past_loop_folder, string(stage)),
-                K=1, radius=radius_prod, second_stage=false, method=method,
+                K=1, radius=radius_prod, second_stage=false,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
                 profile_T=profile_T
@@ -745,7 +742,7 @@ function run_optimization(;
                 n_particles, max_iter_stage;
                 variable_list     = ["alpha"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
-                K=1, radius=radius, second_stage=false, method=method,
+                K=1, radius=radius, second_stage=false,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
                 profile_T=profile_T
@@ -766,7 +763,7 @@ function run_optimization(;
                     n_particles, max_iter_stage;
                     variable_list     = ["T"],
                     last_stage_folder = joinpath(loop_folder, string(stage)),
-                    K=1, radius=radius, second_stage=false, method=method,
+                    K=1, radius=radius, second_stage=false,
                     u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                     moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad
                 )
@@ -783,7 +780,7 @@ function run_optimization(;
                 n_particles, max_iter_stage;
                 variable_list     = ["agg_labor_share_tech", "agg_industry_share_tech"],
                 last_stage_folder = joinpath(loop_folder, string(stage)),
-                K=1, radius=radius, second_stage=false, method=method,
+                K=1, radius=radius, second_stage=false,
                 u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, weight_matrix=weight_matrix,
                 moment_blocks=moment_blocks, analytical=analytical, n_quad=n_quad,
                 profile_T=profile_T
