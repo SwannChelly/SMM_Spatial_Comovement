@@ -1668,8 +1668,16 @@ function compute_jacobian(theta::Vector{Float64};
                 "mean=$(round(mean_e, sigdigits=4))  " *
                 "noise=$(isnan(noise_ratio) ? "n/a" : string(round(noise_ratio, sigdigits=3)))")
     end
-    α_col = findfirst(l -> startswith(l, "alpha"), PARAM_LABELS)
-    if α_col !== nothing
+    # α column mapped to the LOCAL perturbation order (`indices`), so this stays
+    # in-bounds when `param_indices` is a strict subset (e.g. the profiled α-only
+    # Jacobian, whose J has just N_TAU columns). Raw θ layout:
+    # [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | T], so α raw indices are
+    # (2+S+R_downstream) … (1+S+R_downstream+N_TAU).
+    alpha_raw_lo = 2 + S + R_downstream
+    alpha_raw_hi = 1 + S + R_downstream + N_TAU
+    alpha_local  = findall(j -> alpha_raw_lo <= indices[j] <= alpha_raw_hi, 1:n_perturb)
+    if !isempty(alpha_local)
+        α_col = alpha_local[1]
         for (i, m) in enumerate(BLOCK_RANGES[4])
             μ = J_elast[m, α_col]; σ = J_elast_sd[m, α_col]
             @printf("reg_coef[%d] vs α : elast=%.4e  sd=%.4e  ratio=%.2f\n",
@@ -1684,7 +1692,10 @@ function compute_jacobian(theta::Vector{Float64};
     # it is scale-free). High and dispersed ⇒ the fixed-draw FD Jacobian of the
     # extensive-margin (reg_coef) moments on T is simulation-noise dominated — the
     # motivation for a larger N_RHO_INFERENCE. Print-only; J is unchanged.
-    T_cols_ns = findall(l -> startswith(l, "T["), PARAM_LABELS)
+    # T columns mapped to the LOCAL perturbation order (`indices`); empty when the
+    # Jacobian is a restricted α-only (profiled) one, so the block is skipped then.
+    T_raw_lo  = 2 + S + R_downstream + N_TAU
+    T_cols_ns = findall(j -> indices[j] >= T_raw_lo, 1:n_perturb)
     if !isempty(BLOCK_RANGES[4]) && !isempty(T_cols_ns)
         sub_mu = abs.(J_elast[BLOCK_RANGES[4], T_cols_ns])
         sub_sd = J_elast_sd[BLOCK_RANGES[4], T_cols_ns]
