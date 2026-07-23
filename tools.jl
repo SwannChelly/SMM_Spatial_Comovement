@@ -2459,6 +2459,9 @@ DATA covariance `Sigma_data` (per "propagate the data noise of γ"). `se_T_alpha
 - `var_theta_T_delta.npy`        : V_T (correlated, sandwich α)
 - `t_stats_T_delta.npy`, `ci_95_T_delta.npy` : t = T̂/se_T and T̂ ± 1.96·se_T
 - `jacobian_T_wrt_alpha.npy`, `jacobian_T_wrt_gamma.npy` : f_α, f_γ
+- `T_precision_vs_gamma.png`     : scatter of T precision (|t|=|T̂|/se_T) vs the
+  DOMESTIC γ share γ̃=γ^F/domestic_share (Σ_r=1); + `T_precision_vs_gamma.npz`
+  (γ̃, γ^F, T̂, se_T{,_alpha,_gamma}, t) for external re-plotting.
 - `inference_T_delta.txt`        : human-readable summary + channel decomposition
 """
 function compute_profiled_T_inference(theta_hat::Vector{Float64},
@@ -2563,6 +2566,57 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
     NPZ.npzwrite(joinpath(inf_dir, "ci_95_T_delta.npy"),             ci_T)
     NPZ.npzwrite(joinpath(inf_dir, "jacobian_T_wrt_alpha.npy"),      f_alpha)
     NPZ.npzwrite(joinpath(inf_dir, "jacobian_T_wrt_gamma.npy"),      f_gamma)
+
+    # ── T precision vs γ size scatter (γ in the RENORMALIZED, Σ_r=1 space) ───────
+    # The identified T columns and the γ moment block enumerate the SAME active,
+    # non-reference (s,r) pairs in s-major order, so T param i ↔ gamma_rs[i]. The
+    # x-axis is the DOMESTIC sourcing share γ̃[r,s] = γ^F[r,s]/domestic_share[s]
+    # (sums to 1 per sector — the economically comparable size, per the request),
+    # the y-axis is T's precision = |t| = |T̂|/se_T. Expect a positive relation:
+    # bigger, better-measured domestic shares ⇒ tighter T. Saves a PNG + an .npz
+    # with every series so it can be re-plotted externally. Guarded — never blocks.
+    gamma_tilde = fill(NaN, n_gam)   # γ̃ (Σ_r=1), aligned to the γ / T ordering
+    gamma_face  = fill(NaN, n_gam)   # γ^F (with-foreign, as entered in Σ)
+    for i in 1:n_gam
+        (r, s) = gamma_rs[i]
+        gamma_face[i]  = target[r, s]
+        ds             = domestic_share[s]
+        gamma_tilde[i] = ds > 0 ? target[r, s] / ds : NaN
+    end
+    if n_T == n_gam
+        try
+            keep = findall(k -> isfinite(gamma_tilde[k]) && gamma_tilde[k] > 0 &&
+                                isfinite(t_T[k]), 1:n_T)
+            if !isempty(keep)
+                p = scatter(gamma_tilde[keep], abs.(t_T[keep]);
+                    xscale            = :log10,
+                    markersize        = 4,
+                    alpha             = 0.6,
+                    markerstrokecolor = :black,
+                    markerstrokewidth = 0.5,
+                    color             = RGB(0.247, 0.404, 0.667),
+                    legend            = false,
+                    xlabel            = "γ (domestic sourcing share, Σ_r = 1)",
+                    ylabel            = "T precision  |t| = |T| / se_T",
+                    title             = "T precision vs domestic γ share",
+                    grid              = true, gridalpha = 0.5, gridstyle = :dash)
+                hline!(p, [1.96]; color = :firebrick, ls = :dash, label = "")
+                savefig(p, joinpath(inf_dir, "T_precision_vs_gamma.png"))
+                println("  T-precision-vs-γ scatter saved to: " *
+                        joinpath(inf_dir, "T_precision_vs_gamma.png"))
+            end
+        catch e
+            @warn "T_precision_vs_gamma plot failed; continuing." exception=e
+        end
+    end
+    NPZ.npzwrite(joinpath(inf_dir, "T_precision_vs_gamma.npz"),
+        Dict("gamma_tilde"  => gamma_tilde,   # γ̃ (renormalized, Σ_r=1)
+             "gamma_face"   => gamma_face,     # γ^F (with-foreign, Σ entered on this)
+             "T_hat"        => T_hat_active,
+             "se_T"         => se_T,
+             "se_T_alpha"   => se_T_alpha,
+             "se_T_gamma"   => se_T_gamma,
+             "t_T"          => t_T))
 
     # ── Human-readable summary ──────────────────────────────────────────────────
     T_labels = param_labels_gb[T_pos]
