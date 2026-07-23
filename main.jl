@@ -246,30 +246,51 @@ if run_step2
         param_labels = PARAM_LABELS[gb_cols],
         label        = "SMM step2 θ̂_1")
 
-    inf_res_1 = compute_smm_inference(
-         theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
-         param_indices         = gb_param_idx,
-         empirical_moments_vec = emp_vec_gb,
-         simulated_moments_vec = sim_vec_gb,
-         output_folder         = joinpath(output_folder, "step2"),
-         industry              = industry,
-         K_sim                 = K_sim,
-         block_ranges          = gb_block_ranges,
-         block_names           = gb_block_names,
-         gamma_ref_map   = GAMMA_REF_MAP,
-         param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
-         moment_labels = MOMENT_LABELS[gb_indices],    # NEW: names for kept moments (rows of J)
-         display_labels = head_labels,   # NEW: non-inferred head params (value only)
-         display_values = head_values
-    )
+    if profile_T
+        # ── Profiling path ────────────────────────────────────────────────────
+        # α CI from the α-reduced TOTAL Jacobian G_α = ∂m/∂α + ∂m/∂T·∂T*/∂α; T CI
+        # from the correlated α+γ delta method (γ = emp_gamma_ls Sinkhorn target,
+        # its data noise Σ_data). Written under step2/inference/.
+        Sigma_data_s2 = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
+        run_profiled_inference(
+            theta_hat_1, J1, gb_indices, gb_cols, gb_param_idx,
+            Matrix(Weight_matrix_inference), Omega_step2, Sigma_data_s2,
+            emp_vec_gb, sim_vec_gb;
+            output_folder    = joinpath(output_folder, "step2"),
+            industry         = industry,
+            K_sim            = K_sim,
+            gb_block_ranges  = gb_block_ranges,
+            gb_block_names   = gb_block_names,
+            gamma_ref_map    = GAMMA_REF_MAP,
+            param_labels_gb  = PARAM_LABELS[gb_cols],
+            moment_labels_gb = MOMENT_LABELS[gb_indices],
+            head_labels      = head_labels,
+            head_values      = head_values)
+    else
+        inf_res_1 = compute_smm_inference(
+             theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
+             param_indices         = gb_param_idx,
+             empirical_moments_vec = emp_vec_gb,
+             simulated_moments_vec = sim_vec_gb,
+             output_folder         = joinpath(output_folder, "step2"),
+             industry              = industry,
+             K_sim                 = K_sim,
+             block_ranges          = gb_block_ranges,
+             block_names           = gb_block_names,
+             gamma_ref_map   = GAMMA_REF_MAP,
+             param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
+             moment_labels = MOMENT_LABELS[gb_indices],    # NEW: names for kept moments (rows of J)
+             display_labels = head_labels,   # NEW: non-inferred head params (value only)
+             display_values = head_values
+        )
 
-    # ── Delta-method T CIs at θ̂_1: T = T*(α) via invert_T_ge, Ω,A fixed (additive) ──
-    # Same construction as Step 4; propagates Var(α̂_1) through ∂T*/∂α alongside the
-    # joint (T-as-free) CIs. Written under step2/inference/.
-    compute_T_delta_inference(
-        theta_hat_1, inf_res_1, gb_param_idx, PARAM_LABELS[gb_cols];
-        output_folder = joinpath(output_folder, "step2"),
-        industry      = industry)
+        # ── Delta-method T CIs at θ̂_1 (joint estimator): Sinkhorn-pinned counterfactual
+        # propagating Var(α̂_1) through ∂T*/∂α alongside the joint (T-as-free) CIs.
+        compute_T_delta_inference(
+            theta_hat_1, inf_res_1, gb_param_idx, PARAM_LABELS[gb_cols];
+            output_folder = joinpath(output_folder, "step2"),
+            industry      = industry)
+    end
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test
@@ -432,31 +453,52 @@ if run_step4
         param_labels = PARAM_LABELS[gb_cols],
         label        = "SMM step4 θ̂_2")
 
-    inf_res = compute_smm_inference(
-        theta_hat_2, J2_gb, W_step3, Omega_inf;
-        param_indices         = gb_param_idx,
-        empirical_moments_vec = emp_vec_gb,
-        simulated_moments_vec = sim_vec_gb,
-        output_folder         = joinpath(output_folder, "step3"),
-        industry              = industry,
-        K_sim                 = K_sim,
-        block_ranges          = gb_block_ranges,
-        block_names           = gb_block_names,
-        gamma_ref_map   = GAMMA_REF_MAP,
-        param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
-        moment_labels = MOMENT_LABELS[gb_indices],    # NEW: names for kept moments (rows of J)
-        display_labels = head_labels,   # NEW: non-inferred head params (value only)
-        display_values = head_values)
+    if profile_T
+        # ── Profiling path (Phase 3) ──────────────────────────────────────────
+        # α CI from the α-reduced TOTAL Jacobian G_α = ∂m/∂α + ∂m/∂T·∂T*/∂α (the
+        # γ_ls moments are juste-identified along T*(α), so this isolates α on the
+        # reg_coef τ-channel). T CI from the correlated α+γ delta method: propagates
+        # Var(α̂) AND the DATA noise of the γ_ls Sinkhorn target (Σ_data), with their
+        # covariance. Replaces the joint α+T inference (which needed the noisy ∂m/∂T
+        # as a free-parameter column).
+        Sigma_data_s4 = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
+        run_profiled_inference(
+            theta_hat_2, J2, gb_indices, gb_cols, gb_param_idx,
+            W_step3, Omega_inf, Sigma_data_s4, emp_vec_gb, sim_vec_gb;
+            output_folder    = joinpath(output_folder, "step3"),
+            industry         = industry,
+            K_sim            = K_sim,
+            gb_block_ranges  = gb_block_ranges,
+            gb_block_names   = gb_block_names,
+            gamma_ref_map    = GAMMA_REF_MAP,
+            param_labels_gb  = PARAM_LABELS[gb_cols],
+            moment_labels_gb = MOMENT_LABELS[gb_indices],
+            head_labels      = head_labels,
+            head_values      = head_values)
+    else
+        inf_res = compute_smm_inference(
+            theta_hat_2, J2_gb, W_step3, Omega_inf;
+            param_indices         = gb_param_idx,
+            empirical_moments_vec = emp_vec_gb,
+            simulated_moments_vec = sim_vec_gb,
+            output_folder         = joinpath(output_folder, "step3"),
+            industry              = industry,
+            K_sim                 = K_sim,
+            block_ranges          = gb_block_ranges,
+            block_names           = gb_block_names,
+            gamma_ref_map   = GAMMA_REF_MAP,
+            param_labels  = PARAM_LABELS[gb_cols],   # NEW: names for active params (cols of J)
+            moment_labels = MOMENT_LABELS[gb_indices],    # NEW: names for kept moments (rows of J)
+            display_labels = head_labels,   # NEW: non-inferred head params (value only)
+            display_values = head_values)
 
-    # ── Delta-method T CIs: T = T*(α) via invert_T_ge, Ω,A fixed (additive) ──────
-    # Propagates Var(α̂) through ∂T*/∂α, giving T's inherited CIs alongside the joint
-    # (T-as-free) CIs above. Exact for the profiled estimator; a Sinkhorn-pinned
-    # counterfactual under the joint estimator. profiling.jl (invert_T_ge) is
-    # included @everywhere, so this resolves in both modes.
-    compute_T_delta_inference(
-        theta_hat_2, inf_res, gb_param_idx, PARAM_LABELS[gb_cols];
-        output_folder = joinpath(output_folder, "step3"),
-        industry      = industry)
+        # ── Delta-method T CIs (joint estimator): Sinkhorn-pinned counterfactual ──
+        # Propagates Var(α̂) through ∂T*/∂α alongside the joint (T-as-free) CIs above.
+        compute_T_delta_inference(
+            theta_hat_2, inf_res, gb_param_idx, PARAM_LABELS[gb_cols];
+            output_folder = joinpath(output_folder, "step3"),
+            industry      = industry)
+    end
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test

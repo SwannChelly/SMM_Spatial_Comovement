@@ -1180,6 +1180,29 @@ function loss_decomposition(params)
 end
 
 """
+    sigma_beta_gamma_filename(; smm::Bool) -> String
+
+Name of the on-disk β+γ moment covariance to load, keyed on the extensive-margin
+regression method (`REG_METHOD`), the moment count (`N_REG`), and the entry point:
+
+  * `REG_METHOD == :cloglog` → `Sigma_beta_gamma_cloglog…`, else `Sigma_beta_gamma…`
+  * `N_REG == 1`             → `…_1…` (single reg_coef stat), else no suffix
+  * `smm == true` (SMM path) → trailing `…_f.npy`  (the SMM convention, as used by
+    `build_step3_weight_matrix`); `smm == false` (GMM) → `….npy`.
+
+Examples: LPM/SMM/N_REG=4 → `Sigma_beta_gamma_f.npy`; cloglog/SMM/N_REG=1 →
+`Sigma_beta_gamma_cloglog_1_f.npy`; cloglog/GMM/N_REG=4 →
+`Sigma_beta_gamma_cloglog.npy`. The cloglog files carry the joint bootstrap
+covariance of the cloglog reg_coef + γ_ls moments (same β-then-γ ordering).
+"""
+function sigma_beta_gamma_filename(; smm::Bool)
+    base = REG_METHOD == :cloglog ? "Sigma_beta_gamma_cloglog" : "Sigma_beta_gamma"
+    n1   = N_REG == 1 ? "_1" : ""
+    fsuf = smm ? "_f" : ""
+    return base * n1 * fsuf * ".npy"
+end
+
+"""
     reconcile_sigma_data(Sigma_full, input_folder) -> Sigma_data
 
 Reconcile an on-disk β+γ moment covariance (`Sigma_beta_gamma[_1].npy`, or the
@@ -1254,9 +1277,10 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     n_gb = length(gb_indices)
 
     # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
-    # File selection keyed on N_REG (the moment count, not the τ-parameter count N_TAU).
+    # File selection keyed on N_REG (moment count) and REG_METHOD (:lpm vs :cloglog).
     # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
-    sigma_file = N_REG == 1 ? "Sigma_beta_gamma_1_f.npy" : "Sigma_beta_gamma_f.npy"
+    # SMM path ⇒ the `_f` variant (smm=true); cloglog ⇒ the `_cloglog` family.
+    sigma_file = sigma_beta_gamma_filename(; smm=true)
     Sigma_full = NPZ.npzread(joinpath(input_folder, sigma_file))
 
     # ── Reconcile file size with the (possibly thresholded) active set ───────
@@ -2249,6 +2273,87 @@ end
 
 
 """
+    _gamma_block_rs() -> Vector{Tuple{Int,Int}}
+
+The `(r, s)` pairs of the γ_ls moment block (`BLOCK_RANGES[5]`), in the SAME order
+as that block: sector-major, region-minor, active & non-reference. Reconstructed
+from `MOMENT_MASK` (the ground truth), so it stays aligned with the γ rows/cols of
+`Sigma_data` and with the empirical `emp_gamma_ls` entries. The γ block is the LAST
+block of the full moment layout (labor, industry, π_r, reg_coef, γ_ls), occupying
+the trailing `R*S` slots; slot `(s-1)*R + r` maps to `emp_gamma_ls[r, s]`.
+"""
+function _gamma_block_rs()
+    off = length(MOMENT_MASK) - R * S      # 0-based offset to the γ portion of the full vector
+    rs  = Tuple{Int,Int}[]
+    for s in 1:S, r in 1:R
+        MOMENT_MASK[off + (s - 1) * R + r] || continue
+        push!(rs, (r, s))
+    end
+    return rs
+end
+
+
+"""
+    _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb; step_rel, target)
+        -> NamedTuple
+
+Central LOG-step finite difference of the GE-Sinkhorn image `T*(α, Ω, A)` w.r.t. α,
+deterministic (no draws). Perturbs `α·exp(±δ)`, re-solves `invert_T_ge`, and
+chain-rules back to raw α units by `1/α`. Returns the identified-T × N_TAU Jacobian
+`J_T = ∂T*/∂α` plus the bookkeeping the delta-method callers need (α/T column
+positions inside the gb parameter vector, the reduced-T→identified map, the
+normalized head, and the reported T̂). Shared by `compute_T_delta_inference` (the
+α-only counterfactual on the joint path) and `compute_profiled_T_inference` (the
+correlated α+γ CI on the profiled path), so the FD convention cannot drift between
+them. Returns `nothing` if there is no α or no T column.
+"""
+function _dTstar_dalpha(theta_hat::Vector{Float64},
+                        gb_param_idx::Vector{Int},
+                        param_labels_gb::Vector{String};
+                        step_rel::Float64 = 1e-2,
+                        target::AbstractMatrix = emp_gamma_ls)
+    alpha_pos = findall(l -> startswith(l, "alpha"), param_labels_gb)
+    T_pos     = findall(l -> startswith(l, "T["),   param_labels_gb)
+    (isempty(alpha_pos) || isempty(T_pos)) && return nothing
+    n_alpha = length(alpha_pos)
+    n_T     = length(T_pos)
+
+    # Head + α at θ̂, normalized exactly as invert_T_ge / unpack_params read them.
+    ΩL, Ωs, A, α, Tvec = unpack_params(theta_hat)
+    T_hat_mat    = reshape(Tvec, S, R)               # (S,R) ref-normalized warm start
+    T_hat_active = theta_hat[gb_param_idx[T_pos]]     # reported T̂ (CI centers)
+
+    # `vec(permutedims(T*))[T_MASK]` gives ALL active T entries (s-major, incl. the
+    # per-sector reference regions). The gb Jacobian columns (gb_param_idx[T_pos])
+    # are the *identified* T params (reference regions dropped); map full-reduced-T
+    # positions → identified columns via the raw layout offset.
+    T_offset  = 1 + S + R_downstream + N_TAU          # raw index just before the reduced-T block
+    T_red_pos = gb_param_idx[T_pos] .- T_offset        # positions within vec(permutedims(·))[T_MASK]
+    @assert all(1 .<= T_red_pos .<= sum(T_MASK)) (
+        "T reduced-position mapping out of range: got $(extrema(T_red_pos)), " *
+        "reduced-T length $(sum(T_MASK)) — layout offset misaligned.")
+
+    δ   = step_rel
+    J_T = zeros(n_T, n_alpha)
+    for jj in 1:n_alpha
+        αp = copy(α); αp[jj] *= exp(δ)
+        αm = copy(α); αm[jj] *= exp(-δ)
+        resP = invert_T_ge(αp, ΩL, Ωs, A; target=target, T_init=copy(T_hat_mat))
+        resM = invert_T_ge(αm, ΩL, Ωs, A; target=target, T_init=copy(T_hat_mat))
+        (resP.converged && resM.converged) ||
+            @warn "_dTstar_dalpha: invert_T_ge did not converge for α[$jj] " *
+                  "(resid₊=$(round(resP.resid, sigdigits=3)), resid₋=$(round(resM.resid, sigdigits=3)))."
+        dT_full = (vec(permutedims(resP.T))[T_MASK] .- vec(permutedims(resM.T))[T_MASK]) ./ (2δ * α[jj])
+        J_T[:, jj] = dT_full[T_red_pos]                # restrict to the identified T columns
+    end
+
+    return (J_T = J_T, alpha_pos = alpha_pos, T_pos = T_pos, T_red_pos = T_red_pos,
+            n_alpha = n_alpha, n_T = n_T, ΩL = ΩL, Ωs = Ωs, A = A, α = α,
+            T_hat_mat = T_hat_mat, T_hat_active = T_hat_active)
+end
+
+
+"""
     compute_T_delta_inference(theta_hat, inf_result, gb_param_idx, param_labels_gb;
                               output_folder, industry="", step_rel=1e-2,
                               target=emp_gamma_ls) -> Dict
@@ -2301,47 +2406,19 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
-    # Locate α and T columns within the gb parameter vector (β/α-then-T order).
-    alpha_pos = findall(l -> startswith(l, "alpha"), param_labels_gb)
-    T_pos     = findall(l -> startswith(l, "T["),   param_labels_gb)
-    if isempty(alpha_pos) || isempty(T_pos)
+    # ── ∂T*/∂α by central LOG-step FD on invert_T_ge (deterministic, no draws) ──
+    dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
+                         step_rel=step_rel, target=target)
+    if dTa === nothing
         @warn "compute_T_delta_inference: no α or no T columns in gb params; skipping."
         return Dict{String,Any}()
     end
-    n_alpha = length(alpha_pos)
-    n_T     = length(T_pos)
-
-    # Head + α at θ̂, normalized exactly as invert_T_ge / unpack_params read them.
-    ΩL, Ωs, A, α, Tvec = unpack_params(theta_hat)
-    T_hat_mat    = reshape(Tvec, S, R)               # (S,R) ref-normalized warm start
-    T_hat_active = theta_hat[gb_param_idx[T_pos]]     # reported T̂ (CI centers)
-
-    # ── ∂T*/∂α by central LOG-step FD on invert_T_ge (deterministic, no draws) ──
-    # The α section of PARAM_LABELS is laid out b=1:N_TAU, so alpha_pos[jj] ↔ α[jj].
-    # `vec(permutedims(T*))[T_MASK]` gives ALL active T entries (length sum(T_MASK),
-    # s-major), INCLUDING the per-sector reference regions. The gb Jacobian columns
-    # (gb_param_idx[T_pos]) are the *identified* T params, which drop those reference
-    # regions. Map full-reduced-T positions → identified columns via the raw layout:
-    # T_reduced position k has raw index (1+S+R_downstream+N_TAU)+k, so subtracting
-    # that offset from each gb T raw index gives its slot in the full reduced-T vector.
-    T_offset  = 1 + S + R_downstream + N_TAU          # raw index just before the reduced-T block
-    T_red_pos = gb_param_idx[T_pos] .- T_offset        # positions within vec(permutedims(·))[T_MASK]
-    @assert all(1 .<= T_red_pos .<= sum(T_MASK)) (
-        "T reduced-position mapping out of range: got $(extrema(T_red_pos)), " *
-        "reduced-T length $(sum(T_MASK)) — layout offset misaligned.")
-    δ   = step_rel
-    J_T = zeros(n_T, n_alpha)
-    for jj in 1:n_alpha
-        αp = copy(α); αp[jj] *= exp(δ)
-        αm = copy(α); αm[jj] *= exp(-δ)
-        resP = invert_T_ge(αp, ΩL, Ωs, A; target=target, T_init=copy(T_hat_mat))
-        resM = invert_T_ge(αm, ΩL, Ωs, A; target=target, T_init=copy(T_hat_mat))
-        (resP.converged && resM.converged) ||
-            @warn "compute_T_delta_inference: invert_T_ge did not converge for α[$jj] " *
-                  "(resid₊=$(round(resP.resid, sigdigits=3)), resid₋=$(round(resM.resid, sigdigits=3)))."
-        dT_full = (vec(permutedims(resP.T))[T_MASK] .- vec(permutedims(resM.T))[T_MASK]) ./ (2δ * α[jj])
-        J_T[:, jj] = dT_full[T_red_pos]                # restrict to the identified T columns
-    end
+    alpha_pos    = dTa.alpha_pos
+    T_pos        = dTa.T_pos
+    n_alpha      = dTa.n_alpha
+    n_T          = dTa.n_T
+    T_hat_active = dTa.T_hat_active
+    J_T          = dTa.J_T
 
     # ── Propagate the α-variance (sandwich / efficient / reg_coef-only Ω_β) ──────
     Va_sw  = inf_result["Var_sandwich"][alpha_pos, alpha_pos]
@@ -2442,6 +2519,313 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         "ci_T_delta"    => ci_T,
         "se_T_joint"    => se_T_joint,
     )
+end
+
+
+"""
+    compute_profiled_T_inference(theta_hat, gb_param_idx, param_labels_gb;
+        dTa, G_alpha, W, Sigma_data, Var_alpha_sw, Var_alpha_eff,
+        Var_alpha_reg=nothing, gb_block_ranges,
+        output_folder, industry="", step_rel=1e-2, target=emp_gamma_ls) -> Dict
+
+**Profiling-path** confidence intervals for the comparative-advantage block **T**,
+propagating BOTH the estimation error of α̂ AND the DATA noise of the γ_ls target
+(the Sinkhorn moments), with their correlation — the fully-correlated delta method.
+
+Under profiling, T is the deterministic GE-Sinkhorn image `T̂ = T*(α̂, γ̂)` where γ̂
+is the empirical `emp_gamma_ls` target of `invert_T_ge`. Both α̂ and γ̂ are functions
+of the same β+γ data moments, so
+
+    T̂ − T ≈ f_α·(α̂ − α) + f_γ·(γ̂ − γ),
+
+with `f_α = ∂T*/∂α` (from `dTa.J_T`) and `f_γ = ∂T*/∂γ` (central log-step FD on
+`invert_T_ge`, perturbing each `emp_gamma_ls[r,s]` target entry). The joint
+covariance of `(α̂, γ̂)` is
+
+    [ Var(α̂)            Cov(α̂, γ̂) ]
+    [ Cov(α̂, γ̂)'        Σ_γγ       ]
+
+where `Var(α̂)` is the profiled α variance (`compute_smm_inference` on the reduced
+α-Jacobian `G_alpha`), `Σ_γγ = Sigma_data[γ, γ]` is the DATA (bootstrap) covariance
+of the γ moments, and `Cov(α̂, γ̂) = P·Sigma_data[:, γ]` with the influence
+`P = Var_eff(α̂)·G_alpha'·W` = `dα̂/dm`. This joint matrix is PSD by construction
+(it is the covariance of a linear image of the independent data / simulation noise),
+so `V_T = [f_α f_γ]·JointCov·[f_α f_γ]'` is a proper covariance:
+
+    V_T = f_α Var(α̂) f_α' + f_γ Σ_γγ f_γ' + f_α Cov(α̂,γ̂) f_γ' + (·)'
+
+The α channel uses the reported (sandwich) `Var(α̂)`; the γ channel and cross use the
+DATA covariance `Sigma_data` (per "propagate the data noise of γ"). `se_T_alpha` /
+`se_T_gamma` split the two marginal channels; `se_T` is the correlated total.
+
+# Saves (under output_folder/inference/)
+- `se_theta_T_delta.npy`         : √diag(V_T) — headline correlated SE (sandwich α)
+- `se_theta_T_delta_eff.npy`     : … using the efficient Var(α̂) in the α channel
+- `se_theta_T_delta_alpha.npy`   : α-channel-only SE  √diag(f_α Var(α̂) f_α')
+- `se_theta_T_delta_gamma.npy`   : γ-channel-only SE  √diag(f_γ Σ_γγ f_γ')
+- `se_theta_T_delta_regcoef.npy` : α-channel SE using the reg_coef-only Var(α̂) (Ω_β)
+- `var_theta_T_delta.npy`        : V_T (correlated, sandwich α)
+- `t_stats_T_delta.npy`, `ci_95_T_delta.npy` : t = T̂/se_T and T̂ ± 1.96·se_T
+- `jacobian_T_wrt_alpha.npy`, `jacobian_T_wrt_gamma.npy` : f_α, f_γ
+- `inference_T_delta.txt`        : human-readable summary + channel decomposition
+"""
+function compute_profiled_T_inference(theta_hat::Vector{Float64},
+                                      gb_param_idx::Vector{Int},
+                                      param_labels_gb::Vector{String};
+                                      dTa,
+                                      G_alpha::Matrix{Float64},
+                                      W::Matrix{Float64},
+                                      Sigma_data::Matrix{Float64},
+                                      Var_alpha_sw::Matrix{Float64},
+                                      Var_alpha_eff::Matrix{Float64},
+                                      Var_alpha_reg::Union{Nothing,Matrix{Float64}} = nothing,
+                                      gb_block_ranges,
+                                      output_folder::String = ".",
+                                      industry::String = "",
+                                      step_rel::Float64 = 1e-2,
+                                      target::AbstractMatrix = emp_gamma_ls)
+    inf_dir = joinpath(output_folder, "inference")
+    mkpath(inf_dir)
+
+    f_alpha      = dTa.J_T               # ∂T*/∂α  (n_T × N_TAU)
+    T_pos        = dTa.T_pos
+    T_red_pos    = dTa.T_red_pos
+    n_T          = dTa.n_T
+    n_alpha      = dTa.n_alpha
+    ΩL, Ωs, A, α = dTa.ΩL, dTa.Ωs, dTa.A, dTa.α
+    T_hat_mat    = dTa.T_hat_mat
+    T_hat_active = dTa.T_hat_active
+
+    # γ moment block within the gb vector (β-then-γ ⇒ second block) and its (r,s) map.
+    gam_rng  = gb_block_ranges[2]
+    n_gam    = length(gam_rng)
+    gamma_rs = _gamma_block_rs()
+    @assert length(gamma_rs) == n_gam (
+        "γ (r,s) map length $(length(gamma_rs)) != γ moment count $n_gam — " *
+        "MOMENT_MASK/BLOCK_RANGES[5] misalignment.")
+
+    # ── f_γ = ∂T*/∂γ_target by central LOG-step FD on invert_T_ge (pmap over γ) ──
+    # Perturb one empirical γ target entry at a time (emp_gamma_ls[r,s]), re-solve the
+    # Sinkhorn inversion, chain-rule back to raw γ units by 1/γ. Only the target
+    # PROFILE matters (per-sector scale is gauge), so a single-entry bump is a genuine
+    # profile perturbation; the reference-region entry is gauge and left untouched.
+    δ = step_rel
+    fg_cols = pmap(1:n_gam) do j
+        (r, s) = gamma_rs[j]
+        g0 = target[r, s]
+        g0 <= 0 && return zeros(n_T)
+        tp = Matrix{Float64}(target); tp[r, s] = g0 * exp(δ)
+        tm = Matrix{Float64}(target); tm[r, s] = g0 * exp(-δ)
+        Rp = invert_T_ge(α, ΩL, Ωs, A; target=tp, T_init=copy(T_hat_mat))
+        Rm = invert_T_ge(α, ΩL, Ωs, A; target=tm, T_init=copy(T_hat_mat))
+        dT = (vec(permutedims(Rp.T))[T_MASK] .- vec(permutedims(Rm.T))[T_MASK]) ./ (2δ * g0)
+        return dT[T_red_pos]
+    end
+    f_gamma = n_gam == 0 ? zeros(n_T, 0) : reduce(hcat, fg_cols)   # ∂T*/∂γ  (n_T × n_gam)
+
+    # ── Joint (α̂, γ̂) covariance pieces ──────────────────────────────────────────
+    # Influence of α̂ on the moment vector: P = (G'WG)^{-1} G'W = Var_eff(α̂)·G'·W.
+    P       = Var_alpha_eff * G_alpha' * W          # (N_TAU × n_gb)  dα̂/dm
+    Sig_gg  = Sigma_data[gam_rng, gam_rng]          # (n_gam × n_gam)  DATA cov of γ moments
+    Sig_g   = Sigma_data[:, gam_rng]                # (n_gb × n_gam)
+    Cov_ag  = P * Sig_g                             # (N_TAU × n_gam)  Cov(α̂, γ̂)
+
+    # V_T = f_α Var(α̂) f_α' + f_γ Σ_γγ f_γ' + f_α Cov(α̂,γ̂) f_γ' + (·)'
+    function assemble(Var_a)
+        Vaa = f_alpha * Var_a * f_alpha'
+        Vgg = f_gamma * Sig_gg * f_gamma'
+        Vag = f_alpha * Cov_ag * f_gamma'
+        V   = Vaa .+ Vgg .+ Vag .+ Vag'
+        return (V .+ V') ./ 2
+    end
+    VT_sw  = assemble(Var_alpha_sw)
+    VT_eff = assemble(Var_alpha_eff)
+
+    # Marginal-channel variances (for decomposition; sandwich α).
+    Vaa_only = f_alpha * Var_alpha_sw * f_alpha';  Vaa_only = (Vaa_only .+ Vaa_only') ./ 2
+    Vgg_only = f_gamma * Sig_gg       * f_gamma';  Vgg_only = (Vgg_only .+ Vgg_only') ./ 2
+
+    se_T       = sqrt.(max.(diag(VT_sw),   0.0))
+    se_T_eff   = sqrt.(max.(diag(VT_eff),  0.0))
+    se_T_alpha = sqrt.(max.(diag(Vaa_only), 0.0))
+    se_T_gamma = sqrt.(max.(diag(Vgg_only), 0.0))
+
+    se_T_reg = fill(NaN, n_T)
+    if Var_alpha_reg !== nothing
+        Vreg = f_alpha * Var_alpha_reg * f_alpha'
+        se_T_reg = sqrt.(max.(diag(Vreg), 0.0))
+    end
+
+    # t-stat and 95% CI from the correlated total SE, centered at T̂.
+    t_T  = [se_T[i] > 0 ? T_hat_active[i] / se_T[i] : NaN for i in 1:n_T]
+    ci_T = hcat(T_hat_active .- 1.96 .* se_T, T_hat_active .+ 1.96 .* se_T)
+
+    # ── Save arrays ─────────────────────────────────────────────────────────────
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta.npy"),          se_T)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_eff.npy"),      se_T_eff)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_alpha.npy"),    se_T_alpha)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_gamma.npy"),    se_T_gamma)
+    NPZ.npzwrite(joinpath(inf_dir, "se_theta_T_delta_regcoef.npy"),  se_T_reg)
+    NPZ.npzwrite(joinpath(inf_dir, "var_theta_T_delta.npy"),         VT_sw)
+    NPZ.npzwrite(joinpath(inf_dir, "t_stats_T_delta.npy"),           t_T)
+    NPZ.npzwrite(joinpath(inf_dir, "ci_95_T_delta.npy"),             ci_T)
+    NPZ.npzwrite(joinpath(inf_dir, "jacobian_T_wrt_alpha.npy"),      f_alpha)
+    NPZ.npzwrite(joinpath(inf_dir, "jacobian_T_wrt_gamma.npy"),      f_gamma)
+
+    # ── Human-readable summary ──────────────────────────────────────────────────
+    T_labels = param_labels_gb[T_pos]
+    mean_share_a = mean([se_T[i] > 0 ? (se_T_alpha[i] / se_T[i])^2 : NaN for i in 1:n_T])
+    mean_share_g = mean([se_T[i] > 0 ? (se_T_gamma[i] / se_T[i])^2 : NaN for i in 1:n_T])
+
+    open(joinpath(inf_dir, "inference_T_delta.txt"), "w") do io
+        println(io, "="^84)
+        println(io, "CORRELATED DELTA-METHOD T INFERENCE (profiled estimator)")
+        println(io, "  V_T = f_α Var(α̂) f_α' + f_γ Σ_γγ f_γ' + f_α Cov(α̂,γ̂) f_γ' + (·)'")
+        println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
+        println(io, "  n_T        : $n_T   n_α (N_TAU) : $n_alpha   n_γ : $n_gam")
+        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS UTC"))")
+        println(io, "="^84)
+        println(io, "\nT = T*(α̂, γ̂) is the deterministic GE-Sinkhorn image (invert_T_ge). Its CI")
+        println(io, "propagates TWO sources of uncertainty, WITH their correlation:")
+        println(io, "  (α) the estimation error of α̂ — reduced-Jacobian profiled Var(α̂), and")
+        println(io, "  (γ) the DATA (bootstrap) noise of the γ_ls Sinkhorn target — Σ_γγ from")
+        println(io, "      Sigma_data. Cov(α̂,γ̂)=P·Σ_data[:,γ] with P=dα̂/dm=(G'WG)^{-1}G'W.\n")
+        println(io, "  se_T        : √diag(V_T) — headline correlated SE (sandwich α)")
+        println(io, "  se_T_alpha  : α-channel only  √diag(f_α Var(α̂) f_α')")
+        println(io, "  se_T_gamma  : γ-channel only  √diag(f_γ Σ_γγ f_γ')")
+        println(io, "  se_T_reg    : α-channel using reg_coef-only Var(α̂) (Ω_β)")
+        println(io, "  t, CI       : t = T̂/se_T and 95% CI = T̂ ± 1.96·se_T\n")
+        hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-12s  %-12s",
+                       "T[sector-region]", "T̂", "se_T", "se_T_alpha",
+                       "se_T_gamma", "se_T_reg", "t", "CI_lo", "CI_hi")
+        println(io, hdr)
+        println(io, "  " * "-"^(length(hdr)-2))
+        for i in 1:n_T
+            @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-12.6f  %-12.6f\n",
+                    T_labels[i], T_hat_active[i], se_T[i], se_T_alpha[i],
+                    se_T_gamma[i], se_T_reg[i],
+                    isnan(t_T[i]) ? -999.0 : t_T[i], ci_T[i, 1], ci_T[i, 2])
+        end
+        println(io, "\n--- Channel decomposition (mean variance share over T) ---")
+        @printf(io, "  α-channel share: %.4f   γ-channel share: %.4f   (cross ⇒ shares need not sum to 1)\n",
+                mean_share_a, mean_share_g)
+        @printf(io, "  mean se_T: %.4e   mean se_T_alpha: %.4e   mean se_T_gamma: %.4e\n",
+                mean(se_T), mean(se_T_alpha), mean(se_T_gamma))
+        println(io, "\n--- Caveats ---")
+        println(io, "  * Θ = (α̂, γ̂). Ω^L, Ω^s, A are held fixed at θ̂ (their SMM-final-step status);")
+        println(io, "    a full-head delta method would add their covariance — not propagated here.")
+        println(io, "  * The α channel uses the reported (sandwich) Var(α̂); the γ channel and the")
+        println(io, "    cross term use the DATA covariance Sigma_data (γ target noise). The joint")
+        println(io, "    (α̂,γ̂) covariance is PSD by construction, so V_T is a proper covariance.")
+        println(io, "  * f_γ perturbs emp_gamma_ls[r,s]; Σ_γγ must be the covariance of the SAME")
+        println(io, "    (thresholded/renormalized) γ moments — regenerate Sigma_beta_gamma if the")
+        println(io, "    active set was gamma-thresholded (see reconcile_sigma_data caveat).")
+        println(io, "\n" * "="^84)
+    end
+
+    println("Correlated T inference saved to: $(joinpath(inf_dir, "inference_T_delta.txt"))")
+    @printf("  mean se_T=%.4e (α-share=%.3f, γ-share=%.3f) over %d T params\n",
+            mean(se_T), mean_share_a, mean_share_g, n_T)
+
+    return Dict(
+        "J_T_wrt_alpha"  => f_alpha,
+        "J_T_wrt_gamma"  => f_gamma,
+        "Var_T_delta"    => VT_sw,
+        "se_T_delta"     => se_T,
+        "se_T_delta_eff" => se_T_eff,
+        "se_T_delta_alpha" => se_T_alpha,
+        "se_T_delta_gamma" => se_T_gamma,
+        "se_T_delta_reg" => se_T_reg,
+        "t_T_delta"      => t_T,
+        "ci_T_delta"     => ci_T,
+    )
+end
+
+
+"""
+    run_profiled_inference(theta_hat, J_full, gb_indices, gb_cols, gb_param_idx,
+        W, Omega, Sigma_data, emp_vec_gb, sim_vec_gb; kwargs...) -> (inf_alpha, inf_T)
+
+Orchestrates the **profiling-path** inference at a profiled estimate θ̂ (where
+`T̂ = T*(α̂,Ω̂,Â)`). It (1) builds the α-reduced TOTAL Jacobian along the profiled
+manifold, `G_α = ∂m/∂α + ∂m/∂T · ∂T*/∂α`, (2) runs `compute_smm_inference` on
+`G_α` alone → the profiled α CI (T shown value-only in the report), and (3) runs
+`compute_profiled_T_inference` → the correlated α+γ CI for T. Both write under
+`output_folder/inference/`. Used at Step 2 (θ̂_1) and Step 4 (θ̂_2) when
+`profile_T=true`; the joint (non-profiled) path keeps the standard α+T inference.
+"""
+function run_profiled_inference(theta_hat::Vector{Float64},
+                                J_full::Matrix{Float64},
+                                gb_indices::Vector{Int},
+                                gb_cols::Vector{Int},
+                                gb_param_idx::Vector{Int},
+                                W::Matrix{Float64},
+                                Omega::Matrix{Float64},
+                                Sigma_data::Matrix{Float64},
+                                emp_vec_gb::Vector{Float64},
+                                sim_vec_gb::Vector{Float64};
+                                output_folder::String = ".",
+                                industry::String = "",
+                                K_sim::Int = 0,
+                                gb_block_ranges = nothing,
+                                gb_block_names  = nothing,
+                                gamma_ref_map   = nothing,
+                                param_labels_gb::Vector{String} = String[],
+                                moment_labels_gb = nothing,
+                                head_labels = String[],
+                                head_values = Float64[],
+                                step_rel::Float64 = 1e-2,
+                                target::AbstractMatrix = emp_gamma_ls)
+    J_gb = J_full[gb_indices, gb_cols]                       # β+γ rows × α+T cols
+
+    # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
+    dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
+                         step_rel=step_rel, target=target)
+    dTa === nothing && error("run_profiled_inference: no α or no T columns in gb params.")
+    alpha_pos = dTa.alpha_pos
+    T_pos     = dTa.T_pos
+    f_alpha   = dTa.J_T
+
+    # ── Total profiled α Jacobian: G_α = ∂m/∂α + ∂m/∂T · ∂T*/∂α (β+γ rows × N_TAU)
+    G_alpha = J_gb[:, alpha_pos] .+ J_gb[:, T_pos] * f_alpha
+    alpha_param_idx = gb_param_idx[alpha_pos]
+
+    # ── Profiled α inference (reduced Jacobian) — T shown value-only in report ──
+    T_disp_labels = param_labels_gb[T_pos]
+    T_disp_values = theta_hat[gb_param_idx[T_pos]]
+    inf_alpha = compute_smm_inference(
+        theta_hat, G_alpha, W, Omega;
+        param_indices         = alpha_param_idx,
+        empirical_moments_vec = emp_vec_gb,
+        simulated_moments_vec = sim_vec_gb,
+        output_folder         = output_folder,
+        industry              = industry,
+        K_sim                 = K_sim,
+        block_ranges          = gb_block_ranges,
+        block_names           = gb_block_names,
+        gamma_ref_map         = gamma_ref_map,
+        param_labels          = param_labels_gb[alpha_pos],
+        moment_labels         = moment_labels_gb,
+        display_labels        = vcat(collect(head_labels), collect(T_disp_labels)),
+        display_values        = vcat(collect(head_values), collect(T_disp_values)))
+
+    # ── Correlated T inference (α error + γ data noise + covariance) ────────────
+    inf_T = compute_profiled_T_inference(
+        theta_hat, gb_param_idx, param_labels_gb;
+        dTa           = dTa,
+        G_alpha       = G_alpha,
+        W             = W,
+        Sigma_data    = Sigma_data,
+        Var_alpha_sw  = inf_alpha["Var_sandwich"],
+        Var_alpha_eff = inf_alpha["Var_eff"],
+        Var_alpha_reg = get(inf_alpha, "Var_regcoef", nothing),
+        gb_block_ranges = gb_block_ranges,
+        output_folder = output_folder,
+        industry      = industry,
+        step_rel      = step_rel,
+        target        = target)
+
+    return inf_alpha, inf_T
 end
 
 

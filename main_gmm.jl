@@ -135,8 +135,9 @@ if run_step2
     mkpath(step2_folder)
 
     # Load empirical covariance matrices.
-    # File selection keyed on N_REG (the moment count, not τ-parameter count N_TAU).
-    sigma_file_gmm = N_REG == 1 ? "Sigma_beta_gamma_1.npy" : "Sigma_beta_gamma.npy"
+    # File selection keyed on N_REG (moment count) and REG_METHOD (:lpm vs :cloglog).
+    # GMM path ⇒ no `_f` suffix (smm=false); cloglog ⇒ the `_cloglog` family.
+    sigma_file_gmm = sigma_beta_gamma_filename(; smm=false)
     Sigma_data_full = try
         NPZ.npzread(joinpath(input_folder, sigma_file_gmm))
     catch
