@@ -48,7 +48,7 @@ N_QUAD="200"
 DRAWS="sobol"    # Fréchet draw method: sobol (default), mc, is, qmc
 OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
 PROFILE_T="false"  # SMM only: profile T out of the PSO via invert_T_ge
-N_RHO_INF="1000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
+N_RHO_INF="4000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
 REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (default) or lpm
 CONTROLS="false"  # SMM only: include the no-supplier control group (filter==2) in the reg
 
