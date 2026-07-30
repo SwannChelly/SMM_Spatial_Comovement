@@ -246,82 +246,106 @@ reversed.
 
 ### 4.1 Pseudo-code
 
-```
-# ── Precomputed once (load_parameters.jl) ─────────────────────────────────────
-AA_OF_ZE[l]            : ZE → attraction area                     (length R)
-AA_ACTIVE[s,a]         : a hosts ≥1 observed supplier in s          (S × n_AA)
-CELL_MASK[s,l]         : has_firms[s,l] AND AA_ACTIVE[s, AA_OF_ZE[l]]
-                         → the ~1161 cells: regression + count support
-T_MASK_AA[s,a]         : = AA_ACTIVE                  → the estimated T block
-T_REF_AA[s]            : one reference AA per sector, T[s,ref] = 1
-emp_gamma_aa[a,s]      : Σ_{l∈a} emp_gamma_ls[l,s]                 → block-5 target
-G_TARGET[s]            : G_K.csv value at K = 0                    → block-6 target
-N_LO[s], N_HI[s]       : ceil(N_s^obs / R_downstream), N_s^obs
-SIREN_LOG[s,l]         : log firm count                            → size control
+Shapes are given for every object. `R` = upstream ZE, `R_d` = downstream regions (= number of
+attraction areas), `S` = sectors, `n_cells` = |CELL_MASK| ≈ 1161.
 
-# ── Parameter vector (N_s is NOT in it) ───────────────────────────────────────
-θ = [ Ω^L(1) | Ω^s(S) | A(R_d) | α(N_TAU) | T_aa(n_T_aa) ]
+```text
+════════════════════════════════════════════════════════════════════════════════
+PRECOMPUTED ONCE   (load_parameters.jl)
+════════════════════════════════════════════════════════════════════════════════
+AA_OF_ZE          :: Vector{Int}(R)          l ↦ a(l);  from closest_downstream_region.npy
+                                             @assert AA_OF_ZE == CLOSEST_DOWNSTREAM_REGION  (G7)
+AA_ACTIVE         :: BitMatrix(S, R_d)       a hosts ≥1 observed supplier in s   → 𝒜⁺_s
+CELL_MASK         :: BitMatrix(S, R)         has_firms[s,l] && AA_ACTIVE[s, AA_OF_ZE[l]]
+                                             has_firms = filter_N_upstream ∈ {1,2}
+CELLS_OF_SECTOR   :: Vector{Vector{Int}}(S)  l-indices of CELL_MASK[s,:]
+GOOD_S,GOOD_R,SR_TO_GOOD                     rebuilt from CELL_MASK  (n_good ≈ n_cells)
+T_MASK_AA         :: BitMatrix(S, R_d)       = AA_ACTIVE          → the estimated T block
+T_REF_AA          :: Vector{Int}(S)          one reference AA per sector, T[s,ref] ≡ 1
+emp_gamma_aa      :: Matrix(R_d, S)          Σ_{l∈a} emp_gamma_ls[l,s]        → block-5 target
+G_TARGET          :: Vector{Float64}(S)      G_K.csv at K=0                   → block-6 target
+G_CURVE           :: Vector{Vector}(S)       full G_K.csv curve               → gate G3 only
+N_LO, N_HI        :: Vector{Int}(S)          ceil(N_supplier_s / R_d),  N_supplier_s
+LOG_DIST          :: Vector(R)               log(max(closest_plant_dist, 1.0))   ← the 1.0 floor
+DIST_BIN          :: Vector{Int}(R)          distance_bin(...) ∈ 0:N_REG, 0 = reference (d ≤ 50)
+FE_GROUP          :: Vector{Int}(n_cells)    (s-1)*R_d + AA_OF_ZE[l]
 
-# ── One loss evaluation ───────────────────────────────────────────────────────
-function loss(θ, W):
+════════════════════════════════════════════════════════════════════════════════
+PARAMETER VECTOR      (N_s is NOT in it)
+════════════════════════════════════════════════════════════════════════════════
+θ_c = [ Ω^L(1) | Ω^s(S) | A(R_d) | α(N_TAU) | T_aa(n_T_aa) ],   n_T_aa = count(T_MASK_AA)
 
-    Ω^L, Ω^s, A, α, T_aa = unpack_params(θ)          # T block now (S × n_AA)
-    T[s,l] = T_aa[s, AA_OF_ZE[l]]                    # gather: NEW, the only
-                                                     # structural line added
+════════════════════════════════════════════════════════════════════════════════
+ONE LOSS EVALUATION
+════════════════════════════════════════════════════════════════════════════════
+function loss(θ_c, W; N_prev = nothing)
 
-    net = solve_network(θ; u_draws = U_DRAWS)         # UNCHANGED
+  ── 0. unpack, gather AA → ZE ────────────────────────────────────────────────
+  Ω^L, Ω^s, A, α, T_aa = unpack_params(θ_c)        # T_aa :: Matrix(S, R_d), ref-normalised
+  T[s,l] = T_aa[s, AA_OF_ZE[l]]                    # (S,R) gather — the one structural new line
 
-    # ---- (1) win-somewhere probability, per cell -----------------------------
-    for (s,l) in CELL_MASK:
-        q[s,l] = mean_ρ net.linkages_flat[ρ, SR_TO_GOOD[s,l]]
-        q[s,l] = clamp(q[s,l], eps, 1 - eps)         # guard the ^N_s and the log
+  ── 1. solve the network (UNCHANGED) ─────────────────────────────────────────
+  net = solve_network(Ω^L, Ω^s, A, α, T; u_draws = U_DRAWS)
+  #   net.linkages_flat :: (N_rho, n_good), 1 if the pair wins variety ρ for ≥1 buyer
 
-    # ---- (2) profile out N_s over the integers (NO re-simulation) -----------
-    #  G(s,n) := mean over l with CELL_MASK[s,l] of (1 - q[s,l])^n   # closed form, ↓ in n
-    #  2a: warm start = exact-match root of G(s,n) = G_TARGET[s]
-    for s in 1:S:
-        if   G(s,N_LO[s]) <= G_TARGET[s]: n0[s] = N_LO[s]
-        elif G(s,N_HI[s]) >= G_TARGET[s]: n0[s] = N_HI[s]
-        else:
-            lo, hi = N_LO[s], N_HI[s]                 # G(lo) > target > G(hi)
-            while hi - lo > 1:
-                mid = (lo + hi) ÷ 2
-                if G(s,mid) > G_TARGET[s]: lo = mid else: hi = mid
-            n0[s] = argmin over n ∈ {lo,hi} of |G(s,n) - G_TARGET[s]|
+  ── 2. win-somewhere probability, per cell ───────────────────────────────────
+  for (s,l) in CELL_MASK
+      g       = SR_TO_GOOD[s,l]
+      q̂[s,l]  = mean_ρ net.linkages_flat[ρ, g]                    # ∈ [0,1]
+      n_win[s,l] = q̂[s,l] * N_rho                                  # ← diagnostic, see §4.5
+      q̂[s,l]  = clamp(q̂[s,l], 0.5/N_rho, 1 - 1e-12)                # floor: unresolved ⇒ MC limit
+  end
+  n_floored = count(cells at the floor)                            # ← report every evaluation
 
-    #  2b: integer coordinate descent on the FULL weighted loss (blocks 4+6).
-    #      Sectors couple only through the shared distance coefficients of the
-    #      pooled regression, so one pass usually suffices; a 2nd pass is the check.
-    N̂ = n0
-    repeat until no sector moves (max 3 passes):
-        for s in 1:S:
-            N̂[s] = argmin over n ∈ window(N̂[s]) ∩ [N_LO[s],N_HI[s]] ∩ ℕ
-                     of loss_blocks_4_6(N̂ with entry s replaced by n)
-            #  window = geometric bracket around the incumbent, then integer
-            #  bisection on the loss difference; each candidate = ONE collapsed
-            #  cloglog fit on ~1161 rows — cheap, and no re-simulation
-    clamped[s] = (N̂[s]==N_LO[s]) ? :lo : (N̂[s]==N_HI[s]) ? :hi : :none
+  ── 3. profile out N_s, per sector — closed form, NO re-simulation ───────────
+  #   G(s,n) = mean over l ∈ CELLS_OF_SECTOR[s] of (1 - q̂[s,l])^n     strictly ↓ in n
+  for s in 1:S
+      lo, hi = N_LO[s], N_HI[s]
+      if     G(s,lo) <= G_TARGET[s]   N̂[s], clamped[s] = lo, :lo    # too few empties even at lo
+      elseif G(s,hi) >= G_TARGET[s]   N̂[s], clamped[s] = hi, :hi    # too many empties even at hi
+      else
+          while hi - lo > 1                                        # G(lo) > target > G(hi)
+              mid = (lo + hi) ÷ 2
+              G(s,mid) > G_TARGET[s] ? (lo = mid) : (hi = mid)
+          end
+          N̂[s]      = argmin_{n ∈ {lo,hi}} |G(s,n) - G_TARGET[s]|
+          clamped[s]= :none
+      end
+  end
+  #   cost: ⌈log2(N_HI-N_LO)⌉ ≈ 12–15 evaluations of a length-|CELLS_OF_SECTOR[s]| mean
 
-    # ---- (3) granular extensive margin --------------------------------------
-    p0[s,l] = (1 - q[s,l])^N̂[s]                      # Pr(no supplier), exact
+  ── 4. block 4 — cell-level cloglog on the SUPPLIER indicator ────────────────
+  p1[s,l] = 1 - (1 - q̂[s,l])^N̂[s]                  # Pr(K_ls ≥ 1) ∈ (0,1), fractional outcome
+  X       = N_REG == 1 ? [LOG_DIST[l]]                                  # (n_cells, 1)
+                       : onehot(DIST_BIN[l], 1:N_REG)                   # (n_cells, N_REG), base = bin 0
+  #   NO draw-level column.  log(SIREN) joins X here when it arrives — and must then
+  #   be in the empirical target too (§2), or the two coefficients are different estimands.
+  reg_coef = cloglog_irls(y = p1, X = X, fe = FE_GROUP, w = ones(n_cells))   # (N_REG,)
 
-    # ---- (4) block 4: cell-level cloglog, fractional outcome ----------------
-    #   one row per cell; y = 1 - p0  (SUPPLIER indicator)
-    #   FE group = (s, AA_OF_ZE[l])  — identical to today's group id
-    #   regressors = distance bins (N_REG>1) or log d (N_REG==1); NO draw-level
-    #                control (SIREN_LOG joins here when it arrives)
-    #   weight = 1
-    reg_coef = cloglog_irls(y = 1 - p0, X = [dist], fe = (s, AA_OF_ZE[l]))
+  ── 5. block 5 — AA-level shares ─────────────────────────────────────────────
+  γ[s,l]     from compute_moments(net, θ_c)          # (R,S) as today
+  γ_aa[a,s]  = Σ_{l : AA_OF_ZE[l] == a} γ[l,s]       # (R_d, S), masked by AA_ACTIVE minus ref
 
-    # ---- (5) block 5: AA-level shares ---------------------------------------
-    γ_aa[s,a] = Σ_{l ∈ a} γ[s,l]                      # γ from compute_moments
+  ── 6. block 6 ───────────────────────────────────────────────────────────────
+  G0[s] = G(s, N̂[s])                                 # residual ≈ 0 by step 3
 
-    # ---- (6) block 6: near-zero residual, not exactly zero ------------------
-    G0[s] = G(s, N̂[s])          # ≈ target; step 2b may trade a little G0 fit
-                                # against block 4 — that is the profiled optimum
+  ── 7. assemble ──────────────────────────────────────────────────────────────
+  m = vcat(labor, industry, π_r, reg_coef, γ_aa[mask], G0)
+  return (m .- m̂)' * W * (m .- m̂),  (N̂, clamped, n_floored, n_win)
+end
 
-    m = [labor | industry | π_r | reg_coef | γ_aa | G0]
-    return (m - m̂)' W (m - m̂),  N̂,  clamped
+════════════════════════════════════════════════════════════════════════════════
+ONCE AT θ̂ — verification, not an inner loop
+════════════════════════════════════════════════════════════════════════════════
+#   Step 3 zeroes the block-6 residual. That is the profiled optimum only to the extent
+#   that block 4 is N_s-invariant (D4: 4e-4 well specified, ~9% misspecified). Confirm:
+for s in 1:S
+    for n in {N̂[s]-δ … N̂[s]+δ} ∩ [N_LO[s], N_HI[s]]      # δ ≈ 10% of N̂[s]
+        record full weighted loss with N̂[s] := n          # re-uses q̂; no re-simulation
+    end
+end
+report argmin vs N̂;  a gap ⇒ the block-4 coupling is material ⇒ promote step 3 to a
+                      coordinate-descent line search on the full loss
 ```
 
 ### 4.2 Where `N_s` enters the loss
@@ -370,6 +394,72 @@ TikTak are unaffected (both derivative-free). (ii) The FD Jacobian can straddle 
 Mitigation: at the reported estimate recompute the Jacobian **holding `N̂_s` fixed** at its value
 at `θ̂` — the correct object anyway, since `N̂_s` is integer-valued and locally constant with
 probability one — and assert that no FD perturbation changed `N̂_s`, reporting it if one did.
+
+### 4.5 The binding numerical constraint: resolving `q_ls` in the tail
+
+This is the largest practical risk in the whole design, and it should be measured in Phase 0
+before anything is built.
+
+**The problem.** The cloglog index of the supplier indicator is `η_ls = ln N_s + ln(−ln(1−q_ls))
+≈ ln(N_s q_ls)`, so
+
+```
+∂η / ∂ln q = 1
+```
+
+— a relative error in `q̂` passes into the index **one for one**. And the granular regime forces
+`q_ls` to be small: to reproduce an empty share of 0.915 the model needs `N_s q_ls ≈ −ln(0.915)
+= 0.089` for a typical cell, and `N_s q_ls ≳ 1` for the active ones. So the model must resolve
+`q` down to order `1/N_s`, while `N_rho` draws give roughly `N_rho · q ≈ N_rho / N_s` wins per
+active cell.
+
+**With `N_rho = 1000` (the current value, `load_parameters.jl:58`) this is nowhere near enough:**
+
+| `N_s` | typical `q` | wins per cell @ `N_rho`=1000 | rel. SE of `q̂` | @ 10⁵ | rel. SE |
+|---|---|---|---|---|---|
+| 50 | 1.8e−3 | 1.8 | 75% | 178 | 7.5% |
+| 250 | 3.6e−4 | 0.36 | 168% | 36 | 17% |
+| 500 | 1.8e−4 | 0.18 | 236% | 18 | 24% |
+| 1000 | 8.9e−5 | 0.09 | 334% | 8.9 | 34% |
+
+A 75% relative error in `q̂` is a 0.75 error in `η`, against a distance coefficient of ≈ −0.3
+spread over ~1.2 of `ln d`. The moment would be pure noise. Worse, the marginal cells — the ones
+that decide the extensive margin — sit *below* the typical `q`, so they are resolved worst, and
+many will return `q̂ = 0` exactly.
+
+Note this is not a wholly new problem: the reg_coef Jacobian was already the noisiest column, and
+`:is` exists in the codebase precisely "for reg_coef tail resolution". Granularity sharpens it,
+because `(1−q)^{N_s}` amplifies small-`q` error.
+
+**Mitigation, in order of value.**
+
+1. **Compute the dominant term of `q_ls` analytically (recommended).** For a *single* downstream
+   buyer the win probability is the closed-form EK share `γ_lrs = T_sl (w_l τ_lrs)^{−θ} / Φ_sr` —
+   **zero simulation noise**, and `gamma_ls_analytical` in `model_analytical.jl` already computes
+   it. Only the *union* over buyers needs simulating. Since each ZE's nearest downstream buyer
+   `r* = a(l)` dominates, decompose
+   ```
+   q_ls  =  γ_{l,r*,s}                      ← analytic, exact
+          + Δ_ls,   Δ_ls = Pr(wins somewhere but NOT at r*)   ← simulated
+   ```
+   `Δ_ls ≪ γ_{l,r*,s}`, and what matters for `q̂` is `Δ`'s *absolute* error, not its relative
+   error — so a modest `N_rho` suffices for it. This is a control variate, and it removes
+   essentially all of the noise in the table above. **Do this before raising `N_rho`.**
+2. **Raise `N_rho`.** Linear cost, and it must rise roughly proportionally to `N_s` to hold
+   precision fixed. Useful as a check on (1), expensive as the primary fix.
+3. **Importance sampling for `q̂` specifically.** The bias documented for `:is` concerns the CES
+   price index, where only the winning column's weight is applied so the losing columns' density
+   ratios fail to cancel. The win *indicator* is not that kind of functional: `q = E[w_ρ · 1{l
+   wins}]` is a properly weighted estimator and `:is` is unbiased for it. So `:is` may legitimately
+   be used for the `q̂` estimate even where it must not be used for the value block — but this
+   requires the two to be computed from different draw sets, which is a real complication.
+
+**Phase-0 measurement, before any implementation.** Run the current model once and report the
+distribution across cells of `n_win = q̂ · N_rho`: the median, the 10th percentile, and the count
+of cells with `q̂ = 0`. If the 10th percentile is below ~30 wins, mitigation (1) is not optional.
+Report `n_floored` at every evaluation thereafter.
+
+---
 
 ## 5. File-by-file change list
 
@@ -458,6 +548,7 @@ probability one — and assert that no FD perturbation changed `N̂_s`, reportin
 | **G5** | `α̂` vs the §3.9 within-area evidence (`α/η_size ≈ 1.1`, θ=1) and vs the joint free-`T` search (`α ≈ 0.30`) | the §3.9 evidence predicts `α̂` moves **up** relative to the joint free-`T` search; a large gap the other way is a finding to report, not a bug to chase |
 | **G6** | AA-level Sinkhorn: round-trip recovery of a planted `T_aa` from its own AA aggregates | ~1e-8, mirroring `test/test_ge_inversion.jl` |
 | **G7** | The AA map: `argmax_col(closest_downstream_region.npy) == CLOSEST_DOWNSTREAM_REGION`, rows sum to 1, shape `R × R_downstream` | exact; **run at load time**, not only in tests — a mismatch silently invalidates the alignment argument |
+| **G9** | Phase 0, before anything: distribution of `n_win = q̂·N_rho` across cells — median, p10, count of `q̂ = 0` | p10 ≥ ~30 wins; below that, the analytic-dominant-term mitigation of §4.5 is mandatory, not optional |
 | **G8** | D1 itself: simulate `R` economies with exactly `N̂_s` varieties, average their moments, compare against the closed-form values | agree to `O(1/√R)`; turns the Rao–Blackwellization argument into a test |
 
 **Phase 0, before any of this: measure the cost.** `n_good` goes from ~142 to ~1161, so
@@ -485,7 +576,110 @@ Suggested sequence: **Phase 0** (timing) → **G0** (refactor, zero behavioural 
 
 ---
 
-## 8. Conventions settled, and what remains
+## 8. Review of the empirical-target script
+
+The script that produces the β target must run **the same regression, on the same unit, with the
+same support and the same regressors** as the model, or the moment compares different estimands.
+Findings on the draft, ordered by severity.
+
+### Blocking
+
+**(1) Unit of observation: firm-level has no model counterpart.** The draft is at firm level
+(`df : niveau firme`, one row per firm, `log_X = log(eff_3112)`). The model's object is
+`Pr(K_ls ≥ 1)` — a **(sector, ZE) cell**. A firm-level regression asks "does firm *i* supply",
+whose model probability is *zero*: the model has a continuum of firms per (ZE, variety) and only
+champions are observable, so non-supplier firms are not model objects at all.
+
+The inconsistency is provable rather than a matter of taste. Reading the model at firm level
+forces the fraction of supplying firms in a cell to be `q_ls`, while the granular model says the
+supplier count is `E[K_ls] = N_s q_ls` out of `N_ls` observed firms — so `N_ls = N_s` for every
+cell, i.e. every ZE would have to contain exactly the sector's variety count. Firm counts vary by
+orders of magnitude across ZE, so that is false.
+
+**Use the cell-level dataset** — the same 1161-row frame as the §3.9 diagnostic: one row per
+(sector, ZE) inside an active AA, `y = 1{cell hosts ≥ 1 supplier}`. This is also the unit of
+`G_K.csv`, so all three moments (β, γ, G) then share one support.
+
+**(2) `nunique() == 2` is the wrong filter, and it is not reproducible in the model.** It keeps
+only groups where the outcome takes *both* values — a filter on a **realised random outcome**.
+The model's outcome is a probability in (0,1) and is never exactly 0 or 1, so `nunique()` is
+undefined on simulated data and the two samples cannot be made to coincide.
+
+The support must be defined by a rule that does not depend on the realisation. Use
+
+```python
+keep = df.groupby("A129_AA")["supplier"].transform("max") == 1     # 𝒜⁺_s
+```
+
+i.e. attraction areas hosting at least one supplier — the definition already used for `AA_ACTIVE`
+and for the `G_K.csv` denominator. Note `nunique()==2` additionally drops all-ones groups; under
+cloglog with FE those contribute nothing to `β̂` anyway, so dropping them does not change the
+estimate — but it *does* change the sample, and hence would silently desynchronise the β support
+from the `G_K.csv` denominator. Define `𝒜⁺_s` **once**, export it, and use it for the regression,
+for the `G(K)` denominator and for the model's `CELL_MASK`.
+
+**(3) `log_X` is in the target but not in the model.** `SIREN`/size is deferred (§2). If the
+empirical β is estimated *with* a size control and the model computes β *without* one, the two
+coefficients are different estimands and the moment is meaningless. For v1: **include size on both
+sides or on neither.** Given §3.9 showed size is the dominant within-area force, the honest options
+are to bring `SIREN` forward, or to run v1 without size and record that `α̂` is biased upward in
+magnitude.
+
+### To fix, cheap
+
+**(4) The distance floor.** Julia uses `log(max(d, 1.0))` (`load_parameters.jl:510`). The draft
+uses `np.log(df.dist_com_w_arithmetic)` with no floor — any `d = 0` (a ZE hosting its own
+downstream plant) becomes `−inf`. Mirror the floor: `np.log(np.maximum(d, 1.0))`.
+
+**(5) Which distance.** Julia's regressor is `LOG_CLOSEST_DIST[r]` = distance from ZE `r` to its
+**nearest downstream region**, and the bins are `DistBin[r, dr]` at that same nearest region.
+Confirm `dist_com_w_arithmetic` is that distance and not a weighted average over all downstream
+plants — the name suggests an arithmetic mean, which would be a different regressor.
+
+**(6) The stale `not_supply` comment.** The header says `Y = "ne fournit pas"` so that
+`coef(log_d) = αθ`, and there is a commented-out `not_supply` line — but the code regresses
+`supplier_num`. The code is now the right one; the comment must read **`coef(log_d) = −αθ`, hence
+`α = −β̂/θ`**.
+
+### Confirmed correct
+
+**(7) The distance bins match.** Julia `distance_bin(d, 4)` gives `(50,100] → 1`, `(100,150] → 2`,
+`(150,200] → 3`, `d > 200 → 4`, and `d ≤ 50 → 0` = **no dummy**, i.e. the reference. The draft's
+extraction order
+
+```python
+["C(dist_bin)[T.50-100]", "C(dist_bin)[T.100-150]", "C(dist_bin)[T.150-200]", "C(dist_bin)[T.200+]"]
+```
+
+matches, with `0-50` as base. Make it robust rather than lucky: build `dist_bin` as an explicit
+ordered categorical and set the reference by name.
+
+```python
+df["dist_bin"] = pd.cut(d, [0, 50, 100, 150, 200, np.inf],
+                        labels=["0-50","50-100","100-150","150-200","200+"], right=True)
+# formula: "... + C(dist_bin, Treatment(reference='0-50')) + ..."
+```
+
+Left-open/right-closed (`right=True`) matches Julia's `50 < d <= 100`. Also assert that no cell
+falls outside the bins.
+
+### Notes, not errors
+
+**(8) `cov_type="HC1"` is not what enters `W`.** The weight matrix uses `Σ_data` from the joint
+bootstrap over suppliers that also produces the γ and G blocks and their cross-covariances. HC1
+here is fine for eyeballing; it must not be the source of the β block of Σ. Cluster at
+`A129_AA` when reporting, matching the §3.9 diagnostic.
+
+**(9) `C(A129_AA)` must be sector × AA, not AA alone.** The Julia group is
+`(s-1)*R_downstream + CLOSEST_DOWNSTREAM_REGION[r]`. Confirm `A129_AA` concatenates both.
+
+**(10) Explicit dummies scale badly.** `smf.glm` with `C(A129_AA)` materialises one column per
+group. At 1161 rows and a few dozen groups this is fine; if the group count grows, use
+`pyfixest`'s `feglm` (already a dependency) to absorb instead.
+
+---
+
+## 9. Conventions settled, and what remains
 
 ### Settled
 
