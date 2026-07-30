@@ -548,6 +548,7 @@ Report `n_floored` at every evaluation thereafter.
 | **G5** | `α̂` vs the §3.9 within-area evidence (`α/η_size ≈ 1.1`, θ=1) and vs the joint free-`T` search (`α ≈ 0.30`) | the §3.9 evidence predicts `α̂` moves **up** relative to the joint free-`T` search; a large gap the other way is a finding to report, not a bug to chase |
 | **G6** | AA-level Sinkhorn: round-trip recovery of a planted `T_aa` from its own AA aggregates | ~1e-8, mirroring `test/test_ge_inversion.jl` |
 | **G7** | The AA map: `argmax_col(closest_downstream_region.npy) == CLOSEST_DOWNSTREAM_REGION`, rows sum to 1, shape `R × R_downstream` | exact; **run at load time**, not only in tests — a mismatch silently invalidates the alignment argument |
+| **G10** | `Δ = E[β̂(sim)] − β(E[y])` at `θ̂`, design (a) with `R ≈ 1000` (§A.5) | report it; 15% in the calibrated synthetic, so do not assume it away |
 | **G9** | Phase 0, before anything: distribution of `n_win = q̂·N_rho` across cells — median, p10, count of `q̂ = 0` | p10 ≥ ~30 wins; below that, the analytic-dominant-term mitigation of §4.5 is mandatory, not optional |
 | **G8** | D1 itself: simulate `R` economies with exactly `N̂_s` varieties, average their moments, compare against the closed-form values | agree to `O(1/√R)`; turns the Rao–Blackwellization argument into a test |
 
@@ -576,7 +577,114 @@ Suggested sequence: **Phase 0** (timing) → **G0** (refactor, zero behavioural 
 
 ---
 
-## 8. Review of the empirical-target script
+## A. Design (a) "simulate `N_s` varieties" vs design (b) "`q̂` + closed form"
+
+**(a)** — the straightforward design: put `N_s` in the parameter vector, simulate an economy with
+exactly `N_s` varieties, compute `G` and the regression on the **realised 0/1** outcomes.
+**(b)** — the design this plan was built on: estimate `q_ls` from a large draw pool, apply the
+exact Binomial `Pr(K_ls = 0) = (1−q_ls)^{N_s}` in closed form, regress the resulting probability.
+
+They are **not** equivalent, and the differences do not all point the same way. Measured on a
+synthetic sector calibrated to the observed empty share (0.915), `θα = 0.30`, `N_s` solved to hit
+that share.
+
+### A.1 (a) targets the right object for the regression — worth ~15% of `β`
+
+The empirical `reg_coef` is an auxiliary statistic computed on **one realised economy of fixed
+size**. A nonlinear fixed-effect estimator carries an incidental-parameters bias of order `1/T`
+in the number of observations per group. Design (a) matches the data's `β̂` against
+`E[β̂(simulated economy)]` — the *binding function* — so the same distortion sits on both sides and
+**cancels**. Design (b) matches it against `β(E[y])`, the `T → ∞` limit, and does not.
+
+| configuration | cells / FE group | `β(E[y])` | `E[β̂(realised)]` | gap | FE groups emptied |
+|---|---|---|---|---|---|
+| **sparse, like the data** | 9.7 | −0.3017 | **−0.3459** ± 0.014 | **−0.044 (15%)** | **59%** |
+| fewer, bigger groups | 48.4 | −0.3006 | −0.3025 ± 0.012 | −0.002 (0.6%) | 12% |
+| many cells per group | 75.0 | −0.3001 | −0.3053 ± 0.004 | −0.005 (1.7%) | 14% |
+
+The bias is **real and material exactly in the sparse configuration that resembles the data** —
+15% of `β`, three MC standard errors — and it vanishes as observations per group grow, as the
+`O(1/T)` theory predicts. Since `α = −β/θ`, that is a 15% bias in `α̂` that design (b) leaves in.
+
+*(No separation problem: an earlier run suggesting 100% non-convergence was an artefact of a bad
+IRLS warm start, `η = log(−log(1−y))` on 0/1 data. With a constant warm start and deviance step
+halving, 0% of realisations fail.)*
+
+### A.2 (a) also removes the tail-resolution risk of §4.5 entirely
+
+§4.5 exists only because of (b)'s two-step: `η ≈ ln(N_s q)` passes a relative error in `q̂`
+one-for-one, so `q` must be resolved to order `1/N_s`. In (a) there is no `q̂`. A cell with a tiny
+win probability simply wins zero varieties — the **right answer with the right probability**, not
+a resolution failure.
+
+### A.3 What I overstated for (b): the variance advantage is a wash
+
+At an equal budget of 20,000 variety-draws:
+
+| estimator of `E[G(0)]` | mean | bias | sd | RMSE |
+|---|---|---|---|---|
+| (a) simulate economies, `R = 487` reps | 0.91579 | −0.00000 | 0.00029 | 0.00029 |
+| (b) `q̂` + closed form | 0.91586 | +0.00007 | 0.00023 | 0.00024 |
+
+Both unbiased, RMSE within 20%. `G(0)` is a mean over hundreds of cells, so averaging over cells
+already does most of the variance reduction; the Rao-Blackwellisation adds little.
+
+### A.4 What (b) still has, and it is not small
+
+**The support matches the conditioning; (a)'s does not.** `𝒜⁺_s` is defined **from the outcome**
+(areas with ≥1 supplier), so in the data every retained group has a supplier by construction. Under
+(b) the simulated outcome is a probability in (0,1), no group ever degenerates, and the simulated
+support is exactly the data's. Under (a) a realised economy empties **59%** of the `𝒜⁺` groups, so
+they drop from the cloglog and the simulated statistic is computed on a much smaller, fluctuating
+support. Conditioning the simulation on the same event is infeasible by rejection — the
+probability that all `𝒜⁺` groups come out non-empty is ~`0.41^40 ≈ 10⁻¹⁶`.
+
+This is not a technicality: the note's maintained assumption (§3.2) is that `𝒜⁺_s` is **taken as
+given, never explained**. Design (b) honours that; design (a) silently re-draws it.
+
+**Cheap `N_s` profiling.** `G(s,n) = mean_l (1−q̂_l)^n` is instant for any candidate. Under (a),
+profiling block 4 would need `R × (#candidates)` IRLS fits per loss evaluation — with `R ≈ 1000`
+and ~15 bisection steps, 15,000 fits. Not affordable as an inner loop.
+
+**Cost.** Adequate `R` is set by the dispersion of `β̂` across economies, `sd ≈ 0.35` in the sparse
+case: `R ≈ 1000` for an MC se of ~0.011. At `N_s ≈ 41` that is ~41,000 variety-draws against
+today's `N_rho = 1000` — roughly **40× the current simulation cost** per loss evaluation. Common
+random numbers make much of that noise difference out across `θ`, but the raw cost stands.
+
+### A.5 Verdict and recommendation
+
+I was wrong to present (b) as unambiguously better. The honest scorecard:
+
+| | (a) simulate | (b) closed form |
+|---|---|---|
+| estimand for `reg_coef` | **binding function — bias cancels** | 15% bias in the sparse case |
+| tail resolution of small `q` | **no `q̂` needed** | needs `q` to order `1/N_s` (§4.5) |
+| support vs the `𝒜⁺` conditioning | 59% of groups re-drawn empty | **exact match** |
+| `N_s` profiling | needs `R ×` candidates IRLS fits | **closed form, instant** |
+| cost per loss evaluation | ~40× today | ~today |
+| variance of `G(0)` at equal budget | tie | tie |
+
+**Recommended: implement (b), then measure the gap rather than assume it away.** (b) is what keeps
+the support consistent with the conditioning the whole two-tier design rests on, and what keeps
+`N_s` profiling free. But the 15% bias is real, so:
+
+1. build (b) as specified in §4;
+2. at `θ̂`, run design (a) once with `R ≈ 1000` and report
+   `Δ = E[β̂(sim)] − β(E[y])` — this is gate **G10**;
+3. if `Δ` is material (it was 15% here), either report `α̂` with that known bias stated, or add
+   `Δ` as a fixed offset to the block-4 moment and re-run. `Δ` is a smooth, slowly-varying
+   function of `θ`, so a locally fixed offset is defensible;
+4. mitigate §4.5 with the analytic control variate regardless — it is cheap and it removes (b)'s
+   only *numerical* weakness.
+
+The one thing not to do is set `N_rho = N_s` for the whole simulation. The value block is a
+numerical integral and the variety count is a structural parameter; at `N_s ≈ 41` the labor share,
+`π_s`, `π_r` and the shares would be computed from 41 draws. If (a) is ever adopted, it must be
+`R` replications of `N_s` varieties, with the value block averaged over all `R × N_s`.
+
+---
+
+## 8bis. Review of the empirical-target script
 
 The script that produces the β target must run **the same regression, on the same unit, with the
 same support and the same regressors** as the model, or the moment compares different estimands.
