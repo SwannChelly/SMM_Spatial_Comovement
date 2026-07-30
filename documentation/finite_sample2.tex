@@ -64,12 +64,22 @@ under the granular assumption \emph{is} the empirical specification: the probabi
 ZE hosts a supplier is exactly a complementary log-log function of log distance with an
 attraction-area$\times$sector fixed effect and slope $-\theta\alpha$. We discipline $N_{s}$
 with the empirical distribution of the number of suppliers per region --- the count analogue
-of the number-of-buyers-per-seller moment of \citet{lmm2023} (henceforth LMM). We then answer
-three modeling questions: (i) whether the continuum of firms per variety can be retained
-(yes, and it is the natural choice), (ii) at what geographic level comparative advantage
-should live (the attraction area), and (iii) what else in the model must change (the
-within-sector price index, the treatment of value moments, the active set / normalization,
-and the joint identification of $(\alpha,N_{s},T)$).
+of the number-of-buyers-per-seller moment of \citet{lmm2023} (henceforth LMM). Because
+sourcing shares are observed at the ZE level, we then relax the area-level restriction to
+$T_{sl}=T_{s,a(l)}\nu_{sl}$ with a \emph{random} multiplicative deviation whose dispersion is
+calibrated on those ZE-level shares. This relaxation must be a distribution and never a free
+parameter per ZE: a per-ZE parameter restores exact just-identification (destroying $\alpha$),
+is undefined precisely at the empty ZE we set out to explain, and biased in a signable
+direction there through selection on $\nu$. Done correctly --- with a mean-one Gamma deviation
+--- the supplier count becomes exactly negative binomial, the empirical cloglog slope is
+attenuated relative to $-\theta\alpha$ by a computable factor, and the within-area share
+dispersion joins the count over-dispersion as a second, independent read on the same variance
+parameter. We then answer three modeling questions: (i) whether the continuum of firms per
+variety can be retained (yes, and it is the natural choice), (ii) at what geographic level
+comparative advantage should live (the attraction area, with a random ZE-level deviation), and
+(iii) what else in the model must change (the within-sector price index, the treatment of value
+moments, the active set / normalization, and the joint identification of
+$(\alpha,N_{s},\sigma^{2}_{s},T)$).
 \end{abstract}
 
 \tableofcontents
@@ -546,23 +556,29 @@ $T_{s,a}$, $a\in\Areas^{+}_{s}$
 $\gamma_{s,a}=\sum_{l\in\mathcal{L}_{a}}\gamma_{ls}$, block~5\\
 $N_{s}$
 & \emph{Level} of the empty-ZE share inside active areas, given normalized $T$ and $\alpha$
-& count moment $G_{s}(0)$ (Section~\ref{sec:moment}); optionally share dispersion
-(Appendix~\ref{app:dispersion})\\
+& count moment $G_{s}(0)$ (Section~\ref{sec:moment})\\
+$\sigma^{2}_{s}$ (optional; Section~\ref{sec:eps})
+& \emph{Dispersion} of comparative advantage \emph{within} areas
+& within-area dispersion of log shares among active ZE \emph{and} the count over-dispersion /
+higher thresholds $G_{s}(n)$, $n\ge1$ (Section~\ref{sec:eps-calibration})\\
 $\Areas^{+}_{s}$
 & Which areas host any supplier
 & \emph{Not modeled} --- taken as given, matching the fixed effect's information set\\
 \bottomrule
 \end{tabular}
-\caption{Who identifies what under the two-tier geography. The three estimated objects load on
-three distinct features of the data: a within-area \emph{gradient}, across-area
-\emph{aggregates}, and a within-area \emph{level}.}
+\caption{Who identifies what under the two-tier geography. The estimated objects load on
+distinct features of the data: a within-area \emph{gradient}, across-area \emph{aggregates}, a
+within-area \emph{level}, and (if the restriction is relaxed as in Section~\ref{sec:eps}) a
+within-area \emph{dispersion}.}
 \label{tab:division}
 \end{table}
 
-The three channels are close to orthogonal by construction, which is the practical payoff:
+The channels are close to orthogonal by construction, which is the practical payoff:
 $\alpha$ reads a within-area slope that $T$ cannot touch (it is constant within the area),
-$T$ reads across-area aggregates that $\alpha$ shifts only through the common price index, and
-$N_{s}$ reads a level that the fixed effect strips out of the $\alpha$ regression.
+$T$ reads across-area aggregates that $\alpha$ shifts only through the common price index,
+$N_{s}$ reads a level that the fixed effect strips out of the $\alpha$ regression, and
+$\sigma^{2}_{s}$ --- the within-area dispersion of comparative advantage, if one declines to set
+it to zero --- reads a second moment that none of the other three touches.
 
 \subsection{Why this repairs the profiling pathology}
 \label{sec:profiling}
@@ -610,7 +626,10 @@ at the same distance, for reasons that have nothing to do with trade costs. If s
 the model must load it on the distance coefficient, biasing $\alpha$ by the usual
 omitted-variable amount (with the sign of the size--distance correlation within areas).
 
-Two responses, in order of preference.
+Three responses, in order of preference. The third --- letting comparative advantage deviate
+from its area level by a \emph{random} ZE-level term calibrated on the ZE-level shares --- is
+developed in its own section (Section~\ref{sec:eps}), because it is the general case that
+nests the other two.
 
 \begin{enumerate}[nosep,topsep=2pt]
 \item \textbf{Let observed ZE covariates scale $T$, with a common loading.} Replace
@@ -642,6 +661,358 @@ Note also that \eqref{eq:T-area} converts what were free parameters into $R_{a}-
 feature --- the model becomes testable where it was previously just-identified --- but it means
 a Hansen $J$ on the $\gamma$ block now has power against the geography restriction itself, and
 should be read as such.
+
+\section{Employment-zone deviations: a distribution, not a parameter vector}
+\label{sec:eps}
+
+Assumption~\ref{as:geo} imposes $T_{sl}=T_{s,a(l)}$ exactly. Since sourcing shares are observed
+\emph{at the ZE level}, it is natural to relax it --- write comparative advantage as an area
+level plus a ZE-specific deviation, and calibrate the deviation on those ZE-level shares. This
+section does exactly that. Two things must be settled first: the functional form
+(Section~\ref{sec:eps-form}), and --- decisively --- whether the deviation is a
+\emph{parameter vector} or a \emph{distribution} (Section~\ref{sec:eps-trap}). The answer to
+the second question determines whether the identification of $\alpha$ survives the relaxation.
+
+\subsection{Multiplicative, not additive}
+\label{sec:eps-form}
+
+$T_{sl}$ is a Fr\'echet \emph{scale}: it must be strictly positive, and it enters every model
+object multiplicatively --- shares are ratios of $T$'s \eqref{eq:share-area}, and
+$(w_{l}\tau_{lrs})^{-\theta}$ multiplies it. An additive deviation $T_{s,a}+\epsilon_{sl}$
+respects neither property: it can go negative, and its magnitude has no scale-free reading
+(the same $\epsilon$ means something different in a large and a small sector). The right form
+is multiplicative,
+\begin{equation}
+T_{sl}
+=T_{s,a(l)}\cdot\nu_{sl}\cdot\prod_{k}x_{kl}^{\eta_{k}},
+\qquad \nu_{sl}>0,\qquad \E[\nu_{sl}]=1,
+\label{eq:eps-spec}
+\end{equation}
+or in logs, with $\varepsilon_{sl}\equiv\ln\nu_{sl}$,
+\begin{equation}
+\ln T_{sl}=\ln T_{s,a(l)}+\textstyle\sum_{k}\eta_{k}\ln x_{kl}+\varepsilon_{sl}.
+\label{eq:eps-log}
+\end{equation}
+Three payoffs. Positivity is automatic. The normalization $\E[\nu]=1$ makes $T_{s,a}$
+\emph{exactly} the area level, so the area-aggregate inversion \eqref{eq:area-sinkhorn} is
+unchanged in expectation. And --- the point that makes the proposal work ---
+$\varepsilon_{sl}$ is \emph{literally the residual of the within-area log-share regression},
+because \eqref{eq:within-contrast} is additive in $\ln T$:
+\begin{equation}
+\ln\gamma_{lrs}
+=\underbrace{\ln T_{s,a(l)}-\ln\Phi_{sr}}_{\text{area}\times\text{sector}}
+\;-\;\theta\alpha\ln d_{lr}
+\;-\;\theta\ln w_{l}
+\;+\;\textstyle\sum_{k}\eta_{k}\ln x_{kl}
+\;+\;\varepsilon_{sl}.
+\label{eq:eps-logshare}
+\end{equation}
+The observable block $\prod_{k}x_{kl}^{\eta_{k}}$ should absorb as much as it can --- size above
+all. Every piece of within-area heterogeneity moved from $\varepsilon$ into observables is
+heterogeneity that does \emph{not} have to be integrated out, and doing so is precisely the fix
+to the size concern of Section~\ref{sec:risk}. What remains in $\varepsilon$ is genuinely
+unexplained ZE-level comparative advantage.
+
+\subsection{The trap: a free $\varepsilon$ per ZE undoes the whole design}
+\label{sec:eps-trap}
+
+``Calibrate $\varepsilon$ on the ZE-level shares'' admits two readings, and they are not
+variations on a theme --- one of them destroys the estimator.
+
+\begin{description}[topsep=3pt,itemsep=2pt,leftmargin=1.6em]
+\item[(A) Fixed effects.] One free parameter $\varepsilon_{sl}$ per ZE, chosen so that the
+model reproduces each observed $\hat\gamma_{ls}$ exactly.
+\item[(B) Random effect.] A \emph{distribution} for $\varepsilon$ with one or two parameters
+per sector, chosen so that the model reproduces the \emph{dispersion} of the ZE-level shares
+(and of the supplier counts).
+\end{description}
+
+Reading (A) must be rejected, for three compounding reasons.
+
+\begin{enumerate}[nosep,topsep=3pt,label=(\roman*)]
+\item \emph{It restores exact just-identification and kills $\alpha$.} The number of free
+$T$-elements returns to the number of $\gamma$ targets, so $T^{*}(\alpha)$ can again reproduce
+every share for \emph{any} $\alpha$: the pathology of Section~\ref{sec:profiling} comes back
+verbatim, and the $R_{a}-1$ over-identifying restrictions per area of Appendix~\ref{app:df} ---
+the entire testable content of the two-tier geography --- vanish.
+\item \emph{$\varepsilon$ is undefined exactly where we need it.} The ZE the model was built to
+explain are those with no supplier, i.e.\ $\hat\gamma_{ls}=0$. There is no share to calibrate
+against, so $\varepsilon_{sl}$ for precisely those ZE is unidentified by construction. One
+would end up identifying $\alpha$ off the ZE for which $\varepsilon$ had to be assumed.
+\item \emph{And assuming $\varepsilon=0$ for them is biased in a signable direction.} Empty ZE
+are empty partly \emph{because} they drew a low $\nu$. Under the specification of
+Section~\ref{sec:eps-gamma} this is exact:
+\begin{equation}
+\E\big[\nu_{sl}\;\big|\;K_{ls}=0\big]=\frac{1}{1+\sigma^{2}_{s}\mu_{ls}}\;<\;1,
+\qquad \mu_{ls}\equiv N_{s}\bar q_{ls},
+\label{eq:eps-selection}
+\end{equation}
+so plugging $\nu=1$ over-states an empty ZE's comparative advantage by the factor
+$(1+\sigma_{s}^{2}\mu_{ls})$, over-predicts its probability of hosting a supplier, and forces
+the estimator to raise $\alpha$ (or lower $N_{s}$) to reconcile the observed zero. This is
+selection on unobserved comparative advantage, and it is first-order: at
+$\sigma^{2}=1,\mu=5$ the factor is $6$. On top of it sits the ordinary incidental-parameter
+problem --- one parameter per ZE with $O(1)$ observations each.
+\end{enumerate}
+
+Reading (B) avoids all three: it never needs $\varepsilon$ at a particular ZE, and
+\eqref{eq:eps-selection} is not a bias to be corrected but a property the mixture embeds
+automatically. It is what the rest of this section develops, under one design principle worth
+stating in isolation:
+
+\begin{quote}
+\textbf{The number of free parameters must not grow with the number of employment zones.}
+$\varepsilon$ may be a distribution; it may not be a parameter vector.
+\end{quote}
+
+\subsection{The Gamma specification and its closed form}
+\label{sec:eps-gamma}
+
+\begin{proposition}[Negative-binomial supplier counts]
+\label{prop:negbin}
+Relax Assumption~\ref{as:geo} to \eqref{eq:eps-spec} with $\nu_{sl}$ drawn i.i.d.\ across ZE
+from a Gamma distribution with mean $1$ and variance $\sigma_{s}^{2}$ (shape $1/\sigma_{s}^{2}$,
+scale $\sigma_{s}^{2}$), and Poissonize the variety count (Remark~\ref{rem:poisson}). Then the
+supplier count of ZE $l$ is \textbf{negative binomial}:
+\begin{equation}
+\Prob(K_{ls}=n)
+=\frac{\Gamma\big(n+1/\sigma_{s}^{2}\big)}{n!\,\Gamma\big(1/\sigma_{s}^{2}\big)}
+\left(\frac{\sigma_{s}^{2}\mu_{ls}}{1+\sigma_{s}^{2}\mu_{ls}}\right)^{\!n}
+\big(1+\sigma_{s}^{2}\mu_{ls}\big)^{-1/\sigma_{s}^{2}},
+\qquad \mu_{ls}=N_{s}\,\bar q_{ls},
+\label{eq:negbin}
+\end{equation}
+where $\bar q_{ls}$ is the win-somewhere probability evaluated at $\nu=1$. In particular
+\begin{equation}
+\Prob(K_{ls}=0)=\big(1+\sigma_{s}^{2}\mu_{ls}\big)^{-1/\sigma_{s}^{2}},
+\qquad
+\E[K_{ls}]=\mu_{ls},
+\qquad
+\mathrm{Var}(K_{ls})=\mu_{ls}\big(1+\sigma_{s}^{2}\mu_{ls}\big),
+\label{eq:negbin-moments}
+\end{equation}
+and the posterior of the deviation given the observed count is Gamma with mean
+\begin{equation}
+\E\big[\nu_{sl}\mid K_{ls}\big]=\frac{1+\sigma_{s}^{2}K_{ls}}{1+\sigma_{s}^{2}\mu_{ls}} .
+\label{eq:eps-posterior}
+\end{equation}
+As $\sigma_{s}^{2}\to0$, \eqref{eq:negbin} collapses to the Poisson case and
+\eqref{eq:negbin-moments} to the cloglog of Proposition~\ref{prop:cloglog-exact}.
+\end{proposition}
+
+\begin{proof}
+$K\mid\nu\sim\Pois(\mu\nu)$ and $\nu\sim\text{Gamma}(k,\vartheta)$ with $k\vartheta=1$ and
+$k\vartheta^{2}=\sigma^{2}$, i.e.\ $k=1/\sigma^{2}$, $\vartheta=\sigma^{2}$. Mixing a Poisson
+mean over a Gamma gives the negative binomial \eqref{eq:negbin}; the zero probability is the
+Gamma moment generating function at $-\mu$, $\E[e^{-\mu\nu}]=(1+\vartheta\mu)^{-k}$; the
+variance is $\E[\mathrm{Var}(K\mid\nu)]+\mathrm{Var}(\E[K\mid\nu])=\mu+\mu^{2}\sigma^{2}$;
+and Gamma--Poisson conjugacy gives a Gamma$\big(k+K,\vartheta/(1+\vartheta\mu)\big)$ posterior
+with mean $(k+K)\vartheta/(1+\vartheta\mu)$, which is \eqref{eq:eps-posterior}. Setting $K=0$
+in \eqref{eq:eps-posterior} returns \eqref{eq:eps-selection}.
+\end{proof}
+
+All three closed forms in \eqref{eq:negbin-moments}--\eqref{eq:eps-posterior} were checked
+against Monte-Carlo simulation of the mixture over $\sigma^{2}\in\{0.25,1,3\}$ and
+$\mu\in\{0.3,1,5\}$, agreeing to simulation error ($\sim10^{-4}$).
+
+Proposition~\ref{prop:negbin} buys three things.
+\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
+\item \emph{The analytical path survives.} The whole count-moment family
+$\bar G_{s}(n)$ of Section~\ref{sec:moment} stays closed form --- a negative-binomial CDF
+instead of a Poisson one --- so the GMM/analytical route is not sacrificed to the relaxation.
+\item \emph{$\sigma_{s}^{2}$ has a second, independent signature.} Over-dispersion of the
+supplier counts, $\mathrm{Var}(K)/\E[K]-1=\sigma_{s}^{2}\mu_{ls}$, is a direct read on the
+within-area dispersion of comparative advantage, observable from the count distribution alone
+and completely separate from the share dispersion.
+\item \emph{ZE-level deviations for counterfactuals, at no parameter cost.}
+\eqref{eq:eps-posterior} is an empirical-Bayes shrinkage of each ZE toward its area level:
+active ZE get a $\nu$ informed by their own count, empty ZE get
+$1/(1+\sigma^{2}\mu)<1$. This is how to recover ZE-level heterogeneity for a counterfactual
+\emph{without} ever making $\varepsilon$ a free parameter.
+\end{enumerate}
+
+\begin{remark}[Gamma is a convenience, not a commitment]
+Log-normal $\varepsilon$ gives the familiar frailty cloglog with no closed form; it is just as
+easy in the simulation, which is where the estimator lives anyway. The two parameterizations
+agree to $O(\sigma^{4})$: for a mean-one Gamma,
+$\mathrm{Var}(\ln\nu)=\psi'(1/\sigma^{2})=\sigma^{2}+\tfrac{1}{2}\sigma^{4}+O(\sigma^{6})$. Note
+also that $\E[\nu]=1$ implies $\E[\ln\nu]=\psi(1/\sigma^{2})+\ln\sigma^{2}<0$; the Jensen gap is
+constant within a sector and is absorbed by the area$\times$sector fixed effect in
+\eqref{eq:eps-logshare}, so no correction is needed.
+\end{remark}
+
+\begin{remark}[The price index is unaffected to leading order]
+The deviations also enter
+$\Phi_{sr}=\sum_{a}T_{s,a}\sum_{l\in\mathcal{L}_{a}}\nu_{sl}(w_{l}\tau_{lrs})^{-\theta}$.
+Because it sums over many ZE with $\E[\nu]=1$, $\Phi_{sr}$ concentrates by the law of large
+numbers and is $\nu$-free up to $O(R^{-1/2})$. Hence $\E[\gamma_{lrs}]\approx\bar\gamma_{lrs}$
+evaluated at $\nu=1$, and the \emph{expected} within-area log-share profile is still exactly
+the distance profile of \eqref{eq:within-contrast-norm}. The simulation evaluates the exact
+object regardless; the approximation matters only for the analytical path.
+\end{remark}
+
+\subsection{The frailty attenuates the measured distance coefficient}
+\label{sec:eps-attenuation}
+
+Proposition~\ref{prop:cloglog-exact} said the reduced form is exactly a cloglog with slope
+$-\theta\alpha$. With $\sigma_{s}^{2}>0$ it becomes a cloglog \emph{with frailty}, and the
+mapping from coefficient to parameter acquires a known attenuation.
+
+\begin{lemma}[Frailty attenuation]
+\label{lem:attenuation}
+Under Proposition~\ref{prop:negbin},
+\begin{equation}
+\frac{\partial \ln\big(-\ln\Prob(K_{ls}=0)\big)}{\partial \ln d_{l}}
+=-\theta\alpha\cdot A(u_{ls}),
+\qquad
+A(u)=\frac{u}{(1+u)\ln(1+u)}=\frac{1-e^{-t}}{t}\bigg|_{t=\ln(1+u)},
+\qquad u_{ls}=\sigma_{s}^{2}\mu_{ls},
+\label{eq:attenuation-frailty}
+\end{equation}
+where $A$ is strictly decreasing on $(0,\infty)$ with $A(0^{+})=1$ and $A(\infty)=0$. Hence the
+cloglog distance coefficient understates $\theta\alpha$ in absolute value whenever
+$\sigma_{s}^{2}>0$.
+\end{lemma}
+
+Representative values (verified numerically against \eqref{eq:negbin-moments}):
+$A=0.94$ at $u=0.125$, $A=0.82$ at $u=0.5$, $A=0.61$ at $u=2$, $A=0.44$ at $u=6$. Three
+consequences.
+
+\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
+\item \emph{A third wedge on the interpretation of $\hat\beta_{\mathrm{dist}}$.} The naive map
+$\alpha=-\hat\beta_{\mathrm{dist}}/\theta$ of \eqref{eq:alpha-map} is now a \emph{lower bound}
+on $|\alpha|$; the corrected map divides by $\theta\,\overline{A}$. This sits on top of the LPM
+attenuation $\lambda$ (Lemma~\ref{lem:fe}(ii)) and the market-access wedge
+(Proposition~\ref{prop:cloglog-exact}(d)). All three are harmless for the SMM --- which runs the
+identical regression on simulated data, so every wedge is reproduced on both sides --- and all
+three matter as soon as one wants to read the reduced-form coefficient structurally.
+\item \emph{The frailty bends the distance profile, and that is testable with what is already
+there.} $u_{ls}$ varies with $\bar q_{ls}$, hence with distance: near ZE (large $u$) are
+attenuated more than remote ones, so the cloglog index becomes \emph{concave} in log distance.
+The existing over-identified configuration is exactly the right test --- the binned
+specification ($N_{\mathrm{REG}}=4$) against the power law ($N_{\mathrm{TAU}}=1$) leaves three
+degrees of freedom on the reg\_coef block, and this concavity is what the residual pattern
+across bins should look like if $\sigma^{2}_{s}$ is materially positive. That pattern is
+information about $\sigma_{s}^{2}$, not misfit.
+\item \emph{The cost of the relaxation is precision, not consistency.} Section~\ref{sec:within}
+weakens from a deterministic statement to one in expectation: the expected within-area log-share
+profile is still distance-only, so $\alpha$ remains identified from the within-area slope, but
+the standard error of $\hat\alpha$ grows with $\sigma_{s}^{2}$ --- more of the within-area
+variation is noise the model cannot attribute to distance. That is the honest price of not
+imposing Assumption~\ref{as:geo} exactly, and it is a price paid in variance only \emph{as long
+as $\varepsilon$ stays a distribution} (Section~\ref{sec:eps-trap}).
+\end{enumerate}
+
+\subsection{What the ZE-level shares actually identify --- and a warning}
+\label{sec:eps-calibration}
+
+\emph{Unconditionally}, the within-area residual variance of log shares decomposes cleanly into
+a structural and a sampling term, the latter being the granular noise of
+Appendix~\ref{app:dispersion} carried through the log by the delta method:
+\begin{equation}
+\mathrm{Var}_{\text{within}}\big(\ln\hat\gamma_{ls}\;\big|\;\text{FE},\ln d,x\big)
+=\sigma^{2}_{\varepsilon,s}
++\underbrace{\frac{\big(1-\gamma_{ls}\big)\big(1+\mathrm{CV}_{v}^{2}\big)}{N_{s}\,\gamma_{ls}}}_{\text{granular sampling}} .
+\label{eq:eps-decomp}
+\end{equation}
+This suggests an attractive two-way separation: regress the squared within-area residual on
+$1/\hat\gamma_{ls}$ and read $\sigma^{2}_{\varepsilon}$ off the intercept and $N_{s}$ off the
+slope, since only the sampling term scales with $1/\gamma$.
+
+\textbf{Do not do this in the granular regime.} The feasible regression can only run on ZE with
+$\hat\gamma_{ls}>0$, and that truncation removes precisely the low draws where most of the
+dispersion of $\ln\hat\gamma$ lives. The truncation and the sampling inflation push in
+\emph{opposite} directions and do not cancel in any controlled way. A Monte-Carlo of the exact
+object --- one area with $R_{a}=40$ ZE, true $\sigma^{2}_{\varepsilon}=0.30$, multinomial
+granular shares, within-area regression of $\ln\hat\gamma$ on $\ln d$, active ZE only ---
+gives:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+$N_{s}\bar\gamma$ & empty-ZE share & observed within resid.\ var. & prediction \eqref{eq:eps-decomp} & truth $\sigma^{2}_{\varepsilon}$\\
+\midrule
+$1.5$   & $37.5\%$ & $0.32$ & $0.95$ & $0.30$\\
+$3.8$   & $15.3\%$ & $0.45$ & $0.56$ & $0.30$\\
+$10$    & $3.2\%$  & $0.48$ & $0.40$ & $0.30$\\
+$25$    & $0.4\%$  & $0.41$ & $0.34$ & $0.30$\\
+$100$   & $0.0\%$  & $0.33$ & $0.31$ & $0.30$\\
+$500$   & $0.0\%$  & $0.30$ & $0.30$ & $0.30$\\
+\bottomrule
+\end{tabular}
+\caption{The variance decomposition \eqref{eq:eps-decomp} on the \emph{feasible} (active-ZE)
+sample. It is accurate only once the empty-ZE share is negligible --- i.e.\ precisely outside
+the granular regime this note is about. At $N_{s}\bar\gamma=1.5$ it errs by a factor of three,
+and the sign of the error flips as $N_{s}$ grows.}
+\label{tab:eps-mc}
+\end{table}
+
+The conclusion is methodological, and it is the operative answer to ``how do we calibrate
+$\varepsilon$?'':
+
+\begin{quote}
+$\sigma^{2}_{\varepsilon,s}$ and $N_{s}$ must be estimated \textbf{jointly, inside the SMM},
+where the simulation reproduces the granular sampling, the truncation at $\hat\gamma>0$, and the
+selection \eqref{eq:eps-selection} automatically --- not read off a closed-form variance
+decomposition.
+\end{quote}
+
+Their identifying moments are three, each computed \emph{identically} on the data and on
+simulated data:
+\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
+\item the within-area dispersion of log shares among active ZE, net of the
+area$\times$sector fixed effect, log distance, and the covariates of \eqref{eq:eps-spec};
+\item the empty-ZE share $\bar G_{s}(0)$ --- a \emph{level};
+\item the higher count thresholds $\bar G_{s}(n)$, $n\ge1$, equivalently the count
+over-dispersion $\mathrm{Var}(K)/\E[K]-1=\sigma^{2}_{s}\mu$.
+\end{enumerate}
+$N_{s}$ loads mainly on (2), $\sigma_{s}^{2}$ on (1) and (3). That \emph{both} (1) and (3)
+respond to $\sigma^{2}_{s}$, through completely different data --- share dispersion among active
+ZE versus the shape of the count distribution --- is an over-identifying check on the granular
+story as a whole, and it is the sharpest test the two-tier model offers.
+
+This also retroactively qualifies Appendix~\ref{app:dispersion}: the $1/N_{s}$ read on share
+dispersion, equation \eqref{eq:app-var}, is correct \emph{unconditionally}, but on the observed
+sample (active ZE, granular regime) it is contaminated both by $\sigma^{2}_{\varepsilon}$ and by
+truncation. Use it through the simulation, never as a plug-in formula.
+
+\subsection{What is preserved, and the recommended sequence}
+\label{sec:eps-preserved}
+
+The relaxation costs two scalars per sector and preserves everything that mattered.
+
+\begin{itemize}[nosep,topsep=2pt]
+\item \textbf{Parameter count.} $|\Areas^{+}_{s}|-1$ area levels, plus $\dim(\eta)$ common
+covariate loadings, plus $(N_{s},\sigma^{2}_{s})$ per sector. Still $O(\#\text{areas})$, not
+$O(\#\ZE)$: the design principle of Section~\ref{sec:eps-trap} holds.
+\item \textbf{Profiling.} The area-aggregate inversion \eqref{eq:area-sinkhorn} is unchanged in
+expectation, because $\E[\nu]=1$; the within-area split remains a function of $\alpha$ and
+distance in expectation. The repair of Section~\ref{sec:profiling} survives.
+\item \textbf{Over-identification.} Appendix~\ref{app:df} loses one restriction per sector (for
+$\sigma^{2}_{s}$), not one per ZE. The $R_{a}-1$ within-area restrictions become restrictions on
+the \emph{distribution} of the within-area profile rather than on each ZE.
+\item \textbf{Nesting.} $\sigma^{2}_{s}=0$ with no covariates returns Assumption~\ref{as:geo}
+exactly (and Proposition~\ref{prop:cloglog-exact} exactly); $\sigma_{s}^{2}\to\infty$
+approaches free ZE-level $T$, which is unidentified. The estimated $\sigma^{2}_{s}$ is thus a
+\emph{measure of how wrong the pure area-level restriction is} --- and testing
+$\sigma^{2}_{s}=0$ is the formal version of the diagnostic proposed in
+Section~\ref{sec:risk}(2).
+\end{itemize}
+
+Recommended sequence, in increasing order of commitment:
+\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
+\item Run the descriptive within-area regression \eqref{eq:eps-logshare} on observed shares.
+Read off how much within-area dispersion the covariates absorb, and how much is left. This costs
+nothing and tells you whether $\sigma^{2}_{s}$ is worth estimating at all.
+\item Estimate with $\sigma^{2}_{s}=0$ (Assumption~\ref{as:geo}, covariates included). This is
+the cleanest configuration: $\alpha$ identified off a within-area gradient with no unobserved
+heterogeneity, and Proposition~\ref{prop:cloglog-exact} exact.
+\item Add $\sigma^{2}_{s}$ with the three moments above. Compare $\hat\alpha$ across (2) and
+(3): the gap is the frailty attenuation of Lemma~\ref{lem:attenuation}, and if it is large the
+reduced-form coefficient should not be read structurally.
+\end{enumerate}
 
 \section{From firms in the data to varieties in the model}
 \label{sec:mapping}
@@ -751,7 +1122,10 @@ $K_{ls}\sim\text{PoissonBinomial}$ over the $N_{s}$ varieties, and
 Under Poissonization (Remark~\ref{rem:poisson}), Poisson thinning makes this exact and clean:
 each variety is won somewhere by $l$ independently with probability $q_{ls}$, so
 $K_{ls}\sim\Pois(N_{s}q_{ls})$ and $\Prob(K_{ls}=0)=\exp(-N_{s}q_{ls})$ with no
-Poisson-Binomial machinery required. The single per-market case ($\Nd=1$) gives
+Poisson-Binomial machinery required. If comparative advantage is additionally allowed to
+deviate within areas (Section~\ref{sec:eps}), the Gamma mixture replaces this Poisson by a
+\emph{negative binomial} \eqref{eq:negbin} --- still closed form, and with the over-dispersion
+parameter $\sigma^{2}_{s}$ appearing as a second identified object. The single per-market case ($\Nd=1$) gives
 $q_{ls}=\gamma_{ls}$ and reduces \eqref{eq:model-moment} to the clean Binomial
 \eqref{eq:binomial}; with $\Nd>1$ the union probability $q_{ls}$ is evaluated by simulation
 (or by a low-dimensional integral over the champion draws), which also respects the
@@ -944,8 +1318,15 @@ of the search no longer annihilates $\alpha$'s identification
 (Section~\ref{sec:profiling}).
 \end{enumerate}
 The cost is the restriction itself: within-area heterogeneity other than distance (above all
-\textbf{size}) is either absent or must be modeled with observed covariates and a common
-loading \eqref{eq:T-area-cov}. Test it before imposing it (Section~\ref{sec:risk}).
+\textbf{size}) must be either absent, or modeled with observed covariates and a common loading
+\eqref{eq:T-area-cov}, or integrated out as a \emph{random} deviation
+$T_{sl}=T_{s,a(l)}\nu_{sl}$ with dispersion $\sigma^{2}_{s}$ calibrated on the ZE-level shares
+(Section~\ref{sec:eps}). The one thing that must \emph{not} be done is to make the deviation a
+free parameter per ZE: that restores exact just-identification and annihilates $\alpha$, is
+undefined at the empty ZE, and is biased there by selection on $\nu$
+(Section~\ref{sec:eps-trap}). Test the restriction before imposing it
+(Section~\ref{sec:risk}), and treat the estimated $\sigma^{2}_{s}$ as the formal measure of how
+wrong it is.
 
 \subsection*{Question 3: Should I change anything else?}
 
@@ -971,6 +1352,12 @@ the extensive margin \emph{exactly by simulation} rather than by the FKG approxi
 \item \textbf{Geography inputs and profiling.} Make the ZE$\to$attraction-area map a model
 primitive, identical to the regression's fixed-effect grouping, and re-express the $\gamma$
 inversion on area aggregates \eqref{eq:area-sinkhorn} (Section~\ref{sec:q2}e).
+\item \textbf{(Optional, recommended second stage) A random ZE-level deviation.} Relax
+$T_{sl}=T_{s,a(l)}$ to $T_{sl}=T_{s,a(l)}\nu_{sl}\prod_{k}x_{kl}^{\eta_{k}}$ with
+$\E[\nu]=1$, $\mathrm{Var}(\nu)=\sigma^{2}_{s}$ --- a mean-one Gamma making the supplier count
+negative binomial \eqref{eq:negbin} --- and identify $\sigma^{2}_{s}$ from the within-area share
+dispersion together with the count over-dispersion. Keep it a distribution, never a per-ZE
+parameter (Section~\ref{sec:eps}).
 \end{enumerate}
 Everything else --- the downstream nested-CES block, the wage normalization, the Fr\'echet shape
 $\theta$, the trade-cost parametrization $\tau=d^{\alpha}$, and the value-share and aggregate
@@ -1069,6 +1456,22 @@ unchanged.
 sector, and the regression \eqref{eq:cloglog} adds $N_{\mathrm{REG}}$ coefficients, against
 one new parameter $N_{s}$ per sector: the extensive-margin block is over-identified, and its
 Hansen $J$ is a genuine test of the granular mechanism.
+
+\paragraph{With a random ZE-level deviation.} Relaxing Assumption~\ref{as:geo} as in
+Section~\ref{sec:eps} adds $\sigma^{2}_{s}$ (one scalar per sector) and $\dim(\eta)$ loadings
+shared across all sectors. The right-hand side of \eqref{eq:app-df} therefore falls by
+\emph{one per sector}, not one per ZE:
+\begin{equation}
+\#\{\text{over-identifying restrictions}\}
+=\sum_{a\in\Areas^{+}}\big(R^{\mathrm{act}}_{a}-1\big)-1-\tfrac{1}{S}\dim(\eta),
+\end{equation}
+and their content changes character: instead of pinning each ZE's share on the distance
+profile, they pin the \emph{distribution} of within-area deviations around it. The count block
+gains $\sigma^{2}_{s}$ as a second parameter but also gains the higher thresholds $n\ge1$
+(the over-dispersion) as moments, so it stays over-identified. Two boundary cases bracket the
+design: $\sigma^{2}_{s}=0$ is the pure Assumption~\ref{as:geo} of \eqref{eq:app-df}, while a free
+$\varepsilon_{sl}$ per ZE drives the right-hand side to zero --- exactly the just-identification
+that Section~\ref{sec:eps-trap} rejects.
 
 \section{The granular dispersion of sourcing shares and the identification of $N_{s}$}
 \label{app:dispersion}
@@ -1224,6 +1627,37 @@ Equation \eqref{eq:app-var} is the leading $1/N_{s}$ term; for very thin sectors
 finite-$N_{s}$ Binomial/multinomial variance should be used, which the simulation delivers
 automatically. Both cautions leave the core result intact: \emph{share dispersion is a
 $1/N_{s}$ signal, and it is what makes $N_{s}$ identified even from the value block alone.}
+
+\subsection{Two corrections once comparative advantage deviates within areas}
+\label{app:disp-corrections}
+
+Everything above holds \emph{unconditionally} and under Assumption~\ref{as:geo} taken exactly.
+Two things change once one relaxes it as in Section~\ref{sec:eps}, and both cut against using
+\eqref{eq:app-var} or \eqref{eq:app-identify} as plug-in formulas.
+
+\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
+\item \textbf{Contamination.} Observed share dispersion now mixes granular sampling noise
+($\propto1/N_{s}$) with genuine dispersion of comparative advantage
+($\sigma^{2}_{\varepsilon,s}$): in logs,
+$\mathrm{Var}_{\text{within}}(\ln\hat\gamma)=\sigma^{2}_{\varepsilon,s}+(1-\gamma)(1+\mathrm{CV}_{v}^{2})/(N_{s}\gamma)$,
+which is \eqref{eq:eps-decomp}. Attributing all of it to $1/N_{s}$, as
+\eqref{eq:app-identify} does, \emph{understates} $N_{s}$ --- by an unbounded factor if
+$\sigma^{2}_{\varepsilon}$ is large. The two terms are distinguishable in principle, since only
+the sampling term scales with $1/\gamma$.
+\item \textbf{Truncation, which is worse.} The feasible sample contains only ZE with
+$\hat\gamma_{ls}>0$, and that selection removes exactly the low draws carrying most of the
+dispersion of $\ln\hat\gamma$. Table~\ref{tab:eps-mc} quantifies it: in the granular regime
+($N_{s}\bar\gamma\lesssim10$, i.e.\ a non-negligible empty-ZE share --- the regime this note is
+about) the additive decomposition is wrong by up to a factor of three, and the \emph{sign} of the
+error flips with $N_{s}$. The truncation and the sampling inflation partly cancel, in a way that
+is not signable a priori.
+\end{enumerate}
+
+Consequently \eqref{eq:app-var}--\eqref{eq:app-identify} should be read as the theory of why
+share dispersion is informative, not as an estimator. In practice, match the dispersion moment
+through the \emph{simulation}, which reproduces the sampling, the truncation, and the selection
+of \eqref{eq:eps-selection} automatically, and identify $(N_{s},\sigma^{2}_{s})$ jointly from the
+three moments listed in Section~\ref{sec:eps-calibration}.
 
 \section{The expected within-sector price index, love of variety, and the normalization}
 \label{app:price}
