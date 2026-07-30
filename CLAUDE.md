@@ -43,7 +43,7 @@ Five blocks in the masked moment vector; `BLOCK_RANGES` is a 5-tuple of index ra
 | 1 | `agg_labor_share` | aggregate labor share |
 | 2 | `agg_industry_share` | industry shares π_s |
 | 3 | `pi_r` | regional market shares |
-| 4 | `reg_coef` | extensive-margin distance coefficients, `N_REG` entries. Link set by `REG_METHOD` (`:cloglog` default, `:lpm` legacy); outcome is `not_supply` |
+| 4 | `reg_coef` | extensive-margin distance coefficients, `N_REG` entries. Link set by `REG_METHOD` (`:cloglog` default, `:lpm` legacy); outcome is `not_supply` (`plan_granular_aa.md` flips this to the supplier indicator, which makes the coefficient exactly `−θα`) |
 | 5 | `gamma_ls` | location-specific linkage shares γ_ls |
 
 ---

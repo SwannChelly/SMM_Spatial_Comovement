@@ -1453,7 +1453,8 @@ K_{ls}\;\sim\;\Bin\big(N_{s},\,q_{ls}\big),
 \label{eq:compute-binomial}
 \end{equation}
 Only $q_{ls}$ --- a \emph{one-variety} expectation --- needs simulating, and it can be estimated
-with as many draws $N_{\rho}$ as we like, entirely independently of $N_{s}$. Every granular
+with as many draws $N_{\rho}$ as we like, entirely independently of $N_{s}$
+(Lemma~\ref{lem:q-free} below proves that independence rather than assuming it). Every granular
 object then follows in closed form.
 \end{description}
 
@@ -1489,54 +1490,123 @@ checkable and should be checked once: at $\hat N_{s}$, simulate $R$ economies wi
 $\hat N_{s}$ varieties, average their moments, and confirm they match the closed-form values to
 $O(1/\sqrt{R})$. That gate turns the argument above into a test.
 
-\subsection{Why the extensive-margin regression collapses to one row per cell}
+\subsection{What $q_{ls}$ depends on --- and why it is free of $N_{s}$}
+\label{sec:compute-qfree}
+
+Route (b) rests on one claim: the per-variety win-somewhere probability $q_{ls}$ can be estimated
+once, with many draws, and then reused for \emph{any} $N_{s}$. That claim deserves a proof rather
+than an assertion, because if $q_{ls}$ moved with $N_{s}$ the whole construction would collapse
+into a fixed point.
+
+\begin{lemma}[$q_{ls}$ is free of $N_{s}$]
+\label{lem:q-free}
+Fix a variety $\rho$. Origin $l$ wins it for buyer $r$ iff
+$c_{l\rho s}(r)<c_{l'\rho s}(r)$ for all $l'$, i.e.\ iff
+\begin{equation}
+\frac{w_{l}\tau_{lrs}}{\varphi_{l\rho s}}<\min_{l'\neq l}\frac{w_{l'}\tau_{l'rs}}{\varphi_{l'\rho s}} .
+\label{eq:win-comparison}
+\end{equation}
+The win-somewhere event is the union of \eqref{eq:win-comparison} over $r$, so
+\begin{equation}
+q_{ls}=q_{ls}\big(T_{s\cdot},\,w,\,\tau,\,\theta\big)
+\end{equation}
+and nothing else. In particular the variety count $N_{s}$, the sector price index $P_{sr}$,
+downstream costs $c_{r}$ and expenditures $E_{sr}$ do \textbf{not} appear.
+\end{lemma}
+
+The economics of the lemma is that \eqref{eq:win-comparison} is a statement about \emph{relative
+costs}, whereas $N_{s}$ and $P_{sr}$ are aggregators built \emph{after} the winners are known.
+Expenditure allocates value across winners; it does not choose them. The love-of-variety channel
+$P_{sr}\propto N_{s}^{1/(1-\nu_{s})}$ therefore propagates to $c_{r}$, $y_{r}$, $E_{sr}$ --- and
+stops there. Note that this is stronger than the normalization of Section~\ref{sec:q2}(a):
+$q_{ls}\perp N_{s}$ holds \emph{whether or not} the love-of-variety term is normalized out. The
+normalization decides only whether the \emph{value} block moves with $N_{s}$; it is irrelevant to
+the extensive margin.
+
+\begin{quote}
+\textbf{The one condition that would break Lemma~\ref{lem:q-free}: endogenous upstream wages.}
+If $w_{l}$ cleared an upstream labour market, then $N_{s}\to P_{sr}\to$ downstream demand $\to$
+upstream labour demand $\to w_{l}$, and $w$ enters \eqref{eq:win-comparison} directly. With $w$
+taken as data (the current specification), the channel is absent. If wages are ever endogenized,
+route (b) becomes a fixed point in $(q,N_{s})$ and must be re-derived.
+\end{quote}
+
+\paragraph{This is not ``solve at $N_{s}=\infty$, then re-simulate''.} A natural but incorrect
+reading of route (b) is that one estimates the model in the continuum limit and afterwards
+re-runs it at a finite $N_{s}$. That would be a two-stage approximation with no guarantee. What
+route (b) does is different: $N_{\rho}$ and $N_{s}$ live on \emph{different axes}. $N_{\rho}$ is
+a Monte-Carlo sample size used to estimate a \emph{per-variety} probability; $N_{s}$ is a
+structural count that multiplies independent repetitions of that single-variety experiment. The
+analogy is exact: to compute the probability of at least one head in $N_{s}=10$ tosses of a coin
+of unknown bias $q$, one does not simulate ten tosses many times --- one estimates $q$ from $10^{6}$
+tosses and evaluates $1-(1-q)^{10}$ in closed form. The $10^{6}$ tosses are not ``the coin in the
+limit''; they are how $q$ is learned.
+
+\paragraph{One maintained assumption, stated.} With a finite $N_{s}$ the realized within-sector
+price index \eqref{eq:price-index} is a \emph{random} finite CES aggregate. The implementation
+evaluates the value block at its certainty equivalent $\widetilde P_{sr}$
+(Appendix~\ref{app:price}) rather than at a realized draw. That is exactly Option~2 of
+Section~\ref{sec:q2}(a) --- downstream firms optimize against the expected price index,
+neglecting the granular randomness, as in LMM's general-equilibrium embedding --- combined with
+the scale normalization of Option~1. The model being estimated is therefore \emph{granular
+sourcing with an expected-price-index general equilibrium}. This is a modelling choice, not a
+free lunch, and it is worth stating because it is what makes the value block deterministic. By
+Lemma~\ref{lem:q-free} it has no bearing on $q_{ls}$ or on the extensive margin.
+
+\subsection{The extensive-margin regression is natively one row per cell}
 \label{sec:compute-collapse}
 
 The baseline builds the extensive-margin design with one row per (draw, pair): with
-$n_{\text{good}}\approx142$ pairs and $N_{\rho}=8000$ draws, about $1.1$ million rows, each
-carrying a $0/1$ outcome and weight $1/N_{\rho}$. Almost all of that is redundant, for a reason
-specific to the cloglog.
+$n_{\text{good}}\approx142$ pairs and $N_{\rho}=8000$ draws, about $1.1$ million rows. Under
+granularity that design is not merely wasteful --- it is the wrong unit of observation.
 
-The IRLS estimating equation of a cloglog GLM is
+\paragraph{The outcome is a cell-level event.} In the data, one observation is a
+(sector, ZE) cell carrying $y_{ls}=\one\{\text{$l$ hosts a supplier in $s$}\}$: $1161$ rows for
+the industry of Section~\ref{sec:risk-evidence}. In the granular model the counterpart of that
+event is
+\begin{equation}
+\Prob\big(K_{ls}\ge1\big)=1-(1-q_{ls})^{N_{s}},
+\label{eq:cell-outcome}
+\end{equation}
+one number per cell. \emph{There is no per-draw outcome to regress.} The million-row design was
+an artefact of the continuum model, where the object being aggregated was a per-\emph{variety}
+win. Under granularity the regression is structurally at the cell level, and the simulated design
+matches the empirical one row for row --- which is what makes the moment a comparison of like
+with like. A draw-level regressor would have no empirical counterpart at all and would make the
+two regressions incommensurable.
+
+\paragraph{Backward compatibility: the continuum case collapses exactly.} It is still worth
+recording that the baseline moment is the $N_{s}=1$ special case of \eqref{eq:cell-outcome},
+because that is the cheapest possible regression test of the whole refactor. The cloglog IRLS
+estimating equation
 \begin{equation}
 \sum_{i} w_{i}\,x_{i}\,\frac{(\mathrm{d}\mu/\mathrm{d}\eta)_{i}}{\mu_{i}(1-\mu_{i})}\,
-\big(y_{i}-\mu_{i}\big)=0,
+\big(y_{i}-\mu_{i}\big)=0
 \label{eq:irls-score}
 \end{equation}
-which is \textbf{linear in $y$}. Within one cell $(s,l)$ every draw carries the \emph{same}
-regressors --- the same distance bin, the same area$\times$sector fixed effect --- hence the same
-$\eta$, $\mu$, $\mathrm{d}\mu/\mathrm{d}\eta$ and the same IRLS weight. Their contribution to
-\eqref{eq:irls-score} is
-\begin{equation}
-\sum_{\rho}\frac{1}{N_{\rho}}\,x_{sl}\,c_{sl}\,\big(y_{\rho,sl}-\mu_{sl}\big)
-=x_{sl}\,c_{sl}\Big(\underbrace{\tfrac{1}{N_{\rho}}\textstyle\sum_{\rho}y_{\rho,sl}}_{\text{cell mean}}-\mu_{sl}\Big)\cdot 1,
-\end{equation}
-i.e.\ identical to that of a \emph{single} row with weight $1$ and outcome equal to the cell mean.
-The fixed-effect absorption --- weighted within-group means of the working response --- collapses
-identically, for the same reason. So
+is \textbf{linear in $y$}. If every draw in a cell carries the same regressors and the same
+weight, they share $\eta,\mu,\mathrm{d}\mu/\mathrm{d}\eta$, so their joint contribution to
+\eqref{eq:irls-score} equals that of a single row of weight $1$ whose outcome is their mean; the
+fixed-effect absorption collapses identically. Verified numerically: on a synthetic design
+($60$ cells, $500$ draws, $4$ bins, $6$ groups) the expanded fit on $30{,}000$ rows and the
+collapsed fit on $60$ rows agree to $1.3\times10^{-15}$.
 
-\begin{quote}
-$N_{\rho}$ rows of weight $1/N_{\rho}$ with $0/1$ outcomes $\;\equiv\;$ one row of weight $1$
-with outcome $=$ their mean.
-\end{quote}
-
-Verified numerically: on a synthetic design ($60$ cells, $500$ draws, $4$ distance bins, $6$
-fixed-effect groups) the expanded fit on $30{,}000$ rows and the collapsed fit on $60$ rows agree
-to $1.3\times10^{-15}$. Three consequences.
-
-\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
-\item The design shrinks by three orders of magnitude, from $\sim\!1.1$M rows to one row per cell.
-\item The \emph{current} moment is revealed to be exactly the cell-level regression with
-fractional outcome $y_{sl}=1-q_{ls}$ --- the continuum extensive margin.
-\item Granularity is then the \textbf{single substitution} $y_{sl}=(1-q_{ls})^{N_{s}}$, and
-$N_{s}=1$ reproduces the baseline moment exactly. That is the cheapest possible regression gate
-for the whole refactor.
+\paragraph{Two conditions, and why neither binds.} The collapse requires that nothing vary
+\emph{within} a cell.
+\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
+\item \emph{Regressors.} The distance bin (or $\ln d$) and the area$\times$sector group are
+functions of the cell alone, so they are constant by construction. A \emph{firm-level} control
+such as $\ln z$ --- the winning draw's productivity --- is not, and would break the collapse. It
+should be dropped regardless: it has no empirical counterpart, since the data condition on a
+cell-level firm count, a different variable entirely. The control the specification actually
+needs (Section~\ref{sec:risk-evidence}) is cell-level, so the two requirements coincide.
+\item \emph{Weights.} Flat draw weights (the \texttt{qmc}, \texttt{sobol} and \texttt{mc}
+generators) are constant within a cell. Importance-sampling weights are not, and would break the
+collapse --- one more reason, on top of the bias documented for the min-coupled moments, not to
+use them here.
 \end{enumerate}
-
-The collapse is exact only if no regressor varies \emph{within} a cell. A firm-level control such
-as $\log z$ does vary and would break it; a cell-level control such as $\log(\text{firm count})$
-does not --- and the latter is what Section~\ref{sec:risk-evidence} showed the specification
-actually needs, and what the empirical target conditions on. The two requirements coincide.
+Neither binds on the production path, and under granularity the question is moot anyway:
+\eqref{eq:cell-outcome} has no draw index to collapse over.
 
 \subsection{How $N_{s}$ is obtained: profiling, not calibration}
 \label{sec:compute-profile}
@@ -1557,74 +1627,91 @@ This is the textbook concentrated (profiled) extremum estimator: $(\hat\theta_{c
 N(\hat\theta_{c}))$ is \emph{identical} to the joint minimiser over $(\theta_{c},N)$. Nothing is
 fixed outside the estimation; the objective is the same $r'Wr$ throughout. Two practical
 properties make \eqref{eq:profile-Ns} cheap: the inner minimisation needs \emph{no
-re-simulation} (Section~\ref{sec:compute-rb} --- $\hat q$ is held fixed while $N$ varies), and
-$\widehat N$ is an integer at every evaluation, so integrality is never relaxed and never rounded.
+re-simulation} (Lemma~\ref{lem:q-free} --- $\hat q$ is held fixed while $N$ varies), and
+$\widehat N$ is an integer at every evaluation, so integrality is never relaxed and never
+rounded.
 
-\paragraph{When --- and only when --- profiling degenerates to exact matching.}
-There is a special case in which \eqref{eq:profile-Ns} reduces to ``choose $N_{s}$ so the model
-reproduces $\bar G_{s}(0)$ exactly''. By Proposition~\ref{prop:cloglog-exact}, in the model's
-\emph{exact} reduced form --- the cloglog on the \textbf{supplier} indicator --- the index is
+\subsection{With the supplier indicator, $\ln N_{s}$ is absorbed by the fixed effect}
+\label{sec:compute-convention}
+
+The outcome convention decides how much work \eqref{eq:profile-Ns} actually has to do. Write the
+cell-level probability \eqref{eq:cell-outcome} in the cloglog index of the \textbf{supplier}
+indicator:
 \begin{equation}
-\eta_{ls}=\underbrace{\ln N_{s}+\ln T_{s,a(l)}-\ln\Phi_{s,a(l)}}_{\text{absorbed by the } a\times s \text{ fixed effect}}-\theta\alpha\ln d_{l},
+\eta_{ls}
+=\ln\Big(-\ln\Prob(K_{ls}=0)\Big)
+=\underbrace{\ln N_{s}}_{\text{constant within }s}
+\;+\;\ln\big(-\ln(1-q_{ls})\big),
+\label{eq:eta-separable}
 \end{equation}
-so $\ln N_{s}$ is \emph{perfectly collinear with the fixed effect}: the reg\_coef block carries
-\emph{zero} information about $N_{s}$, $N_{s}$ enters only the count block, and the minimiser of
-\eqref{eq:profile-Ns} sets that block's residual to zero. Exact matching is then not a shortcut
---- it \emph{is} the profiled optimum, and $\widehat N_{s}$ follows from the monotone root-find
-of $\bar G_{s}(0;n)$ described in Section~\ref{sec:moment}.
+\emph{exactly} --- and exactly, note, under the Binomial as well as the Poissonized form, since
+$\ln\!\big(\!-\!\ln(1-q)^{N_{s}}\big)=\ln N_{s}+\ln(-\ln(1-q))$ identically. Because $\ln N_{s}$
+is constant within every area$\times$sector group, it is \textbf{absorbed by the fixed effect}.
+The distance coefficient is therefore invariant to $N_{s}$, and equals $-\theta\alpha$ ---
+Proposition~\ref{prop:cloglog-exact}, now visible as an algebraic identity rather than an
+approximation.
 
-\paragraph{Under the \texttt{not\_supply} convention the collinearity breaks --- and the count
-block alone is no longer sufficient.} The empirical regression is run on the reversed outcome
-$y=\one\{\text{no supplier}\}$, for which the cloglog link is not exact
-(Proposition~\ref{prop:cloglog-exact}(c)) and $\ln N_{s}$ is not absorbed. Simulating the exact
-object --- $1161$ cells, $40$ fixed-effect groups, true $\theta\alpha=0.30$ --- makes the
-difference stark:
+Simulating the exact object ($1161$ cells, $40$ groups, true $\theta\alpha=0.30$) confirms it,
+and shows what happens to the two things that can spoil it:
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{@{}rrrr@{}}
+\begin{tabular}{@{}rrrrr@{}}
 \toprule
-$N_{s}$ & empty-ZE share & $\hat\beta_{\ln d}$, \texttt{not\_supply} & $\hat\beta_{\ln d}$, supplier\\
+& & \multicolumn{2}{c}{supplier indicator} & \texttt{not\_supply}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-5}
+$N_{s}$ & empty share & $\hat\beta_{\ln d}$ (well spec.) & $\hat\beta_{\ln d}$ (misspec.) & $\hat\beta_{\ln d}$\\
 \midrule
-$30$   & $0.992$ & $+0.067$ & $-0.30013$\\
-$60$   & $0.985$ & $+0.078$ & $-0.30013$\\
-$120$  & $0.970$ & $+0.091$ & $-0.30012$\\
-$250$  & $0.941$ & $+0.109$ & $-0.30012$\\
-$500$  & $0.892$ & $+0.131$ & $-0.30011$\\
-$1000$ & $0.812$ & $+0.157$ & $-0.30009$\\
+$30$    & $0.992$ & $-0.300127$ & $-0.3238$ & $+0.067$\\
+$250$   & $0.941$ & $-0.300119$ & $-0.3275$ & $+0.109$\\
+$1000$  & $0.812$ & $-0.300092$ & $-0.3391$ & $+0.157$\\
+$4000$  & $0.550$ & $-0.300037$ & $-0.3523$ & ---\\
+$20000$ & $0.170$ & $-0.300014$ & --- & ---\\
+\midrule
+\multicolumn{2}{@{}l}{relative drift over the range} & $3.8\times10^{-4}$ & $8.8\times10^{-2}$ & $\times 2.3$\\
 \bottomrule
 \end{tabular}
-\caption{The supplier-indicator cloglog recovers $-\theta\alpha$ to five digits and is
-\emph{invariant} to $N_{s}$ over a factor of $33$ --- Proposition~\ref{prop:cloglog-exact} holding
-numerically. The reversed \texttt{not\_supply} outcome is neither: its coefficient is strongly
-attenuated relative to $+\theta\alpha=0.30$ \emph{and} rises monotonically with $N_{s}$.}
+\caption{The supplier-indicator coefficient recovers $-\theta\alpha$ and drifts by
+$4\times10^{-4}$ in relative terms while $N_{s}$ varies by a factor of $667$ --- the fixed effect
+absorbing $\ln N_{s}$ exactly, as \eqref{eq:eta-separable} predicts. ``Misspec.'' fits $\ln d$
+when the true trade cost is piecewise in distance bins: the drift rises to $9\%$, the residual
+coupling coming from the interaction of specification error with the IRLS weights. The reversed
+\texttt{not\_supply} outcome, for which the cloglog link is not the model's own, is neither
+invariant nor near the truth: it is attenuated by a factor of $2$--$4$ and more than doubles across
+the range.}
 \label{tab:convention}
 \end{table}
 
-Two conclusions follow, and they point in opposite directions.
+Three consequences.
 
-\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
-\item \textbf{Exact matching of $\bar G_{s}(0)$ is no longer the profiled optimum.} Under
-\texttt{not\_supply} the reg\_coef block \emph{does} respond to $N_{s}$, so \eqref{eq:profile-Ns}
-must be solved as written --- an integer line search on the \emph{full} weighted loss, warm-started
-at the exact-match solution --- not by zeroing the count residual. Since the inner search needs no
-re-simulation and the collapsed regression costs $O(\#\text{cells})$, this is affordable; it is
-simply not free.
-\item \textbf{The reversed outcome is a materially worse moment for $\alpha$.} It attenuates the
-distance coefficient by a factor of $2$ to $4$ in the relevant range and confounds it with
-$N_{s}$, whereas the supplier-indicator version delivers $-\theta\alpha$ exactly and cleanly
-separates the two parameters. Matching the data convention keeps the estimator consistent --- the
-same regression is run on both sides --- so this is not a bias. It is a loss of \emph{precision
-and of separation}. If the empirical coefficient can also be produced on the supplier indicator,
-it is strictly the better target, and adding it would restore the clean division of labor of
-Table~\ref{tab:division}.
+\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
+\item \textbf{Profiling degenerates to a one-dimensional root-find.} Since block~4 carries
+essentially no information about $N_{s}$, the minimiser of \eqref{eq:profile-Ns} is, to
+$O(10^{-4})$, the value that zeroes the count residual: $\widehat N_{s}$ solves
+$\bar G_{s}(0;N_{s})=$ target, by the monotone integer bisection of Section~\ref{sec:moment}. The
+full-loss integer line search is demoted from a required inner loop to a \emph{verification step}
+run once at the optimum.
+\item \textbf{$\alpha$ becomes directly readable.} $\hat\beta_{\ln d}=-\theta\alpha$ to four
+decimals, so $\alpha=-\hat\beta_{\ln d}/\theta$ with no attenuation correction --- unlike every
+other configuration examined in this note (the LPM factor $\lambda$ of
+Lemma~\ref{lem:fe}(ii), the frailty factor of Lemma~\ref{lem:attenuation}, the censoring factor
+of Lemma~\ref{lem:censoring}).
+\item \textbf{The invariance is conditional on specification.} It is exact only if the distance
+term is flexible enough to fit the true trade-cost profile; under misspecification a few percent
+of $N_{s}$-dependence returns. This is an argument for the binned specification
+($N_{\mathrm{REG}}=4$) over the single power-law coefficient, and for checking the drift
+empirically rather than assuming it away.
 \end{enumerate}
 
-Whichever convention is used, the supplier-indicator coefficient should be computed on
-\emph{simulated} data and printed in every report: it is a direct, $N_{s}$-free read on
-$\theta\alpha$ and therefore the sharpest available diagnostic on whether $\alpha$ is being
-identified as intended.
+\begin{remark}[Changing the outcome convention is a data-side change too]
+\label{rem:convention-data}
+The cloglog link is not symmetric under outcome reversal, so switching the model's regression to
+the supplier indicator requires the \emph{empirical} target and its bootstrap covariance to be
+regenerated with the same outcome. The $\beta$ block of the moment vector and the corresponding
+rows and columns of the joint $\beta+\gamma+G$ covariance are affected; the $\gamma$ and $G$
+blocks are not. This is not a sign flip and cannot be applied post hoc.
+\end{remark}
 
 \section{What else must change}
 \label{sec:q2}

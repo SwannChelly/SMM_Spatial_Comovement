@@ -68,94 +68,104 @@ against the AA-level `T` (one moment per active `(s,a)`, minus one reference per
 The ZE-level variant (non-`_aa` files) stays reachable behind a flag as the over-identifying
 configuration of the note's §6(b) — **not** part of the simple version.
 
-### D4 — `N_s` is **profiled** out over the integers, at zero simulation cost
+### D4 — `N_s` is **profiled** out over the integers, and the supplier indicator makes it a root-find
 
-`N_s` is estimated by the same weighted objective as everything else, but concentrated rather
-than searched jointly:
+`N_s` is estimated by the same weighted objective as everything else, concentrated rather than
+searched jointly:
 
 ```
 N̂(θ_c) = argmin over N ∈ ∏_s [N_LO_s, N_HI_s] ∩ ℕ  of  r(θ_c,N)' W r(θ_c,N)
 ```
 
-This is the textbook profiled extremum estimator — the result is *identical* to joint
-minimisation over `(θ_c, N)`. Two properties make it cheap: the inner minimisation needs **no
-re-simulation** (`q̂` is held fixed while `N` varies, by D1), and `N̂_s` is an integer at every
-evaluation, so integrality is never relaxed and never rounded. **The outer optimizer never sees
-`N_s`: no mixed-integer search.**
+Textbook profiled extremum estimator — identical to joint minimisation over `(θ_c, N)`. The inner
+minimisation needs **no re-simulation** (`q̂` is `N_s`-free, D1 and `finite_sample2.tex` §7.3), and
+`N̂_s` is an integer at every evaluation, so integrality is never relaxed and never rounded.
 
-Given `q̂`, the empty-ZE share is closed form and strictly decreasing in `n`:
+**With `y = 1{supplier}` the inner problem collapses to a one-dimensional root-find.** The
+cloglog index of the supplier indicator separates *exactly*:
 
 ```
-G_s(0; n) = mean over l ∈ cells_s of (1 - q̂[s,l])^n
+η_ls = ln(−ln Pr(K_ls = 0)) = ln N_s + ln(−ln(1 − q_ls))
 ```
 
-**Exact matching of `G_s(0)` is NOT the answer here** — it is only the warm start. The reason is
-the outcome convention (see `finite_sample2.tex` §7.4). Under the model's *exact* reduced form
-(cloglog on the **supplier** indicator) `ln N_s` is perfectly collinear with the AA×sector fixed
-effect, block 4 carries zero information about `N_s`, and profiling would reduce to zeroing the
-block-6 residual. Under the **`not_supply`** convention used in the data the collinearity breaks.
-Simulation of the exact object (1161 cells, 40 groups, true `θα = 0.30`):
+and `ln N_s` is constant within sector, hence **absorbed by the AA×sector fixed effect**. Block 4
+therefore carries essentially no information about `N_s`, and the profiled optimum is the value
+that zeroes the count residual. Simulation of the exact object (1161 cells, 40 groups, true
+`θα = 0.30`):
 
-| `N_s` | empty share | `b_dist` (`not_supply`) | `b_dist` (supplier) |
-|---|---|---|---|
-| 30 | 0.992 | +0.067 | **−0.30013** |
-| 120 | 0.970 | +0.091 | **−0.30012** |
-| 250 | 0.941 | +0.109 | **−0.30012** |
-| 1000 | 0.812 | +0.157 | **−0.30009** |
+| `N_s` | empty share | `b_dist` supplier (well spec.) | supplier (misspec.) | `not_supply` |
+|---|---|---|---|---|
+| 30 | 0.992 | **−0.300127** | −0.3238 | +0.067 |
+| 250 | 0.941 | **−0.300119** | −0.3275 | +0.109 |
+| 1000 | 0.812 | **−0.300092** | −0.3391 | +0.157 |
+| 20000 | 0.170 | **−0.300014** | — | — |
+| *drift over range* | | **3.8e−4** | 8.8e−2 | ×2.3 |
 
-The supplier version recovers `−θα` to five digits and is invariant to `N_s` over a factor of 33;
-the `not_supply` version is attenuated by 2–4× *and* rises monotonically with `N_s`. So block 4
-**does** respond to `N_s`, and the profiling must minimise the full loss.
+So the inner loop is:
 
-**Practical inner loop.** Warm-start at the exact-match root of `G_s(0;n)`, then run an integer
-line search on the full weighted loss over blocks 4+6, one sector at a time (coordinate descent —
-sectors couple only through the shared distance coefficients of the pooled regression), with a
-convergence check on a second pass. Each candidate costs one collapsed cloglog fit on ~1161 rows,
-which is ~1000× cheaper than today's fit (§1), so a few dozen candidates per loss evaluation is
-affordable.
+```
+G(s,n) := mean over l ∈ cells_s of (1 − q̂[s,l])^n          # closed form, ↓ in n
+N̂[s]  := integer bisection of G(s,·) onto G_TARGET[s], clamped to [N_LO_s, N_HI_s]
+```
 
-> **Recommendation, worth raising before implementation.** The `not_supply` convention is
-> consistent (the same regression runs on model and data, so this is not a bias) but it is a
-> materially **worse moment for `α`**: it attenuates the distance coefficient 2–4× and confounds
-> it with `N_s`. If the empirical coefficient can also be produced on the **supplier** indicator,
-> it is strictly better — exactly `−θα`, invariant to `N_s`, and it restores the clean division of
-> labor. Either way, compute the supplier-convention coefficient on *simulated* data and print it
-> every report: it is an `N_s`-free read on `θα` and the sharpest diagnostic available.
+with the **full-loss integer line search demoted to a verification step run once at `θ̂`**, not an
+inner loop. Two riders:
+
+* the invariance is exact only if the distance term is flexible enough to fit the true trade-cost
+  profile — under misspecification ~9% of `N_s`-dependence returns. That argues for the binned
+  specification (`N_REG = 4`) over the single power law, and for **measuring** the drift at `θ̂`
+  rather than assuming it away;
+* `α` becomes **directly readable**: `b_dist = −θα` to four decimals, so `α = −b_dist/θ` with no
+  attenuation correction — unlike every other configuration in the note (the LPM factor `λ`, the
+  frailty factor, the censoring factor).
 
 ---
 
-## 1. A fifth observation that shrinks the code
+## 1. The regression is natively one row per cell
 
-The current `reg_coef` regression builds `(n_good + N_CONTROL) × N_rho ≈ 1.1M` rows
-(`model_CP.jl:1049–1130`), one per (draw, pair). But the cloglog IRLS estimating equation is
-**linear in `y`**:
+The baseline builds the design with one row per (draw, pair) — `(n_good + N_CONTROL) × N_rho ≈
+1.1M` rows (`model_CP.jl:1049–1130`). Under granularity that is not merely wasteful, it is the
+**wrong unit of observation**.
+
+In the data one observation is a (sector, ZE) cell with `y_ls = 1{l hosts a supplier in s}` —
+1161 rows. In the granular model the counterpart of that event is
 
 ```
-Σ  w · x · (dμ/dη) · (y - μ) / (μ(1-μ))  =  0
+Pr(K_ls ≥ 1) = 1 − (1 − q_ls)^{N_s}
 ```
 
-Within one cell `(s,l)` every draw shares the same regressors, hence the same `η, μ, dμ/dη`,
-hence the same IRLS weight — so `N_rho` rows of weight `1/N_rho` with outcomes `y_ρ` are
-**algebraically identical** to *one* row of weight `1` with outcome `mean_ρ y_ρ`. The FE
-absorption (weighted group means, `model_CP.jl` `_cloglog_irls`) collapses identically for the
-same reason.
+**one number per cell.** There is no per-draw outcome to regress: the million-row design was an
+artefact of the continuum model, where the aggregated object was a per-*variety* win. The
+simulated design now matches the empirical one row for row, which is what makes the moment a
+comparison of like with like. A draw-level regressor would have no empirical counterpart and would
+make the two regressions incommensurable.
 
-Therefore:
+### On "the draws within a cell don't share the same productivity draw"
 
-* the design collapses from ~1.1M rows to **one row per cell** (~1161), a large speedup;
-* the current moment is *already* the fractional-outcome cell regression with `y = 1 - q_ls`;
-* granularity is the single substitution **`y = (1 - q_ls)^{N_s}`**;
-* **`N_s = 1` reproduces the current continuum moment exactly** — a perfect regression gate
-  (see G0 in §6).
+Correct, and it is exactly why the draw dimension must not be in the regression. Two things follow.
 
-**One condition:** the collapse is exact only if no regressor varies *within* a cell. The
-draw-level `log(z_flat[ρ,g])` size control does vary. On the production path it is off
-(`include_size_control = !include_control`, and `include_control=true`), so the collapse is exact
-there. And per the §3.9 diagnostic the size control we actually want is the **cell-level
-`log(SIREN)`** anyway — the same variable the empirical target conditions on. So: drop the
-draw-level `log z` control, add cell-level `log(SIREN)`.
+* **Under granularity the objection is moot**: `Pr(K_ls ≥ 1)` has no draw index. The draws serve
+  only to estimate `q_ls`.
+* **For the `N_s = 1` backward-compatibility gate** (G0), where the design *is* collapsed from
+  draws, the collapse is exact iff nothing varies within a cell. Checking what actually varies in
+  `fast_cloglog_regression`:
 
----
+  | Column | Varies within cell? |
+  |---|---|
+  | distance bin / `log_dist` (from `r`, `dr`) | no — cell-level by construction |
+  | FE group `(s-1)*R_downstream + dr` | no |
+  | `sample_weights[rho,g]` | no under `:qmc` / `:sobol` / `:mc`; **yes under `:is`** |
+  | `log(z_flat[rho,g])` (size control) | **yes** — but only when `include_size_control = !include_control`, i.e. off on the production path |
+
+  So on the production path (`--controls=true`, `--draws=qmc`) the collapse is exact — verified to
+  `1.3e-15` on a synthetic design (30,000 rows vs 60). Under `:is`, or with the firm-level `log z`
+  control on, it is not.
+
+The `log z` control should be dropped regardless of the collapse: it is the *winning draw's
+productivity*, whereas the data condition on a **cell-level firm count** (`log SIREN`). They are
+different variables, so matching a coefficient on one against the other was never comparing like
+with like. The control the specification actually needs (§3.9 of the note) is cell-level — so the
+two requirements coincide.
 
 ## 2. Data inputs
 
@@ -218,7 +228,7 @@ Blocks 1–4 keep their roles. Block 5 changes level; block 6 is new.
 | 1 | `agg_labor_share` | 1 | unchanged |
 | 2 | `agg_industry_share` | S−1 | unchanged |
 | 3 | `pi_r` | R_d−1 | unchanged |
-| 4 | `reg_coef` | `N_REG` | unchanged size; **granular** outcome, **cell-level** design |
+| 4 | `reg_coef` | `N_REG` | unchanged size; **granular** outcome, **cell-level** design, outcome flipped to `1{supplier}` |
 | 5 | `gamma_ls` | active (s,ZE) − ref | **active (s,AA) − ref** |
 | 6 | `G0` | — | **new**: `G_s(0)`, one per sector with an active AA |
 
@@ -296,11 +306,12 @@ function loss(θ, W):
     p0[s,l] = (1 - q[s,l])^N̂[s]                      # Pr(no supplier), exact
 
     # ---- (4) block 4: cell-level cloglog, fractional outcome ----------------
-    #   one row per cell; y = p0 (the `not_supply` convention already in the code)
+    #   one row per cell; y = 1 - p0  (SUPPLIER indicator)
     #   FE group = (s, AA_OF_ZE[l])  — identical to today's group id
-    #   regressors = distance bins (N_REG>1) or log d (N_REG==1), + SIREN_LOG
+    #   regressors = distance bins (N_REG>1) or log d (N_REG==1); NO draw-level
+    #                control (SIREN_LOG joins here when it arrives)
     #   weight = 1
-    reg_coef = cloglog_irls(y = p0, X = [dist | SIREN_LOG], fe = (s, AA_OF_ZE[l]))
+    reg_coef = cloglog_irls(y = 1 - p0, X = [dist], fe = (s, AA_OF_ZE[l]))
 
     # ---- (5) block 5: AA-level shares ---------------------------------------
     γ_aa[s,a] = Σ_{l ∈ a} γ[s,l]                      # γ from compute_moments
@@ -315,13 +326,12 @@ function loss(θ, W):
 
 ### 4.2 Where `N_s` enters the loss
 
-`N_s` moves two blocks. Block 6 (`G_s(0)`) is the level of the extensive margin — the moment it
-was designed for. Block 4 (`reg_coef`) responds too, but **only because of the `not_supply`
-convention**: under the exact supplier-indicator reduced form `ln N_s` sits inside the AA×sector
-fixed effect and block 4 would be exactly invariant to it (table in D4). The strength of the
-block-4 channel is therefore an artefact of the outcome convention rather than a structural
-feature — which is exactly why the supplier-convention coefficient is worth printing as a
-diagnostic.
+With the supplier indicator, essentially only **block 6**. `ln N_s` sits inside the AA×sector
+fixed effect of block 4 (D4), so `reg_coef` is invariant to it to `4e−4` under correct
+specification. That is what makes the inner problem a root-find rather than a search, and what
+gives the clean division of labor: `α` from the distance gradient in block 4, `N_s` from the
+level in block 6. The residual coupling under misspecification (~9%) is why the full-loss line
+search is still run once at `θ̂` as a verification.
 
 Because the profiling runs *inside* `loss`, the FD Jacobian automatically picks up the total
 derivative `dm/dα` along the `N̂_s(α)` manifold — the same profiled-Jacobian structure the
@@ -487,15 +497,28 @@ Suggested sequence: **Phase 0** (timing) → **G0** (refactor, zero behavioural 
 | `N_s^obs` | column `N_supplier_s` of `G_K.csv`, repeated on every row (assert constant within `A129`) |
 | AA map | `closest_downstream_region.npy`, `R × R_downstream` binary — **asserted equal** to the internally computed `CLOSEST_DOWNSTREAM_REGION` (gate G7) |
 | `SIREN` size control | **deferred**; consequences recorded in §2 |
-| cloglog outcome | `y = not_supply`, matching the data |
+| cloglog outcome | **`y = 1{supplier}`** — the model's exact reduced form; requires the empirical β target and the β block of Σ to be regenerated (see below) |
 | `θ` | `1.0`, confirmed |
+
+### Required before the first run — a data-side action
+
+**Switching the outcome to `y = 1{supplier}` is not a sign flip.** The cloglog link is asymmetric
+under outcome reversal, so the empirical target and its bootstrap covariance must be regenerated
+with the same outcome:
+
+* the empirical `reg_coef` target (the β block of the moment vector);
+* the **β rows and columns** of all four `Sigma_beta_gamma_cloglog[_1]_f[_aa].npy` files.
+
+The γ and G blocks are unaffected — only the β block and its cross-covariances with γ and G.
+This cannot be applied post hoc to the existing files.
+
+The payoff is large and is the reason to do it: `b_dist = −θα` exactly, invariant to `N_s`
+(D4), so `α` is read straight off the coefficient with no attenuation correction, and the
+`(α, N_s)` identification separates cleanly — `α` from the distance gradient in block 4, `N_s`
+from the level in block 6.
 
 ### Remaining
 
-1. **The `not_supply` convention costs precision on `α`** (D4). Can the empirical cloglog also be
-   run on the **supplier** indicator? That coefficient is exactly `−θα` and invariant to `N_s`,
-   whereas the reversed one is attenuated 2–4× and confounded with `N_s`. It would be an
-   *additional* moment, so nothing already built is wasted.
-2. **`α̂` from this version is expected to be biased upward in magnitude** because `SIREN` is
+1. **`α̂` from this version is expected to be biased upward in magnitude** because `SIREN` is
    deferred (§2). Worth deciding in advance whether that is acceptable for a first run, or whether
    `SIREN` should arrive before the estimation is launched.
