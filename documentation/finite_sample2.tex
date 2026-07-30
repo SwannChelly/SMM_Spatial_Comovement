@@ -549,7 +549,9 @@ from the geography restriction, not from any change to the regression.
 \midrule
 $\alpha$ (trade cost)
 & \emph{Within}-area, across-ZE gradient of the supplier indicator in distance
-& cloglog distance coefficient, block~4 \eqref{eq:cloglog}\\
+& cloglog distance coefficient, block~4 \eqref{eq:cloglog}. The within-area \emph{intensive}
+margin adds only $\alpha/\eta_{\text{size}}$, and only in levels
+(Section~\ref{sec:risk-evidence})\\
 $T_{s,a}$, $a\in\Areas^{+}_{s}$
 & \emph{Across}-area value shares
 & area-aggregated sourcing shares
@@ -661,6 +663,218 @@ Note also that \eqref{eq:T-area} converts what were free parameters into $R_{a}-
 feature --- the model becomes testable where it was previously just-identified --- but it means
 a Hansen $J$ on the $\gamma$ block now has power against the geography restriction itself, and
 should be read as such.
+
+\subsection{The diagnostic, run on the data: verdict and how to read it}
+\label{sec:risk-evidence}
+
+The diagnostic of Section~\ref{sec:risk}(2) has been run on the observed shares: all
+(sector, ZE) cells of the industry's upstream sectors, with $\hat\gamma_{ls}$ set to zero where
+no supplier is observed, grouped by \texttt{ze2010\_downstream}$\times$\texttt{A129} --- which is
+exactly the area$\times$sector fixed effect of Assumption~\ref{as:geo} --- and restricted to
+area$\times$sectors with a strictly positive total share, i.e.\ to $\Areas^{+}_{s}$. The size
+covariate is $\ln(\text{SIREN})$, the number of firms (supplier and non-supplier) in the cell.
+Six specifications: $\hat\gamma_{ls}$ in levels over all cells, and $\ln\hat\gamma_{ls}$ over
+active cells only, each with the fixed effect as a regressor, then absorbed, then absorbed with
+the size control.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+& \multicolumn{3}{c}{$\hat\gamma_{ls}$ (levels)} & \multicolumn{3}{c}{$\ln\hat\gamma_{ls}$ (active only)}\\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+& (1) & (2) & (3) & (4) & (5) & (6)\\
+\midrule
+$\ln d_{l}$ &  & $-0.017^{***}$ & $-0.011^{***}$ & & $-0.284$ & $-0.130$\\
+            &  & $(0.004)$      & $(0.002)$      & & $(0.197)$ & $(0.136)$\\
+$\ln \text{SIREN}_{l}$ & & & $0.010^{***}$ & & & $0.492^{***}$\\
+            & & & $(0.003)$ & & & $(0.126)$\\
+\midrule
+area$\times$sector FE & regressor & absorbed & absorbed & regressor & absorbed & absorbed\\
+Observations & $1161$ & $1161$ & $1161$ & $99$ & $99$ & $99$\\
+$R^{2}$ & $0.059$ & $0.160$ & $0.270$ & $0.944$ & $0.949$ & $0.963$\\
+within $R^{2}$ & --- & $0.108$ & $0.225$ & --- & $0.084$ & $0.330$\\
+\bottomrule
+\end{tabular}
+\caption{The within-area diagnostic of Section~\ref{sec:risk}(2). Standard errors clustered by
+area$\times$sector in the absorbed specifications. $1161$ cells lie inside active attraction
+areas; $99$ host a supplier.}
+\label{tab:diagnostic}
+\end{table}
+
+\paragraph{The headline number.} Of the $1161$ ZE--sector cells sitting \emph{inside an active
+attraction area}, only $99$ host a supplier: \textbf{$91.5\%$ are extensive-margin zeros}. Since
+the sample size is identical in columns (2) and (3), $\ln\text{SIREN}$ is defined everywhere ---
+every one of those $1161$ cells contains at least one firm. These are therefore genuine zeros
+among cells that host firms, not empty cells, and they are exactly the endogenous class of
+Table~\ref{tab:hierarchy}, row~2: under Assumption~\ref{as:geo} they inherit $T_{s,a}>0$ from
+their area and become model objects, whereas ZE-level comparative advantage had to assign them
+$T\equiv0$. The two-tier design is not a convenience here --- it is what makes $91.5\%$ of the
+relevant geography speakable at all.
+
+\paragraph{The two $R^{2}$'s in columns (1) and (4) split exactly along the model's two tiers.}
+With the fixed effect entered as a regressor, area$\times$sector dummies explain $5.9\%$ of the
+variance of $\hat\gamma_{ls}$ in levels but $94.4\%$ of the variance of $\ln\hat\gamma_{ls}$
+among active cells. Because the level variable is $91.5\%$ zeros, its variance is dominated by
+the extensive margin. So:
+\begin{itemize}[nosep,topsep=2pt]
+\item the \emph{intensive} margin is almost entirely \textbf{between} areas --- which is what
+$T_{s,a}$ is for, and a direct endorsement of Assumption~\ref{as:geo};
+\item the \emph{extensive} margin is almost entirely \textbf{within} areas --- which is what
+distance and granularity are for, and where Section~\ref{sec:within} says $\alpha$ lives.
+\end{itemize}
+One caveat on the $0.944$: with $99$ observations and one dummy per active area$\times$sector,
+$R^{2}$ is mechanically inflated by a near-saturated design. Report the number of groups and the
+adjusted $R^{2}$ before leaning on that figure.
+
+\paragraph{Section~\ref{sec:risk}'s concern is confirmed: size is the dominant within-area force,
+and it does confound distance.} In logs, $\ln\text{SIREN}$ carries a coefficient of $0.492$
+$(0.126)$ and lifts the within $R^{2}$ from $0.084$ to $0.330$ --- roughly four times the
+explanatory power of distance. Adding it moves the distance coefficient toward zero in both
+specifications, $-0.284\to-0.130$ in logs and $-0.017\to-0.011$ in levels. The sign of that
+movement is informative: within an attraction area, closer ZE are \emph{bigger}, so omitting size
+made distance look more powerful than it is. \textbf{The covariate extension
+\eqref{eq:T-area-cov} is therefore not optional, and the firm count must be in it.} Any $\alpha$
+estimated from a within-area specification without it inherits the same upward bias in magnitude.
+
+\paragraph{But neither log coefficient can be read as $-\theta\alpha$: granular censoring.}
+The insignificance of columns (5)--(6) is not evidence that distance does not matter within areas.
+Conditioning on activity censors the share, and severely so in the granular regime.
+
+\begin{lemma}[Granular censoring of the observed positive share]
+\label{lem:censoring}
+With $K_{ls}\sim\Pois(u_{ls})$, $u_{ls}=N_{s}\gamma_{ls}$, and equal-value varieties,
+$\E[\hat\gamma_{ls}\mid K_{ls}\ge1]=\gamma_{ls}/(1-e^{-u_{ls}})$, so
+\begin{equation}
+\frac{\partial \ln \E\big[\hat\gamma_{ls}\mid K_{ls}\ge1\big]}{\partial \ln\gamma_{ls}}
+=B(u_{ls}),
+\qquad
+B(u)=1-\frac{u}{e^{u}-1}\in(0,1),
+\label{eq:censoring}
+\end{equation}
+with $B$ increasing, $B(0^{+})=0$ and $B(\infty)=1$. The regression actually run --- on
+$\ln\hat\gamma$ rather than $\ln\E[\hat\gamma]$ --- carries the closely related factor
+$B_{\log}(u)=\partial\,\E[\ln K\mid K\ge1]/\partial\ln u$, which is slightly smaller than $B$ for
+$u\lesssim3$ and equals it in the limits.
+\end{lemma}
+
+The mechanism is quantization: a ZE that supplies at all supplies at least one variety, and when
+$u\ll1$ it supplies \emph{exactly} one, so its observed share is $\approx1/N_{s}$ almost
+irrespective of its true $\gamma$. All of the distance signal is pushed out of the intensive
+margin and into whether $K\ge1$. Exact values of the two factors:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+$u=N_{s}\gamma$ & $0.09$ & $0.3$ & $0.6$ & $1.0$ & $1.5$ & $2.0$ & $3.0$ & $10$\\
+\midrule
+$\Prob(K\ge1)$ & $0.086$ & $0.259$ & $0.451$ & $0.632$ & $0.777$ & $0.865$ & $0.950$ & $1.000$\\
+$B(u)$         & $0.044$ & $0.143$ & $0.270$ & $0.418$ & $0.569$ & $0.687$ & $0.843$ & $1.000$\\
+$B_{\log}(u)$  & $0.031$ & $0.105$ & $0.212$ & $0.351$ & $0.514$ & $0.658$ & $0.874$ & $1.061$\\
+\bottomrule
+\end{tabular}
+\caption{Granular censoring of the intensive margin (Lemma~\ref{lem:censoring}), computed exactly.
+Both factors vanish as $u\to0$: in a sparse sector the observed positive share carries almost no
+information about $\gamma$.}
+\label{tab:censoring}
+\end{table}
+
+Read against Table~\ref{tab:censoring}, the size coefficient of column (6) is itself an estimate
+of the attenuation: if $T$ is proportional to the mass of firms ($\eta_{\text{size}}=1$, the
+natural microfoundation), then $\hat B_{\log}\approx0.49$, which inverts to $u\approx1.4$ among
+the \emph{active} cells. That is consistent with an overall active rate of $8.5\%$ only because
+selection into activity is strong --- the active cells are the high-$u$ tail --- and it yields a
+first, independent order-of-magnitude read on $N_{s}$, namely
+$N_{s}\approx1.4/\bar\gamma_{\text{active},s}$, to be computed sector by sector and compared
+against the count moment. That comparison is precisely the over-identifying check of
+Section~\ref{sec:eps-calibration}.
+
+\paragraph{The ratio of coefficients is identified --- in \emph{levels}, not in logs.} Both
+regressors enter the index $\ln\gamma_{ls}$ linearly, so a censoring factor common across cells
+would cancel from their ratio, leaving
+$\hat\beta_{\ln d}/\hat\beta_{\ln\text{size}}=-\theta\alpha/\eta_{\text{size}}$ free of $N_{s}$,
+of the frailty attenuation of Lemma~\ref{lem:attenuation}, and of $B$. Whether that survives
+heterogeneity in $u_{ls}$ --- which is correlated with both regressors --- is an empirical
+question, and simulation of the exact object (multiple areas, absorbed fixed effects, value
+dispersion $\mathrm{CV}_{v}=0.8$, $\sigma_{\varepsilon}=0.4$--$0.6$, active shares $6$--$18\%$)
+answers it sharply:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{4}{c}{recovered $-\hat\beta_{\ln d}/\hat\beta_{\ln\text{size}}$}\\
+\cmidrule(lr){2-5}
+true $\theta\alpha/\eta$ & $0.300$ & $0.300$ & $1.100$ & $0.600$\\
+value dispersion $\mathrm{CV}_{v}$ & $0$ & $0.8$ & $0.8$ & $0.8$\\
+\midrule
+levels, \emph{all} cells   & $0.311$ & $0.306$ & $1.119$ & $0.646$\\
+logs, \emph{active} cells  & $0.317$ & $-0.155$ & $1.478$ & $-0.063$\\
+\bottomrule
+\end{tabular}
+\caption{The level specification recovers the coefficient ratio to within $8\%$ across
+configurations; the log/active specification does not, and flips sign as soon as varieties carry
+dispersed values. Reason: $\E[\hat\gamma_{ls}]=\gamma_{ls}$ holds \emph{unconditionally}
+(equation \eqref{eq:app-mean}), so the level regression over all cells --- zeros included --- is
+free of censoring and of selection, while the log/active regression suffers both, with an
+attenuation $B(u_{ls})$ that is itself correlated with size and distance.}
+\label{tab:ratio-sim}
+\end{table}
+
+Applied to Table~\ref{tab:diagnostic}, and with the calibration's $\theta=1$:
+\begin{equation}
+\frac{\alpha}{\eta_{\text{size}}}
+=-\frac{\hat\beta_{\ln d}}{\hat\beta_{\ln\text{size}}}
+=\frac{0.011}{0.010}\approx 1.1
+\qquad\text{(column 3, the usable specification).}
+\label{eq:alpha-over-eta}
+\end{equation}
+Column (6)'s ratio, $0.130/0.492\approx0.26$, is \emph{not} usable --- Table~\ref{tab:ratio-sim}
+shows that object biased by a factor of two or worse. Under $\eta_{\text{size}}=1$,
+\eqref{eq:alpha-over-eta} gives $\alpha\approx1.1$: roughly \emph{four times} the $\alpha\approx0.30$
+returned by the joint free-$T$ search. Two readings, not mutually exclusive. Either
+$\eta_{\text{size}}<1$ --- comparative advantage grows less than proportionally with the firm
+count --- in which case only the ratio is pinned and $\alpha$ requires a second moment; or the
+joint search was indeed absorbing the distance channel into $T$, exactly the mechanism
+Section~\ref{sec:profiling} describes, in which case the within-area evidence says the true
+$\alpha$ is substantially larger. Either way $\eta_{\text{size}}$ must be estimated rather than
+assumed, and the extensive-margin moments must supply the second equation.
+
+\paragraph{Why columns (4)--(6) are doubly uninformative, and the next diagnostic to run.}
+Beyond censoring, there is a mechanical problem: the within-area log regression is identified only
+off area$\times$sectors with \emph{at least two} active ZE. A group with exactly one active cell
+has its single residual demeaned to zero and contributes nothing --- Lemma~\ref{lem:fe}(ii)'s
+logic, now applied to the intensive margin. With $99$ active cells spread over the active
+area$\times$sectors, the effective sample may be far below $99$. The cheap next step is to
+tabulate the number of active ZE per active area$\times$sector and report how many groups have
+$\ge2$; that number, not $99$, is what columns (5)--(6) are estimated on, and it explains the
+standard errors of $0.197$ and $0.136$ without any appeal to a small effect.
+
+\paragraph{Verdict.} Four conclusions carry forward.
+\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
+\item \textbf{Keep the two-tier geography.} $91.5\%$ zeros inside active areas, with the intensive
+margin $94\%$ between-area and the extensive margin $94\%$ within-area: the data split along
+exactly the seam Assumption~\ref{as:geo} cuts.
+\item \textbf{Include the firm count in \eqref{eq:T-area-cov}, and estimate its loading.} Size
+dominates within-area variation and biases $\alpha$ upward in magnitude when omitted. Do not fix
+$\eta_{\text{size}}=1$ by assumption --- \eqref{eq:alpha-over-eta} shows the whole reading of
+$\alpha$ hinges on it.
+\item \textbf{Identify $\alpha$ from the extensive margin, not from the within-area intensive
+margin.} The informative variation is the $1062$ zeros, not the $99$ positive shares --- which
+are censored (Lemma~\ref{lem:censoring}) and thin within groups. Table~\ref{tab:division}'s
+$\alpha$ row should be read accordingly: the share channel is the \emph{level} specification over
+all cells, and its role is to pin $\alpha/\eta_{\text{size}}$, while the cloglog on the supplier
+indicator carries the rest.
+\item \textbf{Do not read $\sigma^{2}_{\varepsilon}$ off column (6)'s residual.} A within $R^{2}$
+of $0.330$ leaves two thirds of the within-area log-share variation unexplained, but that residual
+mixes $\varepsilon$, granular sampling noise, censoring, and truncation on the selected high-$\gamma$
+tail. Table~\ref{tab:eps-mc} already ruled out the plug-in route;
+Lemma~\ref{lem:censoring} adds a second reason. Estimate $\sigma^{2}_{s}$ inside the SMM.
+\end{enumerate}
 
 \section{Employment-zone deviations: a distribution, not a parameter vector}
 \label{sec:eps}
@@ -977,6 +1191,16 @@ This also retroactively qualifies Appendix~\ref{app:dispersion}: the $1/N_{s}$ r
 dispersion, equation \eqref{eq:app-var}, is correct \emph{unconditionally}, but on the observed
 sample (active ZE, granular regime) it is contaminated both by $\sigma^{2}_{\varepsilon}$ and by
 truncation. Use it through the simulation, never as a plug-in formula.
+
+Lemma~\ref{lem:censoring} adds a third contaminant to the same residual, and it is the largest of
+the three in a sparse sector: conditional on activity the observed share is quantized toward
+$1/N_{s}$, so the within-area dispersion of $\ln\hat\gamma$ among active ZE is compressed by the
+censoring factor $B(u_{ls})$ --- which is itself correlated with size and distance. Moment (1)
+above must therefore be matched through the simulation like the other two, and never inverted
+analytically. The empirical evidence in Section~\ref{sec:risk-evidence} is what makes this
+concrete: a within $R^{2}$ of $0.330$ on the observed log shares leaves two thirds of the
+within-area variation unexplained, and none of that residual can be attributed to
+$\sigma^{2}_{\varepsilon}$ without the simulation.
 
 \subsection{What is preserved, and the recommended sequence}
 \label{sec:eps-preserved}
