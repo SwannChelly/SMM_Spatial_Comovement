@@ -68,32 +68,59 @@ against the AA-level `T` (one moment per active `(s,a)`, minus one reference per
 The ZE-level variant (non-`_aa` files) stays reachable behind a flag as the over-identifying
 configuration of the note's §6(b) — **not** part of the simple version.
 
-### D4 — `N_s` is concentrated out by integer bisection, at zero simulation cost
+### D4 — `N_s` is **profiled** out over the integers, at zero simulation cost
 
-Given `q̂`, the model's empty-ZE share is a **closed-form, strictly decreasing** function of an
-integer `n`:
+`N_s` is estimated by the same weighted objective as everything else, but concentrated rather
+than searched jointly:
+
+```
+N̂(θ_c) = argmin over N ∈ ∏_s [N_LO_s, N_HI_s] ∩ ℕ  of  r(θ_c,N)' W r(θ_c,N)
+```
+
+This is the textbook profiled extremum estimator — the result is *identical* to joint
+minimisation over `(θ_c, N)`. Two properties make it cheap: the inner minimisation needs **no
+re-simulation** (`q̂` is held fixed while `N` varies, by D1), and `N̂_s` is an integer at every
+evaluation, so integrality is never relaxed and never rounded. **The outer optimizer never sees
+`N_s`: no mixed-integer search.**
+
+Given `q̂`, the empty-ZE share is closed form and strictly decreasing in `n`:
 
 ```
 G_s(0; n) = mean over l ∈ cells_s of (1 - q̂[s,l])^n
 ```
 
-Each term is decreasing in `n`, so the mean is. Matching the `K=0` target from `G_K.csv` is
-therefore a one-dimensional monotone root-find over integers, per sector, costing ~15 evaluations
-of a length-`|cells_s|` mean. **The outer optimizer never sees `N_s`: no mixed-integer search, no
-smoothing, no rounding heuristic.** `N_s` remains an exact natural number by construction.
+**Exact matching of `G_s(0)` is NOT the answer here** — it is only the warm start. The reason is
+the outcome convention (see `finite_sample2.tex` §7.4). Under the model's *exact* reduced form
+(cloglog on the **supplier** indicator) `ln N_s` is perfectly collinear with the AA×sector fixed
+effect, block 4 carries zero information about `N_s`, and profiling would reduce to zeroing the
+block-6 residual. Under the **`not_supply`** convention used in the data the collinearity breaks.
+Simulation of the exact object (1161 cells, 40 groups, true `θα = 0.30`):
 
-Two equivalent formulations of the same estimator:
-
-| | `N_s` in θ | `G_s(0)` in the loss | df on block 6 |
+| `N_s` | empty share | `b_dist` (`not_supply`) | `b_dist` (supplier) |
 |---|---|---|---|
-| (a) joint | yes | yes | 0 |
-| (b) **concentrated (recommended)** | no | no — it *defines* `N̂_s` | — |
+| 30 | 0.992 | +0.067 | **−0.30013** |
+| 120 | 0.970 | +0.091 | **−0.30012** |
+| 250 | 0.941 | +0.109 | **−0.30012** |
+| 1000 | 0.812 | +0.157 | **−0.30009** |
 
-They give the same point estimate. (b) is cheaper and never leaves ℕ. Note that `N_s` still
-couples to `α` through **block 4**: the regression outcome is `(1-q_ls)^{N̂_s}`, so `G_s(0)` fixes
-the *level* of the extensive margin and `reg_coef` its *distance gradient* — exactly the joint
-identification of the note's §6(d). The `G_s(0)` rows of Σ are needed for **inference on `N̂_s`**
-(delta method), not for the loss.
+The supplier version recovers `−θα` to five digits and is invariant to `N_s` over a factor of 33;
+the `not_supply` version is attenuated by 2–4× *and* rises monotonically with `N_s`. So block 4
+**does** respond to `N_s`, and the profiling must minimise the full loss.
+
+**Practical inner loop.** Warm-start at the exact-match root of `G_s(0;n)`, then run an integer
+line search on the full weighted loss over blocks 4+6, one sector at a time (coordinate descent —
+sectors couple only through the shared distance coefficients of the pooled regression), with a
+convergence check on a second pass. Each candidate costs one collapsed cloglog fit on ~1161 rows,
+which is ~1000× cheaper than today's fit (§1), so a few dozen candidates per loss evaluation is
+affordable.
+
+> **Recommendation, worth raising before implementation.** The `not_supply` convention is
+> consistent (the same regression runs on model and data, so this is not a bias) but it is a
+> materially **worse moment for `α`**: it attenuates the distance coefficient 2–4× and confounds
+> it with `N_s`. If the empirical coefficient can also be produced on the **supplier** indicator,
+> it is strictly better — exactly `−θα`, invariant to `N_s`, and it restores the clean division of
+> labor. Either way, compute the supplier-convention coefficient on *simulated* data and print it
+> every report: it is an `N_s`-free read on `θα` and the sharpest diagnostic available.
 
 ---
 
@@ -132,37 +159,55 @@ draw-level `log z` control, add cell-level `log(SIREN)`.
 
 ## 2. Data inputs
 
-### Supplied
+### Supplied, with the conventions now settled
 
-| File | Use |
+| File | Convention (confirmed) |
 |---|---|
-| `G_K.csv` (`A129`, `K`, `G(K)`) | `K=0` row → block-6 target per sector; full curve → untargeted fit check (G3) |
-| `Sigma_beta_gamma_cloglog[_1]_f.npy` | β + γ(**ZE**) + `G_s(0)` covariance — over-identifying variant |
-| `Sigma_beta_gamma_cloglog[_1]_f_aa.npy` | β + γ(**AA**) + `G_s(0)` covariance — **the simple version uses this** |
+| `G_K.csv` — `A129`, `K`, `G(K)`, `N_supplier_s` | `G(0)` = share of ZE with **0** suppliers; `G(1)` = share with **at most 1**; i.e. `G(K) = Pr(K_ls ≤ K)`. Denominator = **ZE inside active attraction areas only** (the 1161 cells of §3.9). `N_supplier_s` = total suppliers in the sector, **repeated on every row** — read once per `A129` and assert constant within sector. |
+| `Sigma_beta_gamma_cloglog[_1]_f_aa.npy` | Ordering **β → γ(AA) → G**, with exactly **`S`** `G_s(0)` rows. **The simple version uses this file.** |
+| `Sigma_beta_gamma_cloglog[_1]_f.npy` | Same, γ at **ZE** level — the over-identifying variant, behind a flag, not part of this version. |
+| `closest_downstream_region.npy` | `R × R_downstream` **binary** incidence matrix: which upstream ZE belongs to which attraction area. |
 
-### Still needed
+Derived immediately:
 
-1. **`N_suppliers_obs` per sector** — the observed number of distinct upstream supplier firms
-   `N_s^obs`. Gives the admissible range directly (note §5):
-   ```
-   N_LO[s] = ceil(N_s^obs / R_downstream)      N_HI[s] = N_s^obs
-   ```
-   It is in principle recoverable from `G_K.csv` (`Σ_l K_ls = R_cells,s · Σ_K K·f_s(K)`), but only
-   if the ZE denominator `R_cells,s` is known and the `K` support is complete. **Cleanest: add a
-   column** (`N_suppliers`, and ideally `n_ZE` — the denominator of `G(K)`) to `G_K.csv`. It also
-   supplies the independent cross-check of §4.3.
-2. **The ZE → attraction-area map**, as an explicit input (`attraction_area.csv`, `ze2010` →
-   `ze2010_downstream`). The code already has `CLOSEST_DOWNSTREAM_REGION` (`load_parameters.jl:507`),
-   which is what builds today's FE group `(s-1)*R_downstream + CLOSEST_DOWNSTREAM_REGION[r]`. But
-   the Python diagnostic merges a separate `attraction_area` table. **These must be the same
-   partition or the whole alignment argument of §2.2 fails.** Load the file and `@assert` it equals
-   `CLOSEST_DOWNSTREAM_REGION`, so a divergence fails loudly instead of silently changing the
-   estimand.
-3. **`SIREN` per (sector, ZE)** — the firm count, for the cell-level size control (§3.9 showed it
-   is the dominant within-area force, and the empirical target conditions on it). Same shape as
-   `filter_N_upstream`.
+```
+N_HI[s] = N_supplier_s                              # every variety won by one origin
+N_LO[s] = ceil(N_supplier_s / R_downstream)         # every variety won by a different origin per buyer
+G_TARGET[s] = G_K.csv value at K = 0
+```
 
----
+### The AA map must be verified, not assumed
+
+`closest_downstream_region.npy` is an incidence matrix; the code already computes the same
+partition internally as `CLOSEST_DOWNSTREAM_REGION` (`load_parameters.jl:507`), which is what
+builds today's fixed-effect group. **Add an explicit test** (new `test/test_aa_map.jl`, plus a
+startup `@assert` in `load_parameters.jl`) checking that
+
+```
+argmax over columns of closest_downstream_region.npy[l, :]  ==  CLOSEST_DOWNSTREAM_REGION[l]   ∀ l
+```
+
+together with: each row sums to exactly 1 (a ZE belongs to exactly one AA), the matrix is
+`R × R_downstream`, and every AA index is in range. A mismatch means the model's fixed effect and
+the empirical one are different partitions, which silently invalidates the whole alignment
+argument of `finite_sample2.tex` §2.2 — so it must fail loudly at load time, not be discovered
+later.
+
+### Deferred to a later version (recorded here so it is not lost)
+
+**`SIREN` per (sector, ZE) — the firm count — is NOT in this version.** Consequence to keep in
+mind: §3.9 showed the size control is the dominant within-area force and that omitting it inflates
+the distance coefficient in magnitude (−0.284 → −0.130 in logs, −0.017 → −0.011 in levels once it
+is added). So **`α̂` from this version is expected to be biased upward in magnitude**, and the
+`α/η_size ≈ 1.1` reading of §3.9 is the target to compare against once `SIREN` arrives. When it
+does, the changes are small and localized:
+
+* a new `SIREN_LOG[s,l]` array loaded alongside `filter_N_upstream`;
+* one extra column in the cell-level design of `cloglog_cell_regression`;
+* the loading `η_size` becomes a scalar parameter appended to `θ` (or fixed at 1, but §3.9 argues
+  against assuming it);
+* the collapse of §1 stays exact, because `log SIREN` is a **cell-level** covariate — unlike the
+  draw-level `log z` it replaces.
 
 ## 3. Moment vector layout
 
@@ -221,18 +266,31 @@ function loss(θ, W):
         q[s,l] = mean_ρ net.linkages_flat[ρ, SR_TO_GOOD[s,l]]
         q[s,l] = clamp(q[s,l], eps, 1 - eps)         # guard the ^N_s and the log
 
-    # ---- (2) concentrate out N_s: integer bisection, per sector --------------
+    # ---- (2) profile out N_s over the integers (NO re-simulation) -----------
+    #  G(s,n) := mean over l with CELL_MASK[s,l] of (1 - q[s,l])^n   # closed form, ↓ in n
+    #  2a: warm start = exact-match root of G(s,n) = G_TARGET[s]
     for s in 1:S:
-        G(n) := mean over l with CELL_MASK[s,l] of (1 - q[s,l])^n   # ↓ in n
-        if G(N_LO[s]) <= G_TARGET[s]:  N̂[s] = N_LO[s]; clamped[s] = :lo
-        elif G(N_HI[s]) >= G_TARGET[s]: N̂[s] = N_HI[s]; clamped[s] = :hi
+        if   G(s,N_LO[s]) <= G_TARGET[s]: n0[s] = N_LO[s]
+        elif G(s,N_HI[s]) >= G_TARGET[s]: n0[s] = N_HI[s]
         else:
             lo, hi = N_LO[s], N_HI[s]                 # G(lo) > target > G(hi)
             while hi - lo > 1:
                 mid = (lo + hi) ÷ 2
-                if G(mid) > G_TARGET[s]: lo = mid else: hi = mid
-            N̂[s] = argmin over n ∈ {lo, hi} of |G(n) - G_TARGET[s]|
-            clamped[s] = :none
+                if G(s,mid) > G_TARGET[s]: lo = mid else: hi = mid
+            n0[s] = argmin over n ∈ {lo,hi} of |G(s,n) - G_TARGET[s]|
+
+    #  2b: integer coordinate descent on the FULL weighted loss (blocks 4+6).
+    #      Sectors couple only through the shared distance coefficients of the
+    #      pooled regression, so one pass usually suffices; a 2nd pass is the check.
+    N̂ = n0
+    repeat until no sector moves (max 3 passes):
+        for s in 1:S:
+            N̂[s] = argmin over n ∈ window(N̂[s]) ∩ [N_LO[s],N_HI[s]] ∩ ℕ
+                     of loss_blocks_4_6(N̂ with entry s replaced by n)
+            #  window = geometric bracket around the incumbent, then integer
+            #  bisection on the loss difference; each candidate = ONE collapsed
+            #  cloglog fit on ~1161 rows — cheap, and no re-simulation
+    clamped[s] = (N̂[s]==N_LO[s]) ? :lo : (N̂[s]==N_HI[s]) ? :hi : :none
 
     # ---- (3) granular extensive margin --------------------------------------
     p0[s,l] = (1 - q[s,l])^N̂[s]                      # Pr(no supplier), exact
@@ -247,8 +305,9 @@ function loss(θ, W):
     # ---- (5) block 5: AA-level shares ---------------------------------------
     γ_aa[s,a] = Σ_{l ∈ a} γ[s,l]                      # γ from compute_moments
 
-    # ---- (6) block 6: fitted exactly by construction ------------------------
-    G0[s] = G(N̂[s])                                   # residual ≈ 0
+    # ---- (6) block 6: near-zero residual, not exactly zero ------------------
+    G0[s] = G(s, N̂[s])          # ≈ target; step 2b may trade a little G0 fit
+                                # against block 4 — that is the profiled optimum
 
     m = [labor | industry | π_r | reg_coef | γ_aa | G0]
     return (m - m̂)' W (m - m̂),  N̂,  clamped
@@ -256,13 +315,17 @@ function loss(θ, W):
 
 ### 4.2 Where `N_s` enters the loss
 
-Block 6 is fitted by construction, so `N̂_s` influences the objective **only through block 4**:
-`p0` shifts the level of the simulated extensive margin, and the cloglog FE absorbs the level
-within each AA × sector, leaving the *distance profile* to be fit by `α`. This is the intended
-division of labor. It also means the loss is a **profiled** objective in exactly the sense the
-existing `profile_T` machinery already handles — the FD Jacobian will pick up the total
-derivative `dm/dα` along the `N̂_s(α)` manifold automatically, provided the concentration runs
-inside the perturbed evaluation (it does, since it lives inside `loss`).
+`N_s` moves two blocks. Block 6 (`G_s(0)`) is the level of the extensive margin — the moment it
+was designed for. Block 4 (`reg_coef`) responds too, but **only because of the `not_supply`
+convention**: under the exact supplier-indicator reduced form `ln N_s` sits inside the AA×sector
+fixed effect and block 4 would be exactly invariant to it (table in D4). The strength of the
+block-4 channel is therefore an artefact of the outcome convention rather than a structural
+feature — which is exactly why the supplier-convention coefficient is worth printing as a
+diagnostic.
+
+Because the profiling runs *inside* `loss`, the FD Jacobian automatically picks up the total
+derivative `dm/dα` along the `N̂_s(α)` manifold — the same profiled-Jacobian structure the
+existing `profile_T` machinery already handles.
 
 ### 4.3 Two independent closed-form routes to `N_s` (a free over-identifying test)
 
@@ -283,21 +346,20 @@ simulation. Print both every report.
 `N̂_s` is an integer at every evaluation, so integrality is never relaxed and never rounded.
 Clamping, however, is **informative rather than benign**:
 
-* `clamped = :hi` — even the maximum admissible variety count leaves too many empty ZE: the model
-  cannot generate enough sparsity. Suspect `α` too small or `T` too concentrated.
-* `clamped = :lo` — even the minimum admissible count produces too few empty ZE.
+* `clamped = :hi` — even the maximum admissible count (`N_supplier_s`, every variety won by a
+  single origin) leaves too many empty ZE: the model cannot generate enough sparsity.
+* `clamped = :lo` — even the minimum admissible count (`N_supplier_s / R_downstream`) produces
+  too few empty ZE.
 
 Either is a **rejection signal for the mechanism**, not a numerical nuisance. Log it per sector
-per report, and treat a persistently clamped sector as a finding.
+per report and treat a persistently clamped sector as a finding.
 
-One caution on the discreteness: `N̂_s(θ)` is a step function of the continuous parameters, so
-the profiled loss is **piecewise smooth with jumps at the switch points**. Two consequences.
-(i) PSO / TikTak are unaffected (both are derivative-free). (ii) The FD Jacobian can straddle a
-jump. Mitigation: at the reported estimate, recompute the Jacobian **holding `N̂_s` fixed** at its
-value at `θ̂` — the correct object anyway, since `N̂_s` is integer-valued and locally constant with
-probability one. Add a check that no FD perturbation changed `N̂_s`; if one did, report it.
-
----
+One caution on the discreteness: `N̂_s(θ)` is a step function of the continuous parameters, so the
+profiled loss is **piecewise smooth with jumps at the switch points**. Two consequences. (i) PSO /
+TikTak are unaffected (both derivative-free). (ii) The FD Jacobian can straddle a jump.
+Mitigation: at the reported estimate recompute the Jacobian **holding `N̂_s` fixed** at its value
+at `θ̂` — the correct object anyway, since `N̂_s` is integer-valued and locally constant with
+probability one — and assert that no FD perturbation changed `N̂_s`, reporting it if one did.
 
 ## 5. File-by-file change list
 
@@ -383,8 +445,10 @@ probability one. Add a check that no FD perturbation changed `N̂_s`; if one did
 | **G2** | The two routes of §4.3 at `θ̂`: `N̂_s` from `G_s(0)` vs `N_s^count` from the total firm count | same order of magnitude; a large gap is a mechanism finding, report it |
 | **G3** | Untargeted fit of the whole curve: simulated `G_s(K)` vs `G_K.csv` for `K ≥ 1` (only `K=0` is targeted) | visual + reported max deviation |
 | **G4** | No sector clamped at `N_LO` / `N_HI` at the optimum | `clamped == :none` ∀ s |
-| **G5** | `α̂` vs the §3.9 within-area evidence (`α/η_size ≈ 1.1`, θ=1) and vs the joint free-`T` search (`α ≈ 0.30`) | the note predicts the new `α̂` moves **up**; if it lands near 0.30 the profiling repair did not bite and §3.6 needs revisiting |
+| **G5** | `α̂` vs the §3.9 within-area evidence (`α/η_size ≈ 1.1`, θ=1) and vs the joint free-`T` search (`α ≈ 0.30`) | the §3.9 evidence predicts `α̂` moves **up** relative to the joint free-`T` search; a large gap the other way is a finding to report, not a bug to chase |
 | **G6** | AA-level Sinkhorn: round-trip recovery of a planted `T_aa` from its own AA aggregates | ~1e-8, mirroring `test/test_ge_inversion.jl` |
+| **G7** | The AA map: `argmax_col(closest_downstream_region.npy) == CLOSEST_DOWNSTREAM_REGION`, rows sum to 1, shape `R × R_downstream` | exact; **run at load time**, not only in tests — a mismatch silently invalidates the alignment argument |
+| **G8** | D1 itself: simulate `R` economies with exactly `N̂_s` varieties, average their moments, compare against the closed-form values | agree to `O(1/√R)`; turns the Rao–Blackwellization argument into a test |
 
 **Phase 0, before any of this: measure the cost.** `n_good` goes from ~142 to ~1161, so
 `solve_network`'s per-sector price loops grow ~8×, while the regression design shrinks from ~1.1M
@@ -411,31 +475,27 @@ Suggested sequence: **Phase 0** (timing) → **G0** (refactor, zero behavioural 
 
 ---
 
-## 8. Open questions
+## 8. Conventions settled, and what remains
 
-Ordered by how much they change the implementation.
+### Settled
 
-1. **Σ block ordering.** Where do the `G_s(0)` rows sit in the four new Σ files — appended after γ
-   (my assumption: β → γ → G), or interleaved/first? And are there exactly `S` of them, or only for
-   sectors with an active AA?
-2. **`G(K)` convention.** The column is described as *"the share of ZE with **less than** K
-   suppliers"*. Read literally, `G(0) = 0` and the empty-ZE share is `G(1)`. I have assumed `≤ K`
-   (so `G(0)` = empty-ZE share). Which is it? This shifts every index by one.
-3. **`G(K)` denominator.** Is the share taken over *all* ZE, or only ZE inside active attraction
-   areas (`𝒜⁺_s`, the 1161 cells of §3.9)? The model counterpart must use the same support, and the
-   difference is large (91.5% vs something else). My assumption: active AAs only.
-4. **`N_s^obs`** — can you add the observed distinct-supplier count per sector (and the `G(K)`
-   denominator `n_ZE`) as columns of `G_K.csv`? Needed for the bounds and for the free cross-check
-   of §4.3. Otherwise I derive it from the curve, which requires the complete `K` support.
-5. **The AA map.** Should the Julia side use the existing `CLOSEST_DOWNSTREAM_REGION`, or do you
-   have a separate `attraction_area` table (the one the Python diagnostic merges)? If the latter,
-   please supply it — I will assert equality against `CLOSEST_DOWNSTREAM_REGION` so any divergence
-   fails loudly.
-6. **`SIREN` per (sector, ZE)** — available as an array on the Julia side? §3.9 showed the size
-   control is not optional, and the empirical target conditions on it, so the model must too.
-7. **Outcome convention for the cloglog.** The code uses `y = not_supply` with distance coefficient
-   `+αθ`; the note's Proposition 1 shows the *exact* reduced form uses the supplier indicator with
-   `-θα`. Keep the current convention (fine for the SMM, since the same regression runs on both
-   sides) or switch to the exact one? I would keep it for continuity and note the wedge.
-8. **`θ = 1`** in `load_parameters.jl:64` (with `1.768` commented out). Confirm this is the
-   intended calibration, since every reg_coef ↔ `α` mapping scales by `1/θ`.
+| Item | Answer |
+|---|---|
+| Σ block ordering | **β → γ → G**, exactly `S` rows of `G_s(0)` |
+| `G(K)` convention | `G(K) = Pr(K_ls ≤ K)`; `G(0)` = share of ZE with **0** suppliers |
+| `G(K)` denominator | ZE inside **active** attraction areas only |
+| `N_s^obs` | column `N_supplier_s` of `G_K.csv`, repeated on every row (assert constant within `A129`) |
+| AA map | `closest_downstream_region.npy`, `R × R_downstream` binary — **asserted equal** to the internally computed `CLOSEST_DOWNSTREAM_REGION` (gate G7) |
+| `SIREN` size control | **deferred**; consequences recorded in §2 |
+| cloglog outcome | `y = not_supply`, matching the data |
+| `θ` | `1.0`, confirmed |
+
+### Remaining
+
+1. **The `not_supply` convention costs precision on `α`** (D4). Can the empirical cloglog also be
+   run on the **supplier** indicator? That coefficient is exactly `−θα` and invariant to `N_s`,
+   whereas the reversed one is attenuated 2–4× and confounded with `N_s`. It would be an
+   *additional* moment, so nothing already built is wasted.
+2. **`α̂` from this version is expected to be biased upward in magnitude** because `SIREN` is
+   deferred (§2). Worth deciding in advance whether that is acceptable for a first run, or whether
+   `SIREN` should arrive before the estimation is launched.

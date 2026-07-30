@@ -582,18 +582,28 @@ $N_{s}$ reads a level that the fixed effect strips out of the $\alpha$ regressio
 $\sigma^{2}_{s}$ --- the within-area dispersion of comparative advantage, if one declines to set
 it to zero --- reads a second moment that none of the other three touches.
 
-\subsection{Why this repairs the profiling pathology}
+\subsection{Why profiling $T$ stays safe under the area-level restriction}
 \label{sec:profiling}
 
 The estimator can concentrate $T$ out of the outer search by inverting the sourcing-share
-moments (the Sinkhorn/GE inversion $T^{*}(\alpha,\Omega,A)$). Under ZE-level comparative
-advantage this was self-defeating: the number of free $T_{sl}$ equals the number of $\gamma$
-targets, so the inversion can hit \emph{every} share exactly for \emph{any} $\alpha$, and it
-does so by raising $T$ on remote origins precisely as $\alpha$ rises. The distance channel is
-then absorbed by $T^{*}(\alpha)$, the regression coefficient flattens in $\alpha$, and the
-profiled objective drifts to the boundary $\alpha\to0$ --- exactly the diagnosed behavior.
+moments (the Sinkhorn/GE inversion $T^{*}(\alpha,\Omega,A)$). With ZE-level comparative advantage
+this is structurally fragile: the number of free $T_{sl}$ equals the number of $\gamma$ targets,
+so the inversion can hit \emph{every} share exactly for \emph{any} $\alpha$, and it does so by
+raising $T$ on remote origins precisely as $\alpha$ rises. The distance channel is then at risk
+of being absorbed by $T^{*}(\alpha)$, flattening the regression coefficient in $\alpha$ and
+leaving the trade-cost elasticity with nothing to fit.
 
-Assumption~\ref{as:geo} breaks that cancellation by counting equations:
+\begin{remark}[Status of this concern]
+The flattening was diagnosed on the \emph{linear} extensive-margin specification. With the
+cloglog link --- the model's own reduced form, Proposition~\ref{prop:cloglog-exact} --- it no
+longer materialises: the profiled search returns an interior $\alpha$. The argument below is
+therefore not a description of current behaviour but a statement about \emph{why the
+area-level restriction is structurally safe}: it removes the degrees of freedom that made the
+cancellation possible in the first place, so the property does not depend on the link
+happening to be well chosen.
+\end{remark}
+
+Assumption~\ref{as:geo} removes the cancellation by counting equations:
 
 \begin{itemize}[nosep,topsep=2pt]
 \item \textbf{Free parameters:} $|\Areas^{+}_{s}|$ per sector (one per active area).
@@ -614,7 +624,7 @@ properties. The \emph{within}-area split of each area aggregate across its ZE is
 a \emph{model prediction}, a function of distance and $\alpha$ alone by
 \eqref{eq:within-contrast-norm}. Profiling $T$ out no longer profiles $\alpha$ out: the
 within-area shares and the within-area extensive margin both remain live functions of
-$\alpha$ that the loss must fit. Appendix~\ref{app:df} counts the resulting degrees of
+$\alpha$ that the loss must fit --- by construction, not by luck. Appendix~\ref{app:df} counts the resulting degrees of
 freedom.
 
 \subsection{The main risk, and the release valve}
@@ -1371,6 +1381,250 @@ a continuous parameter by the optimizer and rounded only for reporting.
 It bears repeating (Proposition~\ref{prop:cloglog-exact}(b)) that the count moment is
 \emph{necessary}: $N_{s}$ is invisible to the distance regression, where it is collinear with
 the fixed effect. The regression gives $\alpha$; the count level gives $N_{s}$.
+
+\section{Computing the granular model: what is drawn, what is integrated in closed form,
+and how $N_{s}$ is obtained}
+\label{sec:compute}
+
+This section answers three implementation questions that the granular assumption raises, and
+that determine whether the estimator is usable at all. What exactly is simulated
+(Section~\ref{sec:compute-draws})? Does a finite $N_{s}$ mean we must draw exactly $N_{s}$
+varieties (Section~\ref{sec:compute-rb})? And in what sense is $N_{s}$ \emph{estimated} rather
+than calibrated (Section~\ref{sec:compute-profile})?
+
+\subsection{What is drawn: the Fr\'echet draw \emph{is} the maximum over a continuum of firms}
+\label{sec:compute-draws}
+
+A natural reading of the granular assumption is that one should now, for every
+(sector $\times$ region $\times$ variety), draw a large number of individual firms, keep the most
+productive, and only then run the Ricardian selection across regions. \textbf{That reading is
+exactly right as a description of the model --- and the Fr\'echet draw already performs it, in
+closed form.}
+
+Recall the assumption of Section~\ref{sec:granular}: within $(l,s,\rho)$ the firms with
+productivity above $z$ form a Poisson process with mean $T_{sl}z^{-\theta}$. The number of firms
+above $z$ is then Poisson with that mean, so
+\begin{equation}
+\Prob\Big(\max_{\text{firms in }(l,s,\rho)}\varphi\;\le\;z\Big)
+=\Prob\big(\text{no firm above }z\big)
+=\exp\!\big(-T_{sl}z^{-\theta}\big),
+\label{eq:champion-frechet}
+\end{equation}
+which is precisely $\Frechet(T_{sl},\theta)$. \emph{One Fr\'echet draw per (sector, region,
+variety) is the champion of a continuum of firms} --- not an approximation to it, but its exact
+law. Drawing $M$ firms explicitly and taking the maximum would converge to \eqref{eq:champion-frechet}
+as $M\to\infty$, at the cost of $M$ times the work and an extra layer of Monte-Carlo error, and
+would return the same object in the limit. So the simulation structure is unchanged from the
+baseline:
+\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
+\item one Fr\'echet draw per (sector, region, variety) $=$ that region's champion cost
+\eqref{eq:region-cost};
+\item Ricardian selection across regions, $\min_{l} w_{l}\tau_{lrs}/\varphi_{l\rho s}$, per
+downstream buyer;
+\item a region ``supplies'' a variety if it wins it for at least one buyer.
+\end{enumerate}
+This is the content of Section~\ref{sec:selection} and of Question~1
+(Section~\ref{sec:q1}): keeping the continuum of firms is what makes the per-variety competition
+collapse to a single closed-form draw. \textbf{Granularity changes the number of varieties, not
+how a variety is competed for.}
+
+\subsection{Where the finite $N_{s}$ enters: integrate the Binomial, do not simulate it}
+\label{sec:compute-rb}
+
+The baseline used $N_{\rho}$ draws as a \emph{numerical} stand-in for a continuum of varieties.
+Under granularity $N_{s}$ is \emph{structural} and finite. It is tempting to conclude that the
+simulation must now draw exactly $N_{s}$ varieties. It must not, and the reason is worth stating
+carefully because it is what keeps the estimator usable.
+
+The estimator matches \emph{expected} moments $\E[m(\theta)]$ against one observed realization.
+There are two ways to compute that expectation.
+
+\begin{description}[topsep=3pt,itemsep=3pt,leftmargin=1.6em]
+\item[(a) Simulate economies.] Draw $R$ independent economies, each with exactly $N_{s}$
+varieties, compute the moment in each, average. Cost $R\times N_{s}$ draws; Monte-Carlo error
+$O(1/\sqrt{R})$.
+\item[(b) Integrate the variety count analytically.] Across varieties the win-somewhere events
+are i.i.d.\ (draws are independent across $\rho$), so \emph{conditional on the per-variety
+win-somewhere probability $q_{ls}$}, the supplier count is exactly
+\begin{equation}
+K_{ls}\;\sim\;\Bin\big(N_{s},\,q_{ls}\big),
+\qquad
+\Prob(K_{ls}=0)=(1-q_{ls})^{N_{s}} .
+\label{eq:compute-binomial}
+\end{equation}
+Only $q_{ls}$ --- a \emph{one-variety} expectation --- needs simulating, and it can be estimated
+with as many draws $N_{\rho}$ as we like, entirely independently of $N_{s}$. Every granular
+object then follows in closed form.
+\end{description}
+
+Route (b) is not an approximation to route (a): it is the exact integral that (a) approximates.
+It is a Rao--Blackwellization --- the Binomial is integrated out instead of being sampled --- and
+it matters for two reasons.
+
+\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
+\item \emph{Noise.} With $N_{s}$ of order $10^{2}$--$10^{3}$, route (a) makes every moment carry
+granular sampling noise of the same order of magnitude as the granularity itself, and that noise
+is \emph{entangled} with the parameter of interest: a smaller $N_{s}$ means both more granularity
+and a noisier moment. Route (b) has noise only in $\hat q$, controlled by $N_{\rho}$, and that
+noise does not scale with $N_{s}$.
+\item \emph{Cost.} Route (b) costs the same as the baseline regardless of $N_{s}$, and lets
+$N_{s}$ be varied --- as the profiling of Section~\ref{sec:compute-profile} does, many times per
+loss evaluation --- without re-simulating anything.
+\end{enumerate}
+
+\paragraph{What route (b) gives up: nothing that is targeted.} Remark~\ref{rem:dependence} noted
+that supplier counts are positively dependent \emph{across} buyers and hence across cells within
+one realized economy, and \eqref{eq:compute-binomial} is a per-cell marginal. But every moment the
+estimator targets is a \emph{mean} --- the empty-ZE share $\bar G_{s}(0)$ is a mean over ZE, the
+regression score is a weighted sum over cells --- and expectations of means are means of
+expectations \emph{whatever the dependence}. The cross-cell dependence therefore affects only the
+\emph{variance} of the moments, never their expectation. And that variance is not something route
+(a) would need to supply either: the empirical moment's sampling variability is the bootstrap
+$\Sigma_{\text{data}}$ (Appendix~\ref{app:estimation}), and the variability of \emph{our estimate}
+of $\E[m]$ is $\Sigma_{\text{sim}}$, obtained by re-drawing $\hat q$. Neither requires simulating
+the joint law at $N_{s}$.
+
+\paragraph{A validation gate rather than an assumption.} The equivalence of (a) and (b) is
+checkable and should be checked once: at $\hat N_{s}$, simulate $R$ economies with exactly
+$\hat N_{s}$ varieties, average their moments, and confirm they match the closed-form values to
+$O(1/\sqrt{R})$. That gate turns the argument above into a test.
+
+\subsection{Why the extensive-margin regression collapses to one row per cell}
+\label{sec:compute-collapse}
+
+The baseline builds the extensive-margin design with one row per (draw, pair): with
+$n_{\text{good}}\approx142$ pairs and $N_{\rho}=8000$ draws, about $1.1$ million rows, each
+carrying a $0/1$ outcome and weight $1/N_{\rho}$. Almost all of that is redundant, for a reason
+specific to the cloglog.
+
+The IRLS estimating equation of a cloglog GLM is
+\begin{equation}
+\sum_{i} w_{i}\,x_{i}\,\frac{(\mathrm{d}\mu/\mathrm{d}\eta)_{i}}{\mu_{i}(1-\mu_{i})}\,
+\big(y_{i}-\mu_{i}\big)=0,
+\label{eq:irls-score}
+\end{equation}
+which is \textbf{linear in $y$}. Within one cell $(s,l)$ every draw carries the \emph{same}
+regressors --- the same distance bin, the same area$\times$sector fixed effect --- hence the same
+$\eta$, $\mu$, $\mathrm{d}\mu/\mathrm{d}\eta$ and the same IRLS weight. Their contribution to
+\eqref{eq:irls-score} is
+\begin{equation}
+\sum_{\rho}\frac{1}{N_{\rho}}\,x_{sl}\,c_{sl}\,\big(y_{\rho,sl}-\mu_{sl}\big)
+=x_{sl}\,c_{sl}\Big(\underbrace{\tfrac{1}{N_{\rho}}\textstyle\sum_{\rho}y_{\rho,sl}}_{\text{cell mean}}-\mu_{sl}\Big)\cdot 1,
+\end{equation}
+i.e.\ identical to that of a \emph{single} row with weight $1$ and outcome equal to the cell mean.
+The fixed-effect absorption --- weighted within-group means of the working response --- collapses
+identically, for the same reason. So
+
+\begin{quote}
+$N_{\rho}$ rows of weight $1/N_{\rho}$ with $0/1$ outcomes $\;\equiv\;$ one row of weight $1$
+with outcome $=$ their mean.
+\end{quote}
+
+Verified numerically: on a synthetic design ($60$ cells, $500$ draws, $4$ distance bins, $6$
+fixed-effect groups) the expanded fit on $30{,}000$ rows and the collapsed fit on $60$ rows agree
+to $1.3\times10^{-15}$. Three consequences.
+
+\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
+\item The design shrinks by three orders of magnitude, from $\sim\!1.1$M rows to one row per cell.
+\item The \emph{current} moment is revealed to be exactly the cell-level regression with
+fractional outcome $y_{sl}=1-q_{ls}$ --- the continuum extensive margin.
+\item Granularity is then the \textbf{single substitution} $y_{sl}=(1-q_{ls})^{N_{s}}$, and
+$N_{s}=1$ reproduces the baseline moment exactly. That is the cheapest possible regression gate
+for the whole refactor.
+\end{enumerate}
+
+The collapse is exact only if no regressor varies \emph{within} a cell. A firm-level control such
+as $\log z$ does vary and would break it; a cell-level control such as $\log(\text{firm count})$
+does not --- and the latter is what Section~\ref{sec:risk-evidence} showed the specification
+actually needs, and what the empirical target conditions on. The two requirements coincide.
+
+\subsection{How $N_{s}$ is obtained: profiling, not calibration}
+\label{sec:compute-profile}
+
+$N_{s}$ is \emph{estimated}, by the same weighted objective as every other parameter. It is
+simply \emph{concentrated out} rather than searched over jointly. Write the parameter vector as
+$\theta=(\theta_{c},N)$ with $\theta_{c}=(\Omega^{L},\Omega^{s},A,\alpha,T)$ continuous and
+$N=(N_{1},\dots,N_{S})\in\mathbb{N}^{S}$, and let $r(\theta)$ be the moment residual. Then
+\begin{equation}
+\widehat N(\theta_{c})
+=\argmin_{N\in\prod_{s}[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
+\;r(\theta_{c},N)'\,W\,r(\theta_{c},N),
+\qquad
+\hat\theta_{c}=\argmin_{\theta_{c}} \;r\big(\theta_{c},\widehat N(\theta_{c})\big)'W\,r\big(\theta_{c},\widehat N(\theta_{c})\big).
+\label{eq:profile-Ns}
+\end{equation}
+This is the textbook concentrated (profiled) extremum estimator: $(\hat\theta_{c},\widehat
+N(\hat\theta_{c}))$ is \emph{identical} to the joint minimiser over $(\theta_{c},N)$. Nothing is
+fixed outside the estimation; the objective is the same $r'Wr$ throughout. Two practical
+properties make \eqref{eq:profile-Ns} cheap: the inner minimisation needs \emph{no
+re-simulation} (Section~\ref{sec:compute-rb} --- $\hat q$ is held fixed while $N$ varies), and
+$\widehat N$ is an integer at every evaluation, so integrality is never relaxed and never rounded.
+
+\paragraph{When --- and only when --- profiling degenerates to exact matching.}
+There is a special case in which \eqref{eq:profile-Ns} reduces to ``choose $N_{s}$ so the model
+reproduces $\bar G_{s}(0)$ exactly''. By Proposition~\ref{prop:cloglog-exact}, in the model's
+\emph{exact} reduced form --- the cloglog on the \textbf{supplier} indicator --- the index is
+\begin{equation}
+\eta_{ls}=\underbrace{\ln N_{s}+\ln T_{s,a(l)}-\ln\Phi_{s,a(l)}}_{\text{absorbed by the } a\times s \text{ fixed effect}}-\theta\alpha\ln d_{l},
+\end{equation}
+so $\ln N_{s}$ is \emph{perfectly collinear with the fixed effect}: the reg\_coef block carries
+\emph{zero} information about $N_{s}$, $N_{s}$ enters only the count block, and the minimiser of
+\eqref{eq:profile-Ns} sets that block's residual to zero. Exact matching is then not a shortcut
+--- it \emph{is} the profiled optimum, and $\widehat N_{s}$ follows from the monotone root-find
+of $\bar G_{s}(0;n)$ described in Section~\ref{sec:moment}.
+
+\paragraph{Under the \texttt{not\_supply} convention the collinearity breaks --- and the count
+block alone is no longer sufficient.} The empirical regression is run on the reversed outcome
+$y=\one\{\text{no supplier}\}$, for which the cloglog link is not exact
+(Proposition~\ref{prop:cloglog-exact}(c)) and $\ln N_{s}$ is not absorbed. Simulating the exact
+object --- $1161$ cells, $40$ fixed-effect groups, true $\theta\alpha=0.30$ --- makes the
+difference stark:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+$N_{s}$ & empty-ZE share & $\hat\beta_{\ln d}$, \texttt{not\_supply} & $\hat\beta_{\ln d}$, supplier\\
+\midrule
+$30$   & $0.992$ & $+0.067$ & $-0.30013$\\
+$60$   & $0.985$ & $+0.078$ & $-0.30013$\\
+$120$  & $0.970$ & $+0.091$ & $-0.30012$\\
+$250$  & $0.941$ & $+0.109$ & $-0.30012$\\
+$500$  & $0.892$ & $+0.131$ & $-0.30011$\\
+$1000$ & $0.812$ & $+0.157$ & $-0.30009$\\
+\bottomrule
+\end{tabular}
+\caption{The supplier-indicator cloglog recovers $-\theta\alpha$ to five digits and is
+\emph{invariant} to $N_{s}$ over a factor of $33$ --- Proposition~\ref{prop:cloglog-exact} holding
+numerically. The reversed \texttt{not\_supply} outcome is neither: its coefficient is strongly
+attenuated relative to $+\theta\alpha=0.30$ \emph{and} rises monotonically with $N_{s}$.}
+\label{tab:convention}
+\end{table}
+
+Two conclusions follow, and they point in opposite directions.
+
+\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
+\item \textbf{Exact matching of $\bar G_{s}(0)$ is no longer the profiled optimum.} Under
+\texttt{not\_supply} the reg\_coef block \emph{does} respond to $N_{s}$, so \eqref{eq:profile-Ns}
+must be solved as written --- an integer line search on the \emph{full} weighted loss, warm-started
+at the exact-match solution --- not by zeroing the count residual. Since the inner search needs no
+re-simulation and the collapsed regression costs $O(\#\text{cells})$, this is affordable; it is
+simply not free.
+\item \textbf{The reversed outcome is a materially worse moment for $\alpha$.} It attenuates the
+distance coefficient by a factor of $2$ to $4$ in the relevant range and confounds it with
+$N_{s}$, whereas the supplier-indicator version delivers $-\theta\alpha$ exactly and cleanly
+separates the two parameters. Matching the data convention keeps the estimator consistent --- the
+same regression is run on both sides --- so this is not a bias. It is a loss of \emph{precision
+and of separation}. If the empirical coefficient can also be produced on the supplier indicator,
+it is strictly the better target, and adding it would restore the clean division of labor of
+Table~\ref{tab:division}.
+\end{enumerate}
+
+Whichever convention is used, the supplier-indicator coefficient should be computed on
+\emph{simulated} data and printed in every report: it is a direct, $N_{s}$-free read on
+$\theta\alpha$ and therefore the sharpest available diagnostic on whether $\alpha$ is being
+identified as intended.
 
 \section{What else must change}
 \label{sec:q2}
