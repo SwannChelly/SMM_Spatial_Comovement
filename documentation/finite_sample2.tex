@@ -1542,16 +1542,47 @@ of unknown bias $q$, one does not simulate ten tosses many times --- one estimat
 tosses and evaluates $1-(1-q)^{10}$ in closed form. The $10^{6}$ tosses are not ``the coin in the
 limit''; they are how $q$ is learned.
 
-\paragraph{One maintained assumption, stated.} With a finite $N_{s}$ the realized within-sector
-price index \eqref{eq:price-index} is a \emph{random} finite CES aggregate. The implementation
-evaluates the value block at its certainty equivalent $\widetilde P_{sr}$
-(Appendix~\ref{app:price}) rather than at a realized draw. That is exactly Option~2 of
-Section~\ref{sec:q2}(a) --- downstream firms optimize against the expected price index,
-neglecting the granular randomness, as in LMM's general-equilibrium embedding --- combined with
-the scale normalization of Option~1. The model being estimated is therefore \emph{granular
-sourcing with an expected-price-index general equilibrium}. This is a modelling choice, not a
-free lunch, and it is worth stating because it is what makes the value block deterministic. By
-Lemma~\ref{lem:q-free} it has no bearing on $q_{ls}$ or on the extensive margin.
+\paragraph{One maintained assumption, stated --- and it is not free.} With a finite $N_{s}$ the
+realised within-sector price index \eqref{eq:price-index} is a \emph{random} finite CES aggregate.
+The self-normalised weights make $\E[P_{sr}^{1-\nu_{s}}]$ invariant to the variety count --- that
+much is Option~1 of Section~\ref{sec:q2}(a), for free. But $P_{sr}$ is a \emph{convex} transform of
+that average, so the realised index is biased upward by Jensen, and the bias decays only as fast
+as the average concentrates. At the estimated calibration $\theta=1$, $\nu_{s}=1.5$ the regularity
+condition of \eqref{eq:app-cv}, $\theta>2(\nu_{s}-1)$, reads $1>1$: it \textbf{fails at equality},
+$(c^{*})^{1-\nu_{s}}$ has infinite variance, and the average converges at $\sqrt{N/\log N}$ rather
+than $\sqrt{N}$. Simulating the exact object:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+$N_{s}$ & $25$ & $50$ & $100$ & $200$ & $400$ & $1000$ & $4000$\\
+\midrule
+$\E[\widehat P]$ vs continuum & $+18.6\%$ & $+11.1\%$ & $+6.5\%$ & $+3.8\%$ & $+2.2\%$ & $+1.0\%$ & $+0.3\%$\\
+$\mathrm{sd}(\widehat P)/P$ & $0.48$ & $0.35$ & $0.27$ & $0.20$ & $0.15$ & $0.11$ & $0.06$\\
+\bottomrule
+\end{tabular}
+\caption{The realised granular price index against its continuum limit, $\theta=1$,
+$\nu_{s}=1.5$. At $N_{s}\approx10^{2}$ the level is off by $6\%$, and it propagates to $c_{r}$,
+$y_{r}$, $E_{sr}$ and hence to every value moment. The slow decay is the boundary case of
+\eqref{eq:app-cv}.}
+\label{tab:price-jensen}
+\end{table}
+
+So $N_{s}$ \emph{does} reach the value block, and materially. The estimator adopts the
+\textbf{certainty-equivalent} reading --- downstream firms optimise against
+$\E[P^{1-\nu_{s}}]^{1/(1-\nu_{s})}$, neglecting granular price randomness, which is Option~2 of
+Section~\ref{sec:q2}(a) and LMM's own general-equilibrium embedding. The model being estimated is
+therefore \emph{granular sourcing with an expected-price-index general equilibrium}. Two things
+follow. Most of the $6\%$ would not have been identifying variation anyway: a price-level shift is
+observationally equivalent to a technology shift (Appendix~\ref{app:price}), so $\Omega^{s}$ and
+$A$ would absorb it and only the cross-sector pattern of $N_{s}$ would survive as signal --- the
+assumption records that rather than letting a slowly-converging Jensen term be mistaken for
+technology. And by Lemma~\ref{lem:q-free} none of it touches $q_{ls}$ or the extensive margin, so
+the identification of $\alpha$ and $N_{s}$ is unaffected either way. What the assumption \emph{must
+not} do is survive into counterfactuals: the love-of-variety propagation channel lives in the
+realised index, so any counterfactual moving the variety set has to use it (Appendix~\ref{app:price}).
 
 \subsection{Two different regressions: cell level and firm level}
 \label{sec:compute-collapse}

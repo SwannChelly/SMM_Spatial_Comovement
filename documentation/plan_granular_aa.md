@@ -41,16 +41,49 @@ replication; the value block averages over all `R × N_s` draws.
 first `N_s`. Common random numbers across `N_s` candidates and across `θ`, which is what keeps the
 optimiser usable.
 
-### D2 — The value block keeps the self-normalised weights
+### D2 — The value block is evaluated at the **certainty-equivalent** price index
 
-`sample_weights[ρ,g] = 1/N_ρ` are self-normalised per column, so the within-sector CES index is an
-**average**, not a sum — the certainty-equivalent price index, invariant to the variety count.
-That is Option 1 of the note's §6(a) implemented implicitly. Keep it, and keep it in the finite
-solve too (weights `1/N_s`), so the estimated economy and any counterfactual are the same object.
+This is a modelling assumption with teeth, not a normalisation that comes for free, and it is what
+makes step 2 of the algorithm legitimate.
 
-> **Carry into counterfactuals.** The love-of-variety channel is normalised out at the calibration
-> point, not removed from the economics. A counterfactual that moves the variety set must undo the
-> normalisation first (note App. D.4) or the propagation channel is silenced.
+**What is exact.** `sample_weights = 1/N` are self-normalised, so `P_sr^{1−ν_s}` is an *average*
+of i.i.d. terms and `E[P_sr^{1−ν_s}]` is invariant to how many varieties enter it. That much is
+the love-of-variety normalisation of the note's §6(a) Option 1, implemented implicitly.
+
+**What is not.** `P_sr = (P_sr^{1−ν_s})^{1/(1−ν_s)}` is a *convex* transform of that average, so
+the **realised** price index is biased upward relative to the continuum by Jensen, and at this
+calibration the bias decays slowly. With `θ = 1` and `ν_s = 1.5` the note's finite-variance
+condition `θ > 2(ν_s − 1)` reads `1 > 1` — it **fails at equality**, so `(c*)^{1−ν_s}` has infinite
+variance and the average converges at `√(N/log N)`, not `√N`:
+
+| `N_s` | 25 | 50 | 100 | 200 | 400 | 1000 | 4000 |
+|---|---|---|---|---|---|---|---|
+| `E[P̂]` vs continuum | +18.6% | +11.1% | **+6.5%** | +3.8% | +2.2% | +1.0% | +0.3% |
+| `sd(P̂)/P` | 0.48 | 0.35 | 0.27 | 0.20 | 0.15 | 0.11 | 0.06 |
+
+So **`N_s` does feed the price index, and at `N_s ≈ 10²` it moves it by ~6%** — which propagates
+to `c_r`, `y_r`, `E_sr` and hence to `agg_industry_share` and `π_r`. Two coherent choices:
+
+1. **(Adopted) Certainty-equivalent GE.** Compute the value block from the **pooled** draws, not
+   the `N̂_s` prefix: downstream firms optimise against `E[P^{1−ν_s}]^{1/(1−ν_s)}`, neglecting
+   granular price randomness. This is the note's §6(a) Option 2 — LMM's own GE embedding —
+   combined with Option 1's scale normalisation. The value block is then genuinely free of `N_s`,
+   granularity lives entirely in the extensive margin and the counts, and the `N_s` inner loop of
+   step 2 is exact.
+2. **Realised granular GE.** Let the `N̂_s`-prefix price index drive the GE. More faithful, but
+   `N_s` then enters every value moment at the magnitudes above; the closed-form inner loop is no
+   longer the profiled optimum and `N_s` must be profiled on the full loss.
+
+**Why 1, and what it costs.** Most of the 6% would not be identifying variation anyway: a price
+level shift is observationally equivalent to a technology shift (note App. D.4), so `Ω^s`/`A`
+would absorb it, and only the *cross-sector* pattern of `N_s` would survive as signal. Choosing 1
+records that explicitly instead of letting a slowly-converging Jensen term leak into `Ω^s` and be
+mistaken for technology.
+
+**What must be undone for counterfactuals.** Any counterfactual that moves the variety set must
+use the realised index — the whole love-of-variety propagation channel lives there (note App.
+D.4). Estimating under 1 and running counterfactuals under 2 is correct *provided the mapping back
+is done*; running counterfactuals under 1 silences the channel.
 
 ### D3 — Comparative advantage, and the γ moments, at the AA level
 
@@ -333,31 +366,36 @@ function loss(θ_c, W)
   Ω^L, Ω^s, A, α, T_aa = unpack_params(θ_c)          # T_aa :: (S, R_d), ref-normalised
   T[s,l] = T_aa[s, AA_OF_ZE[l]]                      # (S,R) gather — the one new structural line
 
-  ── 1. locate N̂_s : closed form on the POOLED draws, no economy needed ───────
-  #   solve once at full pool width to get the win-somewhere probability
-  net_pool = solve_network(θ_c; u_draws = flatten(U_POOL))       # R_rep*N_MAX rows
-  q̂[s,l]   = mean over pooled ρ of net_pool.linkages_flat[ρ, SR_TO_GOOD[s,l]]
-  q̂[s,l]   = clamp(q̂[s,l], 0.5/(R_rep*N_MAX), 1 − 1e-12)
+  ── 1. ONE Ricardian solve at pool width; winners are prefix-stable ──────────
+  #  The winner of variety ρ is the argmin over cells of that variety's OWN draws, so it
+  #  does not depend on how many varieties exist. One solve at pool width therefore serves
+  #  every prefix — there is NO second solve and NO new draw.
+  pool = solve_network(θ_c; u_draws = U_POOL)          # U_POOL :: (R_rep, N_BLOCK, n_cells)
+  #    pool.linkages_flat :: (R_rep, N_BLOCK, n_cells)   1 = wins somewhere
+  #    pool.z_flat        :: (R_rep, N_BLOCK, n_cells)   champion productivity
+  #    pool.p_win         :: (R_rep, N_BLOCK, S)         winning price per variety per sector
+
+  ── 2. q̂ from ALL pooled varieties → N̂_s by bisection ───────────────────────
+  q̂[s,l] = mean over (rep, ρ) of pool.linkages_flat[rep, ρ, g(s,l)]     # R_rep*N_BLOCK draws
+  q̂[s,l] = clamp(q̂[s,l], 0.5/(R_rep*N_BLOCK), 1 − 1e-12)
   for s in 1:S
-      G(s,n) = mean over l ∈ CELLS_OF_SECTOR[s] of (1 − q̂[s,l])^n      # ↓ in n
+      G(s,n) = mean over l ∈ CELLS_OF_SECTOR[s] of (1 − q̂[s,l])^n        # closed form, ↓ in n
       if     G(s,N_LO[s]) ≤ G_TARGET[s]   N̂[s], clamped[s] = N_LO[s], :lo
       elseif G(s,N_HI[s]) ≥ G_TARGET[s]   N̂[s], clamped[s] = N_HI[s], :hi
       else
-          lo, hi = N_LO[s], N_HI[s]                              # G(lo) > target > G(hi)
+          lo, hi = N_LO[s], N_HI[s]
           while hi − lo > 1
               mid = (lo + hi) ÷ 2
               G(s,mid) > G_TARGET[s] ? (lo = mid) : (hi = mid)
           end
           N̂[s], clamped[s] = argmin_{n ∈ {lo,hi}} |G(s,n) − G_TARGET[s]|, :none
       end
+      @assert N̂[s] ≤ N_BLOCK       # else the pool is too narrow: widen N_BLOCK and restart
   end
 
-  ── 2. R realised granular economies, prefix N̂_s of the pool ─────────────────
-  for rep in 1:R_rep
-      net[rep] = solve_network(θ_c; u_draws = U_POOL[rep, 1:N̂[sector], :])
-      #   → linkages_flat :: (N̂_s, n_cells), z_flat :: (N̂_s, n_cells)
-      #   value block uses weights 1/N̂_s  (average, not sum — D2)
-  end
+  ── 2bis. the R realised economies are PREFIXES of the same pool ─────────────
+  #  economy rep = the first N̂[s] varieties of block rep.  No new draws, no new solve.
+  K[rep,s,l] = Σ_{ρ ≤ N̂[s]} pool.linkages_flat[rep, ρ, g(s,l)]        # realised supplier count
 
   ── 3. block 4 — FIRM-level cloglog, y = 1{supplier}, control log z ──────────
   #   rows = (variety ρ, cell g) = firms.  n_cells × N̂_s per replication.
@@ -497,6 +535,7 @@ admissible by construction. Print both every report; a large gap is a mechanism 
 | **G2** | Two routes to `N_s` (§3.4) | same order of magnitude; a large gap is a finding |
 | **G4** | Untargeted fit of the whole curve `G_s(K)`, `K ≥ 1` (only `K=0` is targeted) | reported max deviation |
 | **G3** | No sector clamped at `N_LO` / `N_HI` at the optimum | `clamped == :none` ∀ s |
+| **G12** | Sensitivity of the **value** block to `N_s`: recompute `π_s`, `π_r`, labor share at `N̂_s` and `2N̂_s` under choice 2 of D2 | quantifies what choice 1 assumes away; the price-index table says ~6% at `N_s ≈ 100`, so report it rather than trust it |
 | **G5** | Drift of `reg_coef` in `N_s` at `θ̂` | should be ~0: `η` has no `N_s` term at the firm level (D4). A visible drift means the firm↔champion mapping or the union-over-buyers approximation is doing something unintended |
 | **G11** | `b_logz ≈ −θ = −1.0`, on **both** simulated and empirical data | the cheapest check on the §1 firm-count mapping; a large gap invalidates the coefficient comparison |
 | **G9** | AA-level Sinkhorn: round-trip recovery of a planted `T_aa` from its own AA aggregates | ~1e−8, mirroring `test/test_ge_inversion.jl` |
