@@ -4,6 +4,7 @@
 
 | Date | Files | Summary |
 |------|-------|---------|
+| 2026-07-31 | `load_parameters.jl`, `model_CP.jl`, `model_analytical.jl`, `tools.jl`, `profiling.jl`, `optimizer.jl`, `main.jl`, `main_gmm.jl`, `run.sh`, `test/test_granular_aa.jl` (new), `documentation/`, `CLAUDE.md` | **Granular varieties + comparative advantage at the attraction-area level (`documentation/plan_granular_aa.md`), behind two independent flags.** `--granular=true\|false` (finite `N_s`, the count moment block 6, the `N_s` profiling) and `--ca_level=ze\|aa` (comparative advantage / the γ block at the ZE or ATTRACTION-AREA level). **`--granular=false --ca_level=ze` reproduces the previous estimator BIT-IDENTICALLY** — verified on a synthetic dataset against `HEAD` (simulated + analytical moment vectors, loss, `invert_T_ge` T\*, draws, `MOMENT_MASK`, `T_MASK`, moment/param labels all bitwise equal; gate **V0**). **Two index spaces** now exist and must not be conflated: **CELL space** `CELL_MASK::BitMatrix(S,R)` — the (sector, ZE) cells actually simulated (drives `n_good`, `GOOD_S/R`, `SR_TO_GOOD`, `SECTOR_GOOD_*`, `U_DRAWS` columns); and **T-COLUMN space** of width `T_COL_DIM`, the columns of the comparative-advantage matrix AND the γ-moment block (`T_ACTIVE`, `T_MASK`, `T_REF_REGION`, `SECTOR_T_COLS`, `EMP_GAMMA_T`). Under `:ze` the two coincide (legacy); under `:aa` `CELL_MASK = filter == 1` (control cells become ordinary goods with `T_{s,a} > 0` — **this is the endogenisation**) while `T_COL_DIM = n_AA` and `T_ACTIVE = AA_ACTIVE`. `T_GATHER[l]` maps ZE→T column, so `unpack_params` scatters s-major into `(S, T_COL_DIM)`, ref-normalises, then **gathers** `T[s,l] = T_par[s, T_GATHER[l]]` (identity under `:ze`); new `unpack_T_par` / `gather_T_to_ze` / `aggregate_gamma_to_T` helpers. The CLAUDE.md T↔γ alignment invariant is preserved verbatim, now over T columns. **New inputs:** `filter_N_upstream.npy` is **binary** (control cell ⟺ `filter==1 & X_rs==0`, replacing status 2 — `active_mat` is unchanged); `attraction_area_linkages.npy` `(R, R_downstream)` with three load-time assertions, the decisive one being `argmax_col == CLOSEST_DOWNSTREAM_REGION` (same partition as the empirical fixed effect); `G_K.csv` (`A129`, `K`, `G(K)`, `N_supplier_s`) giving `G_TARGET = Ḡ_s(0)` and the bounds `N_LO = ⌈N_supplier_s/R_downstream⌉`, `N_HI = N_supplier_s`. **Σ files** carry three blocks **β → γ → G** at a fixed `N_REG + n_γ + S`; `sigma_beta_gamma_filename(; smm, aa)` gains the `Sigma_aa_` PREFIX from `CA_LEVEL`, and `reconcile_sigma_data` now splits on that fixed layout, reconciles **the γ block only**, and keeps `G` only under `GRANULAR` (`G` rows are never pruned). **Estimation:** one Ricardian solve at POOL width `N_POOL = R_REP·N_BLOCK` (flat `(rep−1)·N_BLOCK + ρ` row layout, so `solve_network` needs no signature change and `U_DRAWS` IS the pool); the value block is computed over all pooled rows (the certainty-equivalent index, D2); `concentrate_N_s` profiles `N_s` by monotone INTEGER bisection on `Ḡ_s(n) = mean_l (1−q̂_ls)^n` (closed form, no re-simulation, never relaxed or rounded, clamp recorded per sector); block 4 is the firm-level cloglog on the PREFIX `ρ ≤ N̂_{s(g)}` of each replication, **averaged over `R_REP` realised economies** (matching the binding function, V12) and now also returning the `log z` coefficient (`= −θ`, a free over-identifying test); block 6 is the realised empty-cell share averaged over replications. `moments_to_vec` / `moment_blocks_tuple` replace every hard-coded `vcat(…1:5…)[MOMENT_MASK]`; `compute_block_ranges` returns 5 or 6 ranges; `inference_moment_indices` / `inference_block_layout` extend `gb_indices` to β→γ→G. `compute_jacobian` gains `hold_N_s` (pins `N̂_s` across the FD perturbations — `N̂_s(θ)` is a step function, so a central FD could straddle a jump — and `compute_moments` warns if a perturbation would have moved it) and `inference_draws` keeps the pool width under `GRANULAR`. `invert_T_ge` iterates in the T-column space (gather → closed-form ZE γ → aggregate back), so the system stays square and the contraction is inherited. Regression design flags are now effective consts: under `:aa` the control-row path is OFF (those cells are goods — appending them again would double-count) and the log-z size control is ON, which is the firm-level reduced form of Prop. 1 exactly. GMM/analytical asserts `!GRANULAR` (its extensive margin is the FKG-approximated continuum object) but does support the `:aa` γ aggregate. **Verified by running** (Julia 1.10, synthetic data): both configurations load, evaluate the loss, build `W`, compute the Jacobian and run inference end to end; new `test/test_granular_aa.jl` gate runner passes V1/V1a/V1b/V2/V3/V5 and the `Ḡ_s(0)`-monotonicity check, and reports V6/V7/V9/V10. **Not verified on the real data** (not present in this environment) — run V0 first, then the gates. **Caveat:** the granular pool defaults to `:mc` (`GRANULAR_DRAW_METHOD`) rather than `DRAW_METHOD`, because a stratified/QMC design across ρ makes prefix counts under-dispersed relative to Binomial(N̂_s, q) — biasing exactly the block-6 empty share; override with `granular_draw_method` if the QMC variance reduction on the value block is wanted instead. |
 | 2026-07-23 | `tools.jl`, `CLAUDE.md` | **`compute_profiled_T_inference` now saves a T-precision-vs-γ-size scatter (γ in the renormalized Σ_r=1 domestic space).** Diagnostic for "which T are well identified": the identified T columns and the γ moment block enumerate the SAME active non-ref `(s,r)` in s-major order (T param i ↔ `gamma_rs[i]`), so per T we plot x = the DOMESTIC sourcing share `γ̃[r,s]=γ^F[r,s]/domestic_share[s]` (sums to 1 per sector — the economically comparable size, as requested) on a log axis vs y = T's precision `|t|=|T̂|/se_T`, with a 1.96 reference line. Confirms the mechanism (bigger, better-measured domestic shares ⇒ tighter T). Writes `T_precision_vs_gamma.png` + `T_precision_vs_gamma.npz` (γ̃, γ^F, T̂, se_T{,_alpha,_gamma}, t) under `inference/`. Guarded (try/catch, gated on `n_T==n_γ`); the `.npz` always writes. Verified the γ→T normalization is scale-consistent: model γ carries `*domestic_share` (⇒ `emp_gamma_ls` sums to `domestic_share`, same convention as the bootstrap `Sigma_beta_gamma`), `gamma_threshold=0` (no Julia-side rescale), and `f_γ` perturbs `emp_gamma_ls`; so `V_T=f_γ Σ_γγ f_γ'` is invariant to the with-foreign vs domestic normalization (the `1/γ` in `f_γ` cancels the `γ²` in `Σ`, and `f_γ` nulls the per-sector common-scale/foreign-split direction). Print/plot-only; no estimate changed. |
 | 2026-07-23 | `tools.jl`, `CLAUDE.md` | **Bugfix: `compute_jacobian`'s α/T block diagnostics assumed the full param layout, `BoundsError` under a restricted `param_indices` (the profiled α-only Jacobian).** The "reg_coef vs α" print used `α_col = findfirst("alpha", PARAM_LABELS)` (α's position in the FULL layout, e.g. 32) to index `J_elast[m, α_col]`, but the profiled α-only Jacobian has just `N_TAU` columns ⇒ `BoundsError: 163×1 at [32,32]`. Same latent bug in the reg_coef×T noise block (`T_cols_ns = findall("T[", PARAM_LABELS)`). Both now map to the **LOCAL** perturbation order via the raw-θ layout ranges (α at `(2+S+R_downstream)…(1+S+R_downstream+N_TAU)`, T after): `alpha_local = findall(j -> α-range, indices)`, `T_cols_ns = findall(j -> indices[j] ≥ T_lo, …)`. Byte-identical for the full Jacobian (local col == PARAM_LABELS position when `param_indices==jacobian_param_indices`); the T block now correctly skips (empty) for the α-only profiled Jacobian. Print-only diagnostics; `J` unchanged. (The profiled α-Jacobian run confirmed the design: reg_coef elasticity ≈0.77 with noise 1.82 — vs 15.1 for the free Jacobian — and γ_ls elasticity ≈0.006, i.e. γ juste-identified along T*(α).) |
 | 2026-07-23 | `tools.jl`, `main.jl`, `model_CP.jl`, `optimizer.jl`, `CLAUDE.md` | **Profiled inference now perturbs ONLY α (T follows via Sinkhorn) + loss-`method` and `generate_halton_grid` cleanup.** Three changes. **(1) Direct profiled Jacobian (answers "which function must account for profiling").** Verified: `build_step3_weight_matrix` (Σ_sim/W) is parameterization-independent and correctly needs NO profiling awareness; the function that must is **`compute_jacobian`**. New kwarg `profile_T::Bool=false`: when true (SMM only; asserts `!analytical`), every evaluated parameter vector is routed through `profiled_theta` first, so its T block becomes `T*(α,Ω,A)=invert_T_ge(...)`. Perturbing an α column then moves T accordingly ⇒ the returned column is the TOTAL derivative `dm/dα` along the profiled manifold — "only α perturbed, T computed accordingly" — and **no ∂m/∂T-as-free-parameter is formed**. `main.jl` (Step 2 θ̂_1, Step 4 θ̂_2) now computes a profiled α-only Jacobian `Jp = compute_jacobian(θ̂; param_indices=α-only, profile_T=true)` and passes it to `run_profiled_inference`, which **replaces** the previous chain-rule `G_α = ∂m/∂α + ∂m/∂T·∂T*/∂α` (that reused the noisy free-T Jacobian) with the direct `G_α = Jp[gb rows, :]`. `run_profiled_inference` signature drops `J_full, gb_cols` → takes `G_alpha_full, gb_indices`; the T-CI delta method (`compute_profiled_T_inference`, correlated α+γ) is unchanged and still uses `∂T*/∂α` from `_dTstar_dalpha` and `G_α` for the influence `P`. The full free-parameter Jacobian `J2`/`J1` is still computed for the diagnostics (`screen_T_identification`, `jacobian_all*.npy`); only inference switched to the profiled Jacobian. (Also removed a stray `print(DRAW_METHOD)` debug line.) **(2) Loss `method` removed.** `loss_function`/`full_SMM` dropped the `method="original"` positional (only "original" — raw `err=emp−sim` — was ever used on the live path); the `normalize`/`log` branches, `square_size`, and the `method isa Bool` shims are gone. Threaded removal through `parallel_SMM`, `parallel_SMM_safe` (its `show_err` positional shifts up one), `train_stage_one`, and `optimizer.jl` (`train_stage`/`run_optimization` `method` kwarg + all `method=method` forwards). Distinct `draw_method`/`alpha_search_method`/`REG_METHOD`/`generate_initial_alphas` "method" are untouched. **(3) Dead `generate_halton_grid` deleted.** Its only reference was `train_stage_one`'s `params_list===nothing` branch, unreachable (both callers — `generate_report`, `compute_scores_modular` — pass an explicit `params_list`); the branch now errors. **Untested here** (no local Julia); statically verified (bracket balance identical to HEAD, call-site arity, α-column ↔ `alpha_pos` alignment, `profiled_theta` late-binding safe when `profile_T=false`). |
@@ -122,21 +123,28 @@ Moments are ordered as five blocks in the masked vector (`MOMENT_MASK` applied):
 | 2 | `agg_industry_share` | Industry shares π_s |
 | 3 | `pi_r` | Regional market shares |
 | 4 | `reg_coef` | Distance-bin regression coefficients (`N_REG` entries); GMM (quadrature): regressand is the extensive margin ρ̃_{r's}(z) = 1 − ∏_dr (1 − ρ_{r'dr s}(z)) (Eq. B6, whole-industry), regressors/FE keyed on nearest downstream region. `N_REG` is the moment count (= `n_coef` arg); independent of `N_TAU`. |
-| 5 | `gamma_ls` | Location-specific linkage shares γ_ls |
+| 5 | `gamma_ls` | Location-specific linkage shares γ_ls. Under `CA_LEVEL == :aa` these are the ATTRACTION-AREA aggregates `γ_{s,a} = Σ_{l∈a} γ_{ls}`, summed over every cell of the area (control cells included, on both the data and model side). |
+| 6 | `G0` | **`GRANULAR` only.** The count moment `Ḡ_s(0)` — the share of cells inside active attraction areas hosting zero suppliers, `S` entries. **Appended, never inserted**, so every existing index into blocks 1–5 is untouched. |
 
-`BLOCK_RANGES` is a 5-tuple of index ranges into the masked vector, one per block.
+`BLOCK_RANGES` is a 5-tuple of index ranges into the masked vector, one per block —
+a 6-tuple under `GRANULAR`. Assemble the masked moment vector with
+`moments_to_vec(sim)`, never a hard-coded `vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]`,
+which would silently drop block 6.
 
 ---
 
 ## Invariant: β+γ subsystem ordering
 
-**β (reg_coef) first, then γ (gamma_ls):**
+**β (reg_coef) first, then γ (gamma_ls), then G (`GRANULAR` only):**
 
 ```julia
-gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+gb_indices = inference_moment_indices()   # BLOCK_RANGES[4], [5], and [6] under GRANULAR
 ```
 
-This ordering applies everywhere: `Sigma_beta_gamma.npy`, `W_step3`, `Omega`, `gb_indices` in `main.jl` and `main_gmm.jl`. Do not reverse it.
+This ordering applies everywhere: the Σ files on disk, `W_step3`, `Omega`, and `gb_indices`
+in `main.jl` and `main_gmm.jl`. Do not reverse it. Block 6 is appended, so the β and γ
+positions are exactly what they were. Use `inference_moment_indices()` /
+`inference_block_layout()` rather than open-coding the `vcat`.
 
 ---
 
@@ -148,15 +156,28 @@ regions of sector 1, then all regions of sector 2, … — so the `T[s,r]` colum
 with the `γ[s,r]` row.
 
 ```julia
-T_MASK = vec(permutedims(X_rs)) .> 0     # == T_MASK_MOMENT (s-major over (S,R))
+T_MASK = vec(permutedims(T_ACTIVE))      # == T_MASK_MOMENT (s-major over (S, T_COL_DIM))
 ```
 
-- **Flat position** of active pair `(s,r)` in the reduced-T / moment axis:
-  `flat_pos = (s-1)*R_full + r`. Inverse: `s = (flat_pos-1)÷R_full + 1`, `r = (flat_pos-1)%R_full + 1`.
-- **`unpack_params`** inverts this flatten: `T_full = zeros(R*S); T_full[T_MASK] = T_reduced;
-  T_mat = permutedims(reshape(T_full, R, S))`. It still **returns region-major `vec(T_mat)`**,
-  so the inter-stage full-T representation is unchanged — only the *reduced* (active) T
-  ordering is s-major.
+**Two index spaces.** `T_COL_DIM` is the width of the T-parameter/γ-moment column space:
+upstream ZE under `CA_LEVEL == :ze` (so `T_ACTIVE == active_mat` and everything below reads
+exactly as before, with `T_COL_DIM == R`), attraction areas under `:aa` (`T_ACTIVE ==
+AA_ACTIVE`, `T_COL_DIM == n_AA`). The *cells* actually simulated are a separate set,
+`CELL_MASK :: BitMatrix(S, R)` — under `:aa` it includes the control cells, which are goods
+there. Never index one space with the other: use `T_COL_DIM`/`SECTOR_T_COLS`/`EMP_GAMMA_T`
+for T and γ, and `n_good`/`GOOD_S`/`GOOD_R`/`SECTOR_GOOD_*` for cells. `T_GATHER[l]` maps a
+ZE to its T column (the identity under `:ze`).
+
+- **Flat position** of active pair `(s,c)` in the reduced-T / moment axis:
+  `flat_pos = (s-1)*T_COL_DIM + c`. Inverse: `s = (flat_pos-1)÷T_COL_DIM + 1`,
+  `c = (flat_pos-1)%T_COL_DIM + 1`.
+- **`unpack_params`** inverts this flatten: `T_full = zeros(T_COL_DIM*S); T_full[T_MASK] =
+  T_reduced; T_par = permutedims(reshape(T_full, T_COL_DIM, S))`, ref-normalises per sector,
+  then **gathers** onto ZE: `T[s,l] = T_par[s, T_GATHER[l]]`. It still **returns region-major
+  `vec(T_mat)`** at the (S, R) ZE level, so the inter-stage full-T representation is unchanged.
+  `unpack_T_par(params)` returns the `(S, T_COL_DIM)` parameter matrix *before* the gather —
+  that is what the Sinkhorn inversion, the optimizer's warm-start reduction and the T
+  delta-method iterate on.
 - **Every reduced-T producer must emit s-major**: PSO init/bounds use
   `vec(permutedims(T_rs_init))[T_MASK]`; the warm-start reduce uses
   `vec(permutedims(reshape(params_dict[:T], S, R)))[T_MASK]`; `build_step3_weight_matrix`'s
@@ -176,8 +197,10 @@ T_MASK = vec(permutedims(X_rs)) .> 0     # == T_MASK_MOMENT (s-major over (S,R))
 
 | File | Shape | Description |
 |------|-------|-------------|
-| `Sigma_beta_gamma.npy` | `(N_REG + n_gamma_kept, N_REG + n_gamma_kept)` | Joint bootstrap covariance of β+γ **moments**, **β block first then γ block** (`BLOCK_RANGES[4]` then `BLOCK_RANGES[5]`). β-block dimension is `N_REG` (moment count), independent of `N_TAU`. |
-| `Sigma_beta_gamma_1.npy` | same, for `N_REG==1` case | Same ordering |
+| `filter_N_upstream.npy` | `(S, R)`, values in `{0, 1}` | **BINARY.** `1` ⟺ the (sector, ZE) cell enters the optimisation. Within the kept cells, *supplier* ⟺ `X_rs > 0`, *control* ⟺ `X_rs == 0`. The old three-status encoding (0 / 1 / 2) is gone; `active_mat = (filter .== 1) .& (X_rs .> 0)` still selects exactly the supplier cells, so the legacy path needed no edit. |
+| `attraction_area_linkages.npy` | `(R, R_downstream)` binary | ZE → attraction-area incidence, each area anchored on the ZE's closest downstream region. Required under `--ca_level=aa`. Asserted at load: exactly one area per ZE, and `argmax_col == CLOSEST_DOWNSTREAM_REGION` — the model's fixed effect and the empirical `A129_AA` grouping must be the SAME partition. |
+| `G_K.csv` | `A129`, `K`, `G(K)`, `N_supplier_s` | `G(K) = Pr(K_ls ≤ K)`; `G(0)` is the share of ZE with zero suppliers, denominator = ZE inside active attraction areas. `N_supplier_s` (constant within `A129`, asserted) gives the variety-count bounds `N_LO = ⌈N_supplier_s / R_downstream⌉`, `N_HI = N_supplier_s`. Required under `--granular=true`. |
+| `Sigma_beta_gamma*.npy` | `(N_REG + n_γ + S)²` | Joint bootstrap covariance, **three blocks in the order β → γ → G** (`BLOCK_RANGES[4]`, `[5]`, `[6]`). β-block dimension is `N_REG` (moment count), independent of `N_TAU`; the `G` block is `S` rows of `Ḡ_s(0)`. Legacy mode slices to the leading `N_REG + n_γ`; granular keeps all three. Eight variants, selected by `sigma_beta_gamma_filename(; smm, aa)`: `Sigma_aa_` PREFIX under `--ca_level=aa`, `_cloglog` under `REG_METHOD == :cloglog`, `_1` when `N_REG == 1`, trailing `_f` on the SMM path. |
 | `w_gamma.npy` | `(n_gamma_kept, n_gamma_kept)` | Bootstrap covariance of γ_ls moments (fallback) |
 | `w_beta.npy` | `(N_REG, N_REG)` | Bootstrap covariance of β moments (fallback) |
 
@@ -295,6 +318,24 @@ sites discard the return value).
 | `N_REG` | reg_coef moment count | moment | `n_coef` arg | `fast_weighted_regression`, `compute_regression_quadrature`, `distance_bin`, `BLOCK_RANGES[4]`, Σ_data file selection |
 | `N_TAU` | trade-cost parameter count | parameter | `n_tau` arg (default = `n_coef`) | `build_tau`, `unpack_params`, PSO β-slice, `PARAM_LABELS` β section, `get_param_start_index(:T)` |
 
+### Granular / attraction-area constants
+
+| Constant | Meaning |
+|----------|---------|
+| `GRANULAR` | finite `N_s` + the count moment (block 6). `false` ⇒ the continuum model, 5-block moment vector |
+| `CA_LEVEL` | `:ze` or `:aa` — the level of comparative advantage AND of the γ block |
+| `T_COL_DIM`, `T_ACTIVE`, `T_GATHER`, `SECTOR_T_COLS` | the T-parameter / γ-moment column space (see the invariant above) |
+| `CELL_MASK`, `CELLS_OF_SECTOR` | the simulated (sector, ZE) cells — a DIFFERENT set from `T_ACTIVE` under `:aa` |
+| `AA_OF_ZE`, `n_AA`, `AA_ACTIVE` | the attraction-area map and the per-sector active set `𝒜⁺_s` |
+| `EMP_GAMMA_T`, `EMP_GAMMA_T_TILDE` | the block-5 target and the Sinkhorn row margin, in T-column space |
+| `N_LO`, `N_HI`, `N_BLOCK`, `G_TARGET` | variety-count bounds, pool width, and the `Ḡ_s(0)` target |
+| `R_REP`, `N_POOL`, `U_POOL`, `GRANULAR_DRAW_METHOD` | the replication count and the flat draw pool (`(rep−1)·N_BLOCK + ρ` rows) |
+| `REG_INCLUDE_CONTROL`, `REG_INCLUDE_SIZE` | the effective regression design: under `:aa`, control rows OFF (those cells are goods) and the log-z size control ON |
+
+Only the two diagonal configurations are exercised: `(false, :ze)` — the model as it stood —
+and `(true, :aa)`. A cross combination warns rather than erroring; make sure the on-disk Σ
+matches the γ level you select.
+
 Standard runs: `n_tau` unset → `N_TAU = N_REG = n_coef` (no behavior change).
 Over-identified run: `n_tau=1, n_coef=4` → `N_TAU=1` (power-law α), `N_REG=4` (four binned moments), df=3 on reg_coef block.
 
@@ -303,6 +344,11 @@ Over-identified run: `n_tau=1, n_coef=4` → `N_TAU=1` (power-law α), `N_REG=4`
 ## Usage
 
 ```bash
+# Granular varieties + attraction-area comparative advantage (documentation/plan_granular_aa.md)
+./run.sh aero --n_coef=4 --n_tau=1 --granular=false --ca_level=ze   # the legacy model (V0 reference)
+./run.sh aero --n_coef=4 --n_tau=1 --granular=true  --ca_level=aa --n_rep=300
+julia test/test_granular_aa.jl aero 4 1 true aa                    # the validation gates
+
 # SMM (simulation-based)
 julia main.jl auto 1        # N_REG=1, N_TAU=1 (default: n_tau=n_coef)
 julia main.jl aero 4        # N_REG=4, N_TAU=4 (bin parametrization, exactly identified on reg_coef)

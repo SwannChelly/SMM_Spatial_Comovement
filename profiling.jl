@@ -85,17 +85,19 @@ end
 
 """
     invert_T_ge(alpha, Omega_L, Omega_s, A;
-                target = emp_gamma_ls_tilde, T_init = copy(T_rs_init),
+                target = EMP_GAMMA_T_TILDE, T_init = copy(T_rs_init),
                 max_iter = 500, tol = 1e-9, damping = 0.9, verbose = false)
-        -> (T::(S,R), iters, converged::Bool, resid, resid_hist)
+        -> (T::(S,T_COL_DIM), iters, converged::Bool, resid, resid_hist)
 
 `damping` is the log-space relaxation δ (δ=1 is pure Sinkhorn). Phase-0 measured
 the undamped map as a strong contraction (ρ_full≈0.01 at the aero calibration),
 so the default is 0.9 (fast) rather than the very conservative 0.5; drop it toward
 0.5 if a far-from-init particle ever oscillates.
 
-Profile T by the GE-Sinkhorn inversion of `target`. The default target is the
-DOMESTIC-SHARE-BALANCED γ̃ = `emp_gamma_ls_tilde` = emp_gamma_ls / domestic_share,
+Profile T by the GE-Sinkhorn inversion of `target`. Both `target` and the returned
+`T` live in the T-COLUMN space (`T_COL_DIM` wide): upstream ZE under `CA_LEVEL == :ze`,
+attraction areas under `:aa`. The default target is the
+DOMESTIC-SHARE-BALANCED γ̃ = `EMP_GAMMA_T_TILDE` = EMP_GAMMA_T / domestic_share,
 whose per-sector total is 1 — matching the expenditure (column) margin ω, so the
 Sinkhorn margins are COMPATIBLE (Σ row = Σ column) as the theorem requires. Passing
 the raw `emp_gamma_ls` (Σ_r = domestic_share < 1) would leave the transport problem
@@ -113,50 +115,56 @@ convergence info; `converged=false` (resid ≥ tol at max_iter) signals the call
 fall back on `T_init`.
 """
 function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
-                     target::AbstractMatrix = emp_gamma_ls_tilde,
+                     target::AbstractMatrix = EMP_GAMMA_T_TILDE,
                      T_init::AbstractMatrix = copy(T_rs_init),
                      max_iter::Int = 500, tol::Float64 = 1e-9,
                      damping::Float64 = 0.9, verbose::Bool = false)
     tau   = build_tau(alpha)
-    T_mat = Matrix{Float64}(undef, S, R)
-    T_mat .= T_init
+    # The inversion iterates in the T-COLUMN space: ZE under :ze, attraction areas
+    # under :aa. Each pass gathers T onto the ZE the model simulates, evaluates the
+    # closed-form ZE-level γ, and aggregates it back to the T columns — so the system
+    # stays square (one multiplicative update per active (s, column)) and the
+    # contraction is inherited from the ZE-level version.
+    T_par = Matrix{Float64}(undef, S, T_COL_DIM)
+    T_par .= T_init
 
     # Reference-normalize the warm start per sector (gauge: T[s,ref] = 1).
     for s in 1:S
         ref = T_REF_REGION[s]
-        (ref > 0 && T_mat[s, ref] > 0) && (T_mat[s, :] ./= T_mat[s, ref])
+        (ref > 0 && T_par[s, ref] > 0) && (T_par[s, :] ./= T_par[s, ref])
     end
 
     resid      = Inf
     iters      = 0
     resid_hist = Float64[]
-    T_new      = similar(T_mat)
+    T_new      = similar(T_par)
 
     for it in 1:max_iter
         iters = it
-        gamma_model, _, _ = gamma_ls_analytical(Omega_L, Omega_s, A, T_mat, tau)
+        gamma_ze, _, _ = gamma_ls_analytical(Omega_L, Omega_s, A, gather_T_to_ze(T_par), tau)
+        gamma_model    = aggregate_gamma_to_T(gamma_ze)
 
-        T_new .= T_mat
+        T_new .= T_par
         for s in 1:S
-            regs = SECTOR_GOOD_REGIONS[s]
-            isempty(regs) && continue
-            ref = T_REF_REGION[s] > 0 ? T_REF_REGION[s] : regs[1]
-            for r in regs
-                gm    = gamma_model[r, s]
-                ge    = target[r, s]
+            cols = SECTOR_T_COLS[s]
+            isempty(cols) && continue
+            ref = T_REF_REGION[s] > 0 ? T_REF_REGION[s] : cols[1]
+            for c in cols
+                gm    = gamma_model[c, s]
+                ge    = target[c, s]
                 ratio = (gm > 1e-300 && ge > 0) ? ge / gm : 1.0
-                T_new[s, r] = exp(log(T_mat[s, r]) + damping * log(ratio))
+                T_new[s, c] = exp(log(T_par[s, c]) + damping * log(ratio))
             end
             rv = T_new[s, ref]
-            rv > 0 && (T_new[s, regs] ./= rv)
+            rv > 0 && (T_new[s, cols] ./= rv)
         end
 
         max_step = 0.0
-        for s in 1:S, r in SECTOR_GOOD_REGIONS[s]
-            d = abs(log(T_new[s, r]) - log(T_mat[s, r]))
+        for s in 1:S, c in SECTOR_T_COLS[s]
+            d = abs(log(T_new[s, c]) - log(T_par[s, c]))
             d > max_step && (max_step = d)
         end
-        T_mat .= T_new
+        T_par .= T_new
         resid = max_step
         push!(resid_hist, resid)
         verbose && @printf("    [invert_T_ge] it=%3d  max|Δlog T|=%.3e\n", it, resid)
@@ -164,7 +172,7 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
     end
 
     converged = resid < tol
-    return (T = T_mat, iters = iters, converged = converged,
+    return (T = T_par, iters = iters, converged = converged,
             resid = resid, resid_hist = resid_hist)
 end
 

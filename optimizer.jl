@@ -254,10 +254,12 @@ function train_stage(
         names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :alpha, :T]
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
-        # T from unpack_params is full S*R; reduce to non-zero entries, then map to
-        # the free log-space search vector φ (ref entries dropped). All downstream
-        # length/slice arithmetic then uses N_T_FREE automatically.
-        T_red_levels = vec(permutedims(reshape(params_dict[:T], S, R)))[T_MASK]   # region-major full → s-major, then mask
+        # `unpack_params` returns T GATHERED onto ZE (length S*R); the search space is
+        # the T-PARAMETER space (S × T_COL_DIM — attraction areas under CA_LEVEL=:aa),
+        # so take the parameter matrix directly and reduce it to the T_MASK entries,
+        # then map to the free log-space search vector φ (ref entries dropped). All
+        # downstream length/slice arithmetic then uses N_T_FREE automatically.
+        T_red_levels = vec(permutedims(unpack_T_par(best_params_prev)))[T_MASK]   # s-major, then mask
         params_dict[:T] = t_levels_to_free_phi(T_red_levels)
 
         # Handle single variable or list

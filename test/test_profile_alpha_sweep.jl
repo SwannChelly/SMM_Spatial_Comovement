@@ -149,7 +149,7 @@ Note: full_SMM(θ; simulation=false) returns (loss, moments_tuple); we take the
 tuple. (simulation=true returns the X_ls trade matrix, not moments — do not use.)"""
 function eval_moments(θ)
     _, sim = full_SMM(θ; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
-    sim_vec = vcat([vec(sim[i]) for i in 1:5]...)[MOMENT_MASK]
+    sim_vec = moments_to_vec(sim)
     return sim_vec
 end
 

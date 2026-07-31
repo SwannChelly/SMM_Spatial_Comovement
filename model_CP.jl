@@ -398,12 +398,25 @@ Unpack parameter vector into model components (paper notation).
 
 Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | T(sum(T_MASK))]
 
+The T block lives in the **T-COLUMN space** (`T_COL_DIM` wide): upstream ZE under
+`CA_LEVEL == :ze`, attraction areas under `:aa`. It is scattered s-major into an
+`(S, T_COL_DIM)` matrix, per-sector reference-normalised (`T[s, ref] = 1`), and then
+**gathered** to the (S, R) ZE-level matrix the model reads:
+
+    T[s, l] = T_par[s, T_GATHER[l]]
+
+`T_GATHER` is the identity under `:ze` (so this is byte-identical to the historical
+scatter), and `AA_OF_ZE` under `:aa` — Assumption 2 of `finite_sample2.tex`: every ZE
+of an area shares the Fréchet SCALE, not the realisation of its champions, so each ZE
+still runs its own Ricardian competition and two ZE at different distances still have
+different win probabilities.
+
 Returns:
 - Ω^L (Omega_L): Labor share in production [scalar]
 - Ω^s (Omega_s): Sectoral input shares [S elements, normalized to sum to 1]
 - A: Downstream firm productivity by region [R_downstream elements]
 - α (alpha): Trade cost parameters [N_TAU elements; 1 = power-law α, >1 = bin coefficients]
-- T: Fréchet scale parameters [S × R elements, full vector with zeros for masked entries]
+- T: Fréchet scale parameters [S × R elements (ZE level), flattened s-fastest]
 """
 function unpack_params(params)
     Omega_L = params[1]
@@ -415,18 +428,193 @@ function unpack_params(params)
     T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
     # eltype(params) (not a hard-coded Float64) so ForwardDiff Duals survive the
     # scatter into T_full — byte-identical for Float64 params.
-    T_full = zeros(eltype(params), R * S)
+    T_full = zeros(eltype(params), T_COL_DIM * S)
     T_full[T_MASK] = T_reduced
-    T_mat = permutedims(reshape(T_full, R, S))   # s-major flat (R,S) → (S,R)
+    T_par = permutedims(reshape(T_full, T_COL_DIM, S))   # s-major flat → (S, T_COL_DIM)
 
     for s in 1:S
-        ref_r = T_REF_REGION[s]
-        if ref_r > 0 && T_mat[s, ref_r] > 0
-            T_mat[s, :] ./= T_mat[s, ref_r]
+        ref_c = T_REF_REGION[s]
+        if ref_c > 0 && T_par[s, ref_c] > 0
+            T_par[s, :] ./= T_par[s, ref_c]
         end
     end
 
+    # Gather T columns onto ZE. Identity (and a plain copy) under :ze.
+    if CA_LEVEL === :aa
+        T_mat = Matrix{eltype(T_par)}(undef, S, R)
+        @inbounds for l in 1:R
+            c = T_GATHER[l]
+            for s in 1:S
+                T_mat[s, l] = T_par[s, c]
+            end
+        end
+    else
+        T_mat = T_par
+    end
+
     return Omega_L, Omega_s, A, alpha, vec(T_mat)
+end
+
+
+"""
+    unpack_T_par(params) -> Matrix (S × T_COL_DIM)
+
+The comparative-advantage matrix in the **T-COLUMN space** (before the gather onto
+ZE): reference-normalised per sector, zeros outside `T_MASK`. `unpack_params` returns
+the gathered ZE-level version; this is what the Sinkhorn inversion and the T
+delta-method iterate on, since those live in parameter space. Identical to
+`reshape(unpack_params(params)[5], S, R)` under `CA_LEVEL == :ze`.
+"""
+function unpack_T_par(params)
+    T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
+    T_full = zeros(eltype(params), T_COL_DIM * S)
+    T_full[T_MASK] = T_reduced
+    T_par = permutedims(reshape(T_full, T_COL_DIM, S))
+    for s in 1:S
+        ref_c = T_REF_REGION[s]
+        if ref_c > 0 && T_par[s, ref_c] > 0
+            T_par[s, :] ./= T_par[s, ref_c]
+        end
+    end
+    return T_par
+end
+
+
+"""
+    gather_T_to_ze(T_par) -> Matrix (S × R)
+
+Broadcast the T-column parameters onto the upstream ZE the model actually simulates:
+`T[s, l] = T_par[s, T_GATHER[l]]`. The identity under `:ze`.
+"""
+function gather_T_to_ze(T_par::AbstractMatrix)
+    CA_LEVEL === :ze && return T_par
+    T_mat = Matrix{eltype(T_par)}(undef, S, R)
+    @inbounds for l in 1:R
+        c = T_GATHER[l]
+        for s in 1:S
+            T_mat[s, l] = T_par[s, c]
+        end
+    end
+    return T_mat
+end
+
+
+"""
+    aggregate_gamma_to_T(gamma_ze) -> Matrix (T_COL_DIM × S)
+
+Aggregate ZE-level sourcing shares to the T-column space — under `:aa` the
+attraction-area aggregate `γ_{s,a} = Σ_{l ∈ a} γ_{ls}` summed over EVERY cell of the
+area (control cells included, which is what makes the match to `EMP_GAMMA_T`
+unbiased). The identity under `:ze`.
+"""
+function aggregate_gamma_to_T(gamma_ze::AbstractMatrix)
+    CA_LEVEL === :ze && return gamma_ze
+    out = zeros(eltype(gamma_ze), T_COL_DIM, S)
+    @inbounds for g in 1:n_good
+        l = GOOD_R[g]; s = GOOD_S[g]
+        out[T_GATHER[l], s] += gamma_ze[l, s]
+    end
+    return out
+end
+
+
+"""
+    concentrate_N_s(q_hat) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
+
+Profile the variety count `N_s` out of the loss by a **monotone integer bisection**
+on the count moment (plan D5; `finite_sample2.tex` §4.2).
+
+`q_hat[g]` is the probability that cell `g` wins a given variety SOMEWHERE in the
+downstream industry, estimated as the column mean of `linkages_flat` over the whole
+draw pool. By Lemma 2 (`q ⊥ N_s`) it does not depend on the variety count, so
+
+    Ḡ_s(n) = mean over cells l of sector s of (1 − q̂_ls)^n
+
+is closed form and strictly decreasing in `n`; matching it to `G_TARGET[s]` needs no
+re-simulation. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
+implied by the observed distinct-supplier count, so `N̂_s` is an integer at every
+evaluation — never relaxed, never rounded — and the outer optimiser never sees it.
+
+`clamped[s] ∈ (:none, :lo, :hi)` records a bound that bound. Clamping is
+INFORMATIVE, not benign: `:hi` means the model cannot generate enough sparsity even
+when every variety is sourced from a single origin — a rejection signal for the
+mechanism, which is why it is reported per sector rather than silently absorbed.
+"""
+function concentrate_N_s(q_hat::AbstractVector{<:Real})
+    N_hat   = zeros(Int, S)
+    clamped = fill(:none, S)
+    @inbounds for s in 1:S
+        cells = CELLS_OF_SECTOR[s]
+        lo0, hi0 = N_LO[s], N_HI[s]
+        if isempty(cells)
+            N_hat[s] = lo0
+            continue
+        end
+        Gs = n -> begin
+            acc = 0.0
+            for g in cells
+                acc += (1.0 - q_hat[g])^n
+            end
+            acc / length(cells)
+        end
+        tgt = G_TARGET[s]
+        if Gs(lo0) <= tgt
+            N_hat[s], clamped[s] = lo0, :lo
+        elseif Gs(hi0) >= tgt
+            N_hat[s], clamped[s] = hi0, :hi
+        else
+            lo, hi = lo0, hi0
+            while hi - lo > 1
+                mid = (lo + hi) ÷ 2
+                Gs(mid) > tgt ? (lo = mid) : (hi = mid)
+            end
+            N_hat[s] = abs(Gs(lo) - tgt) <= abs(Gs(hi) - tgt) ? lo : hi
+        end
+        @assert N_hat[s] <= N_BLOCK "N̂[$s] = $(N_hat[s]) exceeds the draw-pool width " *
+            "N_BLOCK = $N_BLOCK — widen N_BLOCK (it must be ≥ maximum(N_HI)) and restart."
+    end
+    return N_hat, clamped
+end
+
+
+"""
+    granular_prefix_rows(N_hat, rep) -> (rows::Vector{UnitRange{Int}}, w::Vector{Float64})
+
+Row ranges of one realised economy inside the flat draw pool, and the per-cell
+observation weight. Replication `rep` occupies pool rows
+`(rep−1)·N_BLOCK + 1 … (rep−1)·N_BLOCK + N_BLOCK`, of which a realised economy uses
+only the first `N̂_{s(g)}` — the PREFIX property that lets one Ricardian solve at pool
+width serve every candidate `N_s` with no re-drawing (plan D1). The weight
+`1/N̂_{s(g)}` makes each cell carry total weight 1, as in the pooled design.
+"""
+function granular_prefix_rows(N_hat::Vector{Int}, rep::Int)
+    base = (rep - 1) * N_BLOCK
+    rows = Vector{UnitRange{Int}}(undef, n_good)
+    w    = Vector{Float64}(undef, n_good)
+    @inbounds for g in 1:n_good
+        n_g     = N_hat[GOOD_S[g]]
+        rows[g] = (base + 1):(base + n_g)
+        w[g]    = 1.0 / n_g
+    end
+    return rows, w
+end
+
+
+"""
+    inference_draws(k; draw_method=DRAW_METHOD) -> (U, W)
+
+Independent re-simulation draws for inference (Σ_sim in `build_step3_weight_matrix`,
+the Jacobian replications in `compute_jacobian`). Under `GRANULAR` the row count must
+stay `N_POOL` and the sampler `GRANULAR_DRAW_METHOD`, or the `(rep, ρ)` row layout the
+prefix arithmetic relies on would be destroyed; otherwise this is the historical
+`N_RHO_INFERENCE` resample.
+"""
+function inference_draws(k::Int; draw_method::Symbol = DRAW_METHOD)
+    return GRANULAR ?
+        generate_draws(N_POOL, n_good, GRANULAR_DRAW_METHOD;
+                       randomise = true, rng = MersenneTwister(k)) :
+        generate_draws(N_RHO_INFERENCE, n_good, draw_method;
+                       randomise = true, rng = MersenneTwister(k))
 end
 
 
@@ -830,7 +1018,10 @@ Replaces FixedEffectModels.reg() for major speedup per evaluation.
 """
 function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
                                   include_control::Bool=true,
-                                  include_size_control::Bool=!include_control)
+                                  include_size_control::Bool=!include_control,
+                                  rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
+                                  obs_weight::Union{Nothing, Vector{Float64}}=nothing,
+                                  return_size_coef::Bool=false)
 
     # Regressors: N_REG distance-bin dummies, plus (optionally) a log-z size control.
     # The size control and the control group are MUTUALLY EXCLUSIVE by construction:
@@ -843,9 +1034,9 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
     #       so the distance slope loads on the trade-cost/α channel (see identification note).
     # z_flat is always built by solve_network for the Ricardian selection; it is regressed
     # on only when include_size_control is true.
-    @assert !(include_control && include_size_control) "size control needs firm productivity; " *
-        "the control group (filter==2) has z ≡ −∞, so include_control and include_size_control " *
-        "cannot both be true"
+    @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
+        "size control needs firm productivity; the control group has z ≡ −∞ under " *
+        ":ze, so include_control and include_size_control cannot both be true")
     n_size       = include_size_control ? 1 : 0
     n_regressors = N_REG + n_size          # distance bins (+ log-z size control)
     size_col     = N_REG + 1               # column index of the log-z control (if present)
@@ -854,11 +1045,19 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
     # may pass a different number of varieties (e.g. the price-alignment test).
     N_rho_eff = size(sample_weights, 1)
 
-    # Rows: n_good supplier pairs (+ N_CONTROL control-only pairs when include_control),
-    # each × N_rho_eff. The `include_control=false` path is used by the diagnostic that
-    # contrasts the regression with vs without the no-supplier control group.
+    # Per-good variety rows. `rho_range === nothing` ⇒ every drawn variety (the
+    # continuum/legacy design). Under granularity the caller passes the PREFIX
+    # `1..N̂_{s(g)}` of one replication (`granular_prefix_rows`), with a flat
+    # `obs_weight` of `1/N̂` so each cell still carries total weight 1.
+    rows_of = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
+    n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
+
+    # Rows: the good rows (+ N_CONTROL control-only pairs × N_rho_eff when
+    # include_control). The `include_control=false` path is used by the diagnostic that
+    # contrasts the regression with vs without the no-supplier control group, and is
+    # the production path under :aa (control cells are ordinary goods there).
     n_ctrl_eff = include_control ? N_CONTROL : 0
-    N_valid = (n_good + n_ctrl_eff) * N_rho_eff
+    N_valid = n_rows_goods + n_ctrl_eff * N_rho_eff
 
     y = Vector{Float64}(undef, N_valid)
     X = zeros(N_valid, n_regressors)
@@ -877,10 +1076,10 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
             b = DistBin[r, dr]
         end
 
-        for rho in 1:N_rho_eff
+        for rho in rows_of(g)
             idx += 1
             y[idx] = linkages_flat[rho, g] > 0 ? 1.0 : 0.0
-            w[idx] = sample_weights[rho, g]
+            w[idx] = obs_weight === nothing ? sample_weights[rho, g] : obs_weight[g]
             fe_group[idx] = group_id
 
             if N_REG == 1
@@ -953,7 +1152,12 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
     yw = sqrt_w .* y
     coefs = Xw \ yw
 
-    return coefs[1:N_REG]
+    # The log-z coefficient is a free over-identifying diagnostic (it should equal
+    # −θ under the cloglog link; see fast_cloglog_regression). Returned only on
+    # request, so the historical N_REG-long return is untouched.
+    return return_size_coef ?
+        vcat(coefs[1:N_REG], include_size_control ? coefs[size_col] : NaN) :
+        coefs[1:N_REG]
 end
 
 
@@ -1049,15 +1253,20 @@ Returns the `N_REG` distance coefficients.
 function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
                                  include_control::Bool=true,
                                  include_size_control::Bool=!include_control,
+                                 rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
+                                 obs_weight::Union{Nothing, Vector{Float64}}=nothing,
+                                 return_size_coef::Bool=false,
                                  max_iter::Int=50, tol::Float64=1e-9)
-    @assert !(include_control && include_size_control) "size control needs firm productivity; " *
-        "control firms (filter==2) have z ≡ −∞"
+    @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
+        "size control needs firm productivity; control firms have z ≡ −∞ under :ze")
     n_size       = include_size_control ? 1 : 0
     n_regressors = N_REG + n_size
     size_col     = N_REG + 1
     N_rho_eff    = size(sample_weights, 1)
+    rows_of      = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
+    n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
     n_ctrl_eff   = include_control ? N_CONTROL : 0
-    N_valid      = (n_good + n_ctrl_eff) * N_rho_eff
+    N_valid      = n_rows_goods + n_ctrl_eff * N_rho_eff
 
     y        = Vector{Float64}(undef, N_valid)
     X        = zeros(N_valid, n_regressors)
@@ -1075,10 +1284,10 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{F
         else
             b = DistBin[r, dr]
         end
-        for rho in 1:N_rho_eff
+        for rho in rows_of(g)
             idx += 1
             y[idx] = linkages_flat[rho, g] > 0 ? 0.0 : 1.0   # not_supply
-            w[idx] = sample_weights[rho, g]
+            w[idx] = obs_weight === nothing ? sample_weights[rho, g] : obs_weight[g]
             fe_group[idx] = group_id
             if N_REG == 1
                 X[idx, 1] = log_dist
@@ -1118,7 +1327,12 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{F
     end
 
     β = _cloglog_irls(y, X, w, fe_group; max_iter=max_iter, tol=tol)
-    return β[1:N_REG]
+    # Under the firm-level reduced form (finite_sample2.tex Prop. 1) the log-z
+    # coefficient equals −θ exactly: a free over-identifying test, returned on
+    # request. The historical N_REG-long return is unchanged by default.
+    return return_size_coef ?
+        vcat(β[1:N_REG], include_size_control ? β[size_col] : NaN) :
+        β[1:N_REG]
 end
 
 
@@ -1136,7 +1350,7 @@ Compute targeted moments from solved network for SMM estimation.
 4. Regression coefficients: Elasticity of supplier probability to distance
 5. Sourcing shares γ_{ls}: Share of sector s inputs from region l
 """
-function compute_moments(network, params)
+function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing)
 
     Omega_L, Omega_s_vec, A_vec, alpha, T_vec = unpack_params(params)
 
@@ -1189,26 +1403,123 @@ function compute_moments(network, params)
     # ─────────────────────────────────────────────────────────────────────────
     # 3. Sourcing shares γ_{ls}: Share of sector s sourced from region l
     # γ_{ls} = (X_{ls} / X_s) × domestic_share_s
+    #
+    # Under CA_LEVEL == :aa the block-5 moment is the ATTRACTION-AREA aggregate
+    # γ_{s,a} = Σ_{l ∈ a} γ_{ls}, summed over EVERY cell of the area, control cells
+    # included — the same rule the empirical target `EMP_GAMMA_T` uses. A control
+    # cell contributes 0 in the data and a strictly positive γ in the model; that is
+    # the correct unbiased match (E[γ̂_ls] = γ_ls holds unconditionally), not a
+    # mismatch — see load_parameters.jl SECTION 3b.
     # ─────────────────────────────────────────────────────────────────────────
     gamma_ls = X_ls ./ X_s .* reshape(domestic_share, 1, S)
+    gamma_out = gamma_ls
+    if CA_LEVEL === :aa
+        gamma_out = zeros(eltype(gamma_ls), T_COL_DIM, S)
+        for g in 1:n_good
+            l = GOOD_R[g]; s = GOOD_S[g]
+            gamma_out[T_GATHER[l], s] += gamma_ls[l, s]
+        end
+    end
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 4. Regression: extensive margin vs distance bins.
+    # 4. Regression: extensive margin vs distance.
     #    REG_METHOD selects the link (:lpm linear-probability, or :cloglog — the correct
-    #    complementary-log-log with distance coef = αθ). INCLUDE_CONTROL toggles the
-    #    control-group (filter==2) y=0 rows; when false the log-z size control is added
-    #    (the two are coupled in fast_*_regression). The empirical target loaded in
-    #    load_parameters.jl matches REG_METHOD.
+    #    complementary-log-log with distance coef = αθ). REG_INCLUDE_CONTROL /
+    #    REG_INCLUDE_SIZE are the effective design flags (load_parameters.jl SECTION 6);
+    #    the empirical target loaded there matches REG_METHOD.
+    #
+    #    Under GRANULAR the rows are the PREFIX ρ ≤ N̂_{s(g)} of one realised economy,
+    #    and the coefficients are averaged over the R_REP realisations rather than
+    #    estimated once on the pooled draws. That is deliberate: averaging the
+    #    auxiliary estimator over realised economies matches the binding function, so
+    #    the finite-sample bias of the cloglog cancels instead of being inherited
+    #    (plan Part III; validation gate V12). By Prop. 1 the firm-level index carries
+    #    NO N_s term, so block 4 should be ~invariant to N̂_s (gate V10).
     # ─────────────────────────────────────────────────────────────────────────
     sw = network.sample_weights
-    reg_coef = REG_METHOD == :cloglog ?
-        fast_cloglog_regression(linkages_flat, z_flat, sw; include_control=INCLUDE_CONTROL) :
-        fast_weighted_regression(linkages_flat, z_flat, sw; include_control=INCLUDE_CONTROL)
+    reg_fun = REG_METHOD == :cloglog ? fast_cloglog_regression : fast_weighted_regression
 
-    
+    N_hat    = Int[]
+    clamped  = Symbol[]
+    q_hat    = Float64[]
+    b_logz   = NaN
+    G0       = Float64[]
+
+    if GRANULAR
+        # ── The N_s inner loop: q̂ from ALL pooled varieties, then integer bisection
+        n_pool = size(linkages_flat, 1)
+        q_hat  = Vector{Float64}(undef, n_good)
+        @inbounds for g in 1:n_good
+            acc = 0.0
+            for rho in 1:n_pool
+                acc += linkages_flat[rho, g]
+            end
+            q_hat[g] = clamp(acc / n_pool, 0.5 / n_pool, 1.0 - 1e-12)
+        end
+        N_hat, clamped = concentrate_N_s(q_hat)
+        if N_fixed !== nothing
+            # Finite-difference / counterfactual mode: the caller pins N̂_s (it is a
+            # STEP function of θ, so a central FD could otherwise straddle a jump).
+            # We still run the bisection, purely to flag a θ sitting ON a jump.
+            N_fixed == N_hat || @warn "compute_moments: the profiled variety count moved " *
+                "under a pinned-N̂ evaluation (pinned $(N_fixed), bisection would give " *
+                "$(N_hat)) — θ is on a jump of N̂_s(θ) and the Jacobian there is not the " *
+                "fixed-N̂ object."
+            N_hat = copy(N_fixed)
+        end
+
+        # ── Block 4 on the prefix, averaged over the R_REP realised economies ────
+        coef_acc = zeros(N_REG + 1)
+        for rep in 1:R_REP
+            rows, ow = granular_prefix_rows(N_hat, rep)
+            coef_acc .+= reg_fun(linkages_flat, z_flat, sw;
+                                 include_control      = REG_INCLUDE_CONTROL,
+                                 include_size_control = REG_INCLUDE_SIZE,
+                                 rho_range            = rows,
+                                 obs_weight           = ow,
+                                 return_size_coef     = true)
+        end
+        coef_acc ./= R_REP
+        reg_coef = coef_acc[1:N_REG]
+        b_logz   = coef_acc[N_REG + 1]
+
+        # ── Block 6: realised empty-cell share, averaged over replications ───────
+        # K_ls = Σ_{ρ ≤ N̂_s} 1{cell l wins variety ρ somewhere}; Ḡ_s(0) is the share
+        # of cells of sector s with K = 0, over the cells inside active attraction
+        # areas (CELLS_OF_SECTOR) — empty cells included, since those ARE the K = 0
+        # mass (finite_sample2.tex §3.2).
+        G0 = zeros(S)
+        @inbounds for rep in 1:R_REP
+            base = (rep - 1) * N_BLOCK
+            for s in 1:S
+                cells = CELLS_OF_SECTOR[s]
+                isempty(cells) && continue
+                n_zero = 0
+                n_s    = N_hat[s]
+                for g in cells
+                    won = false
+                    for rho in (base + 1):(base + n_s)
+                        if linkages_flat[rho, g] > 0
+                            won = true
+                            break
+                        end
+                    end
+                    won || (n_zero += 1)
+                end
+                G0[s] += n_zero / length(cells)
+            end
+        end
+        G0 ./= R_REP
+    else
+        reg_coef = reg_fun(linkages_flat, z_flat, sw;
+                           include_control      = REG_INCLUDE_CONTROL,
+                           include_size_control = REG_INCLUDE_SIZE)
+    end
+
+
     # ─────────────────────────────────────────────────────────────────────────
     # 5. Regional employment shares π_r (matching model_CP.jl)
-    # 
+    #
     # From model_CP.jl:
     #   pi_r = labor_r[active] / sum(labor_r[active])
     # ─────────────────────────────────────────────────────────────────────────
@@ -1216,13 +1527,19 @@ function compute_moments(network, params)
 
     # 6. Downstream sales share
     pi_r = Y_r[active]/sum(Y_r[active])
-    
+
     return (
         agg_labor_share   = [agg_labor_share],
         agg_industry_share = vec(agg_industry_share),  # Full S elements (mask handles [2:end])
         pi_r              = pi_r,                       # block 3 — Full R_downstream (mask handles [2:end])
         reg_coef          = reg_coef,                   # block 4
-        gamma_ls          = gamma_ls,                   # block 5 — Full (mask handles inactive/ref entries)
+        gamma_ls          = gamma_out,                  # block 5 — ZE or AA level (mask handles inactive/ref)
+        G0                = G0,                         # block 6 — empty (Float64[]) unless GRANULAR
+        # ── Non-moment diagnostics (never enter the moment vector) ───────────
+        N_hat             = N_hat,                      # profiled variety count per sector
+        clamped           = clamped,                    # :none / :lo / :hi per sector
+        q_hat             = q_hat,                      # win-somewhere probability per cell
+        b_logz            = b_logz,                     # log-z coefficient (should equal −θ)
     )
 end
 
@@ -1244,7 +1561,8 @@ Main SMM function for optimization.
 """
 function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
              u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-             sample_weights::Union{Nothing, Matrix{Float64}}=nothing)
+             sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+             N_fixed::Union{Nothing, Vector{Int}}=nothing)
 
     # Solve network
     network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau,
@@ -1262,15 +1580,82 @@ function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Fl
     end
     
     # Compute and return moments
-    moments = compute_moments(network, params)
-    
-    return (
-        moments.agg_labor_share,
-        moments.agg_industry_share,
-        moments.pi_r,
-        moments.reg_coef,
-        moments.gamma_ls
-    )
+    moments = compute_moments(network, params; N_fixed=N_fixed)
+
+    return moment_blocks_tuple(moments)
+end
+
+
+"""
+    granular_report(params; u_draws, sample_weights, N_fixed=nothing) -> NamedTuple
+
+Non-moment granular diagnostics at a parameter vector: the profiled variety count
+`N̂_s`, which sectors clamped at a bound, the win-somewhere probability `q̂` per cell,
+the log-z coefficient (should equal `−θ`), the realised count distribution, and the
+two independent routes to `N_s` (the bisection on `Ḡ_s(0)` versus the closed-form
+`N^count_s = N_supplier_s / Σ_l q̂_ls` of `finite_sample2.tex` §3.3 — a free
+over-identifying check, gate V7).
+
+Recomputed on demand rather than smuggled out of the loss, so nothing about the
+optimiser's return contract changes and no mutable state crosses the `pmap` workers.
+"""
+function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
+                         N_fixed::Union{Nothing, Vector{Int}}=nothing)
+    @assert GRANULAR "granular_report is only defined under GRANULAR=true"
+    network = solve_network(params; u_draws=u_draws, sample_weights=sample_weights)
+    m = compute_moments(network, params; N_fixed=N_fixed)
+
+    # Realised supplier counts K_ls, replication by replication.
+    K = zeros(Int, R_REP, n_good)
+    @inbounds for rep in 1:R_REP
+        base = (rep - 1) * N_BLOCK
+        for g in 1:n_good
+            acc = 0
+            for rho in (base + 1):(base + m.N_hat[GOOD_S[g]])
+                network.linkages_flat[rho, g] > 0 && (acc += 1)
+            end
+            K[rep, g] = acc
+        end
+    end
+
+    # Second route to N_s (over-identifying check): N^count_s = N_supplier_s / Σ_l q̂_ls.
+    N_count = [begin
+        cells = CELLS_OF_SECTOR[s]
+        sq = isempty(cells) ? 0.0 : sum(m.q_hat[g] for g in cells)
+        sq > 0 ? N_HI[s] / sq : NaN
+    end for s in 1:S]
+
+    return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, b_logz = m.b_logz,
+            G0 = m.G0, G_target = collect(G_TARGET), K = K, N_count = N_count)
+end
+
+
+"""
+    moment_blocks_tuple(m) -> Tuple
+
+The moment blocks of a `compute_moments` / `compute_moments_analytical` result, in
+moment-vector order and WITHOUT the non-moment diagnostic fields. Five blocks in
+legacy mode; six under `GRANULAR` — block 6 (`G0`) is APPENDED, never inserted, so
+every existing index into blocks 1–5 is untouched.
+"""
+function moment_blocks_tuple(m)
+    return GRANULAR ?
+        (m.agg_labor_share, m.agg_industry_share, m.pi_r, m.reg_coef, m.gamma_ls, m.G0) :
+        (m.agg_labor_share, m.agg_industry_share, m.pi_r, m.reg_coef, m.gamma_ls)
+end
+
+
+"""
+    moments_to_vec(sim) -> Vector
+
+Stack a moment-block tuple (or NamedTuple) into the masked moment vector — the
+single assembly used by the loss, the Jacobian and every inference path. Replaces
+the hard-coded `vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]`, which would silently
+drop block 6 under `GRANULAR`.
+"""
+function moments_to_vec(sim)
+    blocks = sim isa Tuple ? sim : moment_blocks_tuple(sim)
+    return vcat([vec(blocks[i]) for i in 1:length(blocks)]...)[MOMENT_MASK]
 end
 
 
@@ -1312,8 +1697,7 @@ where `err = emp − sim` (raw difference) over the masked moment vector. When
 function loss_function(simulated_moments, emp, W;
                        moment_indices::Union{Nothing, Vector{Int}} = nothing)
 
-    sim_flat = vcat([vec(simulated_moments[i]) for i in 1:length(simulated_moments)]...)
-    sim_flat = sim_flat[MOMENT_MASK]
+    sim_flat = moments_to_vec(simulated_moments)
     emp_flat = vec(emp)
 
     if moment_indices !== nothing
@@ -1354,18 +1738,19 @@ function full_SMM(params, simulation=false, second_stage=false;
                   W_override::Union{Nothing, AbstractMatrix}=nothing,
                   moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                   analytical::Bool=false,
-                  n_quad::Int=200)
+                  n_quad::Int=200,
+                  N_fixed::Union{Nothing, Vector{Int}}=nothing)
 
     if analytical
+        @assert !GRANULAR "the analytical/GMM path does not implement the granular count " *
+            "moment (block 6): the extensive margin there is the FKG-approximated " *
+            "continuum object. Run granular estimation through the SMM path (main.jl)."
         moms_nt = compute_moments_analytical(params; n_quad=n_quad)
-        simulated_moments = (moms_nt.agg_labor_share,
-                             moms_nt.agg_industry_share,
-                             moms_nt.pi_r,
-                             moms_nt.reg_coef,
-                             moms_nt.gamma_ls)
+        simulated_moments = moment_blocks_tuple(moms_nt)
     else
         simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
-                                u_draws=u_draws, sample_weights=sample_weights)
+                                u_draws=u_draws, sample_weights=sample_weights,
+                                N_fixed=N_fixed)
     end
 
     # `second_stage` is retained as an ignored positional arg for call-site

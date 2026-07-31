@@ -419,13 +419,14 @@ function plot_T_vs_initial(best_params, out_folder; label::String = "")
         cur_alpha  = length(beta_best) >= 1 ? Float64(beta_best[1]) : NaN
         init_alpha = (TAU_PRIOR !== nothing) ? Float64(TAU_PRIOR[1]) : NaN
 
-        # unpack_params returns vec(T_mat) with T_mat (S,R); recover (S,R). Both this
-        # and T_rs_init are already per-sector ref-normalised → directly comparable.
-        T_best = reshape(Float64.(T_best_flat), S, R)
+        # Compare in the T-PARAMETER space (T_COL_DIM wide: ZE under :ze, attraction
+        # areas under :aa), which is where T_rs_init lives. Both are already
+        # per-sector ref-normalised → directly comparable.
+        T_best = unpack_T_par(best_params)
         T_init = T_rs_init
 
         xs = Float64[]; ys = Float64[]; ss = Int[]; rs = Int[]
-        for s in 1:S, r in 1:R
+        for s in 1:S, r in 1:T_COL_DIM
             ti = T_init[s, r]; tb = T_best[s, r]
             (isfinite(ti) && isfinite(tb) && ti > 1e-8 && tb > 1e-8) || continue
             push!(xs, ti); push!(ys, tb); push!(ss, s); push!(rs, r)
@@ -497,7 +498,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     # ── Extract empirical & simulated vectors ──
     # Use the same masked gamma subset as the optimizer and compute_smm_inference:
     # apply MOMENT_MASK to the raw simulated blocks, then index BLOCK_RANGES[5].
-    sim_flat_masked = vcat([vec(results[best_index][2][i]) for i in 1:length(results[best_index][2])]...)[MOMENT_MASK]
+    sim_flat_masked = moments_to_vec(results[best_index][2])
     emp_gamma = empirical_moments[collect(BLOCK_RANGES[5])]
     sim_gamma = sim_flat_masked[collect(BLOCK_RANGES[5])]
 
@@ -996,17 +997,23 @@ end
 
 
 """
-    compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask)
+    compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask; n_G0=0)
 
 Compute indices into masked moment vector for each moment block.
-Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
-Returns tuple of 5 index vectors (one per block).
+Moment order: [labor | industry | pi_r | reg_coef | gamma_ls (| G0)]
+
+Returns a tuple of 5 index ranges, or 6 when `n_G0 > 0` (granular mode: block 6 is
+the per-sector count moment Ḡ_s(0), **appended** so every existing index into the
+first five blocks is unchanged).
 """
 
-function compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask)
-    cuts = cumsum([0, n_labor, n_industry, n_pi, n_reg, n_gamma])
+function compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask; n_G0::Int = 0)
+    sizes = n_G0 > 0 ? [n_labor, n_industry, n_pi, n_reg, n_gamma, n_G0] :
+                       [n_labor, n_industry, n_pi, n_reg, n_gamma]
+    cuts  = cumsum(vcat(0, sizes))
+    nblk  = length(sizes)
 
-    masked_ranges = ntuple(5) do k
+    masked_ranges = ntuple(nblk) do k
         base    = count(mask[1 : cuts[k]])
         count_k = count(mask[cuts[k]+1 : cuts[k+1]])
         (base + 1):(base + count_k)
@@ -1026,7 +1033,7 @@ Uses global constants: U_DRAWS, SAMPLE_WEIGHTS, MOMENT_MASK,
 function loss_decomposition(params)
     _, sim = full_SMM(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
-    sim_vec = vcat([vec(sim[i]) for i in 1:length(sim)]...)[MOMENT_MASK]
+    sim_vec = moments_to_vec(sim)
     emp_vec = vec(empirical_moments)
     w = diag(Weight_matrix_custom)
 
@@ -1042,39 +1049,176 @@ end
 Name of the on-disk β+γ moment covariance to load, keyed on the extensive-margin
 regression method (`REG_METHOD`), the moment count (`N_REG`), and the entry point:
 
-  * `REG_METHOD == :cloglog` → `Sigma_beta_gamma_cloglog…`, else `Sigma_beta_gamma…`
+  * `aa == true` (γ at the ATTRACTION-AREA level) → `Sigma_aa_beta_gamma…` PREFIX,
+    else `Sigma_beta_gamma…`. Defaults from `CA_LEVEL`, since the γ level is what
+    semantically drives the file: its γ rows must match the γ moments.
+  * `REG_METHOD == :cloglog` → `…_cloglog…`, else nothing
   * `N_REG == 1`             → `…_1…` (single reg_coef stat), else no suffix
   * `smm == true` (SMM path) → trailing `…_f.npy`  (the SMM convention, as used by
     `build_step3_weight_matrix`); `smm == false` (GMM) → `….npy`.
 
 Examples: LPM/SMM/N_REG=4 → `Sigma_beta_gamma_f.npy`; cloglog/SMM/N_REG=1 →
 `Sigma_beta_gamma_cloglog_1_f.npy`; cloglog/GMM/N_REG=4 →
-`Sigma_beta_gamma_cloglog.npy`. The cloglog files carry the joint bootstrap
-covariance of the cloglog reg_coef + γ_ls moments (same β-then-γ ordering).
+`Sigma_beta_gamma_cloglog.npy`; AA/cloglog/SMM/N_REG=4 →
+`Sigma_aa_beta_gamma_cloglog_f.npy`.
+
+Every file carries **three blocks in the order β → γ → G**, with `S` rows of
+`Ḡ_s(0)`, so on disk `size(Σ) = (N_REG + n_γ + S)²`. The legacy (`!GRANULAR`) mode
+slices off the trailing `G` rows/cols; see `reconcile_sigma_data`.
 """
-function sigma_beta_gamma_filename(; smm::Bool)
-    base = REG_METHOD == :cloglog ? "Sigma_beta_gamma_cloglog" : "Sigma_beta_gamma"
-    n1   = N_REG == 1 ? "_1" : ""
-    fsuf = smm ? "_f" : ""
-    return base * n1 * fsuf * ".npy"
+function sigma_beta_gamma_filename(; smm::Bool, aa::Bool = (CA_LEVEL === :aa))
+    prefix = aa ? "Sigma_aa_beta_gamma" : "Sigma_beta_gamma"
+    link   = REG_METHOD == :cloglog ? "_cloglog" : ""
+    n1     = N_REG == 1 ? "_1" : ""
+    fsuf   = smm ? "_f" : ""
+    return prefix * link * n1 * fsuf * ".npy"
 end
+
+"""
+    report_granular(theta, output_folder; industry="", label="") -> NamedTuple
+
+Write and print the granular diagnostics at a parameter vector: the profiled variety
+count `N̂_s` with its clamp flag, the fitted vs targeted empty-cell share `Ḡ_s(0)`,
+the log-z coefficient against `−θ`, the realised supplier-count distribution, and the
+second route to the variety count `N^count_s = N_supplier_s / Σ_l q̂_ls`.
+
+Reporting only — no estimate, weight matrix or inference output is affected. Guarded,
+so a reporting failure never blocks estimation. A clamp is a rejection signal for the
+mechanism rather than a numerical nuisance (validation gate V9), which is why it is
+printed per sector; `N̂_s` vs `N^count_s` is the free over-identifying check (V7) and
+`b_logz` vs `−θ` the free test of Prop. 1(c) (V6).
+"""
+function report_granular(theta::Vector{Float64}, output_folder::String;
+                         industry::String = "", label::String = "")
+    GRANULAR || return nothing
+    try
+        info = granular_report(theta)
+        mkpath(output_folder)
+
+        println("\n" * "="^72)
+        println("GRANULAR DIAGNOSTICS" * (isempty(label) ? "" : "  [$label]"))
+        println("="^72)
+        @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s\n",
+                "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_fit", "G0_target", "N^count")
+        for s in 1:S
+            @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.1f\n",
+                    s, N_LO[s], info.N_hat[s], N_HI[s], string(info.clamped[s]),
+                    isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
+        end
+        n_clamp = count(!=(:none), info.clamped)
+        if n_clamp > 0
+            @warn "$n_clamp sector(s) clamped at a variety-count bound. This is a " *
+                  "rejection signal for the mechanism, not a numerical nuisance: :hi " *
+                  "means the model cannot generate enough sparsity even when every " *
+                  "variety is sourced from a single origin."
+        else
+            println("  no sector clamped at a bound (gate V9 passes).")
+        end
+        @printf("\n  log-z coefficient b_logz = %+.4f   (Prop. 1(c): should equal −θ = %+.4f)\n",
+                info.b_logz, -theta_const_for_report())
+        # Realised supplier-count distribution, pooled over replications and cells.
+        Kv = vec(info.K)
+        if !isempty(Kv)
+            @printf("  realised K_ls: mean %.3f  share(K=0) %.4f  max %d\n",
+                    sum(Kv) / length(Kv), count(==(0), Kv) / length(Kv), maximum(Kv))
+        end
+        println("="^72)
+
+        NPZ.npzwrite(joinpath(output_folder, "granular_diagnostics.npz"),
+                     Dict("N_hat"    => Float64.(info.N_hat),
+                          "N_LO"     => Float64.(N_LO),
+                          "N_HI"     => Float64.(N_HI),
+                          "clamped"  => Float64.([c == :none ? 0.0 : (c == :lo ? -1.0 : 1.0)
+                                                  for c in info.clamped]),
+                          "G0_fit"   => Float64.(info.G0),
+                          "G0_target"=> Float64.(collect(G_TARGET)),
+                          "N_count"  => Float64.(info.N_count),
+                          "q_hat"    => Float64.(info.q_hat),
+                          "b_logz"   => [info.b_logz],
+                          "K"        => Float64.(info.K)))
+        open(joinpath(output_folder, "granular_diagnostics.txt"), "w") do io
+            println(io, "Granular diagnostics", isempty(industry) ? "" : " — $industry",
+                        isempty(label) ? "" : " [$label]")
+            println(io, "sector  N_LO  N_hat  N_HI  clamp  G0_fit  G0_target  N_count")
+            for s in 1:S
+                println(io, "$s  $(N_LO[s])  $(info.N_hat[s])  $(N_HI[s])  $(info.clamped[s])  " *
+                            "$(isempty(info.G0) ? NaN : info.G0[s])  $(G_TARGET[s])  $(info.N_count[s])")
+            end
+            println(io, "b_logz = $(info.b_logz)  (should equal -theta)")
+        end
+        return info
+    catch e
+        @warn "granular diagnostics skipped: $e"
+        return nothing
+    end
+end
+
+# `theta` is both a model parameter name and the Fréchet shape constant; this keeps
+# the report unambiguous where a local named `theta` shadows the global.
+theta_const_for_report() = theta
+
+
+"""
+    inference_moment_indices() -> Vector{Int}
+
+The moments the efficient weight matrix and the α/T inference are built on, in the
+invariant **β → γ (→ G)** order: `BLOCK_RANGES[4]`, then `BLOCK_RANGES[5]`, then —
+only under `GRANULAR` — the count block `BLOCK_RANGES[6]`. This is the ordering every
+Σ file on disk uses; do not reverse it. Extends the historical `gb_indices` without
+disturbing it (block 6 is appended, so the β and γ positions are unchanged).
+"""
+function inference_moment_indices()
+    idx = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    GRANULAR && append!(idx, collect(BLOCK_RANGES[6]))
+    return idx
+end
+
+
+"""
+    inference_block_layout() -> (ranges::Tuple, names::Tuple)
+
+Per-block ranges/names *within* the restricted β+γ(+G) subsystem, for the residual
+diagnostics of `compute_smm_inference`. Local 1-based coordinates, not global
+`BLOCK_RANGES`.
+"""
+function inference_block_layout()
+    n_reg_loc = length(BLOCK_RANGES[4])
+    n_gam_loc = length(BLOCK_RANGES[5])
+    if GRANULAR
+        n_G_loc = length(BLOCK_RANGES[6])
+        return ((1:n_reg_loc,
+                 (n_reg_loc + 1):(n_reg_loc + n_gam_loc),
+                 (n_reg_loc + n_gam_loc + 1):(n_reg_loc + n_gam_loc + n_G_loc)),
+                ("reg_coef", "gamma_ls", "G0"))
+    else
+        return ((1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc)),
+                ("reg_coef", "gamma_ls"))
+    end
+end
+
 
 """
     reconcile_sigma_data(Sigma_full, input_folder) -> Sigma_data
 
-Reconcile an on-disk β+γ moment covariance (`Sigma_beta_gamma[_1].npy`, or the
-`w_beta`/`w_gamma` block-diagonal fallback) with the current, possibly
-gamma-thresholded active set, and return it subset to the active β+γ moments in
-**β-then-γ order** (`BLOCK_RANGES[4]` then `BLOCK_RANGES[5]`).
+Reconcile an on-disk moment covariance with the current active set and return it
+subset to the moments the estimator actually uses, in **β → γ (→ G) order**
+(`BLOCK_RANGES[4]`, `BLOCK_RANGES[5]`, and `BLOCK_RANGES[6]` under `GRANULAR`).
 
-The file may have been bootstrapped on the PRE-threshold active set; if a
-`gamma_threshold` pruned (s,r) pairs the γ block shrank, so the matching β+γ
-rows/cols must be dropped. The β block (`1:N_REG`) is never pruned.
+The on-disk layout is FIXED at `N_REG + n_γ + S` (β → γ → G), so the split is a
+leading-block slice, not a search: `n_γ_file = size(Σ,1) − N_REG − S`. The order of
+operations is (1) split, (2) reconcile the **γ block only** against the active set,
+(3) reassemble — keeping the `G` rows/columns only under `GRANULAR`. The `G` rows are
+never pruned, and neither is the β block.
 
-Three-way size branch:
-  * `size == n_gb`     → already regenerated post-threshold, use as-is
-  * `size == n_gb_old` → pre-threshold full file, subset to surviving (s,r)
-  * otherwise          → error (regenerate the file)
+| mode | file | blocks kept |
+|---|---|---|
+| `GRANULAR = false` | ZE-level (`Sigma_beta_gamma*`) | β + γ — `G` dropped |
+| `GRANULAR = true`  | AA-level (`Sigma_aa_beta_gamma*`) | β + γ + `Ḡ_s(0)` |
+
+The γ block may have been bootstrapped on the PRE-threshold active set; if a
+`gamma_threshold` pruned (s,r) pairs, the matching γ rows/cols are dropped. That
+subset branch is ZE-level only (it keys on `X_rs.npy`); under `CA_LEVEL == :aa` the
+file must already match the active AA-level γ moments.
 
 NOTE: the subset branch returns Cov(raw γ); the loss uses renormalized γ (factor
 `c_s ≈ sum_before/sum_after`), so subset γ rows are over-weighted by ~`c_s^2` and
@@ -1085,39 +1229,79 @@ Shared by `build_step3_weight_matrix` (SMM) and `main_gmm.jl` Step 2 (GMM) so th
 two paths cannot silently diverge on which moments enter the weight matrix.
 """
 function reconcile_sigma_data(Sigma_full::AbstractMatrix, input_folder::String)
-    # ── Gamma+beta moment indices in the masked vector ───────────────────────
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
-    n_gb = length(gb_indices)
+    # ── Moment indices in the masked vector (β then γ, then G under GRANULAR) ──
+    n_beta  = N_REG
+    n_gam   = length(BLOCK_RANGES[5])
+    n_G     = S                                     # the file ALWAYS carries S G rows
+    n_gb    = n_beta + n_gam + (GRANULAR ? length(BLOCK_RANGES[6]) : 0)
 
-    # ── Reconcile file size with the (possibly thresholded) active set ───────
-    X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
-    T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
-    T_mask_moment_new = collect(T_MASK)                                      # thresholded; T_MASK is now s-major (= moment convention)
-
-    # In the old mask, remove reference regions.
-    keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
-    for s in 1:S
-        ref_r = T_REF_REGION[s]
-        ref_r > 0 && (keep_old[(s - 1) * R + ref_r] = false)
+    # ── Split the fixed on-disk layout β → γ → G ─────────────────────────────
+    # The file dimension is (N_REG + n_γ_file + S); n_γ_file is whatever the γ level
+    # of that file implies (ZE- or AA-level), so it is derived, never searched.
+    n_total_file = size(Sigma_full, 1)
+    n_gamma_file = n_total_file - n_beta - n_G
+    if n_gamma_file <= 0
+        # Backward compatibility: a pre-granular file with no G block at all.
+        n_gamma_file = n_total_file - n_beta
+        n_gamma_file > 0 || error("Σ file has $(n_total_file) rows — too few for " *
+            "N_REG=$n_beta plus a γ block. Expected N_REG + n_γ + S (β → γ → G).")
+        GRANULAR && error("Σ file has $(n_total_file) rows = N_REG + n_γ with NO G block, " *
+            "but GRANULAR=true needs the $S rows of Ḡ_s(0). Regenerate the joint bootstrap " *
+            "with all three blocks (β → γ → G).")
+        @warn "Σ file carries no G block ($(n_total_file) = N_REG + n_γ). Proceeding in " *
+              "legacy (5-block) mode; regenerate it with the β → γ → G layout."
+        has_G = false
+    else
+        has_G = true
     end
-    gamma_old_positions = findall(keep_old)                                  # Get indices of the old set (without reference regions)
-    survive  = T_mask_moment_new[gamma_old_positions]                        # Get indices of the new set and remove reference regions
-    keep_idx = vcat(collect(1:N_REG), N_REG .+ findall(survive))
+    beta_rows  = 1:n_beta
+    gamma_rows = (n_beta + 1):(n_beta + n_gamma_file)
+    G_rows     = has_G ? ((n_beta + n_gamma_file + 1):(n_beta + n_gamma_file + n_G)) : (1:0)
 
-    n_gb_old = N_REG + length(gamma_old_positions)
-    if size(Sigma_full, 1) == n_gb
-        Sigma_data = Sigma_full                                              # already regenerated
-    elseif size(Sigma_full, 1) == n_gb_old
-        Sigma_data = Sigma_full[keep_idx, keep_idx]                          # full file → subset
-        @assert size(Sigma_data, 1) == N_REG + count(survive) "Sigma subset row count $(size(Sigma_data,1)) != N_REG+count(survive)=$(N_REG+count(survive))"
-        @assert size(Sigma_data, 1) == n_gb "subset $(size(Sigma_data,1)) != n_gb=$n_gb"
+    # ── Reconcile the γ BLOCK ONLY against the (possibly thresholded) active set ──
+    # Under :aa the γ block is AA-level and the files are generated post-hoc for the
+    # current active set, so only the use-as-is branch applies; the ZE-level
+    # pre-threshold subset branch keys on X_rs.npy, which has no AA counterpart.
+    gamma_keep = nothing                                  # nothing ⇒ use the γ block as-is
+    if n_gamma_file != n_gam
+        CA_LEVEL === :aa && error(
+            "Σ γ block has $(n_gamma_file) rows but the active AA-level γ moment count " *
+            "is $(n_gam). Regenerate $(sigma_beta_gamma_filename(; smm=true)) for the " *
+            "current active set (the pre-threshold subset branch is ZE-level only).")
+        X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
+        T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
+        T_mask_moment_new = collect(T_MASK)                                      # thresholded; s-major (= moment convention)
+
+        # In the old mask, remove reference regions.
+        keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
+        for s in 1:S
+            ref_r = T_REF_REGION[s]
+            ref_r > 0 && (keep_old[(s - 1) * T_COL_DIM + ref_r] = false)
+        end
+        gamma_old_positions = findall(keep_old)                                  # old set (without reference regions)
+        survive  = T_mask_moment_new[gamma_old_positions]                        # new set, reference regions removed
+
+        length(gamma_old_positions) == n_gamma_file || error(
+            "Σ γ block has $(n_gamma_file) rows, matching neither the active count " *
+            "$(n_gam) nor the pre-threshold count $(length(gamma_old_positions)). Regenerate it.")
+        gamma_keep = findall(survive)
+        length(gamma_keep) == n_gam || error(
+            "γ subset gives $(length(gamma_keep)) rows != active n_γ = $(n_gam)")
         # NOTE: subset is Cov(raw γ); loss uses renormalized γ (factor c_s≈sum_before/
         # sum_after). Raw subset over-weights γ rows by ~c_s^2 → T SEs ~c_s too tight.
-        # For exact inference, regenerate Sigma_beta_gamma with the threshold applied.
-    else
-        error("Sigma_beta_gamma size $(size(Sigma_full,1)) matches neither n_gb=$n_gb " *
-              "nor pre-threshold n_gb_old=$n_gb_old. Regenerate it.")
+        # For exact inference, regenerate the Σ file with the threshold applied.
     end
+
+    # ── Reassemble: β + (reconciled) γ, plus G only under GRANULAR ───────────
+    keep_idx = vcat(collect(beta_rows),
+                    gamma_keep === nothing ? collect(gamma_rows) : collect(gamma_rows)[gamma_keep])
+    if GRANULAR
+        length(BLOCK_RANGES[6]) == n_G || error(
+            "block 6 has $(length(BLOCK_RANGES[6])) moments but the Σ G block has $n_G rows")
+        append!(keep_idx, collect(G_rows))          # G rows are NEVER pruned
+    end
+    Sigma_data = Sigma_full[keep_idx, keep_idx]
+    @assert size(Sigma_data, 1) == n_gb "reconciled Σ has $(size(Sigma_data,1)) rows != n_gb=$n_gb"
 
     @assert isapprox(Sigma_data, Sigma_data'; atol=1e-10) "Sigma is non-symmetric"
     return Sigma_data
@@ -1129,11 +1313,12 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
                                    draw_method::Symbol=DRAW_METHOD)
     N_moments = length(empirical_moments)
 
-    # ── Gamma+beta moment indices in the masked vector ───────────────────────
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    # ── Estimated-moment indices in the masked vector: β, γ, and (under
+    #    GRANULAR) the count block Ḡ_s(0) — the β → γ → G ordering invariant ──
+    gb_indices = inference_moment_indices()
     n_gb = length(gb_indices)
 
-    # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
+    # ── Load Σ_data: joint bootstrap covariance of β+γ(+G) (β block first) ───
     # File selection keyed on N_REG (moment count) and REG_METHOD (:lpm vs :cloglog).
     # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
     # SMM path ⇒ the `_f` variant (smm=true); cloglog ⇒ the `_cloglog` family.
@@ -1151,12 +1336,10 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     M_sim_rows = pmap(1:K) do k
         # Σ_sim uses the INFERENCE draw count (N_RHO_INFERENCE), decoupled from the
         # optimization draw count N_rho (full_SMM sizes itself off size(u_draws,1)).
-        u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
-                                      randomise=true,
-                                      rng=MersenneTwister(k))
+        # Under GRANULAR the row count stays N_POOL so the (rep, ρ) layout survives.
+        u_k, w_k = inference_draws(k; draw_method=draw_method)
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
-        moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
-        return moms_flat[gb_indices]
+        return moments_to_vec(moms)[gb_indices]
     end
     M_sim = reduce(hcat, M_sim_rows)'   # (K, n_gb)
 
@@ -1290,9 +1473,24 @@ function compute_jacobian(theta::Vector{Float64};
                           richardson_rel_tol = 0.05,
                           load_existing::Bool = false,
                           profile_T::Bool = false,
+                          hold_N_s::Bool = GRANULAR,
                           draw_method::Symbol = DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
+
+    # ── Granular: hold N̂_s fixed across the finite-difference perturbations ──
+    # N̂_s(θ) is a STEP function of the continuous parameters, so the profiled loss is
+    # piecewise smooth with jumps and a central FD can straddle one. At θ̂ the correct
+    # object is the derivative at fixed N̂_s anyway (N̂_s is locally constant with
+    # probability one), so under GRANULAR the count is pinned at its θ̂ value for the
+    # whole Jacobian and we ASSERT that no perturbation moved it — a fired assertion
+    # means θ̂ sits on a jump and the Jacobian there is not the object you want.
+    N_fixed = nothing
+    if hold_N_s && GRANULAR && !analytical
+        N_fixed = granular_report(theta; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS).N_hat
+        println("Jacobian: holding N̂_s fixed at $(N_fixed) across all FD perturbations " *
+                "(a perturbation that would have moved it warns from compute_moments).")
+    end
 
     # ── T-profiling: perturb only the head/α; T follows via the Sinkhorn image ──
     # Under `profile_T`, T is NOT a free parameter — it is the deterministic image
@@ -1441,20 +1639,19 @@ function compute_jacobian(theta::Vector{Float64};
             # We still loop K times for API compatibility; K=1 is recommended.
             eval_one = p -> begin
                 _, m = full_SMM(p; analytical=true, n_quad=n_quad)
-                vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+                moments_to_vec(m)
             end
         else
             # Jacobian replications use the INFERENCE draw count (N_RHO_INFERENCE),
             # decoupled from the optimization N_rho (full_SMM sizes off size(u_draws,1)).
-            u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
-                                                 randomise = true,
-                                                 rng       = MersenneTwister(base_seed + k))
+            # Under GRANULAR the pool width N_POOL is kept instead (prefix layout).
+            u_k, w_k = inference_draws(base_seed + k; draw_method=draw_method)
             eval_one = p -> begin
                 # Under profiling, reconstruct T = T*(α,Ω,A) before evaluating, so a
                 # perturbation of α/head moves T accordingly (total derivative).
                 p_eval = profile_T ? profiled_theta(p) : p
-                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k)
-                vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k, N_fixed=N_fixed)
+                moments_to_vec(m)
             end
         end
 
@@ -1578,8 +1775,8 @@ function compute_jacobian(theta::Vector{Float64};
         n_before_gamma    = count(MOMENT_MASK[1:gamma_full_offset])
         moment_sector     = zeros(Int, size(J, 1))
         let lg = 0
-            for s in 1:S, r in 1:R
-                MOMENT_MASK[gamma_full_offset + (s-1)*R + r] || continue
+            for s in 1:S, c in 1:T_COL_DIM
+                MOMENT_MASK[gamma_full_offset + (s-1)*T_COL_DIM + c] || continue
                 lg += 1
                 moment_sector[n_before_gamma + lg] = s
             end
@@ -1589,7 +1786,7 @@ function compute_jacobian(theta::Vector{Float64};
             idx < T_first && return 0
             t = idx - T_first + 1
             (t < 1 || t > length(active_T_flat)) && return 0
-            ((active_T_flat[t] - 1) ÷ R) + 1
+            ((active_T_flat[t] - 1) ÷ T_COL_DIM) + 1
         end
 
         println("\nRichardson step-doubling check (J(δ) vs J(2δ), all columns):")
@@ -2167,19 +2364,22 @@ end
 """
     _gamma_block_rs() -> Vector{Tuple{Int,Int}}
 
-The `(r, s)` pairs of the γ_ls moment block (`BLOCK_RANGES[5]`), in the SAME order
-as that block: sector-major, region-minor, active & non-reference. Reconstructed
+The `(column, s)` pairs of the γ moment block (`BLOCK_RANGES[5]`), in the SAME order
+as that block: sector-major, column-minor, active & non-reference. The column is an
+upstream ZE under `CA_LEVEL == :ze` and an attraction area under `:aa`. Reconstructed
 from `MOMENT_MASK` (the ground truth), so it stays aligned with the γ rows/cols of
-`Sigma_data` and with the empirical `emp_gamma_ls` entries. The γ block is the LAST
-block of the full moment layout (labor, industry, π_r, reg_coef, γ_ls), occupying
-the trailing `R*S` slots; slot `(s-1)*R + r` maps to `emp_gamma_ls[r, s]`.
+`Sigma_data` and with the empirical `EMP_GAMMA_T` entries. In the full moment layout
+(labor, industry, π_r, reg_coef, γ [, G0]) the γ block occupies `T_COL_DIM*S` slots
+ending just before block 6; slot `(s-1)*T_COL_DIM + c` maps to `EMP_GAMMA_T[c, s]`.
 """
 function _gamma_block_rs()
-    off = length(MOMENT_MASK) - R * S      # 0-based offset to the γ portion of the full vector
+    # 0-based offset to the γ portion of the FULL (unmasked) vector. Under GRANULAR the
+    # γ block is no longer last — block 6 (S entries of Ḡ_s(0)) is appended after it.
+    off = length(MOMENT_MASK) - T_COL_DIM * S - (GRANULAR ? S : 0)
     rs  = Tuple{Int,Int}[]
-    for s in 1:S, r in 1:R
-        MOMENT_MASK[off + (s - 1) * R + r] || continue
-        push!(rs, (r, s))
+    for s in 1:S, c in 1:T_COL_DIM
+        MOMENT_MASK[off + (s - 1) * T_COL_DIM + c] || continue
+        push!(rs, (c, s))
     end
     return rs
 end
@@ -2203,7 +2403,7 @@ function _dTstar_dalpha(theta_hat::Vector{Float64},
                         gb_param_idx::Vector{Int},
                         param_labels_gb::Vector{String};
                         step_rel::Float64 = 1e-2,
-                        target::AbstractMatrix = emp_gamma_ls)
+                        target::AbstractMatrix = EMP_GAMMA_T)
     alpha_pos = findall(l -> startswith(l, "alpha"), param_labels_gb)
     T_pos     = findall(l -> startswith(l, "T["),   param_labels_gb)
     (isempty(alpha_pos) || isempty(T_pos)) && return nothing
@@ -2212,7 +2412,7 @@ function _dTstar_dalpha(theta_hat::Vector{Float64},
 
     # Head + α at θ̂, normalized exactly as invert_T_ge / unpack_params read them.
     ΩL, Ωs, A, α, Tvec = unpack_params(theta_hat)
-    T_hat_mat    = reshape(Tvec, S, R)               # (S,R) ref-normalized warm start
+    T_hat_mat    = unpack_T_par(theta_hat)           # (S, T_COL_DIM) ref-normalized warm start
     T_hat_active = theta_hat[gb_param_idx[T_pos]]     # reported T̂ (CI centers)
 
     # `vec(permutedims(T*))[T_MASK]` gives ALL active T entries (s-major, incl. the
@@ -2248,7 +2448,7 @@ end
 """
     compute_T_delta_inference(theta_hat, inf_result, gb_param_idx, param_labels_gb;
                               output_folder, industry="", step_rel=1e-2,
-                              target=emp_gamma_ls) -> Dict
+                              target=EMP_GAMMA_T) -> Dict
 
 Delta-method confidence intervals for the comparative-advantage block **T**,
 treating T as the deterministic GE-Sinkhorn image `T*(α, Ω, A)` of the OTHER
@@ -2294,7 +2494,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
                                    output_folder::String = ".",
                                    industry::String = "",
                                    step_rel::Float64 = 1e-2,
-                                   target::AbstractMatrix = emp_gamma_ls)
+                                   target::AbstractMatrix = EMP_GAMMA_T)
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
@@ -2418,7 +2618,7 @@ end
     compute_profiled_T_inference(theta_hat, gb_param_idx, param_labels_gb;
         dTa, G_alpha, W, Sigma_data, Var_alpha_sw, Var_alpha_eff,
         Var_alpha_reg=nothing, gb_block_ranges,
-        output_folder, industry="", step_rel=1e-2, target=emp_gamma_ls) -> Dict
+        output_folder, industry="", step_rel=1e-2, target=EMP_GAMMA_T) -> Dict
 
 **Profiling-path** confidence intervals for the comparative-advantage block **T**,
 propagating BOTH the estimation error of α̂ AND the DATA noise of the γ_ls target
@@ -2431,7 +2631,7 @@ of the same β+γ data moments, so
     T̂ − T ≈ f_α·(α̂ − α) + f_γ·(γ̂ − γ),
 
 with `f_α = ∂T*/∂α` (from `dTa.J_T`) and `f_γ = ∂T*/∂γ` (central log-step FD on
-`invert_T_ge`, perturbing each `emp_gamma_ls[r,s]` target entry). The joint
+`invert_T_ge`, perturbing each `EMP_GAMMA_T[c,s]` target entry). The joint
 covariance of `(α̂, γ̂)` is
 
     [ Var(α̂)            Cov(α̂, γ̂) ]
@@ -2478,7 +2678,7 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
                                       output_folder::String = ".",
                                       industry::String = "",
                                       step_rel::Float64 = 1e-2,
-                                      target::AbstractMatrix = emp_gamma_ls)
+                                      target::AbstractMatrix = EMP_GAMMA_T)
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
@@ -2500,7 +2700,7 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         "MOMENT_MASK/BLOCK_RANGES[5] misalignment.")
 
     # ── f_γ = ∂T*/∂γ_target by central LOG-step FD on invert_T_ge (pmap over γ) ──
-    # Perturb one empirical γ target entry at a time (emp_gamma_ls[r,s]), re-solve the
+    # Perturb one empirical γ target entry at a time (EMP_GAMMA_T[c,s]), re-solve the
     # Sinkhorn inversion, chain-rule back to raw γ units by 1/γ. Only the target
     # PROFILE matters (per-sector scale is gauge), so a single-entry bump is a genuine
     # profile perturbation; the reference-region entry is gauge and left untouched.
@@ -2663,7 +2863,7 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         println(io, "  * The α channel uses the reported (sandwich) Var(α̂); the γ channel and the")
         println(io, "    cross term use the DATA covariance Sigma_data (γ target noise). The joint")
         println(io, "    (α̂,γ̂) covariance is PSD by construction, so V_T is a proper covariance.")
-        println(io, "  * f_γ perturbs emp_gamma_ls[r,s]; Σ_γγ must be the covariance of the SAME")
+        println(io, "  * f_γ perturbs EMP_GAMMA_T[c,s]; Σ_γγ must be the covariance of the SAME")
         println(io, "    (thresholded/renormalized) γ moments — regenerate Sigma_beta_gamma if the")
         println(io, "    active set was gamma-thresholded (see reconcile_sigma_data caveat).")
         println(io, "\n" * "="^84)
@@ -2724,7 +2924,7 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                                 head_labels = String[],
                                 head_values = Float64[],
                                 step_rel::Float64 = 1e-2,
-                                target::AbstractMatrix = emp_gamma_ls)
+                                target::AbstractMatrix = EMP_GAMMA_T)
     # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
     dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
                          step_rel=step_rel, target=target)
