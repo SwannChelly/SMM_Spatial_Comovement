@@ -11,24 +11,21 @@
 
 \newtheorem{proposition}{Proposition}
 \newtheorem{lemma}{Lemma}
-\newtheorem{remark}{Remark}
 \newtheorem{assumption}{Assumption}
+\newtheorem{remark}{Remark}
 
 \DeclareMathOperator*{\argmin}{arg\,min}
 \DeclareMathOperator*{\argmax}{arg\,max}
 \newcommand{\Bin}{\mathrm{Bin}}
-\newcommand{\Pois}{\mathrm{Poisson}}
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\Prob}{\mathbb{P}}
 \newcommand{\one}{\mathbf{1}}
 \newcommand{\Frechet}{\mathrm{Fr\acute{e}chet}}
 \newcommand{\Nd}{N_{d}}
-\newcommand{\ZE}{\mathrm{ZE}}
 \newcommand{\Areas}{\mathcal{A}}
 
-\title{\textbf{A Granular Eaton--Kortum Model of Spatial Sourcing:\\
-Endogenizing Regions with No Suppliers\\[4pt]
-\large with Comparative Advantage Defined at the Attraction-Area Level}}
+\title{\textbf{A Granular Eaton--Kortum Model of Spatial Sourcing\\[3pt]
+\large Comparative Advantage at the Attraction-Area Level}}
 \author{}
 \date{\today}
 
@@ -37,1520 +34,420 @@ Endogenizing Regions with No Suppliers\\[4pt]
 \maketitle
 
 \begin{abstract}
-The baseline spatial-comovement model is a continuum-of-varieties Eaton--Kortum (EK)
-economy. By the law of large numbers, every upstream sector--region with a positive
-comparative advantage supplies a strictly positive share of every downstream buyer, so the
-\emph{extensive margin of sourcing is degenerate}: every sector$\times$region hosts at least
-one supplier. In the data, by contrast, many region--sectors host no supplier at all. This
-note develops a \emph{granular} EK model that endogenizes those zeros, and --- the new
-content of this version --- it locates the comparative-advantage parameter at the
-\emph{level at which the empirical regression actually identifies the trade-cost elasticity}.
-Two departures from the baseline are made jointly. \emph{(i) Granularity}: the continuum of
-varieties in each upstream sector is replaced by a \emph{finite} number $N_{s}$ of varieties,
-keeping a continuum of firms within each region and variety; the sourcing extensive margin
-then becomes a genuine $\Bin(N_{s},\gamma)$ random object, and an origin hosts no supplier
-with probability $(1-\gamma)^{N_{s}}>0$. \emph{(ii) A two-tier geography}: comparative
-advantage $T$ is defined at the level of the \emph{attraction area} (\emph{aire
-d'attraction})$\times$sector --- exactly the fixed effect of the empirical extensive-margin
-regression --- and is \emph{common} to the employment zones (\emph{zones d'emploi}, ZE) it
-contains. This alignment does three things at once. First, attraction areas that host no
-supplier at all need \emph{no} comparative-advantage parameter: the regression's fixed effect
-already discards them (exactly under a cloglog link, and by an explicit attenuation factor
-under a linear probability model), so the model is asked to explain only what the data can
-speak to. Second, \emph{within} an active attraction area, comparative advantage is constant,
-so which ZE hosts a supplier and which does not is disciplined by \emph{distance alone} ---
-first-order, confound-free identification of $\alpha$. Third, and as a consequence, the model
-under the granular assumption \emph{is} the empirical specification: the probability that a
-ZE hosts a supplier is exactly a complementary log-log function of log distance with an
-attraction-area$\times$sector fixed effect and slope $-\theta\alpha$. We discipline $N_{s}$
-with the empirical distribution of the number of suppliers per region --- the count analogue
-of the number-of-buyers-per-seller moment of \citet{lmm2023} (henceforth LMM). Because
-sourcing shares are observed at the ZE level, we then relax the area-level restriction to
-$T_{sl}=T_{s,a(l)}\nu_{sl}$ with a \emph{random} multiplicative deviation whose dispersion is
-calibrated on those ZE-level shares. This relaxation must be a distribution and never a free
-parameter per ZE: a per-ZE parameter restores exact just-identification (destroying $\alpha$),
-is undefined precisely at the empty ZE we set out to explain, and biased in a signable
-direction there through selection on $\nu$. Done correctly --- with a mean-one Gamma deviation
---- the supplier count becomes exactly negative binomial, the empirical cloglog slope is
-attenuated relative to $-\theta\alpha$ by a computable factor, and the within-area share
-dispersion joins the count over-dispersion as a second, independent read on the same variance
-parameter. We then answer three modeling questions: (i) whether the continuum of firms per
-variety can be retained (yes, and it is the natural choice), (ii) at what geographic level
-comparative advantage should live (the attraction area, with a random ZE-level deviation), and
-(iii) what else in the model must change (the within-sector price index, the treatment of value
-moments, the active set / normalization, and the joint identification of
-$(\alpha,N_{s},\sigma^{2}_{s},T)$).
+In a continuum-of-varieties Eaton--Kortum economy every origin with a positive comparative
+advantage supplies every buyer: the extensive margin of sourcing is degenerate. In the data most
+region--sectors host no supplier at all --- inside the attraction areas that host at least one,
+$91.5\%$ of employment zones have none. This paper makes the sourcing extensive margin a genuine
+random object by giving each sector a \emph{finite} number $N_{s}$ of varieties while keeping a
+continuum of firms within each variety and region, and by locating comparative advantage at the
+level at which the data identify the trade-cost elasticity: the \emph{attraction area}. The two
+departures are complementary. Area-level comparative advantage means that within an active area
+the only thing separating an employment zone that hosts a supplier from one that does not is
+distance; finiteness is what allows a zone with positive comparative advantage to host no supplier
+at all. Together they deliver an exact reduced form --- the probability that a firm supplies is a
+complementary log-log function of log distance and log own productivity with an
+area$\times$sector fixed effect, with coefficients $\theta\alpha$ and $-\theta$ and \emph{no}
+dependence on $N_{s}$ --- and a clean division of labour in identification: the distance gradient
+identifies $\alpha$, the level of the zero count identifies $N_{s}$, and area-aggregated sourcing
+shares identify comparative advantage.
 \end{abstract}
 
-\tableofcontents
-
-\section{Motivation: two problems, one alignment}
+\section{The degenerate extensive margin, and where the data identify $\alpha$}
 \label{sec:motivation}
 
-\subsection{The degenerate extensive margin of the continuum model}
+\subsection{The problem}
 
-In the baseline model (Appendix~B of \emph{Spatial Comovements}; see also
-\texttt{documentation/model.md}) each upstream sector $s$ contains a continuum of varieties
-$\rho\in[0,1]$. Variety $\rho$ produced in region $l$ has a Fr\'echet productivity with shape
-$\theta$ and scale $T_{sl}$, and a downstream buyer in region $r$ sources each variety from
-its cheapest origin. Ricardian selection then delivers the familiar EK sourcing share
+In the baseline model each upstream sector $s$ contains a continuum of varieties. Variety $\rho$
+produced in region $l$ has a Fr\'echet productivity with shape $\theta$ and scale $T_{sl}$, and a
+downstream buyer in region $r$ sources each variety from its cheapest origin. Ricardian selection
+delivers the EK sourcing share
 \begin{equation}
 \gamma_{lrs}
-\;=\;
-\frac{T_{sl}\,\big(w_{l}\,\tau_{lrs}\big)^{-\theta}}
-{\displaystyle\sum_{l'} T_{sl'}\,\big(w_{l'}\,\tau_{l'rs}\big)^{-\theta}}
-\;=\;
-\frac{T_{sl}\,(w_{l}\tau_{lrs})^{-\theta}}{\Phi_{sr}},
+=\frac{T_{sl}\,(w_{l}\tau_{lrs})^{-\theta}}{\Phi_{sr}},
 \qquad
 \Phi_{sr}\equiv\sum_{l'}T_{sl'}(w_{l'}\tau_{l'rs})^{-\theta},
+\qquad
+\tau_{lrs}=d_{lr}^{\alpha},
 \label{eq:ek-share}
 \end{equation}
-with iceberg trade costs $\tau_{lrs}=d_{lr}^{\alpha}$ (in the power-law parametrization) and
-upstream wage $w_{l}$.
-
-The share \eqref{eq:ek-share} is the probability that a \emph{single} variety is won by
-origin $l$. With a \emph{continuum} of varieties, the law of large numbers turns this
-probability into a deterministic realized share: origin $l$ supplies exactly a mass
-$\gamma_{lrs}>0$ of sector-$s$ varieties to buyer $r$ whenever $T_{sl}>0$. Consequently
+with $w_{l}$ the upstream wage. Equation \eqref{eq:ek-share} is the probability that a
+\emph{single} variety is won by origin $l$. With a continuum of varieties the law of large numbers
+turns that probability into a deterministic realised share, so
 \begin{equation}
-\Prob\big(\text{$l$ supplies nothing to $r$ in $s$}\big)
-=\lim_{N\to\infty}(1-\gamma_{lrs})^{N}=0.
+\Prob\big(\text{$l$ supplies nothing to $r$ in $s$}\big)=\lim_{N\to\infty}(1-\gamma_{lrs})^{N}=0 .
 \label{eq:degenerate}
 \end{equation}
-Every origin with a positive comparative advantage is active in every market. The extensive
-margin is degenerate, and the model \emph{cannot} produce a region--sector that hosts no
-supplier. The empirical distance regression (moment block~4) is currently matched through an
-approximation to a ``win somewhere'' probability, but the object it approximates is
-deterministic in the continuum limit: the zeros observed in the data are not a model outcome.
+Every origin with $T_{sl}>0$ is active in every market. The observed zeros are not a model
+outcome, and the extensive margin --- the object of interest --- has no content.
 
-\subsection{The estimand of the empirical regression is a \emph{within-attraction-area}
-object}
-\label{sec:motivation-fe}
+\subsection{Where the data identify the trade-cost elasticity}
+\label{sec:fe}
 
-The second problem is econometric rather than theoretical, and it is what dictates
-\emph{where} comparative advantage should live. The empirical extensive-margin regression is
-run on the whole upstream geography --- supplier and non-supplier ZE alike --- with a fixed
-effect at the \textbf{attraction area $\times$ sector} level.\footnote{In the implementation
-the fixed-effect group is \texttt{(s-1)*R\_downstream + CLOSEST\_DOWNSTREAM\_REGION[r]}, i.e.
-sector $\times$ nearest downstream region, and the distance regressor is
-\texttt{LOG\_CLOSEST\_DIST[r]}, the log distance from upstream ZE $r$ to that nearest
-downstream region. The set of upstream ZE sharing a nearest downstream region \emph{is} the
-attraction area of that downstream region.} An attraction area in which \emph{no} ZE hosts a
-supplier therefore has an outcome that is constant (identically zero) within the fixed-effect
-group. Such a group carries no information about the distance slope:
+The empirical extensive-margin regression carries a fixed effect at the \textbf{attraction area
+$\times$ sector} level, an attraction area being the set of upstream employment zones (ZE) sharing
+the same nearest downstream buyer. That choice determines what $\alpha$ is identified from.
 
-\begin{lemma}[All-zero groups and the distance slope]
+\begin{lemma}[All-zero groups carry no information about the distance slope]
 \label{lem:fe}
-Index observations by upstream ZE $l$ within fixed-effect group $g=(a,s)$, with outcome
-$y_{l}\in\{0,1\}$ (``$l$ hosts a supplier''), regressor $x_{l}$ (log distance or distance-bin
-dummies), weights $\omega_{l}>0$, and group effect $\phi_{g}$. Let
-$\Areas^{+}_{s}=\{a:\exists\,l\in\mathcal{L}_{a},\,y_{l}=1\}$ be the set of attraction areas
-hosting at least one supplier.
+Index observations by firm $i$ within fixed-effect group $g=(a,s)$, with outcome $y_{i}$,
+regressor $x_{i}$, weights $\omega_{i}>0$ and group effect $\phi_{g}$.
 \begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
-\item \emph{Complementary log-log.} With $\Prob(y_{l}=1)=1-\exp(-\exp(\phi_{g}+\beta x_{l}))$,
-the log-likelihood contribution of an all-zero group is
-$\ell_{g}(\phi_{g},\beta)=-e^{\phi_{g}}\sum_{l\in\mathcal{L}_{a}}e^{\beta x_{l}}$, whose
-supremum over $\phi_{g}$ is attained as $\phi_{g}\to-\infty$ with
-$\ell_{g}\to0$ and $\partial\ell_{g}/\partial\beta\to0$. All-zero groups drop out of the
-concentrated likelihood and contribute \emph{exactly nothing} to $\hat\beta$.
-\item \emph{Linear probability model.} With $y_{l}=\phi_{g}+\beta x_{l}+u_{l}$ estimated by
-weighted OLS, Frisch--Waugh--Lovell gives
-$\hat\beta=\big(\sum_{g,l}\omega_{l}\tilde x_{l}\tilde y_{l}\big)/
-\big(\sum_{g,l}\omega_{l}\tilde x_{l}^{2}\big)$, where $\tilde\cdot$ denotes weighted
-within-group demeaning. An all-zero group has $\tilde y_{l}\equiv0$, so it contributes
-\emph{zero} to the numerator but a strictly positive amount to the denominator. Hence
-\begin{equation}
-\hat\beta=\lambda\,\hat\beta^{+},
-\qquad
-\lambda=\frac{\sum_{a\in\Areas^{+}_{s}}\sum_{l\in\mathcal{L}_{a}}\omega_{l}\tilde x_{l}^{2}}
-{\sum_{a}\sum_{l\in\mathcal{L}_{a}}\omega_{l}\tilde x_{l}^{2}}\in(0,1],
-\label{eq:attenuation}
-\end{equation}
-where $\hat\beta^{+}$ is the estimate on the subsample $\Areas^{+}_{s}$: the empty areas
-\emph{attenuate} the coefficient toward zero by the known factor $\lambda$.
+\item \emph{Complementary log-log.} The log-likelihood of a group in which $y\equiv0$ is
+$\ell_{g}=-e^{\phi_{g}}\sum_{i}e^{\beta x_{i}}$, whose supremum over $\phi_{g}$ is attained as
+$\phi_{g}\to-\infty$ with $\ell_{g}\to0$ and $\partial\ell_{g}/\partial\beta\to0$: the group drops
+out of the concentrated likelihood and contributes \emph{exactly nothing} to $\hat\beta$.
+\item \emph{Linear probability model.} By Frisch--Waugh--Lovell an all-zero group has
+$\tilde y\equiv0$, contributing zero to the numerator and a positive amount to the denominator, so
+$\hat\beta=\lambda\hat\beta^{+}$ with
+$\lambda=\big(\sum_{a\in\Areas^{+}}\sum\omega\tilde x^{2}\big)/\big(\sum_{a}\sum\omega\tilde x^{2}\big)\in(0,1]$,
+where $\Areas^{+}$ is the set of areas hosting at least one supplier.
 \end{enumerate}
 \end{lemma}
 
-Lemma~\ref{lem:fe} is the empirical fact behind the whole design of this note. Under a
-cloglog link --- the link the model actually implies, see
-Proposition~\ref{prop:cloglog-exact} --- the trade-cost elasticity $\alpha$ is identified
-\emph{exclusively} from variation \emph{within} attraction areas that host at least one
-supplier. Under a linear probability model the empty areas do enter, but only as a mechanical
-dilution \eqref{eq:attenuation} of the same within-area signal; they carry no independent
-information about $\alpha$.
+Under the cloglog link --- the link the model implies, Section~\ref{sec:reduced} --- $\alpha$ is
+therefore identified \emph{exclusively} from variation \emph{within} attraction areas that host at
+least one supplier. Under a linear probability model the empty areas enter only as a mechanical
+dilution of the same within-area signal.
 
-\subsection{The alignment}
+\subsection{The design}
 
-The two problems have a common resolution. If comparative advantage is defined at the
-\textbf{attraction area $\times$ sector} level --- the same level as the fixed effect --- then:
+Two departures, each answering one of the two problems.
 
 \begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
-\item Attraction areas with no supplier require \emph{no} comparative-advantage parameter.
-They are outside the estimation exactly as they are outside the concentrated likelihood
-(Lemma~\ref{lem:fe}(i)). The model is not asked to explain why an entire attraction area is
-empty --- and the data, having absorbed it in a fixed effect, cannot tell us.
-\item \emph{Within} an active attraction area, comparative advantage is \emph{constant}, so
-the only thing distinguishing a ZE that hosts a supplier from one that does not is
-\textbf{distance}. The within-area extensive margin is a pure trade-cost object: this is
-where $\alpha$ comes from, and there is no unobserved comparative-advantage heterogeneity
-left to confound it.
-\item Granularity (finite $N_{s}$) is still indispensable: it is what makes a ZE-level zero
-possible at all inside an area with $T_{s,a}>0$. Without it, (b) has no bite because every ZE
-in an active area would host a supplier with probability one.
+\item \textbf{Granularity.} A finite number $N_{s}$ of varieties per sector makes a zero possible
+at all.
+\item \textbf{Area-level comparative advantage.} $T$ constant within an attraction area makes the
+within-area extensive margin a pure trade-cost object, so what the model explains and what the
+data identify are the same thing.
 \end{enumerate}
 
-Sections~\ref{sec:granular} and \ref{sec:twotier} develop (c) and (a)--(b) respectively;
-Section~\ref{sec:twotier} closes with the resulting division of labor in identification.
+\section{Model}
+\label{sec:model}
 
-\section{A granular departure: finite varieties, a continuum of firms}
-\label{sec:granular}
+The downstream block is unchanged: downstream regions $r=1,\dots,\Nd$ each hosting a
+representative producer; nested-CES technology with labour/intermediate elasticity $\lambda$,
+across-sector elasticity $\nu$ and within-sector elasticity $\nu_{s}$; demand elasticity
+$\varepsilon$ and shifters $\delta_{r}$. Only the upstream supply side changes.
 
-\subsection{Environment}
+\subsection{Granular varieties, a continuum of firms}
 
-We keep the entire downstream block of the baseline model unchanged: downstream regions
-$r=1,\dots,\Nd$, each hosting a single representative producer (``one downstream firm per
-downstream region''); nested-CES technology with labor/intermediate elasticity $\lambda$,
-across-sector elasticity $\nu$, and within-sector elasticity $\nu_{s}$; demand elasticity
-$\varepsilon$ and shifters $\delta_{r}$. The only change is on the upstream supply side.
+\begin{assumption}[Granularity]
+\label{as:granular}
+Each upstream sector $s$ consists of $N_{s}\in\mathbb{N}$ horizontally differentiated varieties,
+$\rho=1,\dots,N_{s}$. Within each variety $\rho$ and each ZE $l$ there is a \emph{continuum} of
+firms whose productivities above $z$ form a Poisson process with mean $T_{sl}z^{-\theta}$. Draws
+are independent across varieties, ZE and sectors.
+\end{assumption}
 
-\begin{quote}
-\textbf{Granular assumption.} Each upstream sector $s$ consists of a \emph{finite} number
-$N_{s}$ of horizontally differentiated varieties, indexed $\rho=1,\dots,N_{s}$.
-Within each variety $\rho$ and each upstream ZE $l$ there is a \emph{continuum} of firms. The
-productivity of firms in $(l,s,\rho)$ is such that the number of firms with productivity above
-$z$ is Poisson with mean $T_{sl}\,z^{-\theta}$; equivalently, the most productive firm of
-ZE $l$ for variety $\rho$ has a Fr\'echet productivity
-$\varphi_{l\rho s}\sim\Frechet(T_{sl},\theta)$, i.e. $\Prob(\varphi_{l\rho s}\le z)=\exp(-T_{sl}z^{-\theta})$.
-Draws are independent across varieties $\rho$, ZE $l$, and sectors $s$.
-\end{quote}
-
-This is the classical ``fixed number of independent Ricardian draws'' form of granular EK
-\citep[cf.][]{eks2012,bejk2003}: the continuum is replaced by $N_{s}$ discrete competitions,
-each of which is a standard EK problem. $N_{s}$ is a new structural parameter, one per
-upstream sector, to be estimated.
-
-\begin{remark}[Poissonizing the variety count]
-\label{rem:poisson}
-It is analytically convenient, and economically innocuous, to let the number of varieties
-itself be random, $N^{\rho}_{s}\sim\Pois(N_{s})$, rather than exactly $N_{s}$. Nothing in the
-value block changes (shares are unaffected by the variety count, see
-Section~\ref{sec:q2}b), the expected count of varieties won is identical, and the zero
-probability becomes \emph{exactly} exponential,
-$\Prob(K=0)=\exp(-N_{s}\gamma)$ instead of $(1-\gamma)^{N_{s}}$. As
-Section~\ref{sec:exactcloglog} shows, this is precisely what makes the empirical cloglog
-specification the \emph{exact} reduced form of the model rather than an approximation to it.
-Both versions coincide to $O(\gamma^{2})$ and are numerically indistinguishable in the
-relevant range ($\gamma$ small, $N_{s}\gamma$ moderate). We keep $N_{s}$ fixed in the main
-text and flag where Poissonization sharpens a statement.
-\end{remark}
-
-\subsection{Per-variety Ricardian selection (the role of the continuum of firms)}
-\label{sec:selection}
-
-Fix a variety $\rho$ of sector $s$ and a downstream buyer $r$. Because there is a continuum of
-firms in each ZE, ZE $l$'s \emph{lowest delivered cost} for variety $\rho$ is
-attained by its most productive firm and equals
+The continuum of firms is what keeps the model tractable: the number of firms above $z$ is Poisson
+with mean $T_{sl}z^{-\theta}$, so the \emph{most productive} firm of ZE $l$ for variety $\rho$ has
 \begin{equation}
-c_{l\rho s}(r)=\frac{w_{l}\,\tau_{lrs}}{\varphi_{l\rho s}},
-\qquad
-\varphi_{l\rho s}\sim\Frechet(T_{sl},\theta).
-\label{eq:region-cost}
+\Prob\big(\varphi_{l\rho s}\le z\big)=\Prob(\text{no firm above }z)=\exp\!\big(-T_{sl}z^{-\theta}\big),
+\label{eq:champion}
 \end{equation}
-Since the minimum of independent Fr\'echet costs is again Fr\'echet, the probability that
-origin $l$ is the cheapest source of variety $\rho$ for buyer $r$ is \emph{exactly} the EK
-share \eqref{eq:ek-share}:
-\begin{equation}
-\Prob\!\Big(l=\argmin_{l'} c_{l'\rho s}(r)\Big)=\gamma_{lrs}.
-\label{eq:per-variety-win}
-\end{equation}
-The continuum of firms is precisely what delivers \eqref{eq:region-cost}--\eqref{eq:per-variety-win}
-in closed form: it collapses each ZE's within-ZE competition into a single
-Fr\'echet ``champion'' cost, so that the only randomness left across the $N_{s}$ varieties is
-\emph{which ZE wins}. This is the key observation behind the answer to Question~1
-(Section~\ref{sec:q1}).
+i.e.\ $\varphi_{l\rho s}\sim\Frechet(T_{sl},\theta)$ \emph{exactly}. One Fr\'echet draw per
+(ZE, variety) \emph{is} the champion of a continuum of firms, not an approximation to it. Since
+the iceberg cost scales all ZE-$l$ firms identically, that champion is the unique ZE-$l$ firm that
+ever serves any buyer sourcing $\rho$ from $l$. \textbf{A firm is therefore a (ZE, variety)
+champion}, with delivered cost $c_{l\rho s}(r)=w_{l}\tau_{lrs}/\varphi_{l\rho s}$, and the
+probability that $l$ wins variety $\rho$ for buyer $r$ is exactly the EK share
+\eqref{eq:ek-share}.
 
-\subsection{The granular extensive margin}
-\label{sec:extmargin}
-
-Across the $N_{s}$ varieties, the wins in \eqref{eq:per-variety-win} are i.i.d.
-$\text{Bernoulli}(\gamma_{lrs})$. Let $K_{lrs}$ denote the number of sector-$s$ varieties that
-buyer $r$ sources from origin $l$. Then
-\begin{equation}
-K_{lrs}\;\sim\;\Bin(N_{s},\gamma_{lrs}),
-\qquad
-\Prob(K_{lrs}=0)=(1-\gamma_{lrs})^{N_{s}},
-\label{eq:binomial}
-\end{equation}
-or, under Remark~\ref{rem:poisson}, $K_{lrs}\sim\Pois(N_{s}\gamma_{lrs})$ with
-$\Prob(K_{lrs}=0)=\exp(-N_{s}\gamma_{lrs})$.
-Equation \eqref{eq:binomial} is the heart of the model. Unlike \eqref{eq:degenerate}, the
-zero-supplier probability is now strictly positive and \emph{endogenous}: it falls with the
-comparative advantage $\gamma_{lrs}$ (hence rises with distance through
-$\tau_{lrs}=d_{lr}^{\alpha}$) and falls with the variety count $N_{s}$. The expected number of
-\emph{active} origins in market $(r,s)$ is
-\begin{equation}
-\E\big[\#\{l:K_{lrs}\ge 1\}\big]=\sum_{l}\Big[1-(1-\gamma_{lrs})^{N_{s}}\Big].
-\label{eq:active-origins}
-\end{equation}
-As $N_{s}\to\infty$, \eqref{eq:active-origins} converges to the number of origins with
-$T_{sl}>0$ and we recover the degenerate continuum limit. For finite $N_{s}$, remote/small
-origins ($\gamma_{lrs}$ close to $0$) are active with probability $\approx N_{s}\gamma_{lrs}$
-and are frequently inactive --- exactly the region-sectors with no suppliers that we want to
-reproduce.
-
-\begin{remark}[Dependence across downstream buyers]
-\label{rem:dependence}
-For a \emph{given} variety $\rho$, the champion costs $\{\varphi_{l\rho s}\}_{l}$ are common
-across all downstream buyers; only the trade cost $\tau_{lrs}$ differs across $r$. Hence the
-win events $\{l\text{ wins }\rho\text{ for }r\}$ and $\{l\text{ wins }\rho\text{ for }r'\}$ are
-\emph{positively dependent}: an origin that drew a good champion for variety $\rho$ tends to
-win it in many markets at once. The per-market marginal \eqref{eq:binomial} is nonetheless
-exact. This dependence matters for the industry-wide count (Section~\ref{sec:moment}) and is
-handled cleanly by simulation.
-\end{remark}
-
-\section{Comparative advantage at the attraction-area level}
-\label{sec:twotier}
+Only the number of \emph{varieties} is made finite; the firms are not discretised. This is the
+``fixed number of independent Ricardian draws'' form of granular EK \citep[cf.][]{eks2012,bejk2003}.
 
 \subsection{The two-tier geography}
 
-\begin{assumption}[Two-tier geography]
+\begin{assumption}[Area-level comparative advantage]
 \label{as:geo}
-The set of upstream employment zones $\mathcal{L}$ is partitioned into attraction areas,
+Upstream ZE are partitioned into attraction areas, $\mathcal{L}=\bigsqcup_{a\in\Areas}\mathcal{L}_{a}$
+with $a(l)$ the area of $l$, $\mathcal{L}_{a}$ being the ZE whose nearest downstream buyer is the
+anchor of $a$. Comparative advantage is area-specific,
 \begin{equation}
-\mathcal{L}=\bigsqcup_{a\in\Areas}\mathcal{L}_{a},
-\qquad
-a(l)\in\Areas \text{ the attraction area of ZE } l,
-\qquad
-R_{a}\equiv|\mathcal{L}_{a}|,
-\end{equation}
-where $\mathcal{L}_{a}$ is the set of upstream ZE whose nearest downstream region is the
-anchor of area $a$. Comparative advantage is \textbf{area-specific}:
-\begin{equation}
-\boxed{\;T_{sl}=T_{s,a(l)}\quad\text{for every } l\in\mathcal{L}_{a},\;}
+T_{sl}=T_{s,a(l)}\qquad\text{for every } l\in\mathcal{L}_{a},
 \label{eq:T-area}
 \end{equation}
-with one parameter $T_{s,a}$ per (sector, attraction area) pair. Productivity draws remain
-\emph{independent across ZE}: two ZE in the same area share the \emph{scale} $T_{s,a}$ of
-their Fr\'echet distribution, not the realization of their champions.
+with one parameter per (sector, area). Productivity draws remain \emph{independent across ZE}: two
+ZE in the same area share the Fr\'echet \emph{scale}, not the realisation of their champions.
 \end{assumption}
 
-The last sentence is essential and easy to misread. Restriction \eqref{eq:T-area} does
-\emph{not} make ZE within an area identical or interchangeable: each ZE runs its own
-independent Ricardian competition for each variety, and two ZE in the same area with
-different distances to the downstream anchor have different win probabilities. What
-\eqref{eq:T-area} removes is only \emph{unobserved technological heterogeneity} across ZE
-within an area.
-
-Under \eqref{eq:T-area} the sourcing share \eqref{eq:ek-share} becomes
+The last sentence matters. \eqref{eq:T-area} does not make ZE within an area interchangeable: each
+runs its own Ricardian competition for each variety, and two ZE at different distances have
+different win probabilities. What it removes is \emph{unobserved technological heterogeneity}
+across ZE within an area. The sourcing share becomes
 \begin{equation}
 \gamma_{lrs}=\frac{T_{s,a(l)}\,(w_{l}\tau_{lrs})^{-\theta}}{\Phi_{sr}},
 \qquad
-\Phi_{sr}=\sum_{a'\in\Areas}T_{s,a'}\sum_{l'\in\mathcal{L}_{a'}}(w_{l'}\tau_{l'rs})^{-\theta},
+\Phi_{sr}=\sum_{a'}T_{s,a'}\sum_{l'\in\mathcal{L}_{a'}}(w_{l'}\tau_{l'rs})^{-\theta}.
 \label{eq:share-area}
 \end{equation}
-so the geography enters twice: through the area's technology $T_{s,a}$ and through each ZE's
-own trade cost $\tau_{lrs}=d_{lr}^{\alpha}$.
 
-\subsection{Which areas need a parameter --- and which do not}
-\label{sec:activeset-area}
-
-Let $\Areas^{+}_{s}$ be the set of attraction areas hosting at least one observed supplier in
-sector $s$. Assumption~\ref{as:geo} together with Lemma~\ref{lem:fe} yields the central
-practical simplification of this note:
-
-\begin{quote}
-\textbf{Only $\{T_{s,a}\}_{a\in\Areas^{+}_{s}}$ needs to be estimated.} For
-$a\notin\Areas^{+}_{s}$, set $T_{s,a}=0$ (equivalently, leave $(s,a)$ out of the active set):
-the entire area is a \emph{structural} zero. This is not an approximation forced on us by
-computation --- it is the only choice consistent with the information the data contain, since
-the attraction-area $\times$ sector fixed effect has already absorbed every all-zero area
-(Lemma~\ref{lem:fe}(i)).
-\end{quote}
-
-Three comments.
-
-\begin{enumerate}[nosep,topsep=3pt,label=(\roman*)]
-\item \emph{What we give up, explicitly.} The model does not explain why an entire attraction
-area hosts no supplier in sector $s$. That is a statement about the sector's absence from a
-whole labor-market catchment area --- plausibly driven by non-tradable local fundamentals,
-historical specialization, or the sector simply not existing there --- and it is a different
-economic question from the one the paper asks. Under \eqref{eq:T-area} the boundary is drawn
-in exactly the same place the econometrics draws it.
-\item \emph{What we gain in dimension.} The comparative-advantage block shrinks from one
-parameter per active $(s,\ZE)$ pair to one per active $(s,\text{area})$ pair, i.e. by a factor
-of roughly $\overline{R_{a}}$ (the average number of ZE per attraction area). This is a large
-reduction in the dimension of the outer search and, as Section~\ref{sec:profiling} explains,
-it is also what restores $\alpha$'s identification when $T$ is profiled out.
-\item \emph{Reference normalization.} The per-sector gauge is now one reference \emph{area},
-$T_{s,\mathrm{ref}(s)}=1$, instead of one reference ZE. Sourcing shares are ratios of $T$
-within a sector, hence invariant to the common scale, so the gauge is free exactly as before.
-\end{enumerate}
-
-\subsection{Within an area, only distance matters}
-\label{sec:within}
-
-Take two ZE $l,l'$ in the \emph{same} attraction area $a$ and the same downstream buyer $r$.
-By \eqref{eq:share-area} the technology term and the price index $\Phi_{sr}$ cancel:
+Two ZE $l,l'$ in the same area and the same buyer therefore satisfy
 \begin{equation}
-\ln\frac{\gamma_{lrs}}{\gamma_{l'rs}}
-=-\theta\,\alpha\,\ln\frac{d_{lr}}{d_{l'r}}
-\;-\;\theta\,\ln\frac{w_{l}}{w_{l'}},
-\label{eq:within-contrast}
+\ln\frac{\gamma_{lrs}}{\gamma_{l'rs}}=-\theta\alpha\big(\ln d_{lr}-\ln d_{l'r}\big)-\theta\ln\frac{w_{l}}{w_{l'}},
+\label{eq:within}
 \end{equation}
-and under the model's wage normalization ($w\equiv1$, as in the estimated version) the second
-term vanishes:
+the technology term and the price index having cancelled. Under the wage normalisation $w\equiv1$
+the within-area sourcing profile is a function of $(\theta,\alpha)$ and observed distances alone.
+
+\subsection{The extensive margin}
+
+Across the $N_{s}$ varieties the win events are i.i.d., so with $K_{lrs}$ the number of sector-$s$
+varieties buyer $r$ sources from origin $l$,
 \begin{equation}
-\boxed{\;
-\ln\frac{\gamma_{lrs}}{\gamma_{l'rs}}
-=-\theta\,\alpha\,\big(\ln d_{lr}-\ln d_{l'r}\big),
-\qquad l,l'\in\mathcal{L}_{a}.
-\;}
-\label{eq:within-contrast-norm}
-\end{equation}
-Combined with the granular zero probability \eqref{eq:binomial}, \eqref{eq:within-contrast-norm}
-says that the \emph{within-area pattern of which ZE hosts a supplier} is a function of
-$(\theta,\alpha)$ and observed distances \emph{only}. This is the identification statement the
-whole construction is built for: within an active attraction area the extensive margin is a
-pure trade-cost object, with no unobserved comparative advantage left to soak up the distance
-gradient.
-
-\subsection{The empirical cloglog \emph{is} the model's reduced form}
-\label{sec:exactcloglog}
-
-The alignment is tighter than an identification argument: the specification estimated in the
-data is, up to a stated approximation, the model itself.
-
-\begin{proposition}[Exact reduced form, \emph{cell} level]
-\label{prop:cloglog-exact}
-Consider a single downstream buyer per area (the area's anchor $r=a$, so that
-$d_{l}\equiv d_{l,a(l)}$ is the distance regressor used in the data), granular varieties with
-$N_{s}$ Poissonized (Remark~\ref{rem:poisson}), and comparative advantage area-specific
-\eqref{eq:T-area}. Then the probability that upstream ZE $l$ hosts at least one sector-$s$
-supplier is exactly
-\begin{equation}
-\Prob\big(K_{l a s}\ge1\big)
-=1-\exp\!\big(-\exp(\eta_{ls})\big),
+K_{lrs}\sim\Bin\big(N_{s},\gamma_{lrs}\big),
 \qquad
-\eta_{ls}
-=\underbrace{\ln N_{s}+\ln T_{s,a(l)}-\ln\Phi_{s,a(l)}}_{\textstyle \phi_{a(l),s}}
-\;-\;\theta\alpha\,\ln d_{l}
-\;-\;\theta\,\ln w_{l},
-\label{eq:cloglog}
+\Prob(K_{lrs}=0)=(1-\gamma_{lrs})^{N_{s}}>0 .
+\label{eq:binomial}
 \end{equation}
-i.e. a \textbf{complementary log-log model of the supplier indicator on log distance with an
-attraction area $\times$ sector fixed effect}, with slope
-\begin{equation}
-\beta_{\mathrm{dist}}=-\theta\,\alpha
-\qquad\Longleftrightarrow\qquad
-\alpha=-\beta_{\mathrm{dist}}/\theta .
-\label{eq:alpha-map}
-\end{equation}
-With the distance-bin parametrization the same statement holds bin by bin, with
-$\beta_{b}=-\theta\ln\tau_{b}$.
-\end{proposition}
+Unlike \eqref{eq:degenerate} the zero-supplier probability is strictly positive and endogenous: it
+falls with comparative advantage, rises with distance through $\tau_{lrs}=d_{lr}^{\alpha}$, and
+falls with $N_{s}$. Letting $q_{ls}$ be the probability that $l$ wins a given variety
+\emph{somewhere} in the downstream industry (the union over buyers), the industry-wide count is
+$K_{ls}\sim\Bin(N_{s},q_{ls})$.
 
-\begin{proof}
-Under Poissonization, $K_{las}\sim\Pois(N_{s}\gamma_{las})$, so
-$\Prob(K_{las}=0)=\exp(-N_{s}\gamma_{las})$ and
-$\Prob(K_{las}\ge1)=1-\exp(-\exp(\ln N_{s}+\ln\gamma_{las}))$. Substituting
-$\ln\gamma_{las}=\ln T_{s,a(l)}-\theta\ln w_{l}-\theta\alpha\ln d_{l}-\ln\Phi_{s,a(l)}$ from
-\eqref{eq:share-area} gives \eqref{eq:cloglog}. Every term that is constant within
-$(a,s)$ --- $\ln N_{s}$, $\ln T_{s,a}$, and $\ln\Phi_{s,a}$, the last because the anchor
-buyer is common to the area --- is absorbed by $\phi_{a,s}$.
-\end{proof}
-
-Four consequences.
-
-\begin{enumerate}[nosep,topsep=3pt,label=(\alph*)]
-\item \emph{Why cloglog and not a linear probability model.} \eqref{eq:cloglog} is a cloglog,
-exactly. The LPM is a linear approximation to it, and Lemma~\ref{lem:fe}(ii) shows the LPM's
-estimand is additionally scaled by the attenuation factor $\lambda$ of
-\eqref{eq:attenuation}. The switch to a cloglog link is therefore not a robustness choice but
-a specification requirement.
-\item \emph{$N_{s}$ is \emph{not} identified by the regression.} In \eqref{eq:cloglog},
-$\ln N_{s}$ enters only through the fixed effect $\phi_{a,s}$, perfectly collinear with
-$\ln T_{s,a}$. The distance coefficient identifies $\alpha$ alone. $N_{s}$ must come from a
-\emph{level} moment --- the count moment of Section~\ref{sec:moment} --- given the normalized
-$T$; see Table~\ref{tab:division}.
-\item \emph{Sign and outcome conventions.} \eqref{eq:cloglog} is exact for the indicator
-$y_{l}=\one\{\text{$l$ hosts a supplier}\}$, with a \emph{negative} distance coefficient
-$-\theta\alpha$. Running the cloglog on the reversed outcome
-$y_{l}=\one\{\text{no supplier}\}$ instead gives
-$\eta=-\ln\!\big(1-e^{-N_{s}\gamma_{las}}\big)\approx-\phi_{a,s}+\theta\alpha\ln d_{l}$, i.e.
-a \emph{positive} slope $+\theta\alpha$ --- but only to first order in $N_{s}\gamma$ (the
-sparse regime), since the cloglog link is not symmetric under outcome reversal. The exact
-version is the supplier indicator; if the reversed convention is retained for continuity, note
-that the model moment must be computed by running the \emph{identical} reversed regression on
-simulated data (which the SMM does), so consistency is preserved and only the direct
-interpretation \eqref{eq:alpha-map} of the coefficient is approximate.
-\item \emph{Multiple downstream buyers.} With $\Nd>1$ the relevant object is the
-industry-wide zero, driven by the probability $q_{ls}$ that ZE $l$ wins a variety
-\emph{somewhere} (Section~\ref{sec:moment}). To first order in small shares,
-$q_{ls}\approx T_{s,a(l)}w_{l}^{-\theta}\sum_{r}d_{lr}^{-\theta\alpha}\hat E_{sr}/\Phi_{sr}$,
-so \eqref{eq:cloglog} holds with $\ln d_{l}$ replaced by a \emph{market-access} index
-$-\tfrac{1}{\theta}\ln\sum_{r}d_{lr}^{-\theta\alpha}\hat E_{sr}/\Phi_{sr}$. The empirical
-practice --- distance to the nearest downstream region plus an area fixed effect --- is the
-leading term of that index, exact when one buyer dominates. \textbf{The estimator does not
-rely on the exactness of \eqref{eq:cloglog}}: block~4 is matched by running the same
-regression on model-simulated data, so any wedge between the index and $\ln d_{l}$ is
-reproduced on both sides. Proposition~\ref{prop:cloglog-exact} is what licenses the
-\emph{interpretation} \eqref{eq:alpha-map}, and what tells us the specification is
-well chosen.
-\end{enumerate}
+\begin{remark}[Dependence across buyers]
+\label{rem:dependence}
+For a given variety the champion costs are common across buyers; only $\tau_{lrs}$ differs. Win
+events are therefore positively dependent across buyers. The per-market marginal
+\eqref{eq:binomial} is nonetheless exact, and the union probability $q_{ls}$ is evaluated by
+simulation.
+\end{remark}
 
 \subsection{A hierarchy of zeros}
 \label{sec:hierarchy}
 
-The two-tier geography sorts the observed zeros into two economically distinct classes, and
-this is the cleanest way to state what the model does and does not endogenize.
+Assumption~\ref{as:geo} sorts observed zeros into two economically distinct classes. This is the
+cleanest statement of what the model does and does not endogenise.
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{@{}p{0.19\textwidth}p{0.24\textwidth}p{0.24\textwidth}p{0.25\textwidth}@{}}
+\begin{tabular}{@{}p{0.20\textwidth}p{0.24\textwidth}p{0.22\textwidth}p{0.26\textwidth}@{}}
 \toprule
-\textbf{Zero} & \textbf{Model treatment} & \textbf{Probability} & \textbf{Role in estimation}\\
+\textbf{Zero} & \textbf{Treatment} & \textbf{Probability} & \textbf{Role}\\
 \midrule
 Whole attraction area $a$ has no supplier in $s$
 & \emph{Structural}: $T_{s,a}=0$, $(s,a)$ outside the active set
 & $1$ by construction
-& None: absorbed by the $a\times s$ fixed effect (Lemma~\ref{lem:fe}(i)); no parameter
-estimated\\[4pt]
-ZE $l$ inside an active area $a\in\Areas^{+}_{s}$ has no supplier
-& \emph{Endogenous}: $T_{s,a}>0$ shared with its area, own distance $d_{l}$
-& $(1-\gamma_{lrs})^{N_{s}}$, or $e^{-N_{s}\gamma_{lrs}}$ under Poissonization
-& \textbf{The identifying variation}: disciplined by distance alone
-\eqref{eq:within-contrast-norm}; pins $\alpha$ (gradient) and $N_{s}$ (level)\\
+& None --- absorbed by the $a\times s$ fixed effect (Lemma~\ref{lem:fe}); no parameter estimated\\[4pt]
+ZE $l$ inside an active area has no supplier
+& \emph{Endogenous}: inherits $T_{s,a}>0$, own distance $d_{l}$
+& $(1-q_{ls})^{N_{s}}$
+& \textbf{The identifying variation}: disciplined by distance alone \eqref{eq:within}\\
 \bottomrule
 \end{tabular}
-\caption{The two classes of extensive-margin zeros under Assumption~\ref{as:geo}.}
+\caption{The two classes of extensive-margin zeros. The second row is exactly the set of
+employment zones that host firms but no supplier. Under ZE-level comparative advantage they had to
+be assigned $T\equiv0$, making their zeros exogenous; under Assumption~\ref{as:geo} they inherit
+their area's comparative advantage and their zeros become model predictions.}
 \label{tab:hierarchy}
 \end{table}
 
-Note that the second row is exactly the set of observations the implementation already
-constructs as ``control'' pairs (status $2$ in \texttt{filter\_N\_upstream}): upstream ZE with
-no supplier that nonetheless enter the regression as $y=0$ observations at their own distance
-bin. Under the baseline these pairs had to be given $T\equiv0$ --- so their zeros were
-\emph{exogenous} and the $\gamma$-inversion could say nothing about them. Under
-Assumption~\ref{as:geo} they inherit $T_{s,a(l)}$ from their area and their zeros become model
-predictions. \textbf{That is the endogenization the note set out to deliver}, and it comes
-from the geography restriction, not from any change to the regression.
+\section{What the model implies for the data}
+\label{sec:reduced}
 
-\subsection{Division of labor in identification}
-\label{sec:division}
+\subsection{The firm-level reduced form}
+
+The empirical extensive-margin regression is run at the firm level, with the firm's own
+productivity as a control. The model delivers that specification exactly.
+
+\begin{proposition}[Firm-level reduced form]
+\label{prop:firm}
+Let a firm be a (ZE, variety) champion with productivity $z$, and let $a$ be its area's downstream
+anchor. Writing $\Phi^{-l}_{sa}=\sum_{l'\neq l}T_{sl'}(w_{l'}\tau_{l'as})^{-\theta}$ for the
+competitors' cost scale,
+\begin{equation}
+\Prob\big(\text{the firm supplies}\mid z\big)=\exp\!\Big(-\Phi^{-l}_{sa}\big(w_{l}\tau_{las}\big)^{\theta}z^{-\theta}\Big),
+\label{eq:firm-win}
+\end{equation}
+so the probability that it does \emph{not} supply is a complementary log-log function
+\begin{equation}
+\Prob\big(\text{no supply}\mid z\big)=1-\exp\!\big(-\exp(\eta)\big),
+\qquad
+\eta=\underbrace{\ln\Phi^{-l}_{sa}}_{\text{area}\times\text{sector FE}}
++\theta\ln w_{l}
++\boxed{\theta\alpha}\,\ln d_{la}
++\boxed{(-\theta)}\,\ln z .
+\label{eq:firm-cloglog}
+\end{equation}
+The variety count $N_{s}$ does not appear.
+\end{proposition}
+
+Three consequences, and they are the backbone of the estimation.
+
+\begin{enumerate}[nosep,topsep=3pt,label=(\alph*)]
+\item \textbf{The empirical specification is the model, not an approximation to it.} A cloglog on
+the ``does not supply'' indicator, on log distance and log own productivity, with an
+area$\times$sector fixed effect, is exactly \eqref{eq:firm-cloglog}. The distance coefficient is
+$+\theta\alpha$, so $\alpha=\hat\beta_{\ln d}/\theta$ with no attenuation correction.
+\item \textbf{$\alpha$ and $N_{s}$ separate exactly.} $N_{s}$ is absent from
+\eqref{eq:firm-cloglog}: conditioning on the firm removes it. The regression identifies $\alpha$;
+the count level identifies $N_{s}$; there is no residual coupling.
+\item \textbf{The productivity coefficient is a free over-identifying test.} It equals $-\theta$.
+Extending the moment vector to include it would let $\theta$ be estimated rather than calibrated.
+\end{enumerate}
+
+Table~\ref{tab:convention} confirms the proposition numerically and shows that the outcome
+convention is dictated by the unit of observation rather than chosen: the reversed outcome
+recovers neither coefficient.
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{@{}llp{0.34\textwidth}@{}}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+outcome & $\hat\beta_{\ln d}$ \ (truth $\theta\alpha=0.30$) & $\hat\beta_{\ln z}$ \ (truth $-\theta=-1.0$)\\
+\midrule
+does not supply & $+0.327$ & $-1.051$\\
+supplies        & $-0.426$ & $+1.452$\\
+\bottomrule
+\end{tabular}
+\caption{Simulation of the exact object, $\theta=1$, $\alpha=0.30$, firms as (ZE $\times$ variety)
+champions.}
+\label{tab:convention}
+\end{table}
+
+\subsection{The count moment}
+\label{sec:count}
+
+The zeros themselves are a cell-level object. Let $\mathcal{L}^{+}_{s}$ be the ZE inside active
+attraction areas. The empirical moment is the share of those ZE hosting at most $n$ suppliers,
+\begin{equation}
+\bar G_{s}(n)=\frac{1}{|\mathcal{L}^{+}_{s}|}\#\big\{l\in\mathcal{L}^{+}_{s}:K_{ls}\le n\big\},
+\qquad
+\E\big[\bar G_{s}(0)\big]=\frac{1}{|\mathcal{L}^{+}_{s}|}\sum_{l}(1-q_{ls})^{N_{s}},
+\label{eq:count}
+\end{equation}
+the count analogue of the number-of-buyers-per-seller moment of \citet{lmm2023}. It is strictly
+decreasing in $N_{s}$, which is what identifies the variety count: given the sourcing shares ---
+pinned by area-aggregated value shares and by $\alpha$, neither of which involves $N_{s}$ --- the
+only free object shaping \eqref{eq:count} is $N_{s}$.
+
+The support is restricted to active areas for the same reason the fixed effect discards the
+others: ZE in empty areas are structural zeros carrying no information about $(\alpha,N_{s})$.
+
+\subsection{Bounds on the variety count}
+\label{sec:bounds}
+
+Because the iceberg cost never changes which firm is cheapest within a ZE, each variety generates
+one distinct supplying firm per winning origin. So if $N^{\mathrm{obs}}_{s}$ is the number of
+distinct upstream firms observed to supply the downstream industry,
+$N^{\mathrm{obs}}_{s}=\sum_{\rho}\#\{\text{origins winning }\rho\text{ somewhere}\}\in[N_{s},N_{s}\Nd]$,
+hence
+\begin{equation}
+\frac{N^{\mathrm{obs}}_{s}}{\Nd}\;\le\;N_{s}\;\le\;N^{\mathrm{obs}}_{s} .
+\label{eq:bounds}
+\end{equation}
+The bounds are tight: the upper when every variety is globally sourced from a single origin, the
+lower when each of the $\Nd$ buyers sources it from a different origin. Since
+$\E[\sum_{l}K_{ls}]=N_{s}\sum_{l}q_{ls}$ with $\sum_{l}q_{ls}\in[1,\min(\Nd,R)]$, matching the
+observed firm count gives a second, closed-form estimate
+$N^{\mathrm{count}}_{s}=N^{\mathrm{obs}}_{s}/\sum_{l}q_{ls}$ that lies in \eqref{eq:bounds} by
+construction --- a free over-identifying check.
+
+\subsection{Identification}
+\label{sec:identification}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}llp{0.36\textwidth}@{}}
 \toprule
 \textbf{Parameter} & \textbf{Identifying variation} & \textbf{Moment}\\
 \midrule
-$\alpha$ (trade cost)
-& \emph{Within}-area, across-ZE gradient of the supplier indicator in distance
-& cloglog distance coefficient, block~4 \eqref{eq:cloglog}. The within-area \emph{intensive}
-margin adds only $\alpha/\eta_{\text{size}}$, and only in levels
-(Section~\ref{sec:risk-evidence})\\
-$T_{s,a}$, $a\in\Areas^{+}_{s}$
-& \emph{Across}-area value shares
-& area-aggregated sourcing shares
-$\gamma_{s,a}=\sum_{l\in\mathcal{L}_{a}}\gamma_{ls}$, block~5\\
-$N_{s}$
-& \emph{Level} of the empty-ZE share inside active areas, given normalized $T$ and $\alpha$
-& count moment $G_{s}(0)$ (Section~\ref{sec:moment})\\
-$\sigma^{2}_{s}$ (optional; Section~\ref{sec:eps})
-& \emph{Dispersion} of comparative advantage \emph{within} areas
-& within-area dispersion of log shares among active ZE \emph{and} the count over-dispersion /
-higher thresholds $G_{s}(n)$, $n\ge1$ (Section~\ref{sec:eps-calibration})\\
-$\Areas^{+}_{s}$
-& Which areas host any supplier
-& \emph{Not modeled} --- taken as given, matching the fixed effect's information set\\
+$\alpha$ & \emph{Within}-area, across-firm gradient of supplying in distance
+& firm-level cloglog distance coefficient \eqref{eq:firm-cloglog}\\
+$T_{s,a}$, $a\in\Areas^{+}_{s}$ & \emph{Across}-area value shares
+& area-aggregated sourcing shares $\gamma_{s,a}=\sum_{l\in\mathcal{L}_{a}}\gamma_{ls}$\\
+$N_{s}$ & \emph{Level} of the empty-ZE share inside active areas
+& count moment $\bar G_{s}(0)$ \eqref{eq:count}\\
+$\theta$ & Gradient of supplying in own productivity
+& $\hat\beta_{\ln z}=-\theta$ --- currently calibrated, hence a test\\
+$\Areas^{+}_{s}$ & Which areas host any supplier
+& \emph{Not modelled} --- taken as given, matching the fixed effect's information set\\
 \bottomrule
 \end{tabular}
-\caption{Who identifies what under the two-tier geography. The estimated objects load on
-distinct features of the data: a within-area \emph{gradient}, across-area \emph{aggregates}, a
-within-area \emph{level}, and (if the restriction is relaxed as in Section~\ref{sec:eps}) a
-within-area \emph{dispersion}.}
-\label{tab:division}
+\caption{The channels are near-orthogonal by construction: $\alpha$ reads a within-area slope that
+$T$ cannot touch because it is constant within the area; $T$ reads across-area aggregates;
+$N_{s}$ reads a level that the fixed effect strips out of the $\alpha$ regression.}
+\label{tab:identification}
 \end{table}
 
-The channels are close to orthogonal by construction, which is the practical payoff:
-$\alpha$ reads a within-area slope that $T$ cannot touch (it is constant within the area),
-$T$ reads across-area aggregates that $\alpha$ shifts only through the common price index,
-$N_{s}$ reads a level that the fixed effect strips out of the $\alpha$ regression, and
-$\sigma^{2}_{s}$ --- the within-area dispersion of comparative advantage, if one declines to set
-it to zero --- reads a second moment that none of the other three touches.
+\subsection{Degrees of freedom}
 
-\subsection{Why profiling $T$ stays safe under the area-level restriction}
-\label{sec:profiling}
-
-The estimator can concentrate $T$ out of the outer search by inverting the sourcing-share
-moments (the Sinkhorn/GE inversion $T^{*}(\alpha,\Omega,A)$). With ZE-level comparative advantage
-this is structurally fragile: the number of free $T_{sl}$ equals the number of $\gamma$ targets,
-so the inversion can hit \emph{every} share exactly for \emph{any} $\alpha$, and it does so by
-raising $T$ on remote origins precisely as $\alpha$ rises. The distance channel is then at risk
-of being absorbed by $T^{*}(\alpha)$, flattening the regression coefficient in $\alpha$ and
-leaving the trade-cost elasticity with nothing to fit.
-
-\begin{remark}[Status of this concern]
-The flattening was diagnosed on the \emph{linear} extensive-margin specification. With the
-cloglog link --- the model's own reduced form, Proposition~\ref{prop:cloglog-exact} --- it no
-longer materialises: the profiled search returns an interior $\alpha$. The argument below is
-therefore not a description of current behaviour but a statement about \emph{why the
-area-level restriction is structurally safe}: it removes the degrees of freedom that made the
-cancellation possible in the first place, so the property does not depend on the link
-happening to be well chosen.
-\end{remark}
-
-Assumption~\ref{as:geo} removes the cancellation by counting equations:
-
-\begin{itemize}[nosep,topsep=2pt]
-\item \textbf{Free parameters:} $|\Areas^{+}_{s}|$ per sector (one per active area).
-\item \textbf{Share moments available:} one per active $(s,\ZE)$ pair, i.e.
-$\sum_{a\in\Areas^{+}_{s}}\#\{l\in\mathcal{L}_{a}: \text{active}\}\;\gg\;|\Areas^{+}_{s}|$.
-\end{itemize}
-
-The natural profiling step is therefore to invert the \emph{area-aggregated} shares,
+Fix a sector and let $A^{+}=|\Areas^{+}_{s}|$ and $R^{\mathrm{act}}_{a}$ be the number of ZE in
+area $a$ with a strictly positive observed share. The $T$ block has $A^{+}-1$ free elements after
+the reference normalisation, against $\sum_{a}R^{\mathrm{act}}_{a}$ share moments, so
+Assumption~\ref{as:geo} converts what were free parameters into
 \begin{equation}
-\sum_{l\in\mathcal{L}_{a}}\gamma_{ls}\big(T,\alpha\big)
-=\sum_{l\in\mathcal{L}_{a}}\hat\gamma_{ls},
-\qquad a\in\Areas^{+}_{s},
-\label{eq:area-sinkhorn}
+\sum_{a\in\Areas^{+}}\big(R^{\mathrm{act}}_{a}-1\big)
+\quad\text{over-identifying restrictions,}
 \end{equation}
-which is a \emph{square} system --- $|\Areas^{+}_{s}|$ equations in $|\Areas^{+}_{s}|$ unknowns,
-with the same multiplicative/Sinkhorn structure as before, hence the same contraction
-properties. The \emph{within}-area split of each area aggregate across its ZE is then left as
-a \emph{model prediction}, a function of distance and $\alpha$ alone by
-\eqref{eq:within-contrast-norm}. Profiling $T$ out no longer profiles $\alpha$ out: the
-within-area shares and the within-area extensive margin both remain live functions of
-$\alpha$ that the loss must fit --- by construction, not by luck. Appendix~\ref{app:df} counts the resulting degrees of
-freedom.
-
-\subsection{The main risk, and the release valve}
-\label{sec:risk}
-
-Restriction \eqref{eq:T-area} is strong, and it is worth being blunt about how it can fail.
-With $w\equiv1$ and $T$ constant within an area, \emph{all} within-area variation in sourcing
-shares and in the extensive margin is attributed to distance. But ZE within an attraction area
-also differ in \textbf{size}: a large ZE plausibly hosts suppliers more often than a small one
-at the same distance, for reasons that have nothing to do with trade costs. If size is omitted,
-the model must load it on the distance coefficient, biasing $\alpha$ by the usual
-omitted-variable amount (with the sign of the size--distance correlation within areas).
-
-Three responses, in order of preference. The third --- letting comparative advantage deviate
-from its area level by a \emph{random} ZE-level term calibrated on the ZE-level shares --- is
-developed in its own section (Section~\ref{sec:eps}), because it is the general case that
-nests the other two.
-
-\begin{enumerate}[nosep,topsep=2pt]
-\item \textbf{Let observed ZE covariates scale $T$, with a common loading.} Replace
-\eqref{eq:T-area} by
-\begin{equation}
-T_{sl}=T_{s,a(l)}\cdot\prod_{k}\big(x_{kl}\big)^{\eta_{k}},
-\label{eq:T-area-cov}
-\end{equation}
-with $x_{kl}$ observed (ZE employment or establishment count, an urbanization indicator,
-\dots) and $\eta_{k}$ a \emph{small number of scalars shared across areas and sectors}
-(e.g. $\eta_{\text{size}}=1$ under the microfoundation ``$T$ is proportional to the mass of
-potential entrepreneurs''). The parameter count stays at the area level --- the dimension gain
-of Section~\ref{sec:activeset-area} is preserved --- while within-area heterogeneity is no
-longer forced onto distance. Crucially, \eqref{eq:T-area-cov} must include the \emph{same}
-controls as the empirical regression: whatever the cloglog conditions on within the fixed
-effect, the model must condition on too, or the two $\alpha$'s are not the same object.
-\item \textbf{Test the restriction before imposing it.} \eqref{eq:T-area} is directly
-checkable in the data, without any estimation: regress $\ln\hat\gamma_{ls}$ (observed shares,
-active ZE only) on an area$\times$sector fixed effect, log distance, and candidate size
-controls, and inspect the residual \emph{within-area} dispersion. If the within-area residual
-variance is small relative to the across-area variance, \eqref{eq:T-area} is a good
-approximation; if it is large, the surviving dispersion tells you which covariate is missing
-in \eqref{eq:T-area-cov}. Running this diagnostic first is cheap and settles the question the
-restriction raises.
-\end{enumerate}
-
-Note also that \eqref{eq:T-area} converts what were free parameters into $R_{a}-1$
-\emph{over-identifying restrictions} per active area (Appendix~\ref{app:df}). That is a
-feature --- the model becomes testable where it was previously just-identified --- but it means
-a Hansen $J$ on the $\gamma$ block now has power against the geography restriction itself, and
-should be read as such.
-
-\subsection{The diagnostic, run on the data: verdict and how to read it}
-\label{sec:risk-evidence}
-
-The diagnostic of Section~\ref{sec:risk}(2) has been run on the observed shares: all
-(sector, ZE) cells of the industry's upstream sectors, with $\hat\gamma_{ls}$ set to zero where
-no supplier is observed, grouped by \texttt{ze2010\_downstream}$\times$\texttt{A129} --- which is
-exactly the area$\times$sector fixed effect of Assumption~\ref{as:geo} --- and restricted to
-area$\times$sectors with a strictly positive total share, i.e.\ to $\Areas^{+}_{s}$. The size
-covariate is $\ln(\text{SIREN})$, the number of firms (supplier and non-supplier) in the cell.
-Six specifications: $\hat\gamma_{ls}$ in levels over all cells, and $\ln\hat\gamma_{ls}$ over
-active cells only, each with the fixed effect as a regressor, then absorbed, then absorbed with
-the size control.
-
-\begin{table}[htbp]
-\centering
-\small
-\begin{tabular}{@{}lrrrrrr@{}}
-\toprule
-& \multicolumn{3}{c}{$\hat\gamma_{ls}$ (levels)} & \multicolumn{3}{c}{$\ln\hat\gamma_{ls}$ (active only)}\\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-& (1) & (2) & (3) & (4) & (5) & (6)\\
-\midrule
-$\ln d_{l}$ &  & $-0.017^{***}$ & $-0.011^{***}$ & & $-0.284$ & $-0.130$\\
-            &  & $(0.004)$      & $(0.002)$      & & $(0.197)$ & $(0.136)$\\
-$\ln \text{SIREN}_{l}$ & & & $0.010^{***}$ & & & $0.492^{***}$\\
-            & & & $(0.003)$ & & & $(0.126)$\\
-\midrule
-area$\times$sector FE & regressor & absorbed & absorbed & regressor & absorbed & absorbed\\
-Observations & $1161$ & $1161$ & $1161$ & $99$ & $99$ & $99$\\
-$R^{2}$ & $0.059$ & $0.160$ & $0.270$ & $0.944$ & $0.949$ & $0.963$\\
-within $R^{2}$ & --- & $0.108$ & $0.225$ & --- & $0.084$ & $0.330$\\
-\bottomrule
-\end{tabular}
-\caption{The within-area diagnostic of Section~\ref{sec:risk}(2). Standard errors clustered by
-area$\times$sector in the absorbed specifications. $1161$ cells lie inside active attraction
-areas; $99$ host a supplier.}
-\label{tab:diagnostic}
-\end{table}
-
-\paragraph{The headline number.} Of the $1161$ ZE--sector cells sitting \emph{inside an active
-attraction area}, only $99$ host a supplier: \textbf{$91.5\%$ are extensive-margin zeros}. Since
-the sample size is identical in columns (2) and (3), $\ln\text{SIREN}$ is defined everywhere ---
-every one of those $1161$ cells contains at least one firm. These are therefore genuine zeros
-among cells that host firms, not empty cells, and they are exactly the endogenous class of
-Table~\ref{tab:hierarchy}, row~2: under Assumption~\ref{as:geo} they inherit $T_{s,a}>0$ from
-their area and become model objects, whereas ZE-level comparative advantage had to assign them
-$T\equiv0$. The two-tier design is not a convenience here --- it is what makes $91.5\%$ of the
-relevant geography speakable at all.
-
-\paragraph{The two $R^{2}$'s in columns (1) and (4) split exactly along the model's two tiers.}
-With the fixed effect entered as a regressor, area$\times$sector dummies explain $5.9\%$ of the
-variance of $\hat\gamma_{ls}$ in levels but $94.4\%$ of the variance of $\ln\hat\gamma_{ls}$
-among active cells. Because the level variable is $91.5\%$ zeros, its variance is dominated by
-the extensive margin. So:
-\begin{itemize}[nosep,topsep=2pt]
-\item the \emph{intensive} margin is almost entirely \textbf{between} areas --- which is what
-$T_{s,a}$ is for, and a direct endorsement of Assumption~\ref{as:geo};
-\item the \emph{extensive} margin is almost entirely \textbf{within} areas --- which is what
-distance and granularity are for, and where Section~\ref{sec:within} says $\alpha$ lives.
-\end{itemize}
-One caveat on the $0.944$: with $99$ observations and one dummy per active area$\times$sector,
-$R^{2}$ is mechanically inflated by a near-saturated design. Report the number of groups and the
-adjusted $R^{2}$ before leaning on that figure.
-
-\paragraph{Section~\ref{sec:risk}'s concern is confirmed: size is the dominant within-area force,
-and it does confound distance.} In logs, $\ln\text{SIREN}$ carries a coefficient of $0.492$
-$(0.126)$ and lifts the within $R^{2}$ from $0.084$ to $0.330$ --- roughly four times the
-explanatory power of distance. Adding it moves the distance coefficient toward zero in both
-specifications, $-0.284\to-0.130$ in logs and $-0.017\to-0.011$ in levels. The sign of that
-movement is informative: within an attraction area, closer ZE are \emph{bigger}, so omitting size
-made distance look more powerful than it is. \textbf{The covariate extension
-\eqref{eq:T-area-cov} is therefore not optional, and the firm count must be in it.} Any $\alpha$
-estimated from a within-area specification without it inherits the same upward bias in magnitude.
-
-\paragraph{But neither log coefficient can be read as $-\theta\alpha$: granular censoring.}
-The insignificance of columns (5)--(6) is not evidence that distance does not matter within areas.
-Conditioning on activity censors the share, and severely so in the granular regime.
-
-\begin{lemma}[Granular censoring of the observed positive share]
-\label{lem:censoring}
-With $K_{ls}\sim\Pois(u_{ls})$, $u_{ls}=N_{s}\gamma_{ls}$, and equal-value varieties,
-$\E[\hat\gamma_{ls}\mid K_{ls}\ge1]=\gamma_{ls}/(1-e^{-u_{ls}})$, so
-\begin{equation}
-\frac{\partial \ln \E\big[\hat\gamma_{ls}\mid K_{ls}\ge1\big]}{\partial \ln\gamma_{ls}}
-=B(u_{ls}),
-\qquad
-B(u)=1-\frac{u}{e^{u}-1}\in(0,1),
-\label{eq:censoring}
-\end{equation}
-with $B$ increasing, $B(0^{+})=0$ and $B(\infty)=1$. The regression actually run --- on
-$\ln\hat\gamma$ rather than $\ln\E[\hat\gamma]$ --- carries the closely related factor
-$B_{\log}(u)=\partial\,\E[\ln K\mid K\ge1]/\partial\ln u$, which is slightly smaller than $B$ for
-$u\lesssim3$ and equals it in the limits.
-\end{lemma}
-
-The mechanism is quantization: a ZE that supplies at all supplies at least one variety, and when
-$u\ll1$ it supplies \emph{exactly} one, so its observed share is $\approx1/N_{s}$ almost
-irrespective of its true $\gamma$. All of the distance signal is pushed out of the intensive
-margin and into whether $K\ge1$. Exact values of the two factors:
-
-\begin{table}[htbp]
-\centering
-\small
-\begin{tabular}{@{}lrrrrrrrr@{}}
-\toprule
-$u=N_{s}\gamma$ & $0.09$ & $0.3$ & $0.6$ & $1.0$ & $1.5$ & $2.0$ & $3.0$ & $10$\\
-\midrule
-$\Prob(K\ge1)$ & $0.086$ & $0.259$ & $0.451$ & $0.632$ & $0.777$ & $0.865$ & $0.950$ & $1.000$\\
-$B(u)$         & $0.044$ & $0.143$ & $0.270$ & $0.418$ & $0.569$ & $0.687$ & $0.843$ & $1.000$\\
-$B_{\log}(u)$  & $0.031$ & $0.105$ & $0.212$ & $0.351$ & $0.514$ & $0.658$ & $0.874$ & $1.061$\\
-\bottomrule
-\end{tabular}
-\caption{Granular censoring of the intensive margin (Lemma~\ref{lem:censoring}), computed exactly.
-Both factors vanish as $u\to0$: in a sparse sector the observed positive share carries almost no
-information about $\gamma$.}
-\label{tab:censoring}
-\end{table}
-
-Read against Table~\ref{tab:censoring}, the size coefficient of column (6) is itself an estimate
-of the attenuation: if $T$ is proportional to the mass of firms ($\eta_{\text{size}}=1$, the
-natural microfoundation), then $\hat B_{\log}\approx0.49$, which inverts to $u\approx1.4$ among
-the \emph{active} cells. That is consistent with an overall active rate of $8.5\%$ only because
-selection into activity is strong --- the active cells are the high-$u$ tail --- and it yields a
-first, independent order-of-magnitude read on $N_{s}$, namely
-$N_{s}\approx1.4/\bar\gamma_{\text{active},s}$, to be computed sector by sector and compared
-against the count moment. That comparison is precisely the over-identifying check of
-Section~\ref{sec:eps-calibration}.
-
-\paragraph{The ratio of coefficients is identified --- in \emph{levels}, not in logs.} Both
-regressors enter the index $\ln\gamma_{ls}$ linearly, so a censoring factor common across cells
-would cancel from their ratio, leaving
-$\hat\beta_{\ln d}/\hat\beta_{\ln\text{size}}=-\theta\alpha/\eta_{\text{size}}$ free of $N_{s}$,
-of the frailty attenuation of Lemma~\ref{lem:attenuation}, and of $B$. Whether that survives
-heterogeneity in $u_{ls}$ --- which is correlated with both regressors --- is an empirical
-question, and simulation of the exact object (multiple areas, absorbed fixed effects, value
-dispersion $\mathrm{CV}_{v}=0.8$, $\sigma_{\varepsilon}=0.4$--$0.6$, active shares $6$--$18\%$)
-answers it sharply:
-
-\begin{table}[htbp]
-\centering
-\small
-\begin{tabular}{@{}lrrrr@{}}
-\toprule
-& \multicolumn{4}{c}{recovered $-\hat\beta_{\ln d}/\hat\beta_{\ln\text{size}}$}\\
-\cmidrule(lr){2-5}
-true $\theta\alpha/\eta$ & $0.300$ & $0.300$ & $1.100$ & $0.600$\\
-value dispersion $\mathrm{CV}_{v}$ & $0$ & $0.8$ & $0.8$ & $0.8$\\
-\midrule
-levels, \emph{all} cells   & $0.311$ & $0.306$ & $1.119$ & $0.646$\\
-logs, \emph{active} cells  & $0.317$ & $-0.155$ & $1.478$ & $-0.063$\\
-\bottomrule
-\end{tabular}
-\caption{The level specification recovers the coefficient ratio to within $8\%$ across
-configurations; the log/active specification does not, and flips sign as soon as varieties carry
-dispersed values. Reason: $\E[\hat\gamma_{ls}]=\gamma_{ls}$ holds \emph{unconditionally}
-(equation \eqref{eq:app-mean}), so the level regression over all cells --- zeros included --- is
-free of censoring and of selection, while the log/active regression suffers both, with an
-attenuation $B(u_{ls})$ that is itself correlated with size and distance.}
-\label{tab:ratio-sim}
-\end{table}
-
-Applied to Table~\ref{tab:diagnostic}, and with the calibration's $\theta=1$:
-\begin{equation}
-\frac{\alpha}{\eta_{\text{size}}}
-=-\frac{\hat\beta_{\ln d}}{\hat\beta_{\ln\text{size}}}
-=\frac{0.011}{0.010}\approx 1.1
-\qquad\text{(column 3, the usable specification).}
-\label{eq:alpha-over-eta}
-\end{equation}
-Column (6)'s ratio, $0.130/0.492\approx0.26$, is \emph{not} usable --- Table~\ref{tab:ratio-sim}
-shows that object biased by a factor of two or worse. Under $\eta_{\text{size}}=1$,
-\eqref{eq:alpha-over-eta} gives $\alpha\approx1.1$: roughly \emph{four times} the $\alpha\approx0.30$
-returned by the joint free-$T$ search. Two readings, not mutually exclusive. Either
-$\eta_{\text{size}}<1$ --- comparative advantage grows less than proportionally with the firm
-count --- in which case only the ratio is pinned and $\alpha$ requires a second moment; or the
-joint search was indeed absorbing the distance channel into $T$, exactly the mechanism
-Section~\ref{sec:profiling} describes, in which case the within-area evidence says the true
-$\alpha$ is substantially larger. Either way $\eta_{\text{size}}$ must be estimated rather than
-assumed, and the extensive-margin moments must supply the second equation.
-
-\paragraph{Why columns (4)--(6) are doubly uninformative, and the next diagnostic to run.}
-Beyond censoring, there is a mechanical problem: the within-area log regression is identified only
-off area$\times$sectors with \emph{at least two} active ZE. A group with exactly one active cell
-has its single residual demeaned to zero and contributes nothing --- Lemma~\ref{lem:fe}(ii)'s
-logic, now applied to the intensive margin. With $99$ active cells spread over the active
-area$\times$sectors, the effective sample may be far below $99$. The cheap next step is to
-tabulate the number of active ZE per active area$\times$sector and report how many groups have
-$\ge2$; that number, not $99$, is what columns (5)--(6) are estimated on, and it explains the
-standard errors of $0.197$ and $0.136$ without any appeal to a small effect.
-
-\paragraph{Verdict.} Four conclusions carry forward.
-\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
-\item \textbf{Keep the two-tier geography.} $91.5\%$ zeros inside active areas, with the intensive
-margin $94\%$ between-area and the extensive margin $94\%$ within-area: the data split along
-exactly the seam Assumption~\ref{as:geo} cuts.
-\item \textbf{Include the firm count in \eqref{eq:T-area-cov}, and estimate its loading.} Size
-dominates within-area variation and biases $\alpha$ upward in magnitude when omitted. Do not fix
-$\eta_{\text{size}}=1$ by assumption --- \eqref{eq:alpha-over-eta} shows the whole reading of
-$\alpha$ hinges on it.
-\item \textbf{Identify $\alpha$ from the extensive margin, not from the within-area intensive
-margin.} The informative variation is the $1062$ zeros, not the $99$ positive shares --- which
-are censored (Lemma~\ref{lem:censoring}) and thin within groups. Table~\ref{tab:division}'s
-$\alpha$ row should be read accordingly: the share channel is the \emph{level} specification over
-all cells, and its role is to pin $\alpha/\eta_{\text{size}}$, while the cloglog on the supplier
-indicator carries the rest.
-\item \textbf{Do not read $\sigma^{2}_{\varepsilon}$ off column (6)'s residual.} A within $R^{2}$
-of $0.330$ leaves two thirds of the within-area log-share variation unexplained, but that residual
-mixes $\varepsilon$, granular sampling noise, censoring, and truncation on the selected high-$\gamma$
-tail. Table~\ref{tab:eps-mc} already ruled out the plug-in route;
-Lemma~\ref{lem:censoring} adds a second reason. Estimate $\sigma^{2}_{s}$ inside the SMM.
-\end{enumerate}
-
-\section{Employment-zone deviations: a distribution, not a parameter vector}
-\label{sec:eps}
-
-Assumption~\ref{as:geo} imposes $T_{sl}=T_{s,a(l)}$ exactly. Since sourcing shares are observed
-\emph{at the ZE level}, it is natural to relax it --- write comparative advantage as an area
-level plus a ZE-specific deviation, and calibrate the deviation on those ZE-level shares. This
-section does exactly that. Two things must be settled first: the functional form
-(Section~\ref{sec:eps-form}), and --- decisively --- whether the deviation is a
-\emph{parameter vector} or a \emph{distribution} (Section~\ref{sec:eps-trap}). The answer to
-the second question determines whether the identification of $\alpha$ survives the relaxation.
-
-\subsection{Multiplicative, not additive}
-\label{sec:eps-form}
-
-$T_{sl}$ is a Fr\'echet \emph{scale}: it must be strictly positive, and it enters every model
-object multiplicatively --- shares are ratios of $T$'s \eqref{eq:share-area}, and
-$(w_{l}\tau_{lrs})^{-\theta}$ multiplies it. An additive deviation $T_{s,a}+\epsilon_{sl}$
-respects neither property: it can go negative, and its magnitude has no scale-free reading
-(the same $\epsilon$ means something different in a large and a small sector). The right form
-is multiplicative,
-\begin{equation}
-T_{sl}
-=T_{s,a(l)}\cdot\nu_{sl}\cdot\prod_{k}x_{kl}^{\eta_{k}},
-\qquad \nu_{sl}>0,\qquad \E[\nu_{sl}]=1,
-\label{eq:eps-spec}
-\end{equation}
-or in logs, with $\varepsilon_{sl}\equiv\ln\nu_{sl}$,
-\begin{equation}
-\ln T_{sl}=\ln T_{s,a(l)}+\textstyle\sum_{k}\eta_{k}\ln x_{kl}+\varepsilon_{sl}.
-\label{eq:eps-log}
-\end{equation}
-Three payoffs. Positivity is automatic. The normalization $\E[\nu]=1$ makes $T_{s,a}$
-\emph{exactly} the area level, so the area-aggregate inversion \eqref{eq:area-sinkhorn} is
-unchanged in expectation. And --- the point that makes the proposal work ---
-$\varepsilon_{sl}$ is \emph{literally the residual of the within-area log-share regression},
-because \eqref{eq:within-contrast} is additive in $\ln T$:
-\begin{equation}
-\ln\gamma_{lrs}
-=\underbrace{\ln T_{s,a(l)}-\ln\Phi_{sr}}_{\text{area}\times\text{sector}}
-\;-\;\theta\alpha\ln d_{lr}
-\;-\;\theta\ln w_{l}
-\;+\;\textstyle\sum_{k}\eta_{k}\ln x_{kl}
-\;+\;\varepsilon_{sl}.
-\label{eq:eps-logshare}
-\end{equation}
-The observable block $\prod_{k}x_{kl}^{\eta_{k}}$ should absorb as much as it can --- size above
-all. Every piece of within-area heterogeneity moved from $\varepsilon$ into observables is
-heterogeneity that does \emph{not} have to be integrated out, and doing so is precisely the fix
-to the size concern of Section~\ref{sec:risk}. What remains in $\varepsilon$ is genuinely
-unexplained ZE-level comparative advantage.
-
-\subsection{The trap: a free $\varepsilon$ per ZE undoes the whole design}
-\label{sec:eps-trap}
-
-``Calibrate $\varepsilon$ on the ZE-level shares'' admits two readings, and they are not
-variations on a theme --- one of them destroys the estimator.
-
-\begin{description}[topsep=3pt,itemsep=2pt,leftmargin=1.6em]
-\item[(A) Fixed effects.] One free parameter $\varepsilon_{sl}$ per ZE, chosen so that the
-model reproduces each observed $\hat\gamma_{ls}$ exactly.
-\item[(B) Random effect.] A \emph{distribution} for $\varepsilon$ with one or two parameters
-per sector, chosen so that the model reproduces the \emph{dispersion} of the ZE-level shares
-(and of the supplier counts).
-\end{description}
-
-Reading (A) must be rejected, for three compounding reasons.
-
-\begin{enumerate}[nosep,topsep=3pt,label=(\roman*)]
-\item \emph{It restores exact just-identification and kills $\alpha$.} The number of free
-$T$-elements returns to the number of $\gamma$ targets, so $T^{*}(\alpha)$ can again reproduce
-every share for \emph{any} $\alpha$: the pathology of Section~\ref{sec:profiling} comes back
-verbatim, and the $R_{a}-1$ over-identifying restrictions per area of Appendix~\ref{app:df} ---
-the entire testable content of the two-tier geography --- vanish.
-\item \emph{$\varepsilon$ is undefined exactly where we need it.} The ZE the model was built to
-explain are those with no supplier, i.e.\ $\hat\gamma_{ls}=0$. There is no share to calibrate
-against, so $\varepsilon_{sl}$ for precisely those ZE is unidentified by construction. One
-would end up identifying $\alpha$ off the ZE for which $\varepsilon$ had to be assumed.
-\item \emph{And assuming $\varepsilon=0$ for them is biased in a signable direction.} Empty ZE
-are empty partly \emph{because} they drew a low $\nu$. Under the specification of
-Section~\ref{sec:eps-gamma} this is exact:
-\begin{equation}
-\E\big[\nu_{sl}\;\big|\;K_{ls}=0\big]=\frac{1}{1+\sigma^{2}_{s}\mu_{ls}}\;<\;1,
-\qquad \mu_{ls}\equiv N_{s}\bar q_{ls},
-\label{eq:eps-selection}
-\end{equation}
-so plugging $\nu=1$ over-states an empty ZE's comparative advantage by the factor
-$(1+\sigma_{s}^{2}\mu_{ls})$, over-predicts its probability of hosting a supplier, and forces
-the estimator to raise $\alpha$ (or lower $N_{s}$) to reconcile the observed zero. This is
-selection on unobserved comparative advantage, and it is first-order: at
-$\sigma^{2}=1,\mu=5$ the factor is $6$. On top of it sits the ordinary incidental-parameter
-problem --- one parameter per ZE with $O(1)$ observations each.
-\end{enumerate}
-
-Reading (B) avoids all three: it never needs $\varepsilon$ at a particular ZE, and
-\eqref{eq:eps-selection} is not a bias to be corrected but a property the mixture embeds
-automatically. It is what the rest of this section develops, under one design principle worth
-stating in isolation:
-
-\begin{quote}
-\textbf{The number of free parameters must not grow with the number of employment zones.}
-$\varepsilon$ may be a distribution; it may not be a parameter vector.
-\end{quote}
-
-\subsection{The Gamma specification and its closed form}
-\label{sec:eps-gamma}
-
-\begin{proposition}[Negative-binomial supplier counts]
-\label{prop:negbin}
-Relax Assumption~\ref{as:geo} to \eqref{eq:eps-spec} with $\nu_{sl}$ drawn i.i.d.\ across ZE
-from a Gamma distribution with mean $1$ and variance $\sigma_{s}^{2}$ (shape $1/\sigma_{s}^{2}$,
-scale $\sigma_{s}^{2}$), and Poissonize the variety count (Remark~\ref{rem:poisson}). Then the
-supplier count of ZE $l$ is \textbf{negative binomial}:
-\begin{equation}
-\Prob(K_{ls}=n)
-=\frac{\Gamma\big(n+1/\sigma_{s}^{2}\big)}{n!\,\Gamma\big(1/\sigma_{s}^{2}\big)}
-\left(\frac{\sigma_{s}^{2}\mu_{ls}}{1+\sigma_{s}^{2}\mu_{ls}}\right)^{\!n}
-\big(1+\sigma_{s}^{2}\mu_{ls}\big)^{-1/\sigma_{s}^{2}},
-\qquad \mu_{ls}=N_{s}\,\bar q_{ls},
-\label{eq:negbin}
-\end{equation}
-where $\bar q_{ls}$ is the win-somewhere probability evaluated at $\nu=1$. In particular
-\begin{equation}
-\Prob(K_{ls}=0)=\big(1+\sigma_{s}^{2}\mu_{ls}\big)^{-1/\sigma_{s}^{2}},
-\qquad
-\E[K_{ls}]=\mu_{ls},
-\qquad
-\mathrm{Var}(K_{ls})=\mu_{ls}\big(1+\sigma_{s}^{2}\mu_{ls}\big),
-\label{eq:negbin-moments}
-\end{equation}
-and the posterior of the deviation given the observed count is Gamma with mean
-\begin{equation}
-\E\big[\nu_{sl}\mid K_{ls}\big]=\frac{1+\sigma_{s}^{2}K_{ls}}{1+\sigma_{s}^{2}\mu_{ls}} .
-\label{eq:eps-posterior}
-\end{equation}
-As $\sigma_{s}^{2}\to0$, \eqref{eq:negbin} collapses to the Poisson case and
-\eqref{eq:negbin-moments} to the cloglog of Proposition~\ref{prop:cloglog-exact}.
-\end{proposition}
-
-\begin{proof}
-$K\mid\nu\sim\Pois(\mu\nu)$ and $\nu\sim\text{Gamma}(k,\vartheta)$ with $k\vartheta=1$ and
-$k\vartheta^{2}=\sigma^{2}$, i.e.\ $k=1/\sigma^{2}$, $\vartheta=\sigma^{2}$. Mixing a Poisson
-mean over a Gamma gives the negative binomial \eqref{eq:negbin}; the zero probability is the
-Gamma moment generating function at $-\mu$, $\E[e^{-\mu\nu}]=(1+\vartheta\mu)^{-k}$; the
-variance is $\E[\mathrm{Var}(K\mid\nu)]+\mathrm{Var}(\E[K\mid\nu])=\mu+\mu^{2}\sigma^{2}$;
-and Gamma--Poisson conjugacy gives a Gamma$\big(k+K,\vartheta/(1+\vartheta\mu)\big)$ posterior
-with mean $(k+K)\vartheta/(1+\vartheta\mu)$, which is \eqref{eq:eps-posterior}. Setting $K=0$
-in \eqref{eq:eps-posterior} returns \eqref{eq:eps-selection}.
-\end{proof}
-
-All three closed forms in \eqref{eq:negbin-moments}--\eqref{eq:eps-posterior} were checked
-against Monte-Carlo simulation of the mixture over $\sigma^{2}\in\{0.25,1,3\}$ and
-$\mu\in\{0.3,1,5\}$, agreeing to simulation error ($\sim10^{-4}$).
-
-Proposition~\ref{prop:negbin} buys three things.
-\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
-\item \emph{The analytical path survives.} The whole count-moment family
-$\bar G_{s}(n)$ of Section~\ref{sec:moment} stays closed form --- a negative-binomial CDF
-instead of a Poisson one --- so the GMM/analytical route is not sacrificed to the relaxation.
-\item \emph{$\sigma_{s}^{2}$ has a second, independent signature.} Over-dispersion of the
-supplier counts, $\mathrm{Var}(K)/\E[K]-1=\sigma_{s}^{2}\mu_{ls}$, is a direct read on the
-within-area dispersion of comparative advantage, observable from the count distribution alone
-and completely separate from the share dispersion.
-\item \emph{ZE-level deviations for counterfactuals, at no parameter cost.}
-\eqref{eq:eps-posterior} is an empirical-Bayes shrinkage of each ZE toward its area level:
-active ZE get a $\nu$ informed by their own count, empty ZE get
-$1/(1+\sigma^{2}\mu)<1$. This is how to recover ZE-level heterogeneity for a counterfactual
-\emph{without} ever making $\varepsilon$ a free parameter.
-\end{enumerate}
-
-\begin{remark}[Gamma is a convenience, not a commitment]
-Log-normal $\varepsilon$ gives the familiar frailty cloglog with no closed form; it is just as
-easy in the simulation, which is where the estimator lives anyway. The two parameterizations
-agree to $O(\sigma^{4})$: for a mean-one Gamma,
-$\mathrm{Var}(\ln\nu)=\psi'(1/\sigma^{2})=\sigma^{2}+\tfrac{1}{2}\sigma^{4}+O(\sigma^{6})$. Note
-also that $\E[\nu]=1$ implies $\E[\ln\nu]=\psi(1/\sigma^{2})+\ln\sigma^{2}<0$; the Jensen gap is
-constant within a sector and is absorbed by the area$\times$sector fixed effect in
-\eqref{eq:eps-logshare}, so no correction is needed.
-\end{remark}
-
-\begin{remark}[The price index is unaffected to leading order]
-The deviations also enter
-$\Phi_{sr}=\sum_{a}T_{s,a}\sum_{l\in\mathcal{L}_{a}}\nu_{sl}(w_{l}\tau_{lrs})^{-\theta}$.
-Because it sums over many ZE with $\E[\nu]=1$, $\Phi_{sr}$ concentrates by the law of large
-numbers and is $\nu$-free up to $O(R^{-1/2})$. Hence $\E[\gamma_{lrs}]\approx\bar\gamma_{lrs}$
-evaluated at $\nu=1$, and the \emph{expected} within-area log-share profile is still exactly
-the distance profile of \eqref{eq:within-contrast-norm}. The simulation evaluates the exact
-object regardless; the approximation matters only for the analytical path.
-\end{remark}
-
-\subsection{The frailty attenuates the measured distance coefficient}
-\label{sec:eps-attenuation}
-
-Proposition~\ref{prop:cloglog-exact} said the reduced form is exactly a cloglog with slope
-$-\theta\alpha$. With $\sigma_{s}^{2}>0$ it becomes a cloglog \emph{with frailty}, and the
-mapping from coefficient to parameter acquires a known attenuation.
-
-\begin{lemma}[Frailty attenuation]
-\label{lem:attenuation}
-Under Proposition~\ref{prop:negbin},
-\begin{equation}
-\frac{\partial \ln\big(-\ln\Prob(K_{ls}=0)\big)}{\partial \ln d_{l}}
-=-\theta\alpha\cdot A(u_{ls}),
-\qquad
-A(u)=\frac{u}{(1+u)\ln(1+u)}=\frac{1-e^{-t}}{t}\bigg|_{t=\ln(1+u)},
-\qquad u_{ls}=\sigma_{s}^{2}\mu_{ls},
-\label{eq:attenuation-frailty}
-\end{equation}
-where $A$ is strictly decreasing on $(0,\infty)$ with $A(0^{+})=1$ and $A(\infty)=0$. Hence the
-cloglog distance coefficient understates $\theta\alpha$ in absolute value whenever
-$\sigma_{s}^{2}>0$.
-\end{lemma}
-
-Representative values (verified numerically against \eqref{eq:negbin-moments}):
-$A=0.94$ at $u=0.125$, $A=0.82$ at $u=0.5$, $A=0.61$ at $u=2$, $A=0.44$ at $u=6$. Three
-consequences.
-
-\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
-\item \emph{A third wedge on the interpretation of $\hat\beta_{\mathrm{dist}}$.} The naive map
-$\alpha=-\hat\beta_{\mathrm{dist}}/\theta$ of \eqref{eq:alpha-map} is now a \emph{lower bound}
-on $|\alpha|$; the corrected map divides by $\theta\,\overline{A}$. This sits on top of the LPM
-attenuation $\lambda$ (Lemma~\ref{lem:fe}(ii)) and the market-access wedge
-(Proposition~\ref{prop:cloglog-exact}(d)). All three are harmless for the SMM --- which runs the
-identical regression on simulated data, so every wedge is reproduced on both sides --- and all
-three matter as soon as one wants to read the reduced-form coefficient structurally.
-\item \emph{The frailty bends the distance profile, and that is testable with what is already
-there.} $u_{ls}$ varies with $\bar q_{ls}$, hence with distance: near ZE (large $u$) are
-attenuated more than remote ones, so the cloglog index becomes \emph{concave} in log distance.
-The existing over-identified configuration is exactly the right test --- the binned
-specification ($N_{\mathrm{REG}}=4$) against the power law ($N_{\mathrm{TAU}}=1$) leaves three
-degrees of freedom on the reg\_coef block, and this concavity is what the residual pattern
-across bins should look like if $\sigma^{2}_{s}$ is materially positive. That pattern is
-information about $\sigma_{s}^{2}$, not misfit.
-\item \emph{The cost of the relaxation is precision, not consistency.} Section~\ref{sec:within}
-weakens from a deterministic statement to one in expectation: the expected within-area log-share
-profile is still distance-only, so $\alpha$ remains identified from the within-area slope, but
-the standard error of $\hat\alpha$ grows with $\sigma_{s}^{2}$ --- more of the within-area
-variation is noise the model cannot attribute to distance. That is the honest price of not
-imposing Assumption~\ref{as:geo} exactly, and it is a price paid in variance only \emph{as long
-as $\varepsilon$ stays a distribution} (Section~\ref{sec:eps-trap}).
-\end{enumerate}
-
-\subsection{What the ZE-level shares actually identify --- and a warning}
-\label{sec:eps-calibration}
-
-\emph{Unconditionally}, the within-area residual variance of log shares decomposes cleanly into
-a structural and a sampling term, the latter being the granular noise of
-Appendix~\ref{app:dispersion} carried through the log by the delta method:
-\begin{equation}
-\mathrm{Var}_{\text{within}}\big(\ln\hat\gamma_{ls}\;\big|\;\text{FE},\ln d,x\big)
-=\sigma^{2}_{\varepsilon,s}
-+\underbrace{\frac{\big(1-\gamma_{ls}\big)\big(1+\mathrm{CV}_{v}^{2}\big)}{N_{s}\,\gamma_{ls}}}_{\text{granular sampling}} .
-\label{eq:eps-decomp}
-\end{equation}
-This suggests an attractive two-way separation: regress the squared within-area residual on
-$1/\hat\gamma_{ls}$ and read $\sigma^{2}_{\varepsilon}$ off the intercept and $N_{s}$ off the
-slope, since only the sampling term scales with $1/\gamma$.
-
-\textbf{Do not do this in the granular regime.} The feasible regression can only run on ZE with
-$\hat\gamma_{ls}>0$, and that truncation removes precisely the low draws where most of the
-dispersion of $\ln\hat\gamma$ lives. The truncation and the sampling inflation push in
-\emph{opposite} directions and do not cancel in any controlled way. A Monte-Carlo of the exact
-object --- one area with $R_{a}=40$ ZE, true $\sigma^{2}_{\varepsilon}=0.30$, multinomial
-granular shares, within-area regression of $\ln\hat\gamma$ on $\ln d$, active ZE only ---
-gives:
-
-\begin{table}[htbp]
-\centering
-\small
-\begin{tabular}{@{}rrrrr@{}}
-\toprule
-$N_{s}\bar\gamma$ & empty-ZE share & observed within resid.\ var. & prediction \eqref{eq:eps-decomp} & truth $\sigma^{2}_{\varepsilon}$\\
-\midrule
-$1.5$   & $37.5\%$ & $0.32$ & $0.95$ & $0.30$\\
-$3.8$   & $15.3\%$ & $0.45$ & $0.56$ & $0.30$\\
-$10$    & $3.2\%$  & $0.48$ & $0.40$ & $0.30$\\
-$25$    & $0.4\%$  & $0.41$ & $0.34$ & $0.30$\\
-$100$   & $0.0\%$  & $0.33$ & $0.31$ & $0.30$\\
-$500$   & $0.0\%$  & $0.30$ & $0.30$ & $0.30$\\
-\bottomrule
-\end{tabular}
-\caption{The variance decomposition \eqref{eq:eps-decomp} on the \emph{feasible} (active-ZE)
-sample. It is accurate only once the empty-ZE share is negligible --- i.e.\ precisely outside
-the granular regime this note is about. At $N_{s}\bar\gamma=1.5$ it errs by a factor of three,
-and the sign of the error flips as $N_{s}$ grows.}
-\label{tab:eps-mc}
-\end{table}
-
-The conclusion is methodological, and it is the operative answer to ``how do we calibrate
-$\varepsilon$?'':
-
-\begin{quote}
-$\sigma^{2}_{\varepsilon,s}$ and $N_{s}$ must be estimated \textbf{jointly, inside the SMM},
-where the simulation reproduces the granular sampling, the truncation at $\hat\gamma>0$, and the
-selection \eqref{eq:eps-selection} automatically --- not read off a closed-form variance
-decomposition.
-\end{quote}
-
-Their identifying moments are three, each computed \emph{identically} on the data and on
-simulated data:
-\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
-\item the within-area dispersion of log shares among active ZE, net of the
-area$\times$sector fixed effect, log distance, and the covariates of \eqref{eq:eps-spec};
-\item the empty-ZE share $\bar G_{s}(0)$ --- a \emph{level};
-\item the higher count thresholds $\bar G_{s}(n)$, $n\ge1$, equivalently the count
-over-dispersion $\mathrm{Var}(K)/\E[K]-1=\sigma^{2}_{s}\mu$.
-\end{enumerate}
-$N_{s}$ loads mainly on (2), $\sigma_{s}^{2}$ on (1) and (3). That \emph{both} (1) and (3)
-respond to $\sigma^{2}_{s}$, through completely different data --- share dispersion among active
-ZE versus the shape of the count distribution --- is an over-identifying check on the granular
-story as a whole, and it is the sharpest test the two-tier model offers.
-
-This also retroactively qualifies Appendix~\ref{app:dispersion}: the $1/N_{s}$ read on share
-dispersion, equation \eqref{eq:app-var}, is correct \emph{unconditionally}, but on the observed
-sample (active ZE, granular regime) it is contaminated both by $\sigma^{2}_{\varepsilon}$ and by
-truncation. Use it through the simulation, never as a plug-in formula.
-
-Lemma~\ref{lem:censoring} adds a third contaminant to the same residual, and it is the largest of
-the three in a sparse sector: conditional on activity the observed share is quantized toward
-$1/N_{s}$, so the within-area dispersion of $\ln\hat\gamma$ among active ZE is compressed by the
-censoring factor $B(u_{ls})$ --- which is itself correlated with size and distance. Moment (1)
-above must therefore be matched through the simulation like the other two, and never inverted
-analytically. The empirical evidence in Section~\ref{sec:risk-evidence} is what makes this
-concrete: a within $R^{2}$ of $0.330$ on the observed log shares leaves two thirds of the
-within-area variation unexplained, and none of that residual can be attributed to
-$\sigma^{2}_{\varepsilon}$ without the simulation.
-
-\subsection{What is preserved, and the recommended sequence}
-\label{sec:eps-preserved}
-
-The relaxation costs two scalars per sector and preserves everything that mattered.
-
-\begin{itemize}[nosep,topsep=2pt]
-\item \textbf{Parameter count.} $|\Areas^{+}_{s}|-1$ area levels, plus $\dim(\eta)$ common
-covariate loadings, plus $(N_{s},\sigma^{2}_{s})$ per sector. Still $O(\#\text{areas})$, not
-$O(\#\ZE)$: the design principle of Section~\ref{sec:eps-trap} holds.
-\item \textbf{Profiling.} The area-aggregate inversion \eqref{eq:area-sinkhorn} is unchanged in
-expectation, because $\E[\nu]=1$; the within-area split remains a function of $\alpha$ and
-distance in expectation. The repair of Section~\ref{sec:profiling} survives.
-\item \textbf{Over-identification.} Appendix~\ref{app:df} loses one restriction per sector (for
-$\sigma^{2}_{s}$), not one per ZE. The $R_{a}-1$ within-area restrictions become restrictions on
-the \emph{distribution} of the within-area profile rather than on each ZE.
-\item \textbf{Nesting.} $\sigma^{2}_{s}=0$ with no covariates returns Assumption~\ref{as:geo}
-exactly (and Proposition~\ref{prop:cloglog-exact} exactly); $\sigma_{s}^{2}\to\infty$
-approaches free ZE-level $T$, which is unidentified. The estimated $\sigma^{2}_{s}$ is thus a
-\emph{measure of how wrong the pure area-level restriction is} --- and testing
-$\sigma^{2}_{s}=0$ is the formal version of the diagnostic proposed in
-Section~\ref{sec:risk}(2).
-\end{itemize}
-
-Recommended sequence, in increasing order of commitment:
-\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
-\item Run the descriptive within-area regression \eqref{eq:eps-logshare} on observed shares.
-Read off how much within-area dispersion the covariates absorb, and how much is left. This costs
-nothing and tells you whether $\sigma^{2}_{s}$ is worth estimating at all.
-\item Estimate with $\sigma^{2}_{s}=0$ (Assumption~\ref{as:geo}, covariates included). This is
-the cleanest configuration: $\alpha$ identified off a within-area gradient with no unobserved
-heterogeneity, and Proposition~\ref{prop:cloglog-exact} exact.
-\item Add $\sigma^{2}_{s}$ with the three moments above. Compare $\hat\alpha$ across (2) and
-(3): the gap is the frailty attenuation of Lemma~\ref{lem:attenuation}, and if it is large the
-reduced-form coefficient should not be read structurally.
-\end{enumerate}
-
-\section{From firms in the data to varieties in the model}
-\label{sec:mapping}
-
-The data record which upstream firms supply the downstream industry, but not which upstream
-firm supplies which downstream buyer. Let $N$ be the number of distinct upstream firms
-observed to supply the downstream industry in sector $s$. We now show that the model implies
-the bounds
-\begin{equation}
-\frac{N}{\Nd}\;\le\;N_{s}\;\le\;N,
-\label{eq:bounds}
-\end{equation}
-and that these bounds are exactly the granular content of the mapping between observed firms
-and model varieties.
-
-Consider a single variety $\rho$. Within origin ZE $l$, the firm that serves \emph{any} buyer
-sourcing $\rho$ from $l$ is always the same firm --- the ZE-$l$ champion
-$\varphi_{l\rho s}$ --- because the iceberg cost $\tau_{lrs}$ scales the cost of \emph{all}
-ZE-$l$ firms identically and therefore never changes which firm is cheapest within the
-ZE. Consequently:
-\begin{itemize}[nosep,topsep=2pt]
-\item Each variety $\rho$ generates \emph{one distinct supplying firm per winning origin
-ZE}. If all $\Nd$ downstream buyers happen to source $\rho$ from the same origin, variety
-$\rho$ shows up as a single firm; if the $\Nd$ buyers source $\rho$ from $\Nd$ different
-origins, it shows up as $\Nd$ distinct firms.
-\item Therefore the number of distinct firms attributable to variety $\rho$ lies between $1$
-and $\Nd$, and the total number of observed firms is
-$N=\sum_{\rho=1}^{N_{s}} \#\{\text{origins that win }\rho\text{ somewhere}\}\in[N_{s},\,N_{s}\Nd]$.
-\end{itemize}
-Inverting the range $N\in[N_{s},N_{s}\Nd]$ yields exactly \eqref{eq:bounds}. The bounds are
-tight: $N_{s}=N$ when every variety is globally sourced from a single origin (no cross-market
-reallocation), and $N_{s}=N/\Nd$ when every variety is sourced from a different origin in each
-of the $\Nd$ downstream markets. The observed firm count therefore bounds, but does not pin
-down, $N_{s}$; the distribution of the number of suppliers across origins does.
-
-\begin{remark}[The champion is ZE-specific, not area-specific]
-\label{rem:champion-ze}
-Assumption~\ref{as:geo} equalizes the Fr\'echet \emph{scale} across ZE within an area, not the
-draws. Each ZE therefore has its own champion for each variety, two ZE in the same area can
-both win different varieties, and the firm$\to$variety accounting above is unchanged: the unit
-that generates an observed supplier is still (variety $\times$ winning ZE), and the counts in
-\eqref{eq:bounds} are counts over ZE. Nothing in this section depends on the level at which
-$T$ is defined.
-\end{remark}
-
-\begin{remark}[What is and is not observable]
-Because firm-to-firm links are unobserved, the per-market Binomial \eqref{eq:binomial} is not
-directly measurable. What \emph{is} measurable is the \emph{pooled} count of supplying firms
-per origin ZE (the object underlying \eqref{eq:bounds}). The identifying moment below is
-built from that observable pooled count, which the simulation reproduces without requiring the
-firm-to-firm assignment.
-\end{remark}
-
-\section{The identifying moment: the distribution of suppliers per region}
-\label{sec:moment}
-
-\subsection{The LMM template}
-
-LMM face the mirror-image problem. They observe, for each French exporter, the number of
-foreign buyers it serves, and they use the \emph{distribution of the number of buyers per
-seller} to identify the strength of search frictions. Their theoretical object is the
-probability $h_{i}(M)$ that an exporter serves exactly $M$ buyers in market $i$
-(\citealp{lmm2023}, eq.~7), and their headline moment is a variance built from ratios
-$h(M)/h(1)$ that is (i) monotone in the structural parameter of interest and (ii) uncorrelated
-with the intercept, which is governed by the raw number of potential sellers and buyers
-(\citealp{lmm2023}, eq.~8; Online Appendix~C). The empirical counterpart they display is the
-cumulative curve ``share of sellers with $x$ buyers or less'' (Online Appendix Figure~D.1).
-
-\subsection{The count moment in our model}
-
-We transpose LMM to the \emph{supplier} count. For sector $s$, let $K_{ls}$ be the total number
-of firm-links (equivalently, the number of distinct varieties, netted for the champion identity
-of Section~\ref{sec:mapping}) that origin ZE $l$ supplies to the downstream industry. The
-empirical moment is the cumulative distribution of $K_{ls}$ across origin ZE \emph{inside
-active attraction areas},
-\begin{equation}
-G_{s}(n)\;=\;\#\big\{\,l\in\mathcal{L}^{+}_{s} : K_{ls}\le n\,\big\},
-\qquad
-\mathcal{L}^{+}_{s}\equiv\bigsqcup_{a\in\Areas^{+}_{s}}\mathcal{L}_{a},
-\qquad n=0,1,2,\dots,
-\label{eq:moment}
-\end{equation}
-i.e. \emph{the number of ZE hosting at most $n$ suppliers}. The threshold $n=0$ is the
-number of ZE with \emph{no} supplier --- the quantity we set out to endogenize --- and the
-higher thresholds trace out the whole granular extensive-margin curve, exactly as LMM's
-``$x$ buyers or less'' curve does on the buyer side.
-
-The restriction of the support to $\mathcal{L}^{+}_{s}$ is the count-moment counterpart of
-Section~\ref{sec:activeset-area} and of Lemma~\ref{lem:fe}: ZE in empty attraction areas are
-structural zeros carrying no information about $(\alpha,N_{s})$, and including them would let
-an arbitrary number of mechanically-explained zeros drown the informative ones. Equivalently,
-one may compute \eqref{eq:moment} \emph{area by area} and aggregate, which makes the parallel
-with the fixed effect explicit.
-
-The model counterpart is the expectation of \eqref{eq:moment}. Writing $q_{ls}$ for the
-probability that origin $l$ wins a given variety \emph{somewhere} in the downstream industry
-(the union over buyers of the per-market win event; see Remark~\ref{rem:dependence}), the
-industry-wide supplier count of origin $l$ is a Binomial-type count
-$K_{ls}\sim\text{PoissonBinomial}$ over the $N_{s}$ varieties, and
-\begin{equation}
-\E\big[G_{s}(n)\big]
-=\sum_{l\in\mathcal{L}^{+}_{s}}\Prob\big(K_{ls}\le n\big),
-\qquad
-\Prob(K_{ls}=0)=(1-q_{ls})^{N_{s}}.
-\label{eq:model-moment}
-\end{equation}
-Under Poissonization (Remark~\ref{rem:poisson}), Poisson thinning makes this exact and clean:
-each variety is won somewhere by $l$ independently with probability $q_{ls}$, so
-$K_{ls}\sim\Pois(N_{s}q_{ls})$ and $\Prob(K_{ls}=0)=\exp(-N_{s}q_{ls})$ with no
-Poisson-Binomial machinery required. If comparative advantage is additionally allowed to
-deviate within areas (Section~\ref{sec:eps}), the Gamma mixture replaces this Poisson by a
-\emph{negative binomial} \eqref{eq:negbin} --- still closed form, and with the over-dispersion
-parameter $\sigma^{2}_{s}$ appearing as a second identified object. The single per-market case ($\Nd=1$) gives
-$q_{ls}=\gamma_{ls}$ and reduces \eqref{eq:model-moment} to the clean Binomial
-\eqref{eq:binomial}; with $\Nd>1$ the union probability $q_{ls}$ is evaluated by simulation
-(or by a low-dimensional integral over the champion draws), which also respects the
-cross-market dependence of Remark~\ref{rem:dependence}.
-
-\subsection{Why this moment identifies $N_{s}$}
-
-Given the sourcing shares $\{\gamma_{lrs}\}$ --- which are pinned down by the area-aggregated
-value shares and by $\alpha$, independently of $N_{s}$, because \eqref{eq:share-area} does not
-involve $N_{s}$ --- the only free object shaping \eqref{eq:model-moment} is $N_{s}$. Increasing
-$N_{s}$ shifts the whole curve $G_{s}(\cdot)$ to the right (more suppliers per ZE, fewer
-empty ZE): $\partial\,\E[G_{s}(0)]/\partial N_{s}=\sum_{l}(1-q_{ls})^{N_{s}}\ln(1-q_{ls})<0$,
-so the number of empty ZE is strictly decreasing in $N_{s}$. A small set of thresholds
-$n\in\{0,1,2,\dots\}$ --- in the spirit of LMM's three ratio-moments --- over-identifies the
-single parameter $N_{s}$ and is robust to the exact upper support. Because the mapping is
-smooth in $N_{s}$ through the expected count \eqref{eq:model-moment}, $N_{s}$ can be treated as
-a continuous parameter by the optimizer and rounded only for reporting.
-
-It bears repeating (Proposition~\ref{prop:cloglog-exact}(b)) that the count moment is
-\emph{necessary}: $N_{s}$ is invisible to the distance regression, where it is collinear with
-the fixed effect. The regression gives $\alpha$; the count level gives $N_{s}$.
-
-\section{Computing the granular model: what is drawn, what is integrated in closed form,
-and how $N_{s}$ is obtained}
-\label{sec:compute}
-
-This section answers three implementation questions that the granular assumption raises, and
-that determine whether the estimator is usable at all. What exactly is simulated
-(Section~\ref{sec:compute-draws})? Does a finite $N_{s}$ mean we must draw exactly $N_{s}$
-varieties (Section~\ref{sec:compute-rb})? And in what sense is $N_{s}$ \emph{estimated} rather
-than calibrated (Section~\ref{sec:compute-profile})?
-
-\subsection{What is drawn: the Fr\'echet draw \emph{is} the maximum over a continuum of firms}
-\label{sec:compute-draws}
-
-A natural reading of the granular assumption is that one should now, for every
-(sector $\times$ region $\times$ variety), draw a large number of individual firms, keep the most
-productive, and only then run the Ricardian selection across regions. \textbf{That reading is
-exactly right as a description of the model --- and the Fr\'echet draw already performs it, in
-closed form.}
-
-Recall the assumption of Section~\ref{sec:granular}: within $(l,s,\rho)$ the firms with
-productivity above $z$ form a Poisson process with mean $T_{sl}z^{-\theta}$. The number of firms
-above $z$ is then Poisson with that mean, so
-\begin{equation}
-\Prob\Big(\max_{\text{firms in }(l,s,\rho)}\varphi\;\le\;z\Big)
-=\Prob\big(\text{no firm above }z\big)
-=\exp\!\big(-T_{sl}z^{-\theta}\big),
-\label{eq:champion-frechet}
-\end{equation}
-which is precisely $\Frechet(T_{sl},\theta)$. \emph{One Fr\'echet draw per (sector, region,
-variety) is the champion of a continuum of firms} --- not an approximation to it, but its exact
-law. Drawing $M$ firms explicitly and taking the maximum would converge to \eqref{eq:champion-frechet}
-as $M\to\infty$, at the cost of $M$ times the work and an extra layer of Monte-Carlo error, and
-would return the same object in the limit. So the simulation structure is unchanged from the
-baseline:
-\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
-\item one Fr\'echet draw per (sector, region, variety) $=$ that region's champion cost
-\eqref{eq:region-cost};
-\item Ricardian selection across regions, $\min_{l} w_{l}\tau_{lrs}/\varphi_{l\rho s}$, per
-downstream buyer;
-\item a region ``supplies'' a variety if it wins it for at least one buyer.
-\end{enumerate}
-This is the content of Section~\ref{sec:selection} and of Question~1
-(Section~\ref{sec:q1}): keeping the continuum of firms is what makes the per-variety competition
-collapse to a single closed-form draw. \textbf{Granularity changes the number of varieties, not
-how a variety is competed for.}
-
-\subsection{Where the finite $N_{s}$ enters: integrate the Binomial, do not simulate it}
-\label{sec:compute-rb}
-
-The baseline used $N_{\rho}$ draws as a \emph{numerical} stand-in for a continuum of varieties.
-Under granularity $N_{s}$ is \emph{structural} and finite. It is tempting to conclude that the
-simulation must now draw exactly $N_{s}$ varieties. It must not, and the reason is worth stating
-carefully because it is what keeps the estimator usable.
-
-The estimator matches \emph{expected} moments $\E[m(\theta)]$ against one observed realization.
-There are two ways to compute that expectation.
-
-\begin{description}[topsep=3pt,itemsep=3pt,leftmargin=1.6em]
-\item[(a) Simulate economies.] Draw $R$ independent economies, each with exactly $N_{s}$
-varieties, compute the moment in each, average. Cost $R\times N_{s}$ draws; Monte-Carlo error
-$O(1/\sqrt{R})$.
-\item[(b) Integrate the variety count analytically.] Across varieties the win-somewhere events
-are i.i.d.\ (draws are independent across $\rho$), so \emph{conditional on the per-variety
-win-somewhere probability $q_{ls}$}, the supplier count is exactly
-\begin{equation}
-K_{ls}\;\sim\;\Bin\big(N_{s},\,q_{ls}\big),
-\qquad
-\Prob(K_{ls}=0)=(1-q_{ls})^{N_{s}} .
-\label{eq:compute-binomial}
-\end{equation}
-Only $q_{ls}$ --- a \emph{one-variety} expectation --- needs simulating, and it can be estimated
-with as many draws $N_{\rho}$ as we like, entirely independently of $N_{s}$
-(Lemma~\ref{lem:q-free} below proves that independence rather than assuming it). Every granular
-object then follows in closed form.
-\end{description}
-
-Route (b) is not an approximation to route (a): it is the exact integral that (a) approximates.
-It is a Rao--Blackwellization --- the Binomial is integrated out instead of being sampled --- and
-it matters for two reasons.
-
-\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
-\item \emph{Noise.} With $N_{s}$ of order $10^{2}$--$10^{3}$, route (a) makes every moment carry
-granular sampling noise of the same order of magnitude as the granularity itself, and that noise
-is \emph{entangled} with the parameter of interest: a smaller $N_{s}$ means both more granularity
-and a noisier moment. Route (b) has noise only in $\hat q$, controlled by $N_{\rho}$, and that
-noise does not scale with $N_{s}$.
-\item \emph{Cost.} Route (b) costs the same as the baseline regardless of $N_{s}$, and lets
-$N_{s}$ be varied --- as the profiling of Section~\ref{sec:compute-profile} does, many times per
-loss evaluation --- without re-simulating anything.
-\end{enumerate}
-
-\paragraph{What route (b) gives up: nothing that is targeted.} Remark~\ref{rem:dependence} noted
-that supplier counts are positively dependent \emph{across} buyers and hence across cells within
-one realized economy, and \eqref{eq:compute-binomial} is a per-cell marginal. But every moment the
-estimator targets is a \emph{mean} --- the empty-ZE share $\bar G_{s}(0)$ is a mean over ZE, the
-regression score is a weighted sum over cells --- and expectations of means are means of
-expectations \emph{whatever the dependence}. The cross-cell dependence therefore affects only the
-\emph{variance} of the moments, never their expectation. And that variance is not something route
-(a) would need to supply either: the empirical moment's sampling variability is the bootstrap
-$\Sigma_{\text{data}}$ (Appendix~\ref{app:estimation}), and the variability of \emph{our estimate}
-of $\E[m]$ is $\Sigma_{\text{sim}}$, obtained by re-drawing $\hat q$. Neither requires simulating
-the joint law at $N_{s}$.
-
-\paragraph{A validation gate rather than an assumption.} The equivalence of (a) and (b) is
-checkable and should be checked once: at $\hat N_{s}$, simulate $R$ economies with exactly
-$\hat N_{s}$ varieties, average their moments, and confirm they match the closed-form values to
-$O(1/\sqrt{R})$. That gate turns the argument above into a test.
-
-\subsection{What $q_{ls}$ depends on --- and why it is free of $N_{s}$}
-\label{sec:compute-qfree}
-
-Route (b) rests on one claim: the per-variety win-somewhere probability $q_{ls}$ can be estimated
-once, with many draws, and then reused for \emph{any} $N_{s}$. That claim deserves a proof rather
-than an assertion, because if $q_{ls}$ moved with $N_{s}$ the whole construction would collapse
-into a fixed point.
+one per active ZE beyond the first in each area. Each is a within-area statement: given the area
+aggregate, the split across its ZE must follow the distance profile \eqref{eq:within}. Under
+ZE-level comparative advantage this count is zero.
+
+\section{Estimation}
+\label{sec:estimation}
+
+\subsection{Moments and simulation}
+
+The moment vector has six blocks: the aggregate labour share, industry shares $\pi_{s}$, regional
+sales shares $\pi_{r}$, the firm-level distance coefficients of \eqref{eq:firm-cloglog}, the
+area-aggregated sourcing shares, and the count moment $\bar G_{s}(0)$. The economy is simulated
+with exactly $N_{s}$ varieties per sector, replicated, and moments are computed on the realised
+economies and averaged.
+
+Two properties keep this tractable. First, the winner of a variety is the argmin over ZE of that
+variety's own draws, so it does not depend on how many varieties exist: one Ricardian solve at
+pool width serves every candidate $N_{s}$ as a prefix, with no re-drawing. Second:
 
 \begin{lemma}[$q_{ls}$ is free of $N_{s}$]
-\label{lem:q-free}
-Fix a variety $\rho$. Origin $l$ wins it for buyer $r$ iff
-$c_{l\rho s}(r)<c_{l'\rho s}(r)$ for all $l'$, i.e.\ iff
-\begin{equation}
-\frac{w_{l}\tau_{lrs}}{\varphi_{l\rho s}}<\min_{l'\neq l}\frac{w_{l'}\tau_{l'rs}}{\varphi_{l'\rho s}} .
-\label{eq:win-comparison}
-\end{equation}
-The win-somewhere event is the union of \eqref{eq:win-comparison} over $r$, so
-\begin{equation}
-q_{ls}=q_{ls}\big(T_{s\cdot},\,w,\,\tau,\,\theta\big)
-\end{equation}
-and nothing else. In particular the variety count $N_{s}$, the sector price index $P_{sr}$,
-downstream costs $c_{r}$ and expenditures $E_{sr}$ do \textbf{not} appear.
+\label{lem:qfree}
+Winning a variety is the comparison
+$w_{l}\tau_{lrs}/\varphi_{l\rho s}<\min_{l'\neq l}w_{l'}\tau_{l'rs}/\varphi_{l'\rho s}$, so
+$q_{ls}=q_{ls}(T_{s\cdot},w,\tau,\theta)$ and nothing else. The variety count, the price index,
+downstream costs and expenditures do not appear.
 \end{lemma}
 
-The economics of the lemma is that \eqref{eq:win-comparison} is a statement about \emph{relative
-costs}, whereas $N_{s}$ and $P_{sr}$ are aggregators built \emph{after} the winners are known.
-Expenditure allocates value across winners; it does not choose them. The love-of-variety channel
-$P_{sr}\propto N_{s}^{1/(1-\nu_{s})}$ therefore propagates to $c_{r}$, $y_{r}$, $E_{sr}$ --- and
-stops there. Note that this is stronger than the normalization of Section~\ref{sec:q2}(a):
-$q_{ls}\perp N_{s}$ holds \emph{whether or not} the love-of-variety term is normalized out. The
-normalization decides only whether the \emph{value} block moves with $N_{s}$; it is irrelevant to
-the extensive margin.
+The economics is that winning is a statement about \emph{relative costs}, whereas $N_{s}$ and
+$P_{sr}$ are aggregators built after the winners are known: expenditure allocates value across
+winners, it does not choose them. The one condition that would break the lemma is endogenous
+upstream wages, since $w$ enters the comparison directly; wages are taken as data.
 
-\begin{quote}
-\textbf{The one condition that would break Lemma~\ref{lem:q-free}: endogenous upstream wages.}
-If $w_{l}$ cleared an upstream labour market, then $N_{s}\to P_{sr}\to$ downstream demand $\to$
-upstream labour demand $\to w_{l}$, and $w$ enters \eqref{eq:win-comparison} directly. With $w$
-taken as data (the current specification), the channel is absent. If wages are ever endogenized,
-route (b) becomes a fixed point in $(q,N_{s})$ and must be re-derived.
-\end{quote}
+\subsection{The variety count}
 
-\paragraph{This is not ``solve at $N_{s}=\infty$, then re-simulate''.} A natural but incorrect
-reading of route (b) is that one estimates the model in the continuum limit and afterwards
-re-runs it at a finite $N_{s}$. That would be a two-stage approximation with no guarantee. What
-route (b) does is different: $N_{\rho}$ and $N_{s}$ live on \emph{different axes}. $N_{\rho}$ is
-a Monte-Carlo sample size used to estimate a \emph{per-variety} probability; $N_{s}$ is a
-structural count that multiplies independent repetitions of that single-variety experiment. The
-analogy is exact: to compute the probability of at least one head in $N_{s}=10$ tosses of a coin
-of unknown bias $q$, one does not simulate ten tosses many times --- one estimates $q$ from $10^{6}$
-tosses and evaluates $1-(1-q)^{10}$ in closed form. The $10^{6}$ tosses are not ``the coin in the
-limit''; they are how $q$ is learned.
+$N_{s}$ is estimated by the same weighted objective as every other parameter, concentrated rather
+than searched jointly:
+\begin{equation}
+\widehat N(\theta_{c})=\argmin_{N\in\prod_{s}[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
+r(\theta_{c},N)'W\,r(\theta_{c},N),
+\label{eq:profile}
+\end{equation}
+with the bounds of \eqref{eq:bounds}. This is the profiled extremum estimator: the result is
+identical to joint minimisation over $(\theta_{c},N)$, $\widehat N_{s}$ is an integer at every
+evaluation so integrality is never relaxed and never rounded, and by Lemma~\ref{lem:qfree} the
+inner minimisation needs no re-simulation. Since $\bar G_{s}(0;n)$ is closed form and strictly
+decreasing in $n$, \eqref{eq:profile} reduces to a monotone integer bisection.
 
-\paragraph{One maintained assumption, stated --- and it is not free.} With a finite $N_{s}$ the
-realised within-sector price index \eqref{eq:price-index} is a \emph{random} finite CES aggregate.
-The self-normalised weights make $\E[P_{sr}^{1-\nu_{s}}]$ invariant to the variety count --- that
-much is Option~1 of Section~\ref{sec:q2}(a), for free. But $P_{sr}$ is a \emph{convex} transform of
-that average, so the realised index is biased upward by Jensen, and the bias decays only as fast
-as the average concentrates. At the estimated calibration $\theta=1$, $\nu_{s}=1.5$ the regularity
-condition of \eqref{eq:app-cv}, $\theta>2(\nu_{s}-1)$, reads $1>1$: it \textbf{fails at equality},
-$(c^{*})^{1-\nu_{s}}$ has infinite variance, and the average converges at $\sqrt{N/\log N}$ rather
-than $\sqrt{N}$. Simulating the exact object:
+Clamping at either bound is informative rather than benign: the upper bound binding means the model
+cannot generate enough sparsity even when every variety is sourced from a single origin.
+
+\subsection{The price index}
+\label{sec:priceindex}
+
+The one place where granularity meets the value block requires an explicit assumption, and it is
+worth stating with its magnitude.
+
+With $N_{s}$ varieties the within-sector price index is a finite CES aggregate,
+$P_{sr}^{1-\nu_{s}}=\frac{1}{N_{s}}\sum_{\rho}p_{\rho rs}^{1-\nu_{s}}$, whose expectation is
+invariant to $N_{s}$ --- the love-of-variety level is absorbed into the within-sector scale of $T$,
+which is a free gauge (Appendix~\ref{app:price}). But $P_{sr}$ is a \emph{convex} transform of that
+average, so the realised index exceeds its continuum limit by Jensen, and the gap closes only as
+fast as the average concentrates. At the calibration $\theta=1$, $\nu_{s}=1.5$ the regularity
+condition $\theta>2(\nu_{s}-1)$ reads $1>1$: it fails at equality, $(c^{*})^{1-\nu_{s}}$ has
+infinite variance, and the average converges at $\sqrt{N/\log N}$ rather than $\sqrt{N}$.
 
 \begin{table}[htbp]
 \centering
@@ -1563,981 +460,220 @@ $\E[\widehat P]$ vs continuum & $+18.6\%$ & $+11.1\%$ & $+6.5\%$ & $+3.8\%$ & $+
 $\mathrm{sd}(\widehat P)/P$ & $0.48$ & $0.35$ & $0.27$ & $0.20$ & $0.15$ & $0.11$ & $0.06$\\
 \bottomrule
 \end{tabular}
-\caption{The realised granular price index against its continuum limit, $\theta=1$,
-$\nu_{s}=1.5$. At $N_{s}\approx10^{2}$ the level is off by $6\%$, and it propagates to $c_{r}$,
-$y_{r}$, $E_{sr}$ and hence to every value moment. The slow decay is the boundary case of
-\eqref{eq:app-cv}.}
+\caption{The realised granular price index against its continuum limit, $\theta=1$, $\nu_{s}=1.5$.}
 \label{tab:price-jensen}
 \end{table}
 
-So $N_{s}$ \emph{does} reach the value block, and materially. The estimator adopts the
-\textbf{certainty-equivalent} reading --- downstream firms optimise against
-$\E[P^{1-\nu_{s}}]^{1/(1-\nu_{s})}$, neglecting granular price randomness, which is Option~2 of
-Section~\ref{sec:q2}(a) and LMM's own general-equilibrium embedding. The model being estimated is
-therefore \emph{granular sourcing with an expected-price-index general equilibrium}. Two things
-follow. Most of the $6\%$ would not have been identifying variation anyway: a price-level shift is
-observationally equivalent to a technology shift (Appendix~\ref{app:price}), so $\Omega^{s}$ and
-$A$ would absorb it and only the cross-sector pattern of $N_{s}$ would survive as signal --- the
-assumption records that rather than letting a slowly-converging Jensen term be mistaken for
-technology. And by Lemma~\ref{lem:q-free} none of it touches $q_{ls}$ or the extensive margin, so
-the identification of $\alpha$ and $N_{s}$ is unaffected either way. What the assumption \emph{must
-not} do is survive into counterfactuals: the love-of-variety propagation channel lives in the
-realised index, so any counterfactual moving the variety set has to use it (Appendix~\ref{app:price}).
+So $N_{s}$ does reach the value block, and at $N_{s}\approx10^{2}$ by about $6\%$. The estimator
+adopts the \textbf{certainty-equivalent} reading: downstream firms optimise against
+$\E[P^{1-\nu_{s}}]^{1/(1-\nu_{s})}$, neglecting granular price randomness --- the
+general-equilibrium embedding of \citet{lmm2023}. Two things make this the right default. Most of
+the $6\%$ would not have been identifying variation: a price-level shift is observationally
+equivalent to a technology shift (Appendix~\ref{app:price}), so the sector technology terms absorb
+it and only the cross-sector pattern of $N_{s}$ survives as signal. And by Lemma~\ref{lem:qfree}
+none of it touches $q_{ls}$ or the extensive margin, so the identification of $\alpha$ and $N_{s}$
+is unaffected either way.
 
-\subsection{Two different regressions: cell level and firm level}
-\label{sec:compute-collapse}
+What the assumption must not do is survive into counterfactuals. The love-of-variety propagation
+channel lives in the realised index --- a shock that removes suppliers raises $P_{sr}$ downstream
+through exactly that channel, and it is absent from the continuum model. Any counterfactual moving
+the variety set must use the realised index.
 
-Proposition~\ref{prop:cloglog-exact} is a statement about the \emph{cell}: it describes
-$\Prob(K_{ls}\ge1)$, the event that ZE $l$ hosts at least one supplier, and it delivers a cloglog
-on the \textbf{supplier} indicator with slope $-\theta\alpha$. The regression the estimator
-actually matches is a different object --- it is run at the \textbf{firm} level, with the firm's
-own productivity as a control --- and its exact form is the mirror image. Both are correct; they
-are simply not the same regression, and confusing them inverts the outcome convention.
+\section{Key quantitative facts}
+\label{sec:facts}
 
-\begin{proposition}[Exact firm-level reduced form]
-\label{prop:firm-level}
-Identify a firm with a (cell, variety) champion, and let $z$ be its productivity. Its delivered
-cost to buyer $a$ is $w_{l}\tau_{las}/z$, and it supplies iff every competitor's delivered cost is
-higher. The competitors' minimum cost is Weibull with scale
-$\Phi^{-l}_{sa}=\sum_{l'\neq l}T_{sl'}(w_{l'}\tau_{l'as})^{-\theta}$, so
-\begin{equation}
-\Prob\big(\text{firm supplies}\mid z\big)
-=\exp\!\Big(-\Phi^{-l}_{sa}\,\big(w_{l}\tau_{las}\big)^{\theta}\,z^{-\theta}\Big),
-\label{eq:firm-win}
-\end{equation}
-and therefore
-\begin{equation}
-\Prob\big(\text{firm does \emph{not} supply}\mid z\big)=1-\exp\!\big(-\exp(\eta)\big),
-\qquad
-\eta=\underbrace{\ln\Phi^{-l}_{sa}}_{\text{FE}}+\theta\ln w_{l}
-\;+\;\theta\alpha\,\ln d_{la}\;-\;\theta\,\ln z .
-\label{eq:firm-cloglog}
-\end{equation}
-That is a cloglog on the \textbf{\texttt{not\_supply}} indicator, with coefficient
-$\boxed{+\theta\alpha}$ on log distance and $\boxed{-\theta}$ on log productivity. The variety
-count $N_{s}$ does not appear.
-\end{proposition}
+\subsection{The extensive margin is a within-area object; the intensive margin is not}
 
-Verified by simulating the exact object ($\theta=1$, $\alpha=0.30$, firms as (cell $\times$
-variety) champions, one dominant buyer per area):
+Inside attraction areas hosting at least one supplier there are $1161$ ZE--sector cells, of which
+$99$ host a supplier: \textbf{$91.5\%$ are extensive-margin zeros}, and every one of those cells
+contains at least one firm. Entering the fixed effect as a regressor,
+area$\times$sector dummies explain
+\begin{itemize}[nosep,topsep=2pt]
+\item $5.9\%$ of the variance of the sourcing share in \emph{levels} --- a variable that is
+$91.5\%$ zeros, hence dominated by the extensive margin, so \textbf{the extensive margin is
+$94\%$ within-area};
+\item $94.4\%$ of the variance of \emph{log} shares among active cells --- so \textbf{the intensive
+margin is $94\%$ between-area}.
+\end{itemize}
+The data split along exactly the seam Assumption~\ref{as:geo} cuts: $T_{s,a}$ for the intensive
+margin, distance and granularity for the extensive margin.
+
+\subsection{Size dominates within-area variation}
+
+Regressing observed sourcing shares within area$\times$sector on log distance and log firm count:
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{@{}lrr@{}}
+\begin{tabular}{@{}lrrrr@{}}
 \toprule
-outcome & $\hat\beta_{\ln d}$ (truth $+\theta\alpha=0.30$) & $\hat\beta_{\ln z}$ (truth $-\theta=-1.0$)\\
+& \multicolumn{2}{c}{share, levels} & \multicolumn{2}{c}{log share, active only}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+$\ln d$ & $-0.017^{***}$ & $-0.011^{***}$ & $-0.284$ & $-0.130$\\
+        & $(0.004)$ & $(0.002)$ & $(0.197)$ & $(0.136)$\\
+$\ln(\text{firm count})$ & & $0.010^{***}$ & & $0.492^{***}$\\
+        & & $(0.003)$ & & $(0.126)$\\
 \midrule
-\texttt{not\_supply} & $+0.327$ & $-1.051$\\
-supplier indicator   & $-0.426$ & $+1.452$\\
+within $R^{2}$ & $0.108$ & $0.225$ & $0.084$ & $0.330$\\
+Observations & $1161$ & $1161$ & $99$ & $99$\\
 \bottomrule
 \end{tabular}
-\caption{At the firm level the \texttt{not\_supply} convention recovers both structural
-coefficients; the supplier indicator recovers neither. The reverse holds at the cell level
-(Proposition~\ref{prop:cloglog-exact}). The convention is not a matter of taste --- it is dictated
-by the unit of observation.}
-\label{tab:firm-convention}
+\caption{Within-area diagnostic. Standard errors clustered by area$\times$sector.}
+\label{tab:diagnostic}
 \end{table}
 
-Three consequences.
+Size carries four times the explanatory power of distance and, when added, moves the distance
+coefficient toward zero in both specifications: within an area, closer ZE are \emph{bigger}, so
+omitting size makes distance look more powerful than it is. Both coefficients are attenuated by
+the same factor --- conditional on being active, a ZE's observed share is quantised toward $1/N_{s}$
+--- so their \emph{ratio} is the interpretable object, and only in the level specification, where
+$\E[\hat\gamma]=\gamma$ holds unconditionally. With $\theta=1$ it gives
+$\alpha/\eta_{\text{size}}\approx1.1$.
 
-\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
-\item \emph{The firm-level regression is exactly free of $N_{s}$.} Equation
-\eqref{eq:firm-cloglog} contains no variety count: conditioning on the firm removes it, where at
-the cell level it entered through the fixed effect and the invariance held only up to
-specification error. So the division of labour is exact --- block~4 carries $\alpha$, the count
-block carries $N_{s}$.
-\item \emph{The productivity coefficient is a free over-identifying test.} It should equal
-$-\theta$. With $\theta$ calibrated at $1$, a coefficient far from $-1$ says either that $\theta$
-is wrong or that the mapping between observed firms and model champions is broken. Extending the
-$\beta$ block of $\Sigma$ to include it would let $\theta$ be estimated rather than calibrated.
-\item \emph{The design cannot be collapsed to one row per cell.} $\ln z$ varies across varieties
-\emph{within} a cell, so the row structure is genuinely (variety $\times$ cell). The cell-level
-object $\Prob(K_{ls}\ge1)=1-(1-q_{ls})^{N_{s}}$ is a \emph{different} moment; it is what the count
-block uses, not what the regression estimates.
-\end{enumerate}
+The implication for the model is direct: any within-area heterogeneity other than distance must
+enter explicitly, either as observed covariates scaling $T$ with a common loading or as a random
+deviation integrated out; it must never become a free parameter per ZE, which would restore exact
+just-identification and remove the over-identifying content of Assumption~\ref{as:geo}.
 
-\begin{remark}[Which unit the observed firms correspond to]
-\label{rem:firm-mapping}
-Proposition~\ref{prop:firm-level} identifies each observed firm with a (cell, variety) champion.
-Read literally that gives every cell exactly $N_{s}$ firms, whereas observed firm counts vary by
-orders of magnitude. Closing that gap requires either accepting a sample mismatch --- the model's
-$z$ are maxima over a continuum and so are shifted right relative to the data's firms --- or giving
-the model a firm count, e.g.\ a productivity floor $\bar z_{s}$ making the count in $(l,s,\rho)$
-$\Pois(T_{sl}\bar z_{s}^{-\theta})$. The latter reinstates precisely the Poisson-firm-count device
-that Section~\ref{sec:q1} set aside: \emph{choosing a firm-level empirical moment is what forces
-it back in}. The $\ln z$ coefficient of (b) above is the cheapest diagnostic of which situation
-one is in.
-\end{remark}
+\section{Extensions}
 
-\subsection{How $N_{s}$ is obtained: profiling, not calibration}
-\label{sec:compute-profile}
+\paragraph{ZE-level deviations.} Assumption~\ref{as:geo} can be relaxed to
+$T_{sl}=T_{s,a(l)}\nu_{sl}$ with $\E[\nu]=1$ and $\mathrm{Var}(\nu)=\sigma^{2}_{s}$, calibrated on
+the dispersion of the ZE-level shares. With $\nu$ Gamma the supplier count becomes negative
+binomial and the whole count family stays closed form. The deviation must be a \emph{distribution},
+never a parameter vector: a free $\nu$ per ZE is undefined precisely at the empty ZE the model
+exists to explain, and setting it to one there is biased downward by selection,
+$\E[\nu\mid K=0]=(1+\sigma^{2}\mu)^{-1}$.
 
-$N_{s}$ is \emph{estimated}, by the same weighted objective as every other parameter. It is
-simply \emph{concentrated out} rather than searched over jointly. Write the parameter vector as
-$\theta=(\theta_{c},N)$ with $\theta_{c}=(\Omega^{L},\Omega^{s},A,\alpha,T)$ continuous and
-$N=(N_{1},\dots,N_{S})\in\mathbb{N}^{S}$, and let $r(\theta)$ be the moment residual. Then
-\begin{equation}
-\widehat N(\theta_{c})
-=\argmin_{N\in\prod_{s}[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
-\;r(\theta_{c},N)'\,W\,r(\theta_{c},N),
-\qquad
-\hat\theta_{c}=\argmin_{\theta_{c}} \;r\big(\theta_{c},\widehat N(\theta_{c})\big)'W\,r\big(\theta_{c},\widehat N(\theta_{c})\big).
-\label{eq:profile-Ns}
-\end{equation}
-This is the textbook concentrated (profiled) extremum estimator: $(\hat\theta_{c},\widehat
-N(\hat\theta_{c}))$ is \emph{identical} to the joint minimiser over $(\theta_{c},N)$. Nothing is
-fixed outside the estimation; the objective is the same $r'Wr$ throughout. Two practical
-properties make \eqref{eq:profile-Ns} cheap: the inner minimisation needs \emph{no
-re-simulation} (Lemma~\ref{lem:q-free} --- $\hat q$ is held fixed while $N$ varies), and
-$\widehat N$ is an integer at every evaluation, so integrality is never relaxed and never
-rounded.
-
-\subsection{With the supplier indicator, $\ln N_{s}$ is absorbed by the fixed effect}
-\label{sec:compute-convention}
-
-The outcome convention decides how much work \eqref{eq:profile-Ns} actually has to do. Write the
-cell-level probability \eqref{eq:binomial} in the cloglog index of the \textbf{supplier}
-indicator:
-\begin{equation}
-\eta_{ls}
-=\ln\Big(-\ln\Prob(K_{ls}=0)\Big)
-=\underbrace{\ln N_{s}}_{\text{constant within }s}
-\;+\;\ln\big(-\ln(1-q_{ls})\big),
-\label{eq:eta-separable}
-\end{equation}
-\emph{exactly} --- and exactly, note, under the Binomial as well as the Poissonized form, since
-$\ln\!\big(\!-\!\ln(1-q)^{N_{s}}\big)=\ln N_{s}+\ln(-\ln(1-q))$ identically. Because $\ln N_{s}$
-is constant within every area$\times$sector group, it is \textbf{absorbed by the fixed effect}.
-The distance coefficient is therefore invariant to $N_{s}$, and equals $-\theta\alpha$ ---
-Proposition~\ref{prop:cloglog-exact}, now visible as an algebraic identity rather than an
-approximation.
-
-Simulating the exact object ($1161$ cells, $40$ groups, true $\theta\alpha=0.30$) confirms it,
-and shows what happens to the two things that can spoil it:
-
-\begin{table}[htbp]
-\centering
-\small
-\begin{tabular}{@{}rrrrr@{}}
-\toprule
-& & \multicolumn{2}{c}{supplier indicator} & \texttt{not\_supply}\\
-\cmidrule(lr){3-4}\cmidrule(lr){5-5}
-$N_{s}$ & empty share & $\hat\beta_{\ln d}$ (well spec.) & $\hat\beta_{\ln d}$ (misspec.) & $\hat\beta_{\ln d}$\\
-\midrule
-$30$    & $0.992$ & $-0.300127$ & $-0.3238$ & $+0.067$\\
-$250$   & $0.941$ & $-0.300119$ & $-0.3275$ & $+0.109$\\
-$1000$  & $0.812$ & $-0.300092$ & $-0.3391$ & $+0.157$\\
-$4000$  & $0.550$ & $-0.300037$ & $-0.3523$ & ---\\
-$20000$ & $0.170$ & $-0.300014$ & --- & ---\\
-\midrule
-\multicolumn{2}{@{}l}{relative drift over the range} & $3.8\times10^{-4}$ & $8.8\times10^{-2}$ & $\times 2.3$\\
-\bottomrule
-\end{tabular}
-\caption{The supplier-indicator coefficient recovers $-\theta\alpha$ and drifts by
-$4\times10^{-4}$ in relative terms while $N_{s}$ varies by a factor of $667$ --- the fixed effect
-absorbing $\ln N_{s}$ exactly, as \eqref{eq:eta-separable} predicts. ``Misspec.'' fits $\ln d$
-when the true trade cost is piecewise in distance bins: the drift rises to $9\%$, the residual
-coupling coming from the interaction of specification error with the IRLS weights. The reversed
-\texttt{not\_supply} outcome, for which the cloglog link is not the model's own, is neither
-invariant nor near the truth: it is attenuated by a factor of $2$--$4$ and more than doubles across
-the range.}
-\label{tab:convention}
-\end{table}
-
-Three consequences.
-
-\begin{enumerate}[nosep,topsep=2pt,label=(\alph*)]
-\item \textbf{Profiling degenerates to a one-dimensional root-find.} Since block~4 carries
-essentially no information about $N_{s}$, the minimiser of \eqref{eq:profile-Ns} is, to
-$O(10^{-4})$, the value that zeroes the count residual: $\widehat N_{s}$ solves
-$\bar G_{s}(0;N_{s})=$ target, by the monotone integer bisection of Section~\ref{sec:moment}. The
-full-loss integer line search is demoted from a required inner loop to a \emph{verification step}
-run once at the optimum.
-\item \textbf{$\alpha$ becomes directly readable.} $\hat\beta_{\ln d}=-\theta\alpha$ to four
-decimals, so $\alpha=-\hat\beta_{\ln d}/\theta$ with no attenuation correction --- unlike every
-other configuration examined in this note (the LPM factor $\lambda$ of
-Lemma~\ref{lem:fe}(ii), the frailty factor of Lemma~\ref{lem:attenuation}, the censoring factor
-of Lemma~\ref{lem:censoring}).
-\item \textbf{The invariance is conditional on specification.} It is exact only if the distance
-term is flexible enough to fit the true trade-cost profile; under misspecification a few percent
-of $N_{s}$-dependence returns. This is an argument for the binned specification
-($N_{\mathrm{REG}}=4$) over the single power-law coefficient, and for checking the drift
-empirically rather than assuming it away.
-\end{enumerate}
-
-\begin{remark}[The outcome convention is dictated by the unit, not chosen]
-\label{rem:convention-data}
-The cloglog link is not symmetric under outcome reversal, so the convention cannot be flipped post
-hoc. But it is also not a free choice: Proposition~\ref{prop:cloglog-exact} fixes it as the
-supplier indicator for a \emph{cell}-level regression, and Proposition~\ref{prop:firm-level} fixes
-it as \texttt{not\_supply} for a \emph{firm}-level one. Since the estimator matches a firm-level
-regression, \texttt{not\_supply} is the correct convention and the empirical target needs no
-regeneration.
-\end{remark}
-
-\section{What else must change}
-\label{sec:q2}
-
-The finite variety count and the area-level comparative advantage propagate to five other
-parts of the model. None is fatal; each is a deliberate modeling choice that must be made
-consistently.
-
-\paragraph{(a) The within-sector price index and love of variety.}
-With a continuum of varieties, the sector-$s$ price index $P_{sr}$ is deterministic. With
-$N_{s}$ varieties it is a finite CES aggregate,
-\begin{equation}
-P_{sr}=\Big[\textstyle\sum_{\rho=1}^{N_{s}} p_{\rho rs}^{\,1-\nu_{s}}\Big]^{\frac{1}{1-\nu_{s}}},
-\qquad p_{\rho rs}=\frac{1}{\mu}\min_{l} c_{l\rho s}(r),
-\label{eq:price-index}
-\end{equation}
-whose expectation carries a mechanical variety term,
-$\E\!\big[P_{sr}^{\,1-\nu_{s}}\big]=N_{s}\,\Gamma\!\big(1+\tfrac{1-\nu_{s}}{\theta}\big)\,
-\mu^{\nu_{s}-1}\,\Phi_{sr}^{-\frac{1-\nu_{s}}{\theta}}$, so that
-$P_{sr}\propto N_{s}^{\,1/(1-\nu_{s})}$ (derived in Appendix~\ref{app:price}).
-Thus $N_{s}$ mechanically moves the sector price level
-(love of variety) and, through it, every value-based moment (labor share, industry shares
-$\pi_{s}$, regional shares $\pi_{r}$). Two clean options:
-\begin{enumerate}[nosep,topsep=2pt]
-\item \emph{(Recommended)} Normalize the love-of-variety term out by redefining the sector
-scale (e.g. $T_{s,a}\mapsto T_{s,a}N_{s}^{\theta/(1-\nu_{s})}$ or an offsetting sector-share
-renormalization) so that $\E[P_{sr}]$ is invariant to $N_{s}$. Then $N_{s}$ is identified
-\emph{solely} from the extensive-margin count \eqref{eq:moment}, and the value moments are
-numerically unchanged from the baseline. This keeps $N_{s}$ from being confounded with
-productivity/technology levels. Note that the rescaling is common across origins within a
-sector, hence invisible to the sourcing shares \eqref{eq:share-area} and to the whole
-identification scheme of Table~\ref{tab:division}.
-\item Follow LMM's general-equilibrium embedding (Online Appendix~B.3): assume a continuum of
-sectors and let downstream firms optimize against the \emph{expected} price index
-$\E[P_{sr}]$, neglecting the granular randomness. Aggregate value moments then average the
-granularity out, but $N_{s}$ retains a footprint on price levels and is jointly identified from
-prices and counts. This is more faithful but couples $N_{s}$ to the value block.
-\end{enumerate}
-Option~1 is the parsimonious choice and matches the current code's separation between the
-value moments and the extensive-margin block.
-
-\paragraph{(b) Value moments are now expectations; the $\gamma$ target is an average share ---
-and is matched at the \emph{area} level.}
-Conditional on winning, the price a buyer pays for a variety is distributed identically across
-origins (the standard EK property), so the \emph{expected} expenditure share on origin $l$
-still equals the probability share $\gamma_{lrs}$ of \eqref{eq:share-area}. Hence the
-value-share moment is matched in expectation exactly as before, and its empirical target
-should be read as the \emph{average realized share}. Two changes follow from
-Assumption~\ref{as:geo}:
-\begin{itemize}[nosep,topsep=2pt]
-\item The \emph{just-identified} share moments are the \textbf{area aggregates}
-$\gamma_{s,a}=\sum_{l\in\mathcal{L}_{a}}\gamma_{ls}$, one per active $(s,a)$ --- these are what
-the profiling step \eqref{eq:area-sinkhorn} inverts. The ZE-level shares remain in the moment
-vector, but as \emph{over-identifying} content: they test the within-area distance profile
-implied by \eqref{eq:within-contrast-norm}. Keeping both, with the efficient weight matrix
-deciding how much each is worth, is the right default.
-\item The second moment is new: the realized share is now a random variable whose dispersion
-also carries information about $N_{s}$ (a thinner sector has noisier shares).
-Appendix~\ref{app:dispersion} makes this precise: the realized value shares behave like a
-multinomial draw of \emph{effective sample size} $N_{s}/(1+\mathrm{CV}_{v}^{2})$, so their
-variance is $\propto 1/N_{s}$ and a bootstrap over suppliers identifies $N_{s}$ directly. The
-estimator can ignore this extra content and rely on \eqref{eq:moment}, or exploit it for
-efficiency.
-\end{itemize}
-
-\paragraph{(c) The active set and the reference normalization: masking moves \emph{up} one
-tier.}
-In the baseline, region-sector pairs with zero empirical sourcing are dropped up front
-(\texttt{T\_MASK}) because the continuum model cannot rationalize a zero. Under the granular
-model with area-level comparative advantage the correct rule is \emph{tier-dependent}, and
-this is the single most consequential change to the code's data layer:
-\begin{itemize}[nosep,topsep=2pt]
-\item \textbf{At the ZE tier, stop masking.} A ZE with no supplier that sits inside an active
-attraction area is an \emph{endogenous outcome} of \eqref{eq:binomial}: it has
-$T_{sl}=T_{s,a(l)}>0$ and contributes the informative event $\{K_{ls}=0\}$ to the count moment
-\eqref{eq:moment} and to the regression. These are exactly the status-$2$ (``control'') pairs,
-which now become model objects rather than exogenous zeros.
-\item \textbf{At the area tier, keep masking.} An attraction area with no supplier at all gets
-no parameter and enters no moment (Section~\ref{sec:activeset-area}).
-\item \textbf{Parameter block.} The estimated $T$ block is indexed by active $(s,a)$ pairs,
-not active $(s,\ZE)$ pairs. The per-sector reference normalization becomes one reference
-\emph{area}, $T_{s,\mathrm{ref}(s)}=1$; $\gamma$ and hence $(1-\gamma)^{N_{s}}$ are invariant
-to the within-sector scale of $T$, so $N_{s}$ is identified given the normalized $T$ exactly as
-before.
-\end{itemize}
-
-\paragraph{(d) Joint identification of $(\alpha,N_{s})$ and the distance regression.}
-The distance regression (block~4) and the count moment \eqref{eq:moment} are now two views of
-the \emph{same} endogenous extensive margin, and Proposition~\ref{prop:cloglog-exact} says
-what each sees. Distance raises $\tau_{lrs}=d_{lr}^{\alpha}$, lowers $\gamma_{lrs}$, and thus
-raises the zero probability: the trade-cost elasticity $\alpha$ governs how the extensive
-margin varies \emph{with distance within an area}, while $N_{s}$ governs its overall
-\emph{level}, which the fixed effect strips from the regression. Matching the regression slope
-and the count level therefore identifies $\alpha$ and $N_{s}$ separately
-(Table~\ref{tab:division}), and makes the block-4 extensive margin an exact model object
-rather than the FKG approximation currently used. This resolves, rather than sidesteps, the
-identification concern flagged in the code's caveats about the FKG-biased $\alpha$ column:
-with genuine granular zeros, the extensive margin is computed exactly (by simulation) instead
-of approximated, and with area-level $T$ the distance gradient is no longer absorbable by the
-comparative-advantage block.
-
-\paragraph{(e) The geography inputs and the profiling step.}
-Two mechanical requirements. First, the model needs the ZE$\to$area map explicitly as a
-primitive (in the implementation it already exists as the nearest-downstream assignment used
-to build the fixed effect: the map and the regression's fixed effect must be the \emph{same}
-object, or the alignment argument of Section~\ref{sec:motivation-fe} fails). Second, the
-$\gamma$-inversion / Sinkhorn profiling must be re-expressed on area aggregates
-\eqref{eq:area-sinkhorn}: one multiplicative update per active $(s,a)$, with the within-area
-split recomputed from distance at the current $\alpha$. The system remains square and retains
-its contraction structure (Appendix~\ref{app:df}).
-
-\section{Answers to the three questions}
-\label{sec:answers}
-
-\subsection*{Question 1: Can I keep the continuum of firms for each variety?}
-\label{sec:q1}
-
-\textbf{Yes --- and it is the correct choice, not merely an admissible one.} The granularity
-that generates empty regions comes entirely from making the number of \emph{varieties} finite;
-it does not require discretizing firms. Keeping a continuum of firms within each ZE and
-variety buys three things:
-\begin{enumerate}[nosep,topsep=2pt]
-\item \emph{Closed-form per-variety selection.} The continuum collapses each ZE's
-within-ZE competition into a single Fr\'echet champion cost \eqref{eq:region-cost}, so the
-probability that ZE $l$ wins a variety is \emph{exactly} the EK share $\gamma_{lrs}$
-\eqref{eq:per-variety-win}. You retain the entire analytical sourcing apparatus of the baseline
-model unchanged; only the number of independent draws of that competition changes from a
-continuum to $N_{s}$.
-\item \emph{A clean firm$\to$variety mapping.} Because the iceberg cost scales all ZE-$l$
-firms equally, the ZE-$l$ champion is the unique ZE-$l$ firm that ever serves any buyer
-sourcing that variety from $l$ (Section~\ref{sec:mapping}). This is exactly what makes the
-observed firm count $N$ translate into the variety bounds $N/\Nd\le N_{s}\le N$.
-\item \emph{No need for a Pareto lower bound or a Poisson firm count.} LMM obtain granularity by
-making the \emph{number of firms} itself Poisson (with a Pareto productivity floor). Your route
---- a fixed $N_{s}$ with a continuum of firms per variety --- is the ``fixed number of EK draws''
-granular model \citep{eks2012}. It has the practical advantages that $N_{s}$ is a single clean
-integer parameter per sector and the extensive margin is an exact Binomial \eqref{eq:binomial}.
-\end{enumerate}
-The one conceptual point to keep straight is that with a continuum of firms you do not literally
-``count firms'': the empirical firm is the (variety $\times$ winning ZE) champion, and the
-observable count is the pooled per-ZE supplier count of Section~\ref{sec:mapping}.
-
-\subsection*{Question 2: At what geographic level should comparative advantage be defined?}
-\label{sec:q3}
-
-\textbf{At the attraction area $\times$ sector level --- the level of the regression's fixed
-effect --- with a shared scale across the ZE it contains.} The argument is a chain of four
-links.
-\begin{enumerate}[nosep,topsep=2pt]
-\item \emph{The data only speak within areas.} The extensive-margin regression carries an
-attraction area $\times$ sector fixed effect. Under the cloglog link, areas with no supplier
-contribute \emph{exactly nothing} to $\hat\alpha$; under a LPM they contribute only a known
-attenuation factor $\lambda$ \eqref{eq:attenuation}. Either way $\alpha$ is a
-\emph{within-area} estimand (Lemma~\ref{lem:fe}).
-\item \emph{So the model should not be asked for more.} Defining $T$ at the area level means
-empty areas need no comparative-advantage parameter at all: they are structural zeros, exactly
-as they are absorbed observations. The estimated block is $\{T_{s,a}\}_{a\in\Areas^{+}_{s}}$
-(Section~\ref{sec:activeset-area}).
-\item \emph{And within areas the model then says something sharp.} With $T$ constant and wages
-normalized, the entire within-area extensive margin --- which ZE hosts a supplier and which
-does not --- is governed by distance alone \eqref{eq:within-contrast-norm}. That is
-first-order, confound-free identification of $\alpha$, and it is what the empirical
-specification is measuring. Indeed the model's implied specification \emph{is} the empirical
-one: a cloglog on log distance with an area$\times$sector fixed effect and slope $-\theta\alpha$
-(Proposition~\ref{prop:cloglog-exact}).
-\item \emph{With two side benefits.} The $T$ block shrinks by the average number of ZE per
-area, and --- because the share moments now outnumber the $T$ parameters --- profiling $T$ out
-of the search no longer annihilates $\alpha$'s identification
-(Section~\ref{sec:profiling}).
-\end{enumerate}
-The cost is the restriction itself: within-area heterogeneity other than distance (above all
-\textbf{size}) must be either absent, or modeled with observed covariates and a common loading
-\eqref{eq:T-area-cov}, or integrated out as a \emph{random} deviation
-$T_{sl}=T_{s,a(l)}\nu_{sl}$ with dispersion $\sigma^{2}_{s}$ calibrated on the ZE-level shares
-(Section~\ref{sec:eps}). The one thing that must \emph{not} be done is to make the deviation a
-free parameter per ZE: that restores exact just-identification and annihilates $\alpha$, is
-undefined at the empty ZE, and is biased there by selection on $\nu$
-(Section~\ref{sec:eps-trap}). Test the restriction before imposing it
-(Section~\ref{sec:risk}), and treat the estimated $\sigma^{2}_{s}$ as the formal measure of how
-wrong it is.
-
-\subsection*{Question 3: Should I change anything else?}
-
-\textbf{Yes --- five consistent changes, summarized in Section~\ref{sec:q2}:}
-\begin{enumerate}[nosep,topsep=2pt]
-\item \textbf{Price index.} Replace the continuum CES aggregate by the finite sum
-\eqref{eq:price-index}, and normalize out the mechanical love-of-variety term so that $N_{s}$ is
-identified from counts, not from price levels (Section~\ref{sec:q2}a).
-\item \textbf{Value moments in expectation, aggregated at the area level.} Read the shares as
-average realized shares (unchanged in expectation); treat the \emph{area aggregates} as the
-just-identified targets and the ZE-level shares as over-identifying content; optionally use the
-share dispersion as extra information on $N_{s}$ (Section~\ref{sec:q2}b).
-\item \textbf{Active set: mask at the area tier, not the ZE tier.} Stop masking ZE-level
-empirical zeros inside active areas --- they are now endogenous and are the core content of the
-count moment and of the regression --- while keeping empty attraction areas out of the
-parameter block entirely. Index $T$ by active $(s,\text{area})$ pairs and normalize a reference
-area per sector (Section~\ref{sec:q2}c).
-\item \textbf{Identification and estimation.} Add $N_{s}$ (one per sector) to the parameter
-vector; add the count moment \eqref{eq:moment} over a few thresholds; recognize that $\alpha$
-comes from the within-area distance gradient and $N_{s}$ from the zero \emph{level}, and compute
-the extensive margin \emph{exactly by simulation} rather than by the FKG approximation
-(Section~\ref{sec:q2}d).
-\item \textbf{Geography inputs and profiling.} Make the ZE$\to$attraction-area map a model
-primitive, identical to the regression's fixed-effect grouping, and re-express the $\gamma$
-inversion on area aggregates \eqref{eq:area-sinkhorn} (Section~\ref{sec:q2}e).
-\item \textbf{(Optional, recommended second stage) A random ZE-level deviation.} Relax
-$T_{sl}=T_{s,a(l)}$ to $T_{sl}=T_{s,a(l)}\nu_{sl}\prod_{k}x_{kl}^{\eta_{k}}$ with
-$\E[\nu]=1$, $\mathrm{Var}(\nu)=\sigma^{2}_{s}$ --- a mean-one Gamma making the supplier count
-negative binomial \eqref{eq:negbin} --- and identify $\sigma^{2}_{s}$ from the within-area share
-dispersion together with the count over-dispersion. Keep it a distribution, never a per-ZE
-parameter (Section~\ref{sec:eps}).
-\end{enumerate}
-Everything else --- the downstream nested-CES block, the wage normalization, the Fr\'echet shape
-$\theta$, the trade-cost parametrization $\tau=d^{\alpha}$, and the value-share and aggregate
-moments in expectation --- carries over from the baseline without modification.
-
-\section*{Implementation note}
-
-In the SMM engine the changes are local and additive.
-
-\begin{enumerate}[nosep,topsep=2pt,label=\arabic*.]
-\item \textbf{Parameter block.} Replace the active-$(s,\ZE)$ $T$ block by an active-$(s,a)$
-block. The ZE-level $T$ used by the solver is then a \emph{gather} through the ZE$\to$area map,
-$T_{sl}=T_{s,a(l)}$ (times the observed covariate factor \eqref{eq:T-area-cov} if used) ---
-i.e. one extra indexing layer between the parameter vector and the model, leaving the solver
-untouched. Active areas are those containing at least one status-$1$ ZE; status-$2$
-(``control'') ZE inside an active area now \emph{inherit} $T_{s,a}$ instead of being assigned
-$T\equiv0$, which is what makes their zeros endogenous.
-\item \textbf{Draws.} Instead of approximating the continuum with a large draw count, draw
-exactly $N_{s}$ varieties per sector (or $\Pois(N_{s})$ under Remark~\ref{rem:poisson}), run the
-existing per-variety Ricardian selection, and (i) accumulate value shares as before (they still
-average to the EK shares) and (ii) tally, per origin ZE, the number of varieties won across the
-downstream industry to form the count moment \eqref{eq:moment}.
-\item \textbf{Regression moment.} Unchanged in construction --- the same cloglog with the same
-sector $\times$ nearest-downstream fixed effect and the same distance regressor, now run on a
-simulated extensive margin that is a genuine granular zero/one outcome rather than an FKG
-approximation. Whatever controls the empirical specification includes must be included here
-too, and must appear in \eqref{eq:T-area-cov}.
-\item \textbf{Profiling.} Re-express the $\gamma$ inversion on area aggregates
-\eqref{eq:area-sinkhorn}: the update is one multiplicative step per active $(s,a)$ against the
-aggregated target, with the within-area split recomputed from distance at the current $\alpha$.
-The system stays square and its contraction structure is inherited from the ZE-level version.
-\item \textbf{Analytical/GMM path.} A closed form survives: the per-market extensive margin is
-the exact Binomial \eqref{eq:binomial} (exponential under Poissonization), and the
-industry-wide count \eqref{eq:model-moment} is a Poisson-Binomial (a plain Poisson under
-Poissonization) whose threshold probabilities are available in closed form in the single-market
-case and by a low-dimensional integral over the champion draws otherwise. $N_{s}$ enters
-smoothly through these expected counts, so no integer programming is required inside the
-optimizer.
-\item \textbf{Pre-flight check.} Before any of the above, run the within-area diagnostic of
-Section~\ref{sec:risk}(2) on the observed shares. It costs nothing and it tells you whether
-\eqref{eq:T-area} needs the covariate extension \eqref{eq:T-area-cov}.
-\end{enumerate}
+\paragraph{Firm counts.} Proposition~\ref{prop:firm} identifies each observed firm with a
+(ZE, variety) champion, which gives every cell exactly $N_{s}$ firms while observed counts vary by
+orders of magnitude. Closing that gap means giving the model a firm count --- a productivity floor
+$\bar z_{s}$ makes the count in $(l,s,\rho)$ Poisson with mean $T_{sl}\bar z_{s}^{-\theta}$, so it
+varies with $T_{sl}$ as in the data, and the observed count becomes a new and strong moment for
+$T$. The $\ln z$ coefficient of Proposition~\ref{prop:firm}(c) is the cheapest diagnostic of
+whether this is needed.
 
 \appendix
 
-\section{Degrees of freedom under area-level comparative advantage}
-\label{app:df}
+\section{Proofs}
+\label{app:proofs}
 
-This appendix collects the counting that makes Sections~\ref{sec:profiling} and
-\ref{sec:risk} precise. Fix a sector $s$; let $A^{+}=|\Areas^{+}_{s}|$ be the number of active
-attraction areas, $R_{a}$ the number of ZE in area $a$, and $R^{\mathrm{act}}_{a}\le R_{a}$ the
-number of those ZE with a strictly positive observed share.
+\subsection*{Lemma~\ref{lem:fe}}
 
-\paragraph{Parameters.} The $T$ block has $A^{+}-1$ free elements after the reference
-normalization $T_{s,\mathrm{ref}}=1$ (versus
-$\sum_{a\in\Areas^{+}}R^{\mathrm{act}}_{a}-1$ under ZE-level comparative advantage). Adding the
-common covariate loadings of \eqref{eq:T-area-cov} adds $\dim(\eta)$, a small number shared
-across all sectors and areas.
+(i) With $\Prob(y=1)=1-\exp(-\exp(\phi_{g}+\beta x))$, a group in which $y\equiv0$ contributes
+$\ell_{g}=\sum_{i}\ln\exp(-e^{\phi_{g}+\beta x_{i}})=-e^{\phi_{g}}\sum_{i}e^{\beta x_{i}}$. This is
+increasing in $-\phi_{g}$ with supremum $0$ as $\phi_{g}\to-\infty$, at which
+$\partial\ell_{g}/\partial\beta=-e^{\phi_{g}}\sum_{i}x_{i}e^{\beta x_{i}}\to0$. The group therefore
+drops from the concentrated likelihood.
 
-\paragraph{Share moments.} The value block supplies $\sum_{a\in\Areas^{+}}R^{\mathrm{act}}_{a}$
-share moments (minus one per sector for adding-up). Hence
-\begin{equation}
-\underbrace{\sum_{a\in\Areas^{+}}\big(R^{\mathrm{act}}_{a}-1\big)}_{\text{over-identifying restrictions}}
-=\underbrace{\sum_{a\in\Areas^{+}}R^{\mathrm{act}}_{a}}_{\text{share moments}}
--\underbrace{A^{+}}_{T\text{ parameters}} ,
-\label{eq:app-df}
-\end{equation}
-i.e. $R^{\mathrm{act}}_{a}-1$ testable restrictions per active area. Each restriction is a
-within-area statement: given the area aggregate, the split of the area's sourcing across its ZE
-must follow the distance profile \eqref{eq:within-contrast-norm}. Under ZE-level $T$ the
-right-hand side of \eqref{eq:app-df} is zero --- the source of the just-identification that
-lets $T^{*}(\alpha)$ absorb any $\alpha$.
+(ii) By Frisch--Waugh--Lovell,
+$\hat\beta=\sum_{g,i}\omega\tilde x\tilde y/\sum_{g,i}\omega\tilde x^{2}$ with $\tilde\cdot$ the
+weighted within-group demeaning. A group with $y\equiv0$ has $\tilde y\equiv0$, so it contributes
+zero to the numerator and $\sum\omega\tilde x^{2}>0$ to the denominator. Splitting the denominator
+between $\Areas^{+}$ and its complement gives $\hat\beta=\lambda\hat\beta^{+}$. \hfill$\square$
 
-\paragraph{Profiling.} The inversion \eqref{eq:area-sinkhorn} imposes only the $A^{+}$ area
-aggregates, matching the $A^{+}$ unknowns exactly. Writing the multiplicative update in the
-Sinkhorn form used by the ZE-level inversion,
-\begin{equation}
-T^{+}_{s,a}
-=T_{s,a}\cdot\Bigg(
-\frac{\sum_{l\in\mathcal{L}_{a}}\hat\gamma_{ls}}
-{\sum_{l\in\mathcal{L}_{a}}\gamma_{ls}(T,\alpha)}\Bigg)^{\!\delta},
-\qquad a\in\Areas^{+}_{s},
-\label{eq:app-sinkhorn}
-\end{equation}
-the map has the same structure as before --- a positive, homogeneous-of-degree-one
-multiplicative rescaling, ref-normalized per sector at each pass --- because
-$\gamma_{ls}(T,\alpha)$ is linear in $T_{s,a}$ in the numerator and enters the common
-denominator $\Phi_{sr}$ through the area aggregate only. Aggregating the update over the ZE of
-an area \emph{cannot degrade} the contraction: it is the original map composed with a
-projection onto a coarser partition, and the Birkhoff contraction coefficient of the coarsened
-row-scaling is bounded by that of the original. The measured contraction rates of the ZE-level
-inversion therefore transfer as upper bounds, and the endogenous-expenditure (GE) channel is
-unchanged.
+\subsection*{Proposition~\ref{prop:firm}}
 
-\paragraph{Extensive-margin moments.} The count moment \eqref{eq:moment} adds one family per
-sector, and the regression \eqref{eq:cloglog} adds $N_{\mathrm{REG}}$ coefficients, against
-one new parameter $N_{s}$ per sector: the extensive-margin block is over-identified, and its
-Hansen $J$ is a genuine test of the granular mechanism.
+Condition on the firm's productivity $z$; its delivered cost to buyer $a$ is $c=w_{l}\tau_{las}/z$.
+Each competitor $l'$ has champion cost $w_{l'}\tau_{l'as}/\varphi_{l'}$ with
+$\varphi_{l'}\sim\Frechet(T_{sl'},\theta)$, so
+$\Prob(w_{l'}\tau_{l'as}/\varphi_{l'}>x)=\exp(-T_{sl'}(w_{l'}\tau_{l'as})^{-\theta}x^{\theta})$.
+By independence across competitors the minimum competing cost $M$ satisfies
+$\Prob(M>x)=\exp(-\Phi^{-l}_{sa}x^{\theta})$. The firm supplies iff $M>c$, giving
+\eqref{eq:firm-win}. Taking the complement,
+$\Prob(\text{no supply}\mid z)=1-\exp(-\exp(\eta))$ with
+$\eta=\ln\Phi^{-l}_{sa}+\theta\ln(w_{l}\tau_{las})-\theta\ln z$, and $\tau_{las}=d_{la}^{\alpha}$
+gives \eqref{eq:firm-cloglog}. No step involves the variety count. \hfill$\square$
 
-\paragraph{With a random ZE-level deviation.} Relaxing Assumption~\ref{as:geo} as in
-Section~\ref{sec:eps} adds $\sigma^{2}_{s}$ (one scalar per sector) and $\dim(\eta)$ loadings
-shared across all sectors. The right-hand side of \eqref{eq:app-df} therefore falls by
-\emph{one per sector}, not one per ZE:
-\begin{equation}
-\#\{\text{over-identifying restrictions}\}
-=\sum_{a\in\Areas^{+}}\big(R^{\mathrm{act}}_{a}-1\big)-1-\tfrac{1}{S}\dim(\eta),
-\end{equation}
-and their content changes character: instead of pinning each ZE's share on the distance
-profile, they pin the \emph{distribution} of within-area deviations around it. The count block
-gains $\sigma^{2}_{s}$ as a second parameter but also gains the higher thresholds $n\ge1$
-(the over-dispersion) as moments, so it stays over-identified. Two boundary cases bracket the
-design: $\sigma^{2}_{s}=0$ is the pure Assumption~\ref{as:geo} of \eqref{eq:app-df}, while a free
-$\varepsilon_{sl}$ per ZE drives the right-hand side to zero --- exactly the just-identification
-that Section~\ref{sec:eps-trap} rejects.
+\subsection*{Lemma~\ref{lem:qfree}}
 
-\section{The granular dispersion of sourcing shares and the identification of $N_{s}$}
-\label{app:dispersion}
+Origin $l$ wins variety $\rho$ for buyer $r$ iff
+$w_{l}\tau_{lrs}/\varphi_{l\rho s}<\min_{l'\neq l}w_{l'}\tau_{l'rs}/\varphi_{l'\rho s}$, an event
+measurable with respect to $\{\varphi_{\cdot\rho s}\}$, $w$ and $\tau$ alone; the $\varphi$ have
+distribution governed by $(T_{s\cdot},\theta)$. The win-somewhere event is the union over $r$ of
+those events, hence measurable with respect to the same objects. Neither the variety count nor any
+price or expenditure aggregate enters. \hfill$\square$
 
-This appendix answers the question: \emph{once the sourcing share is an average share, how does
-its dispersion identify $N_{s}$?} The short answer is that the realized shares behave like a
-multinomial draw whose \emph{effective sample size} is $N_{s}$, so their sampling variance is
-$\propto 1/N_{s}$. A bootstrap over suppliers estimates exactly this variance and therefore pins
-$N_{s}$ down. Nothing in this appendix depends on the tier at which $T$ is defined --- it is a
-statement about the variety count, and it applies verbatim to ZE-level and to area-aggregated
-shares (with the aggregated share of area $a$ inheriting the same $1/N_{s}$ scaling with
-$\gamma$ replaced by $\gamma_{s,a}$).
+\subsection*{Equation \eqref{eq:champion}}
 
-\subsection{The realized value share as a self-normalized sum}
+The number of firms in $(l,s,\rho)$ with productivity above $z$ is Poisson with mean
+$T_{sl}z^{-\theta}$, so the probability that none exceeds $z$ --- equivalently that the maximum is
+below $z$ --- is $\exp(-T_{sl}z^{-\theta})$, the $\Frechet(T_{sl},\theta)$ CDF. \hfill$\square$
 
-Fix a market $(r,s)$ with $N_{s}$ varieties. For variety $\rho$ let
-$I_{\rho}\equiv\one\{\text{origin $l$ wins }\rho\}$ and let $v_{\rho}$ be the buyer's expenditure
-on $\rho$. Under CES, expenditure on a variety is proportional to its (winning) price raised to
-$1-\nu_{s}$,
-\begin{equation}
-v_{\rho}=\Big(\frac{p_{\rho}}{P_{sr}}\Big)^{1-\nu_{s}}E_{sr},
-\qquad
-p_{\rho}=\frac{c^{*}_{\rho}}{\mu},
-\qquad
-c^{*}_{\rho}=\min_{l'} c_{l'\rho s}(r),
-\label{eq:app-value}
-\end{equation}
-with $E_{sr}$ total sector-$s$ spending. The \emph{realized} value share going to origin $l$ is the
-self-normalized sum
-\begin{equation}
-\widehat{\gamma}_{lrs}
-=\frac{\sum_{\rho=1}^{N_{s}} v_{\rho}\,I_{\rho}}{\sum_{\rho=1}^{N_{s}} v_{\rho}}
-=\sum_{\rho=1}^{N_{s}} \omega_{\rho}\,I_{\rho},
-\qquad
-\omega_{\rho}\equiv\frac{v_{\rho}}{\sum_{\rho'} v_{\rho'}},
-\quad
-\sum_{\rho}\omega_{\rho}=1.
-\label{eq:app-realized}
-\end{equation}
-
-The crucial EK property is \emph{conditional independence}: the price at which a variety is bought
-is distributed identically regardless of \emph{which} origin wins it (the min over origins of
-independent Fr\'echet costs is independent of the argmin). Hence the value weights
-$\{\omega_{\rho}\}$ are independent of the winner indicators $\{I_{\rho}\}$, and across varieties
-$I_{\rho}\sim\text{Bernoulli}(\gamma_{lrs})$ i.i.d.
-
-\subsection{Conditional mean and variance}
-
-Condition on the weights $\bm{\omega}$. Because $\E[I_{\rho}]=\gamma_{lrs}$ and the $I_{\rho}$ are
-i.i.d.\ and independent of $\bm{\omega}$,
-\begin{align}
-\E\big[\widehat{\gamma}_{lrs}\mid\bm{\omega}\big]
-&=\gamma_{lrs}\sum_{\rho}\omega_{\rho}=\gamma_{lrs},
-\label{eq:app-mean}\\[2pt]
-\mathrm{Var}\big[\widehat{\gamma}_{lrs}\mid\bm{\omega}\big]
-&=\gamma_{lrs}(1-\gamma_{lrs})\sum_{\rho}\omega_{\rho}^{2}
-=\gamma_{lrs}(1-\gamma_{lrs})\,\mathcal{H},
-\label{eq:app-condvar}
-\end{align}
-where $\mathcal{H}\equiv\sum_{\rho}\omega_{\rho}^{2}$ is the Herfindahl index of the value weights.
-Equation \eqref{eq:app-mean} confirms $\widehat{\gamma}_{lrs}$ is unbiased for the EK probability
-$\gamma_{lrs}$ (the ``average share'' statement of the main text); the identifying content is in
-the variance \eqref{eq:app-condvar}.
-
-\subsection{The Herfindahl scales as $1/N_{s}$}
-
-For i.i.d.\ values, $\mathcal{H}=\big(\sum_{\rho} v_{\rho}^{2}\big)/\big(\sum_{\rho} v_{\rho}\big)^{2}$
-concentrates, by the law of large numbers, around
-\begin{equation}
-\E[\mathcal{H}]\;\approx\;\frac{1}{N_{s}}\,\frac{\E[v^{2}]}{\E[v]^{2}}
-\;=\;\frac{1+\mathrm{CV}_{v}^{2}}{N_{s}},
-\qquad
-\mathrm{CV}_{v}^{2}\equiv\frac{\mathrm{Var}(v)}{\E[v]^{2}}.
-\label{eq:app-herf}
-\end{equation}
-Taking expectations of \eqref{eq:app-condvar} and using \eqref{eq:app-herf},
-\begin{equation}
-\boxed{\;
-\mathrm{Var}\big(\widehat{\gamma}_{lrs}\big)
-\;\approx\;
-\frac{\gamma_{lrs}(1-\gamma_{lrs})}{N_{s}}\,\big(1+\mathrm{CV}_{v}^{2}\big).
-\;}
-\label{eq:app-var}
-\end{equation}
-The dispersion of the realized share is inversely proportional to the number of varieties. This is
-the mathematical content of ``a thinner sector has noisier shares'': granular sampling noise in the
-sourcing shares is a direct, monotone read on $N_{s}$.
-
-\subsection{The value-dispersion factor is a model constant}
-
-The nuisance $1+\mathrm{CV}_{v}^{2}$ is not free: it is pinned down by the EK price distribution.
-The minimum delivered cost is Weibull, $\Prob(c^{*}\le x)=1-\exp(-\Phi_{sr}x^{\theta})$
-(Appendix~\ref{app:price}), whose power moments are
-$\E[(c^{*})^{k}]=\Phi_{sr}^{-k/\theta}\,\Gamma(1+k/\theta)$ for $k>-\theta$. Since
-$v\propto (c^{*})^{1-\nu_{s}}$ by \eqref{eq:app-value}, the $\Phi_{sr}$ factors cancel in the ratio
-and
-\begin{equation}
-1+\mathrm{CV}_{v}^{2}
-=\frac{\E[(c^{*})^{2(1-\nu_{s})}]}{\E[(c^{*})^{1-\nu_{s}}]^{2}}
-=\frac{\Gamma\!\big(1+\tfrac{2(1-\nu_{s})}{\theta}\big)}
-{\Gamma\!\big(1+\tfrac{1-\nu_{s}}{\theta}\big)^{2}},
-\qquad\text{finite iff } \theta>2(\nu_{s}-1).
-\label{eq:app-cv}
-\end{equation}
-Given the calibrated $(\theta,\nu_{s})$, \eqref{eq:app-cv} is a known constant (e.g.\ $\approx 1.03$
-for $\theta=4,\nu_{s}=1.5$), so \eqref{eq:app-var} maps the observed share dispersion into $N_{s}$
-without any additional free parameter. The regularity condition $\theta>2(\nu_{s}-1)$ is the usual
-requirement that the CES price index have a finite second moment.
-
-\subsection{Effective sample size and the full covariance}
-
-Collecting origins, the winner vector $(I_{\rho 1},\dots,I_{\rho R})$ is multinomial$(1;\bm{\gamma})$
-for each variety, so \eqref{eq:app-condvar} generalizes to
-\begin{equation}
-\mathrm{Cov}\big(\widehat{\gamma}_{lrs},\widehat{\gamma}_{l'rs}\big)
-\;\approx\;
-\frac{1+\mathrm{CV}_{v}^{2}}{N_{s}}\,
-\big(\gamma_{lrs}\,\delta_{ll'}-\gamma_{lrs}\gamma_{l'rs}\big).
-\label{eq:app-cov}
-\end{equation}
-This is exactly the covariance of a multinomial proportion vector with $\gamma$ probabilities and
-\emph{effective sample size}
-\begin{equation}
-N_{s}^{\mathrm{eff}}=\frac{N_{s}}{1+\mathrm{CV}_{v}^{2}}.
-\label{eq:app-ess}
-\end{equation}
-In words: \emph{the granular sourcing shares are distributed as a multinomial sample of size
-$N_{s}^{\mathrm{eff}}$}. $N_{s}$ is the effective number of independent draws behind the sourcing
-vector, and any dispersion statistic of the shares measures it. Aggregating to the area level
-($\widehat{\gamma}_{s,a}=\sum_{l\in\mathcal{L}_{a}}\widehat{\gamma}_{lrs}$) simply collapses
-\eqref{eq:app-cov} onto the coarser partition, with the same $1/N_{s}$ factor --- so the
-area-aggregated targets of Section~\ref{sec:q2}b carry the same information about $N_{s}$, at
-lower dispersion.
-
-\subsection{Connection to the bootstrap and identification}
-
-The proposed bootstrap --- resample the observed supplier links and recompute the shares ---
-is an empirical estimator of precisely the sampling variance in \eqref{eq:app-var}: it perturbs the
-finite set of granular units behind the share, so its dispersion reflects how many such units there
-are. Equating the bootstrap variance to \eqref{eq:app-var},
-\begin{equation}
-\widehat{N}_{s}
-=\big(1+\mathrm{CV}_{v}^{2}\big)\cdot
-\frac{\gamma_{ls}(1-\gamma_{ls})}{\widehat{\mathrm{Var}}_{\text{boot}}(\gamma_{ls})},
-\label{eq:app-identify}
-\end{equation}
-delivers $N_{s}$ (or, pooling over $l$ and $r$, a GMM moment matching the two sides). Two cautions.
-\emph{(i)} The resampling unit must be the same object in the model and the data: if the bootstrap
-resamples firm-\emph{links} rather than varieties, the relevant count is the link count $N$, which
-exceeds $N_{s}$ by up to the factor $\Nd$ (Section~\ref{sec:mapping}); use the model's
-link-level variance, or resample at the variety level, to keep the units aligned. \emph{(ii)}
-Equation \eqref{eq:app-var} is the leading $1/N_{s}$ term; for very thin sectors the exact
-finite-$N_{s}$ Binomial/multinomial variance should be used, which the simulation delivers
-automatically. Both cautions leave the core result intact: \emph{share dispersion is a
-$1/N_{s}$ signal, and it is what makes $N_{s}$ identified even from the value block alone.}
-
-\subsection{Two corrections once comparative advantage deviates within areas}
-\label{app:disp-corrections}
-
-Everything above holds \emph{unconditionally} and under Assumption~\ref{as:geo} taken exactly.
-Two things change once one relaxes it as in Section~\ref{sec:eps}, and both cut against using
-\eqref{eq:app-var} or \eqref{eq:app-identify} as plug-in formulas.
-
-\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
-\item \textbf{Contamination.} Observed share dispersion now mixes granular sampling noise
-($\propto1/N_{s}$) with genuine dispersion of comparative advantage
-($\sigma^{2}_{\varepsilon,s}$): in logs,
-$\mathrm{Var}_{\text{within}}(\ln\hat\gamma)=\sigma^{2}_{\varepsilon,s}+(1-\gamma)(1+\mathrm{CV}_{v}^{2})/(N_{s}\gamma)$,
-which is \eqref{eq:eps-decomp}. Attributing all of it to $1/N_{s}$, as
-\eqref{eq:app-identify} does, \emph{understates} $N_{s}$ --- by an unbounded factor if
-$\sigma^{2}_{\varepsilon}$ is large. The two terms are distinguishable in principle, since only
-the sampling term scales with $1/\gamma$.
-\item \textbf{Truncation, which is worse.} The feasible sample contains only ZE with
-$\hat\gamma_{ls}>0$, and that selection removes exactly the low draws carrying most of the
-dispersion of $\ln\hat\gamma$. Table~\ref{tab:eps-mc} quantifies it: in the granular regime
-($N_{s}\bar\gamma\lesssim10$, i.e.\ a non-negligible empty-ZE share --- the regime this note is
-about) the additive decomposition is wrong by up to a factor of three, and the \emph{sign} of the
-error flips with $N_{s}$. The truncation and the sampling inflation partly cancel, in a way that
-is not signable a priori.
-\end{enumerate}
-
-Consequently \eqref{eq:app-var}--\eqref{eq:app-identify} should be read as the theory of why
-share dispersion is informative, not as an estimator. In practice, match the dispersion moment
-through the \emph{simulation}, which reproduces the sampling, the truncation, and the selection
-of \eqref{eq:eps-selection} automatically, and identify $(N_{s},\sigma^{2}_{s})$ jointly from the
-three moments listed in Section~\ref{sec:eps-calibration}.
-
-\section{The expected within-sector price index, love of variety, and the normalization}
+\section{The price index, love of variety, and the normalisation}
 \label{app:price}
 
-This appendix derives the price-index expectation quoted in Section~\ref{sec:q2}(a), shows that the
-proposed normalization is internally consistent, and explains why the love-of-variety term it
-removes is nonetheless economically meaningful. Throughout, $T$ may be read at either tier; under
-Assumption~\ref{as:geo} substitute $T_{sl}=T_{s,a(l)}$ and note that the normalization acts on the
-sector-common scale, hence identically at both tiers.
+\subsection*{The minimum delivered cost}
 
-\subsection{The distribution of the minimum delivered cost}
-
-For variety $\rho$ in market $(r,s)$, origin $l$'s champion cost is
-$c_{l\rho s}(r)=w_{l}\tau_{lrs}/\varphi_{l\rho s}$ with
-$\varphi_{l\rho s}\sim\Frechet(T_{sl},\theta)$, i.e.\ $\Prob(\varphi_{l\rho s}\le z)=\exp(-T_{sl}z^{-\theta})$.
-Then
+For variety $\rho$ in market $(r,s)$, origin $l$'s champion cost satisfies
+$\Prob(c_{l\rho s}(r)>x)=\exp(-T_{sl}(w_{l}\tau_{lrs})^{-\theta}x^{\theta})$, so by independence
+across origins the minimum $c^{*}_{\rho}$ is Weibull,
 \begin{equation}
-\Prob\big(c_{l\rho s}(r)>x\big)
-=\Prob\!\Big(\varphi_{l\rho s}<\tfrac{w_{l}\tau_{lrs}}{x}\Big)
-=\exp\!\big(-T_{sl}(w_{l}\tau_{lrs})^{-\theta}x^{\theta}\big),
-\end{equation}
-and, by independence across origins, the minimum cost $c^{*}_{\rho}=\min_{l}c_{l\rho s}(r)$ is
-Weibull:
-\begin{equation}
-\Prob\big(c^{*}_{\rho}>x\big)=\prod_{l}\Prob\big(c_{l\rho s}(r)>x\big)
-=\exp\!\big(-\Phi_{sr}\,x^{\theta}\big),
+\Prob\big(c^{*}_{\rho}>x\big)=\exp\!\big(-\Phi_{sr}x^{\theta}\big),
 \qquad
-\Phi_{sr}=\sum_{l}T_{sl}(w_{l}\tau_{lrs})^{-\theta}.
+\E\big[(c^{*}_{\rho})^{k}\big]=\Phi_{sr}^{-k/\theta}\,\Gamma\!\Big(1+\tfrac{k}{\theta}\Big),
+\quad k>-\theta .
 \label{eq:app-weibull}
 \end{equation}
-Its power moments follow from the substitution $u=\Phi_{sr}x^{\theta}$:
+
+\subsection*{Love of variety and its normalisation}
+
+With the CES aggregate taken as a sum, $\E[P_{sr}^{1-\nu_{s}}]=N_{s}\Gamma(1+\tfrac{1-\nu_{s}}{\theta})\mu^{\nu_{s}-1}\Phi_{sr}^{-\frac{1-\nu_{s}}{\theta}}$,
+so the certainty-equivalent index $\widetilde P_{sr}=(\E[P_{sr}^{1-\nu_{s}}])^{1/(1-\nu_{s})}$
+satisfies
 \begin{equation}
-\E\big[(c^{*}_{\rho})^{k}\big]
-=\int_{0}^{\infty}x^{k}\,\Phi_{sr}\theta x^{\theta-1}e^{-\Phi_{sr}x^{\theta}}\,dx
-=\Phi_{sr}^{-k/\theta}\,\Gamma\!\Big(1+\tfrac{k}{\theta}\Big),
-\qquad k>-\theta.
-\label{eq:app-moment}
+\widetilde P_{sr}=N_{s}^{\frac{1}{1-\nu_{s}}}\times\underbrace{\Gamma\!\Big(1+\tfrac{1-\nu_{s}}{\theta}\Big)^{\frac{1}{1-\nu_{s}}}\mu^{-1}\Phi_{sr}^{-1/\theta}}_{N_{s}\text{-free}} .
+\label{eq:loveofvariety}
 \end{equation}
+Since $1-\nu_{s}<0$ the factor is decreasing in $N_{s}$: more varieties lower the sector price
+index. Rescaling $\widetilde T_{s,a}=T_{s,a}N_{s}^{\kappa}$ with $\kappa=\theta/(1-\nu_{s})$ maps
+$\Phi_{sr}\mapsto N_{s}^{\kappa}\Phi_{sr}$ and cancels the two powers exactly, leaving
+$\widetilde P_{sr}$ invariant to $N_{s}$. Equivalently, taking the CES aggregate as an
+\emph{average} rather than a sum implements the same normalisation.
 
-\subsection{The expected price index}
+The normalisation is consistent because it acts on a gauge the sourcing shares do not see: the
+share \eqref{eq:share-area} is a ratio of $T$'s within a sector, so the extensive margin, the count
+moment and the within-area contrast \eqref{eq:within} are all unchanged. It is also a gauge the
+estimator already fixes, by normalising one reference area per sector.
 
-The within-sector CES price index over the $N_{s}$ varieties is
-$P_{sr}^{1-\nu_{s}}=\sum_{\rho=1}^{N_{s}} p_{\rho}^{1-\nu_{s}}$ with $p_{\rho}=c^{*}_{\rho}/\mu$.
-The $c^{*}_{\rho}$ are i.i.d.\ across $\rho$, so by \eqref{eq:app-moment} with $k=1-\nu_{s}$,
-\begin{equation}
-\E\big[P_{sr}^{1-\nu_{s}}\big]
-=N_{s}\,\E\big[p_{\rho}^{1-\nu_{s}}\big]
-=N_{s}\,\mu^{\nu_{s}-1}\,\E\big[(c^{*}_{\rho})^{1-\nu_{s}}\big]
-=N_{s}\,\Gamma\!\Big(1+\tfrac{1-\nu_{s}}{\theta}\Big)\,\mu^{\nu_{s}-1}\,\Phi_{sr}^{-\frac{1-\nu_{s}}{\theta}},
-\label{eq:app-EPindex}
-\end{equation}
-which is the expression in the main text. Defining the certainty-equivalent price index
-$\widetilde{P}_{sr}\equiv\big(\E[P_{sr}^{1-\nu_{s}}]\big)^{1/(1-\nu_{s})}$,
-\begin{equation}
-\widetilde{P}_{sr}
-=N_{s}^{\frac{1}{1-\nu_{s}}}\,
-\underbrace{\Gamma\!\Big(1+\tfrac{1-\nu_{s}}{\theta}\Big)^{\frac{1}{1-\nu_{s}}}\mu^{-1}\,
-\Phi_{sr}^{-1/\theta}}_{\text{continuum EK price, }N_{s}\text{-free}} .
-\label{eq:app-loveofvariety}
-\end{equation}
-Because $1-\nu_{s}<0$, the factor $N_{s}^{1/(1-\nu_{s})}$ is \emph{decreasing} in $N_{s}$: more
-varieties lower the sector price index. This is the standard CES love-of-variety channel, here
-generated by the granular variety count rather than by entry.
+\subsection*{Why the removed term is nonetheless economic}
 
-\subsection{Why the normalization is consistent}
+The elasticity $\partial\ln\widetilde P_{sr}/\partial\ln N_{s}=1/(1-\nu_{s})<0$ is a genuine gain
+from variety. Three implications. First, the cross-section cannot separate $N_{s}$ from technology
+using prices alone --- a sector that is cheap because it has many varieties looks identical, in
+expenditure data, to one that is cheap because it is productive --- which is why the count moment
+is indispensable. Second, the normalisation fixes a \emph{level} at the calibration point and does
+not alter the counterfactual \emph{response} of prices to a change in the variety set, provided one
+maps back to the physical $T$ before running such a counterfactual. Third, it is a live propagation
+channel: a shock that removes suppliers in one region raises $P_{sr}$ downstream through exactly
+this elasticity, and that channel is absent from the continuum model.
 
-The normalization proposed in Section~\ref{sec:q2}(a) rescales each sector's comparative-advantage
-vector by a common (across origins) factor,
-\begin{equation}
-\widetilde{T}_{s,a}=T_{s,a}\cdot N_{s}^{\,\kappa},
-\qquad
-\kappa=\frac{\theta}{1-\nu_{s}}\;(<0).
-\label{eq:app-normalization}
-\end{equation}
-Under \eqref{eq:app-normalization}, $\Phi_{sr}\mapsto N_{s}^{\kappa}\Phi_{sr}$, so
-$\Phi_{sr}^{-1/\theta}\mapsto N_{s}^{-\kappa/\theta}\Phi_{sr}^{-1/\theta}$, and the two $N_{s}$-powers
-in \eqref{eq:app-loveofvariety} cancel exactly:
-\begin{equation}
-\widetilde{P}_{sr}\;\propto\;N_{s}^{\frac{1}{1-\nu_{s}}-\frac{\kappa}{\theta}}
-=N_{s}^{0}=\text{const in }N_{s}.
-\end{equation}
-The normalization is \emph{consistent} for three reasons, each of which is exactly the property
-that makes it harmless for everything except the price level.
-\begin{enumerate}[nosep,topsep=2pt]
-\item \textbf{It acts on a gauge the sourcing shares do not see.} The share in
-\eqref{eq:share-area} is a \emph{ratio} of $T$'s within a sector and is therefore invariant to any
-common rescaling $T_{s,a}\mapsto N_{s}^{\kappa}T_{s,a}$. Hence the extensive margin
-$(1-\gamma_{lrs})^{N_{s}}$, the count moment \eqref{eq:moment}, the within-area contrast
-\eqref{eq:within-contrast-norm}, and the share-dispersion result of
-Appendix~\ref{app:dispersion} are all \emph{unchanged} by \eqref{eq:app-normalization}. The
-normalization moves only the price \emph{level}, never the sourcing geometry.
-\item \textbf{The gauge is already free in the estimator.} The code fixes one reference region per
-sector ($T_{s,\mathrm{ref}}=1$ --- one reference \emph{area} under Assumption~\ref{as:geo})
-precisely because the within-sector scale of $T$ is not identified by the shares. The
-love-of-variety factor $N_{s}^{1/(1-\nu_{s})}$ is exactly this unidentified scale
-re-appearing in the price level; \eqref{eq:app-normalization} simply chooses the scale so that the
-price level is held fixed as $N_{s}$ varies. Equivalently, one absorbs $N_{s}^{1/(1-\nu_{s})}$ into
-the sector technology share $\Omega^{s}$ (or the productivity level $A$) that already carries the
-sector price level in the value moments.
-\item \textbf{It restores numerical equivalence with the baseline value block.} With
-\eqref{eq:app-normalization}, every value-based moment (labor share, $\pi_{s}$, $\pi_{r}$) takes the
-same value as in the continuum model at the same $(\Omega,A,\alpha,T\text{-normalized})$, so adding
-granularity does not perturb the blocks that granularity has nothing to say about. $N_{s}$ is then
-identified \emph{only} by the objects that genuinely depend on it --- the count moment and the share
-dispersion.
-\end{enumerate}
+\section{The count moment in estimation}
+\label{app:count}
 
-\subsection{Why the love-of-variety term is nonetheless economically relevant}
+\paragraph{Which thresholds.} Writing $\mu_{ls}=N_{s}q_{ls}$ and using the Poisson approximation,
+$\partial\bar G_{s}(K)/\partial N_{s}=-|\mathcal{L}^{+}_{s}|^{-1}\sum_{l}q_{ls}e^{-\mu_{ls}}\mu_{ls}^{K}/K!$,
+which peaks at $K\approx\mu_{ls}$ and vanishes as $\bar G_{s}(K)\to1$. Saturated thresholds carry
+no identifying variation and a small, poorly-estimated variance, so they must be trimmed. The
+empty-ZE share $\bar G_{s}(0)$ is the most interpretable and typically near-optimal threshold: it
+\emph{is} the extensive margin the model was built to explain.
 
-Consistency does \emph{not} mean the removed term is economically empty. Equation
-\eqref{eq:app-loveofvariety} says a region-sector with more varieties has a genuinely lower price
-index and higher real income: the elasticity
-\begin{equation}
-\frac{\partial \ln \widetilde{P}_{sr}}{\partial \ln N_{s}}=\frac{1}{1-\nu_{s}}<0
-\label{eq:app-welfare}
-\end{equation}
-is the marginal gain from variety, a real welfare object of the same nature as in
-Krugman/Melitz/ACR. Three implications follow.
-\begin{enumerate}[nosep,topsep=2pt]
-\item \textbf{The cross-section cannot separate $N_{s}$ from technology using prices alone.}
-Because \eqref{eq:app-normalization} is observationally equivalent in the value block to a shift in
-$T$-scale (equivalently $\Omega^{s}$/$A$), a sector that is cheap because it has many varieties looks
-identical, in expenditure data, to one that is cheap because it is technologically productive. This
-observational equivalence is \emph{why} the granular count/dispersion moments are indispensable:
-they are the only data that break it. The normalization does not destroy information --- it records
-that the information about $N_{s}$ was never in the value levels to begin with.
-\item \textbf{It is a level normalization, not a slope restriction.} \eqref{eq:app-normalization}
-fixes the price \emph{level} at the calibration point; it does not alter the counterfactual
-\emph{response} \eqref{eq:app-welfare} of prices to a change in the variety set. Provided one maps
-back to the physical primitive $T$ (undoing \eqref{eq:app-normalization}) before running any
-counterfactual that moves $N_{s}$, the love-of-variety channel is fully preserved. Holding
-$\widetilde{T}$ (rather than $T$) fixed in such a counterfactual would silence it --- a modeling
-error to avoid.
-\item \textbf{It is a live propagation channel for spatial comovement.} The paper's object of
-interest is how a shock in one place propagates elsewhere through sourcing. A demand or supply shock
-that removes suppliers/varieties in one region raises $P_{sr}$ downstream through exactly
-\eqref{eq:app-welfare}, i.e.\ through the granular extensive margin. This channel is absent in the
-continuum model (where the variety mass is fixed and the extensive margin is degenerate) and is
-precisely the new content of the granular model. Normalizing the term out is therefore appropriate
-for \emph{identification} but the term itself must be retained --- as a function of the endogenous,
-shock-dependent number of active varieties --- in any \emph{counterfactual}.
-\end{enumerate}
-In sum, the normalization is a change of units that isolates $N_{s}$'s identification in the count
-and dispersion moments; the love-of-variety term it neutralizes in the cross-section is a genuine
-welfare and comovement channel that reappears the moment the variety set is allowed to move.
-
-\section{Choosing the count thresholds and bootstrapping the extensive-margin moment}
-\label{app:estimation}
-
-The count moment \eqref{eq:moment} adds one family of moments per sector,
-$G_{s}(K)=\#\{l\in\mathcal{L}^{+}_{s}:K_{ls}\le K\}$ (equivalently, its share form
-$\bar G_{s}(K)=G_{s}(K)/R^{+}_{s}$ with $R^{+}_{s}=|\mathcal{L}^{+}_{s}|$). This appendix settles
-two practical questions: which thresholds $K$ to match, and how to bootstrap their covariance.
-
-\subsection{Which thresholds identify $N_{s}$}
-\label{app:threshold}
-
-Write the model share as $\bar G_{s}(K;N_{s})=\tfrac{1}{R^{+}_{s}}\sum_{l}F(K;N_{s},q_{ls})$, where
-$q_{ls}$ is origin $l$'s per-variety win probability (pinned by the value block, independent of
-$N_{s}$) and $F$ is the count CDF. Using the Poisson form
-$K_{ls}\sim\Pois(\mu_{ls})$ with $\mu_{ls}=N_{s}q_{ls}$ (exact under
-Remark~\ref{rem:poisson}; otherwise a Poisson-Binomial evaluated by simulation), the sensitivity of
-the moment is
-\begin{equation}
-\frac{\partial \bar G_{s}(K)}{\partial N_{s}}
-=-\frac{1}{R^{+}_{s}}\sum_{l}q_{ls}\,\frac{e^{-\mu_{ls}}\mu_{ls}^{K}}{K!},
-\label{eq:app-sensitivity}
-\end{equation}
-which, region by region, peaks at $K\approx\mu_{ls}=N_{s}q_{ls}$ and decays on either side. Two
-consequences:
-\begin{itemize}[nosep,topsep=2pt]
-\item \textbf{Large $K$ saturates.} $\bar G_{s}(K)\to 1$ and \eqref{eq:app-sensitivity} $\to 0$:
-no identifying variation. A share pinned near $1$ also has a small, poorly-estimated variance, so
-the optimal weight matrix loads it with a large, unstable weight. Such thresholds must be trimmed.
-\item \textbf{The signal is in the left tail.} The informative thresholds are those near where the
-marginal (remote/small) origins flip from inactive to active. The empty-ZE share
-$\bar G_{s}(0)$ is the most interpretable and typically near-optimal moment --- it \emph{is} the
-extensive margin the model was built to explain.
-\end{itemize}
-Formally, the threshold that carries the most information about $N_{s}$ maximizes the
-signal-to-noise (Fisher-information) ratio
-\begin{equation}
-K^{\star}_{s}=\argmax_{K}\ \mathcal{I}_{s}(K),
-\qquad
-\mathcal{I}_{s}(K)=\frac{\big[\partial_{N_{s}}\bar G_{s}(K)\big]^{2}}{\mathrm{Var}\big(\hat G_{s}(K)\big)},
-\label{eq:app-info}
-\end{equation}
-with the denominator taken from the bootstrap of Section~\ref{app:bootstrap}. $\mathcal{I}_{s}(K)$
-is maximized at an \emph{interior} share, roughly $\bar G_{s}(K)\in[0.1,0.9]$, away from the
-degenerate $0$ and the saturated $1$. Because $N_{s}$ --- and hence the saturation point ---
-differs across sectors, $K$ should be chosen \emph{per sector} (e.g.\ at a fixed low quantile of
-the sector's empirical count distribution, or simply $K=0$). One well-chosen $K$ just-identifies
-$N_{s}$; a short ladder $K\in\{0,1,2\}$ over-identifies it and supplies a Hansen-style check that
-the whole granular curve fits (in the spirit of LMM's several $h(M)/h(1)$ ratios), while the
-optimal weight matrix combines them --- provided saturated thresholds are dropped so the covariance
-stays well-conditioned.
-
-\subsection{How to bootstrap the moment}
-\label{app:bootstrap}
-
-The count moment is a proportion over the geography \emph{of active attraction areas}, empty ZE
-included, since those empty ZE are the $K=0$ mass. This dictates the resampling design.
-
-\paragraph{Denominator: all candidate ZE inside active areas.} Define
-$\hat G_{s}(K)=\tfrac{1}{R^{+}_{s}}\#\{l\in\mathcal{L}^{+}_{s}:\hat K_{ls}\le K\}$ over
-$\mathcal{L}^{+}_{s}=\bigsqcup_{a\in\Areas^{+}_{s}}\mathcal{L}_{a}$, with $R^{+}_{s}$ held
-\emph{fixed}. Two errors to avoid, in opposite directions. Restricting the computation to ZE that
-host a supplier (as is appropriate for the value-share block) computes a different object --- a
-share \emph{among} active ZE --- whose variance is not the variance of the extensive margin: the
-empty ZE must enter the denominator. Conversely, including ZE from \emph{empty} attraction areas
-inflates the denominator with mechanically-explained zeros that carry no information about
-$(\alpha,N_{s})$ and that the regression's fixed effect has already discarded
-(Lemma~\ref{lem:fe}); they must stay out. The correct denominator is exactly the support the
-cloglog uses.
-
-\paragraph{Resampling unit: supplier firm-links, not the control group.} Bootstrap with
-replacement from the observed supplier firms (pooled over the geography of active areas),
-recompute the per-ZE counts $\hat K_{ls}^{*}$ and $\hat G_{s}(K)^{*}$ each replication, holding
-$R^{+}_{s}$ fixed. A ZE with one or two firms can then draw zero and \emph{flip into the empty set}
---- precisely the extensive-margin variance required --- and this arises entirely from resampling
-\emph{suppliers}. Under a firm-to-firm dataset that is the \emph{universe} of the downstream
-industry's suppliers (as in LMM's universe of French exporters), an observed-zero ZE is a true
-zero: it stays zero in every replication and contributes deterministically to $\hat G_{s}(0)$.
-Adding non-supplier (``control-group'') firms as resampling units would then inject variance
-corresponding to no real sampling process and should be avoided. Non-suppliers enter only under a
-different noise source: if the data are a \emph{sample} of the firm universe (resample the whole
-observed firm list), or if the moment's uncertainty is about which downstream buyers are observed
-(resample \emph{buyers}, so a ZE's count changes as different buyers reveal different suppliers).
-Neither applies to the structural granular interpretation with a fixed universe. Note that the
-\emph{composition} of $\Areas^{+}_{s}$ is itself an outcome of the same sampling: if an area's only
-supplier can be resampled away, the area would leave $\Areas^{+}_{s}$ and change the support. Holding
-$\Areas^{+}_{s}$ fixed at its observed value --- which is what the fixed-effect estimator does --- is
-the coherent convention, and should be applied identically in the bootstrap.
-
-\paragraph{Bootstrap jointly with the value block.} The same supplier firms generate both the
-value shares and the counts $K_{ls}$, so a single joint bootstrap --- resample firms
-once, recompute \emph{both} moment families per replication --- is needed to estimate the
-cross-covariance blocks of $\Sigma_{\text{data}}$ that the efficient weight matrix
-$W=(\Sigma_{\text{data}}+\Sigma_{\text{sim}})^{-1}$ requires. The simulation-noise term
-$\Sigma_{\text{sim}}$ continues to come from re-simulation as in the baseline. In particular, the
-value-share block may keep the existing supplier-only, active-ZE bootstrap (its object is
-conditional on activity; cf.\ Appendix~\ref{app:dispersion}), while the count block uses the
-active-area denominator above --- the two are drawn in the same resampling loop. If the
-area-aggregated shares of Section~\ref{sec:q2}b are used as targets, their covariance comes out of
-the same loop by summing within areas before recomputing.
+\paragraph{Bootstrap design.} The moment is a proportion over the ZE of active attraction areas,
+empty ZE included, since those are the $K=0$ mass. Two errors to avoid, in opposite directions:
+restricting to ZE that host a supplier computes a share \emph{among} active ZE, whose variance is
+not that of the extensive margin; and including ZE from empty areas inflates the denominator with
+mechanically-explained zeros that the fixed effect has already discarded. The resampling unit is
+the supplier firm, pooled over the geography of active areas, with the denominator held fixed --- a
+ZE with one or two firms can then draw zero and flip into the empty set, which is precisely the
+required variance. Because the same firms generate both the sourcing shares and the counts, a
+single joint bootstrap is needed to estimate the cross-covariance blocks that the efficient weight
+matrix requires.
 
 \begin{thebibliography}{9}
 
 \bibitem[Bernard et al.(2003)]{bejk2003}
 Bernard, A., J. Eaton, J.~B. Jensen, and S. Kortum (2003).
-``Plants and Productivity in International Trade.'' \emph{American Economic Review} 93(4),
-1268--1290.
+``Plants and Productivity in International Trade.'' \emph{American Economic Review} 93(4), 1268--1290.
 
 \bibitem[Eaton et al.(2012)]{eks2012}
 Eaton, J., S. Kortum, and S. Sotelo (2012).
@@ -2545,8 +681,8 @@ Eaton, J., S. Kortum, and S. Sotelo (2012).
 
 \bibitem[Lenoir et al.(2023)]{lmm2023}
 Lenoir, C., J. Martin, and I. M\'ejean (2023).
-``Search Frictions in International Goods Markets.''
-\emph{Journal of the European Economic Association} 21(1), 326--366.
+``Search Frictions in International Goods Markets.'' \emph{Journal of the European Economic
+Association} 21(1), 326--366.
 
 \end{thebibliography}
 

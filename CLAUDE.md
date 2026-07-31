@@ -29,8 +29,10 @@ reach into `optimizers/`, `test/`, `extras/`; files in those folders reach back 
 
 **Key docs** — `documentation/model.md` (model + math), `inference.md` (SEs, Jacobian,
 Hansen J), `optimizer.md` (backends), and for the current direction — granular varieties with
-comparative advantage at the attraction-area level — `finite_sample2.tex` (theory) and
-`plan_granular_aa.md` (implementation plan).
+comparative advantage at the attraction-area level — `finite_sample2.tex` (the model),
+`plan_granular_aa.md` (what to build) and `granular_validation.md` (gates + open assumptions).
+The granular work is behind `--granular` and `--ca_level`; both at their legacy values
+(`false`, `ze`) must reproduce today's estimates.
 
 ---
 
