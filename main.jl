@@ -113,9 +113,9 @@ include_control = length(ARGS) >= 10 && !isempty(strip(ARGS[10])) ?
 # --granular=false --ca_level=ze the estimator is the continuum ZE-level model exactly
 # as it stood, which is a supported configuration, not a historical curiosity.
 granular = length(ARGS) >= 11 && !isempty(strip(ARGS[11])) ?
-    (lowercase(strip(ARGS[11])) in ("true", "1", "yes")) : false
+    (lowercase(strip(ARGS[11])) in ("true", "1", "yes")) : true
 # 12th positional arg (run.sh --ca_level=ze|aa), default :ze.
-ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :ze
+ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :aa
 @assert ca_level in (:ze, :aa) "ca_level must be ze|aa, got :$ca_level"
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
