@@ -123,6 +123,10 @@ Args: `industry n_coef n_tau granular ca_level [n_rep]`.
 
 * **V6 — firm ↔ champion.** `b_logz` against `−θ` (Prop. 1(c)). A large gap calls for
   `granular_validation.md` §A.2 option 2.
+* **V4 — closed form vs realised.** `report_granular` (and `report.txt`) print the closed-form
+  `Ḡ_s(N̂) = mean_l (1−q̂)^{N̂}` the bisection targets beside the REALISED empty share. A
+  material gap points at the winner accounting, or at a stratified/QMC draw design making the
+  prefix counts under-dispersed relative to `Binomial(N̂_s, q)` — in which case use `--draws=mc`.
 * **V7 — two routes to `N_s`.** `N̂_s` from `Ḡ_s(0)` against `N^count_s = N_supplier_s / Σ_l q̂`.
   A large gap is a mechanism finding, not a bug.
 * **V9 — bounds not binding.** A persistent clamp is a rejection signal for the mechanism:

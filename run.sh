@@ -36,12 +36,12 @@ if [ -z "$1" ]; then
     echo "  --n_rho_inf: draw count for inference (Jacobian + Σ_sim), decoupled from N_rho (default: 10000)"
     echo "  --reg      : extensive-margin regression link — cloglog (default, coef=αθ) or lpm (linear prob.); SMM only, target file selected to match"
     echo "  --controls : include the no-supplier control group — true  or false (default) (⇒ supplier pairs only, WITH the size control); SMM only"
-    echo "  --granular : true|false (default false) — finite N_s varieties per sector + the count moment G_s(0); SMM only"
+    echo "  --granular : true|false (default false) — finite N_s varieties per sector + the count moment G_s(0); SMM only. REQUIRES --ca_level=aa"
     echo "  --ca_level : ze (default) or aa — comparative advantage (and the gamma block) at the ZE or attraction-area level; SMM only"
     echo "  --n_rep    : replications per granular loss evaluation (default 300; only used with --granular=true)"
     echo ""
     echo "  NOTE: --granular=false --ca_level=ze is the continuum ZE-level model exactly as it stood."
-    echo "        Only the two diagonal configurations (false,ze) and (true,aa) are exercised."
+    echo "        --granular=true is only valid with --ca_level=aa."
     exit 1
 fi
 
@@ -132,13 +132,22 @@ case "$N_REP" in
     ''|*[!0-9]*) echo "Error: --n_rep must be a positive integer (got: $N_REP)"; exit 1 ;;
 esac
 
-# Only the two diagonal configurations are exercised. The flags stay separate
-# because the gamma level is what drives the Sigma file, but warn on a cross combo.
-if { [ "$GRANULAR" = "true" ] && [ "$CA_LEVEL" != "aa" ]; } || \
-   { [ "$GRANULAR" = "false" ] && [ "$CA_LEVEL" = "aa" ]; }; then
-    echo "Warning: --granular=$GRANULAR with --ca_level=$CA_LEVEL is a cross configuration."
-    echo "         Supported/exercised: (false, ze) and (true, aa). Make sure the on-disk"
-    echo "         Sigma file matches the gamma level you selected."
+# --granular=true REQUIRES --ca_level=aa. Under ZE-level comparative advantage only
+# the supplier cells are estimated, so no cell can come out empty: the count moment
+# has no content, and the estimator would be fitting T > 0 for regions whose observed
+# gamma_ls is 0. The reverse (--granular=false --ca_level=aa) is the AA-level
+# continuum, a legitimate intermediate, so it only warns.
+if [ "$GRANULAR" = "true" ] && [ "$CA_LEVEL" != "aa" ]; then
+    echo "Error: --granular=true requires --ca_level=aa (got --ca_level=$CA_LEVEL)."
+    echo "       Under ZE-level comparative advantage only supplier cells are estimated,"
+    echo "       so no cell can be empty: G_s(0) has no content and T > 0 would be fitted"
+    echo "       for regions whose observed gamma_ls is 0."
+    exit 1
+fi
+if [ "$GRANULAR" = "false" ] && [ "$CA_LEVEL" = "aa" ]; then
+    echo "Warning: --ca_level=aa with --granular=false is the AA-level CONTINUUM (gamma"
+    echo "         aggregated to areas, no count moment). Make sure the on-disk Sigma file"
+    echo "         is the AA one."
 fi
 
 # Granularity and the AA layer are SMM-only: the analytical/GMM extensive margin is

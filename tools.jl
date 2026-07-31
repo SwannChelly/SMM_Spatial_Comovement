@@ -213,7 +213,7 @@ end
 
 function generate_dashboard_report(
     n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,
-    output_file::String,variable,alpha
+    output_file::String,variable,alpha; G0_ = nothing, granular_info = nothing
 )   
 
     # gamma_ls summary table
@@ -313,6 +313,36 @@ function generate_dashboard_report(
         for row in eachrow(reg_df)
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.bins, row.empirical, row.simulated))
+        end
+
+        # ── Block 6: the count moment Ḡ_s(0), granular runs only ────────────
+        if G0_ !== nothing
+            G0_emp, G0_sim = G0_
+            println(io, "\n>> Count moment  G_s(0)  (share of cells with ZERO suppliers): \n")
+            for (k, sec) in enumerate(sectors)
+                k <= length(G0_emp) && k <= length(G0_sim) || continue
+                println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f",
+                    string(sec), G0_emp[k], G0_sim[k]))
+            end
+            if granular_info !== nothing
+                println(io, "\n>> Profiled variety count N_s (bisection on G_s(0)): \n")
+                println(io, @sprintf("%-10s %8s %8s %8s %8s %10s %10s",
+                    "sector", "N_LO", "N_hat", "N_HI", "clamp", "G0_closed", "N_count"))
+                for (k, sec) in enumerate(sectors)
+                    k <= length(granular_info.N_hat) || continue
+                    println(io, @sprintf("%-10s %8d %8d %8d %8s %10.4f %10.1f",
+                        string(sec), N_LO[k], granular_info.N_hat[k], N_HI[k],
+                        string(granular_info.clamped[k]),
+                        granular_info.G0_closed[k], granular_info.N_count[k]))
+                end
+                println(io, "\n  clamp: :none = interior (good). :lo/:hi = the variety count hit a")
+                println(io, "  bound — a rejection signal for the mechanism, not a numerical nuisance.")
+                println(io, "  G0_closed is the closed-form mean_l (1-q_hat)^N_hat that the bisection")
+                println(io, "  targets; G0 simulated above is the REALISED empty share. A material gap")
+                println(io, "  between them is validation gate V4 (winner accounting / draw design).")
+                println(io, @sprintf("\n  log z coefficient: %+.4f   (theory: -theta = %+.4f)",
+                    granular_info.b_logz, -theta))
+            end
         end
     end
 end
@@ -637,8 +667,21 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     best_score = results[best_index][1][1]
 
+    # Block 6 (granular only): empirical vs realised Ḡ_s(0), plus the profiled N̂_s.
+    G0_ = nothing; granular_info = nothing
+    if GRANULAR
+        try
+            G0_emp = vec(empirical_moments)[collect(BLOCK_RANGES[6])]
+            G0_sim = vec(results[best_index][2][6])
+            G0_    = [G0_emp, G0_sim]
+            granular_info = granular_report(best_params)
+        catch e
+            @warn "count-moment section of report.txt skipped: $e"
+        end
+    end
+
     generate_dashboard_report(n, agg_labor_share_, agg_industry_share_, gamma_ls_, reg_, pi_r, best_score,
-        folder * "/report.txt", variable, alpha)
+        folder * "/report.txt", variable, alpha; G0_ = G0_, granular_info = granular_info)
 end
 
 
@@ -1098,12 +1141,35 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
         println("\n" * "="^72)
         println("GRANULAR DIAGNOSTICS" * (isempty(label) ? "" : "  [$label]"))
         println("="^72)
-        @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s\n",
-                "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_fit", "G0_target", "N^count")
+        @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s %10s\n",
+                "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_real", "G0_closed",
+                "G0_target", "N^count")
         for s in 1:S
-            @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.1f\n",
+            @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.4f %10.1f\n",
                     s, N_LO[s], info.N_hat[s], N_HI[s], string(info.clamped[s]),
-                    isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
+                    isempty(info.G0) ? NaN : info.G0[s], info.G0_closed[s],
+                    G_TARGET[s], info.N_count[s])
+        end
+        # V4 — the closed form the bisection targets vs the REALISED empty share. They
+        # can only agree to Monte-Carlo error, so the yardstick is the MC standard
+        # error of the realised share (≈ √(G(1−G)/(n_cells·R_REP))), not a constant:
+        # a fixed tolerance would fire spuriously at small R_REP and hide a real
+        # problem at large R_REP.
+        if !isempty(info.G0)
+            gaps = abs.(info.G0 .- info.G0_closed)
+            ses  = [begin
+                        nc = length(CELLS_OF_SECTOR[s])
+                        g  = info.G0_closed[s]
+                        nc == 0 ? NaN : sqrt(max(g * (1 - g), 1e-6) / (nc * R_REP))
+                    end for s in 1:S]
+            z    = [isfinite(ses[s]) && ses[s] > 0 ? gaps[s] / ses[s] : NaN for s in 1:S]
+            zmax = maximum(filter(isfinite, z); init = NaN)
+            @printf("\n  V4  max |G0_realised − G0_closed| = %.4f   (max %.1f × MC s.e.)%s\n",
+                    maximum(gaps), zmax, (isfinite(zmax) && zmax > 3) ? "  ← INVESTIGATE" : "")
+            (isfinite(zmax) && zmax > 3) &&
+                println("      Beyond Monte-Carlo error. Points at the winner accounting, or at a " *
+                        "stratified/QMC\n      draw design making prefix counts under-dispersed " *
+                        "vs Binomial(N̂_s, q) — try --draws=mc.")
         end
         n_clamp = count(!=(:none), info.clamped)
         if n_clamp > 0
@@ -1131,6 +1197,7 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
                           "clamped"  => Float64.([c == :none ? 0.0 : (c == :lo ? -1.0 : 1.0)
                                                   for c in info.clamped]),
                           "G0_fit"   => Float64.(info.G0),
+                          "G0_closed"=> Float64.(info.G0_closed),
                           "G0_target"=> Float64.(collect(G_TARGET)),
                           "N_count"  => Float64.(info.N_count),
                           "q_hat"    => Float64.(info.q_hat),
@@ -1139,10 +1206,11 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
         open(joinpath(output_folder, "granular_diagnostics.txt"), "w") do io
             println(io, "Granular diagnostics", isempty(industry) ? "" : " — $industry",
                         isempty(label) ? "" : " [$label]")
-            println(io, "sector  N_LO  N_hat  N_HI  clamp  G0_fit  G0_target  N_count")
+            println(io, "sector  N_LO  N_hat  N_HI  clamp  G0_real  G0_closed  G0_target  N_count")
             for s in 1:S
                 println(io, "$s  $(N_LO[s])  $(info.N_hat[s])  $(N_HI[s])  $(info.clamped[s])  " *
-                            "$(isempty(info.G0) ? NaN : info.G0[s])  $(G_TARGET[s])  $(info.N_count[s])")
+                            "$(isempty(info.G0) ? NaN : info.G0[s])  $(info.G0_closed[s])  " *
+                            "$(G_TARGET[s])  $(info.N_count[s])")
             end
             println(io, "b_logz = $(info.b_logz)  (should equal -theta)")
         end

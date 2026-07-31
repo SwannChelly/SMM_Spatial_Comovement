@@ -55,7 +55,6 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const N_rho               = $(1000)
 @everywhere const epsilon             = $(coefs[1, "value"])
 @everywhere const P_alpha             = $(coefs[4, "value"]) #Prior on alpha
 @everywhere const lambda              = $(0.5)
@@ -63,7 +62,6 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
 @everywhere const theta               = $(1.)#1.768
 
-println("\n N_rho = $N_rho — Entreprise par secteur x region")
 println("\n Lambda = $lambda — Labor / CI share")
 println("\n Epsilon = $epsilon — Sales elasticity")
 println("\n nu = $nu — Across sector substituability")
@@ -98,21 +96,34 @@ end
 #                      an active area inherit T_{s,a} > 0, so their zeros become model
 #                      predictions rather than exogenous.
 #
-# For now only the two DIAGONAL configurations are exercised — (false,:ze) and
-# (true,:aa) — and the Σ file selection follows CA_LEVEL; a cross combination is
-# warned about, not blocked.
+# `granular = true` REQUIRES `ca_level = :aa`. Under ZE-level comparative advantage
+# the estimated cell set is the supplier cells alone, so a cell can never come out
+# empty: the count moment has no content, and the model would be asked to fit T > 0
+# for regions whose observed γ_ls is 0. Granularity only means something once cells
+# inherit their area's comparative advantage. The reverse combination
+# (granular = false, ca_level = :aa) is a legitimate intermediate — the AA-level
+# continuum — so it only warns.
 # ═══════════════════════════════════════════════════════════════════════════
 
 granular_local = (@isdefined(granular)) ? Bool(granular) : false
 ca_level_local = (@isdefined(ca_level)) ? Symbol(ca_level) : :ze
 @assert ca_level_local in (:ze, :aa) "ca_level must be :ze or :aa, got :$ca_level_local"
+if granular_local && ca_level_local != :aa
+    error("granular=true requires ca_level=:aa (got :$ca_level_local). Under ZE-level " *
+          "comparative advantage only the supplier cells are estimated, so no cell can " *
+          "come out empty: the count moment Ḡ_s(0) has no content, and the estimator " *
+          "would be fitting T > 0 for regions whose observed γ_ls is 0. The extensive " *
+          "margin becomes a model prediction only once cells inherit T_{s,a} from their " *
+          "attraction area (finite_sample2.tex, Table 1).")
+end
+if !granular_local && ca_level_local == :aa
+    @warn "ca_level=:aa with granular=false is the AA-level CONTINUUM: γ is aggregated to " *
+          "attraction areas and control cells are simulated, but the extensive margin is " *
+          "still degenerate and there is no count moment. Make sure the on-disk Σ file is " *
+          "the AA one (its γ rows must match the γ moments)."
+end
 @everywhere const GRANULAR = $(granular_local)
 @everywhere const CA_LEVEL = $(QuoteNode(ca_level_local))
-if granular_local != (ca_level_local == :aa)
-    @warn "Cross flag configuration (granular=$granular_local, ca_level=:$ca_level_local): " *
-          "only (false, :ze) and (true, :aa) are exercised. The Σ file is keyed on " *
-          "CA_LEVEL and the G block on GRANULAR, so make sure the on-disk covariance matches."
-end
 println("\nGRANULAR = $granular_local ; CA_LEVEL = :$ca_level_local")
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -130,68 +141,87 @@ closest_plant_dist_local        = vec(minimum(distances_downstream_local, dims=2
 closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_local, dims=2), 2))
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 3 — GAMMA THRESHOLD + ACTIVE-SET PRUNING
-# Defines which (sector, upstream-region) sourcing pairs are estimated. Pairs
-# with a within-sector share at or below the threshold are dropped from both the
-# γ_ls targets and the T active set, then survivors are renormalized to preserve
-# each sector total. MUST run before T_mask_local — it shapes the active set.
+# SECTION 2d — COUNT MOMENT TARGET, VARIETY-COUNT BOUNDS, AND N_rho
+# Read before N_rho is bound, because under GRANULAR the draw count per sector IS
+# the variety block width and must cover the largest candidate N_s.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── Gamma threshold: drop small sourcing-share pairs from active set ─────
-# Must precede T_mask_local so pruned pairs are excluded from T_MASK/n_good.
-gamma_threshold = 0.0   # (s,r) pairs with γ_{rs} <= threshold are zeroed out
-NPZ.npzwrite(joinpath(output_folder, "gamma_threshold.npy"), gamma_threshold)
+# ── Block 6 target: the count moment Ḡ_s(0) (granular mode only) ────────────
+# G_K.csv carries A129 (sector), K, G(K) = Pr(K_ls ≤ K) and the observed distinct
+# supplier-firm count N_supplier_s, repeated on every row of a sector. G(0) is the
+# share of ZE with ZERO suppliers; the denominator is the ZE inside ACTIVE attraction
+# areas — the same 𝒜⁺ rule as AA_ACTIVE and CELL_MASK (finite_sample2.tex §3.2).
+# The variety-count bounds come from the firm count (finite_sample2.tex §3.3):
+#     N_supplier_s / R_downstream  ≤  N_s  ≤  N_supplier_s
+G_target_local = Float64[]
+N_LO_local     = Int[]
+N_HI_local     = Int[]
+if granular_local
+    gk_path = joinpath(input_folder, "G_K.csv")
+    isfile(gk_path) || error("granular=true requires $(gk_path) (columns A129, K, G(K), N_supplier_s).")
+    gk_df = CSV.read(gk_path, DataFrame)
+    _gk_col(cands) = begin
+        nm = names(gk_df)
+        hit = findfirst(c -> lowercase(c) in cands, nm)
+        hit === nothing && error("G_K.csv is missing a column among $(cands); has $(nm)")
+        nm[hit]
+    end
+    c_sector = _gk_col(["a129", "sector"])
+    c_K      = _gk_col(["k"])
+    c_G      = _gk_col(["g(k)", "g_k", "gk", "g"])
+    c_N      = _gk_col(["n_supplier_s", "n_supplier", "n_suppliers"])
+    # Sector ids in G_K.csv are the A129 labels; map them to 1..S by sorted order,
+    # matching how filter_N_upstream.csv's A129 is turned into sector indices below.
+    gk_sectors = sort(unique(gk_df[!, c_sector]))
+    @assert length(gk_sectors) == S_ (
+        "G_K.csv covers $(length(gk_sectors)) sectors, expected S=$S_ " *
+        "($(gk_sectors)) — the A129 label set must match filter_N_upstream.")
+    G_target_local = fill(NaN, S_)
+    N_LO_local     = zeros(Int, S_)
+    N_HI_local     = zeros(Int, S_)
+    for (s, a129) in enumerate(gk_sectors)
+        rows = findall(==(a129), gk_df[!, c_sector])
+        nsup = unique(gk_df[rows, c_N])
+        @assert length(nsup) == 1 "G_K.csv: N_supplier_s is not constant within A129=$a129 (got $nsup)"
+        n_obs = Int(round(Float64(nsup[1])))
+        @assert n_obs >= 1 "G_K.csv: N_supplier_s = $n_obs for A129=$a129 must be ≥ 1"
+        k0 = findfirst(i -> Int(round(Float64(gk_df[i, c_K]))) == 0, rows)
+        k0 === nothing && error("G_K.csv has no K=0 row for A129=$a129 — Ḡ_s(0) is the targeted moment.")
+        G_target_local[s] = Float64(gk_df[rows[k0], c_G])
+        N_HI_local[s]     = n_obs
+        N_LO_local[s]     = max(1, cld(n_obs, R_down_))
+    end
+    @assert all(0 .<= G_target_local .<= 1) "G_K.csv: G(0) must be a share in [0,1], got $G_target_local"
+    println("\nCount moment Ḡ_s(0) target: ", round.(G_target_local, digits=4))
+    println("Variety-count bounds  N_LO = $N_LO_local   N_HI = $N_HI_local")
+end
+@everywhere const G_TARGET = $G_target_local
+@everywhere const N_LO     = $N_LO_local
+@everywhere const N_HI     = $N_HI_local
+
+
+# ── N_rho: varieties (draws) per sector ─────────────────────────────────────
+# Continuum: the number of Monte-Carlo/QMC draws integrating over the variety
+# continuum. GRANULAR: the width of ONE replication's variety block — it must cover
+# the largest candidate N_s, so it is pinned to maximum(N_HI). Same object, same
+# name: a realised economy uses the PREFIX ρ ≤ N̂_s of those N_rho draws.
+n_rho_local = granular_local ? maximum(N_HI_local) : 1000
+@everywhere const N_rho = $(n_rho_local)
+println("\n N_rho = $n_rho_local — " *
+        (granular_local ? "varieties per sector per replication (= maximum(N_HI))" :
+                          "Entreprise par secteur x region"))
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 3 — EMPIRICAL SOURCING SHARES
+# Loads the observed domestic sourcing shares γ_ls. Every (sector, ZE) pair kept by
+# `filter_N_upstream` is estimated; there is no share threshold.
+# ═══════════════════════════════════════════════════════════════════════════
+
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))
 # Shape: (R_full, S_) — indexed as emp_gamma_ls_local[r, s]
-
-# ── Pre-threshold diagnostic: active regions above / below the cut, per sector ──
-# Computed on the pristine matrix, before any pair is zeroed.
-#   active = γ > 0 ; below = 0 < γ ≤ threshold (dropped) ; above = γ > threshold (kept)
-println("\nGamma threshold = $gamma_threshold — active regions per sector:")
-@printf("  %-8s %8s %8s %8s\n", "sector", "active", "above", "below")
-total_active = 0; total_below = 0
-for s in 1:S_
-    col      = @view emp_gamma_ls_local[:, s]
-    n_active = count(>(0), col)
-    n_below  = count(x -> 0 < x/sum(col) <= gamma_threshold, col)
-    n_above  = n_active - n_below
-    global total_active += n_active; global total_below += n_below
-    @printf("  %-8d %8d %8d %8d\n", s, n_active, n_above, n_below)
-end
-@printf("  %-8s %8d %8d %8d\n", "TOTAL", total_active, total_active - total_below, total_below)
-
-n_dropped = 0
-if gamma_threshold != 0
-    for s in 1:S_
-        sector_sum_before = sum(emp_gamma_ls_local[:, s])
-        for r in 1:R_full
-            if 0 < emp_gamma_ls_local[r, s]/sector_sum_before <= gamma_threshold
-                emp_gamma_ls_local[r, s] = 0.0
-                X_rs_local[s, r] = 0.0      # remove from T_MASK active set
-                global n_dropped += 1
-            end
-        end
-        # Renormalize survivors to preserve sector total
-        sector_sum_after = sum(emp_gamma_ls_local[:, s])
-        if sector_sum_after > 1e-15 && sector_sum_before > 1e-15
-            emp_gamma_ls_local[:, s] .*= sector_sum_before / sector_sum_after
-        end
-        # Diagnostic: sectors collapsed to ≤ 1 surviving upstream region
-        n_surv = count(>(0), @view emp_gamma_ls_local[:, s])
-        if n_surv == 0
-            error("γ-threshold: sector $s has NO surviving upstream region ⇒ " *
-                  "X_s[s]=0, γ_ls=0/0 (NaN moment, NaN Jacobian column). " *
-                  "Lower the threshold or drop this sector.")
-        elseif n_surv == 1
-            @warn "γ-threshold: sector $s reduced to a SINGLE upstream region. " *
-                  "It is the ref region (dropped as sum-to-1 redundant), so the " *
-                  "sector contributes zero γ_ls moments and T[s,·] has no free " *
-                  "parameter."
-        end
-    end
-end
-println("Gamma threshold=$gamma_threshold: dropped $n_dropped (s,r) pairs")
-@everywhere const emp_gamma_ls   = $(emp_gamma_ls_local)
+# ZE-level throughout, in BOTH modes. `EMP_GAMMA_T` (SECTION 3b) is the moment/T-space
+# target derived from it — the same matrix under :ze, the AA aggregate under :aa.
+@everywhere const emp_gamma_ls = $(emp_gamma_ls_local)
 
 # ── Projective (domestic-share-balanced) γ target for the Sinkhorn inversion ──
 # The observed γ_ls are DOMESTIC sourcing shares: per sector they sum to
@@ -222,14 +252,21 @@ emp_gamma_ls_tilde_local = emp_gamma_ls_local ./ reshape(max.(domestic_share_loc
 # parameter axis and γ-moment row axis share (see CLAUDE.md invariant).
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── The supplier active set (unchanged under either encoding) ────────────────
-# `filter_N_upstream` is now BINARY: 1 ⟺ the (sector, ZE) cell enters the
-# optimisation, 0 ⟺ it is dropped (no firms). Within the kept cells,
+# ── Cells with OBSERVED SUPPLIER SALES ──────────────────────────────────────
+# `filter_N_upstream` is BINARY: 1 ⟺ the (sector, ZE) cell enters the optimisation,
+# 0 ⟺ it is dropped (no firms). Within the kept cells,
 #   supplier cell ⟺ filter == 1 AND X_rs  > 0
 #   control  cell ⟺ filter == 1 AND X_rs == 0   (firms, but no observed supplier)
-# so `active_mat` below still selects exactly the supplier cells — the same object
-# the legacy three-status encoding produced with `.== 1`.
-active_mat_local = (filter_N_upstream_local .== 1) .& (X_rs_local .> 0)  # (S, R_full)
+#
+# `supplier_cells` is therefore "the cells with supplier sales IN THE DATA". It plays
+# two distinct roles and it is worth keeping them apart:
+#   (a) under CA_LEVEL = :ze it IS the estimated set — both the simulated cells and
+#       the T/γ support (the legacy model: a cell with no sales gets T ≡ 0);
+#   (b) under :aa it is NOT the estimated cell set — it only DEFINES 𝒜⁺, i.e. which
+#       attraction areas host at least one supplier in a sector. The cells actually
+#       put into the optimisation are all of `filter == 1` inside those areas
+#       (CELL_MASK below), control cells included, because they inherit T_{s,a} > 0.
+supplier_cells_local = (filter_N_upstream_local .== 1) .& (X_rs_local .> 0)  # (S, R_full)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 3b — ATTRACTION AREAS, CELL SET, AND THE T-COLUMN SPACE
@@ -296,7 +333,7 @@ end
 @everywhere const AA_ACTIVE = $aa_active_local
 
 # ── CELL_MASK : the simulated (sector, ZE) cells ─────────────────────────────
-cell_mask_local = ca_level_local == :aa ? (filter_N_upstream_local .== 1) : copy(active_mat_local)
+cell_mask_local = ca_level_local == :aa ? (filter_N_upstream_local .== 1) : copy(supplier_cells_local)
 if ca_level_local == :aa
     # V1b — the filter must already be restricted to 𝒜⁺: the model is never asked to
     # explain why an ENTIRE area is empty (that is the boundary the fixed effect draws).
@@ -315,7 +352,7 @@ end
 
 # ── T-column space ──────────────────────────────────────────────────────────
 T_col_dim_local = ca_level_local == :aa ? n_AA_local : R_full
-T_active_local  = ca_level_local == :aa ? aa_active_local : active_mat_local
+T_active_local  = ca_level_local == :aa ? aa_active_local : supplier_cells_local
 T_gather_local  = ca_level_local == :aa ? aa_of_ze_local : collect(1:R_full)
 @everywhere const T_COL_DIM = $T_col_dim_local
 @everywhere const T_ACTIVE  = $T_active_local
@@ -391,7 +428,35 @@ n_control_local       = length(control_indices_local)
 println("Control cells (filter==1 & X_rs==0): $n_control_local " *
         (ca_level_local == :aa ? "(simulated as ordinary goods under :aa)." :
                                  "(extensive-margin y=0 observations, not simulated)."))
-println("Simulated cells (CELL_MASK): $n_good_local ; T columns (active (s,$(ca_level_local == :aa ? "AA" : "ZE")) pairs): $(count(T_mask_local))")
+# ── Per-sector composition of the estimated set ─────────────────────────────
+# The three counts that determine what the estimator is actually fitting:
+#   ZE active  — cells with observed supplier sales (X_rs > 0)
+#   ZE control — cells kept by the filter with NO observed supplier. Under :ze these
+#                are extensive-margin y=0 rows only; under :aa they are SIMULATED,
+#                inherit T_{s,a} > 0, and their zeros become model predictions —
+#                which is exactly the variation the count moment reads.
+#   AA active  — attraction areas hosting at least one supplier in that sector (𝒜⁺_s),
+#                i.e. the number of free T columns before the reference is dropped.
+println("\nEstimated set per sector:")
+@printf("  %-8s %10s %10s %10s %10s %10s\n",
+        "sector", "ZE active", "ZE control", "ZE total", "AA active", "AA total")
+let ta = 0, tc = 0, tt = 0, taa = 0
+    for s in 1:S_
+        n_act  = count(view(supplier_cells_local, s, :))
+        n_cell = count(view(cell_mask_local, s, :))
+        n_ctl  = n_cell - n_act
+        n_aa   = count(view(aa_active_local, s, :))
+        ta += n_act; tc += n_ctl; tt += n_cell; taa += n_aa
+        @printf("  %-8d %10d %10d %10d %10d %10d\n", s, n_act, n_ctl, n_cell, n_aa, n_AA_local)
+        n_act == 0 && @warn "sector $s has NO cell with observed supplier sales — its γ " *
+                            "moments and T column are undefined. Drop the sector."
+        n_act == 1 && @warn "sector $s has a SINGLE supplier cell: it is the reference " *
+                            "(dropped as sum-to-1 redundant), so the sector contributes no " *
+                            "γ moment and T[s,·] has no free parameter."
+    end
+    @printf("  %-8s %10d %10d %10d %10d %10d\n", "TOTAL", ta, tc, tt, taa, S_ * n_AA_local)
+end
+println("\nSimulated cells (CELL_MASK): $n_good_local ; T columns (active (s,$(ca_level_local == :aa ? "AA" : "ZE")) pairs): $(count(T_mask_local))")
 
 # ── γ target in the T-COLUMN space ───────────────────────────────────────────
 # `EMP_GAMMA_T[c, s]` is the block-5 empirical target and the Sinkhorn row margin.
@@ -582,87 +647,12 @@ n_reg = length(reg_coef_local)   # actual moment count from loaded data
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 7 — T STARTING VALUES (GRAVITY FALLBACK)
-# Warm-starts the comparative-advantage optimisation. The gravity guess
-# T ≈ γ_ls · w^θ is the value consistent with observed shares at UNIFORM trade
-# costs (τ≡1) — it drops all trade-cost geometry. It is kept here only as a
-# fallback: the active T_rs_init is built by the γ-inversion in SECTION 10b
-# (after the geography/trade-cost precompute), which restores the τ terms.
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Gravity fallback base (uniform trade costs): T ≈ γ · w^θ, per (s, T-column).
-# Under :aa the "wage" of an area is taken as the wage of its ZE (all 1 after the
-# normalisation at the top of this file), so the w^θ factor is inert there.
-T_gravity = zeros(S_, T_col_dim_local)
-for s in 1:S_
-    for c in SECTOR_T_COLS_local[s]
-        w_c = ca_level_local == :aa ? 1.0 : w_rs_local[c]
-        T_gravity[s, c] = max(emp_gamma_T_local[c, s] * (w_c^theta), 1e-12)
-    end
-end
-# NOTE: `@everywhere const T_rs_init` is bound in SECTION 10b, once the
-# trade-cost geometry (LOG_DIST_DOWNSTREAM) it needs is available.
-
-# ═══════════════════════════════════════════════════════════════════════════
 # SECTION 8 — EMPIRICAL MOMENT VECTOR + MOMENT_MASK + BLOCK_RANGES
 # Stacks the five moment blocks into one target vector and builds MOMENT_MASK,
 # which drops the linearly-dependent moments (first industry/pi_r share, inactive
 # and per-sector reference γ_ls) so the system is identified. BLOCK_RANGES indexes
 # each block within the masked vector; Weight_matrix_custom is the Step-1 metric.
 # ═══════════════════════════════════════════════════════════════════════════
-
-# ── Block 6 target: the count moment Ḡ_s(0) (granular mode only) ────────────
-# G_K.csv carries A129 (sector), K, G(K) = Pr(K_ls ≤ K) and the observed distinct
-# supplier-firm count N_supplier_s, repeated on every row of a sector. G(0) is the
-# share of ZE with ZERO suppliers; the denominator is the ZE inside ACTIVE attraction
-# areas — the same 𝒜⁺ rule as AA_ACTIVE and CELL_MASK (finite_sample2.tex §3.2).
-# The variety-count bounds come from the firm count (finite_sample2.tex §3.3):
-#     N_supplier_s / R_downstream  ≤  N_s  ≤  N_supplier_s
-G_target_local = Float64[]
-N_LO_local     = Int[]
-N_HI_local     = Int[]
-if granular_local
-    gk_path = joinpath(input_folder, "G_K.csv")
-    isfile(gk_path) || error("granular=true requires $(gk_path) (columns A129, K, G(K), N_supplier_s).")
-    gk_df = CSV.read(gk_path, DataFrame)
-    _gk_col(cands) = begin
-        nm = names(gk_df)
-        hit = findfirst(c -> lowercase(c) in cands, nm)
-        hit === nothing && error("G_K.csv is missing a column among $(cands); has $(nm)")
-        nm[hit]
-    end
-    c_sector = _gk_col(["a129", "sector"])
-    c_K      = _gk_col(["k"])
-    c_G      = _gk_col(["g(k)", "g_k", "gk", "g"])
-    c_N      = _gk_col(["n_supplier_s", "n_supplier", "n_suppliers"])
-    # Sector ids in G_K.csv are the A129 labels; map them to 1..S by sorted order,
-    # matching how filter_N_upstream.csv's A129 is turned into sector indices below.
-    gk_sectors = sort(unique(gk_df[!, c_sector]))
-    @assert length(gk_sectors) == S_ (
-        "G_K.csv covers $(length(gk_sectors)) sectors, expected S=$S_ " *
-        "($(gk_sectors)) — the A129 label set must match filter_N_upstream.")
-    G_target_local = fill(NaN, S_)
-    N_LO_local     = zeros(Int, S_)
-    N_HI_local     = zeros(Int, S_)
-    for (s, a129) in enumerate(gk_sectors)
-        rows = findall(==(a129), gk_df[!, c_sector])
-        nsup = unique(gk_df[rows, c_N])
-        @assert length(nsup) == 1 "G_K.csv: N_supplier_s is not constant within A129=$a129 (got $nsup)"
-        n_obs = Int(round(Float64(nsup[1])))
-        @assert n_obs >= 1 "G_K.csv: N_supplier_s = $n_obs for A129=$a129 must be ≥ 1"
-        k0 = findfirst(i -> Int(round(Float64(gk_df[i, c_K]))) == 0, rows)
-        k0 === nothing && error("G_K.csv has no K=0 row for A129=$a129 — Ḡ_s(0) is the targeted moment.")
-        G_target_local[s] = Float64(gk_df[rows[k0], c_G])
-        N_HI_local[s]     = n_obs
-        N_LO_local[s]     = max(1, cld(n_obs, R_down_))
-    end
-    @assert all(0 .<= G_target_local .<= 1) "G_K.csv: G(0) must be a share in [0,1], got $G_target_local"
-    println("\nCount moment Ḡ_s(0) target: ", round.(G_target_local, digits=4))
-    println("Variety-count bounds  N_LO = $N_LO_local   N_HI = $N_HI_local")
-end
-@everywhere const G_TARGET = $G_target_local
-@everywhere const N_LO     = $N_LO_local
-@everywhere const N_HI     = $N_HI_local
 
 # Moment block sizes + MOMENT_MASK
 n_labor    = 1
@@ -770,53 +760,44 @@ println("\n N_rho (optimization) = $N_rho ; N_RHO_INFERENCE (Jacobian + Σ_sim) 
 # no re-drawing, and prefixes give common random numbers across N_s candidates and
 # across θ, which is what keeps the outer optimiser usable.
 #
-# The pool is stored FLAT as a (R_REP·N_BLOCK, n_good) matrix so `solve_network` needs
+# The pool is stored FLAT as a (R_REP·N_rho, n_good) matrix so `solve_network` needs
 # no signature change (it already sizes off `size(u_draws, 1)`). Row layout:
-#     row(rep, ρ) = (rep − 1)·N_BLOCK + ρ,     rep ∈ 1:R_REP,  ρ ∈ 1:N_BLOCK
+#     row(rep, ρ) = (rep − 1)·N_rho + ρ,     rep ∈ 1:R_REP,  ρ ∈ 1:N_rho
 # The value block is computed over ALL pooled rows — the certainty-equivalent price
-# index of D2, with the self-normalised 1/(R_REP·N_BLOCK) weights implementing the
+# index of D2, with the self-normalised 1/(R_REP·N_rho) weights implementing the
 # love-of-variety normalisation (finite_sample2.tex App. B).
 #
-# Sampler: rows must be i.i.d. ACROSS ρ within a column, because a realised economy's
-# counts are Binomial(N̂_s, q_ls) and a stratified/QMC design across ρ would make the
-# prefix counts under-dispersed relative to the binomial — biasing exactly the block-6
-# empty-share the exercise exists to explain. So the pool defaults to :mc (i.i.d.,
-# deterministic at MersenneTwister(0) ⇒ PSO-safe) rather than DRAW_METHOD. Override
-# with `granular_draw_method` in the entry point if you want the QMC variance
-# reduction on the value block instead.
-granular_draw_method_local = (@isdefined(granular_draw_method)) ? Symbol(granular_draw_method) : :mc
-@assert granular_draw_method_local in (:qmc, :mc, :is, :sobol) "granular_draw_method must be :qmc, :mc, :is or :sobol"
-@everywhere const GRANULAR_DRAW_METHOD = $(QuoteNode(granular_draw_method_local))
+# The sampler is DRAW_METHOD, the same one the continuum path uses — there is no
+# separate granular sampler. One caveat worth knowing rather than configuring around:
+# a realised economy's counts are Binomial(N̂_s, q_ls), and a stratified/QMC design
+# across ρ makes the prefix counts slightly UNDER-dispersed relative to that binomial,
+# which touches the realised block-6 empty share. The closed-form Ḡ_s(n) driving the
+# N_s bisection is built from the pooled q̂ and is unaffected. `report_granular` prints
+# the realised Ḡ_s(0) against that closed form every run (validation gate V4): if they
+# separate materially, the QMC design is doing it — switch --draws=mc.
 
 # R_REP replications, never N_rho = N_s: the value block is a numerical integral while
 # the variety count is a structural parameter, so granularity holds exactly N̂_s WITHIN
-# a replication and the value block averages over all R_REP × N_BLOCK draws. The
+# a replication and the value block averages over all R_REP × N_rho draws. The
 # dispersion of β̂ across realised economies is ~0.16–0.18 in data-matching
 # configurations, so R_REP ≈ 300 gives an MC standard error of ~0.010 on block 4.
 r_rep_local = (@isdefined(n_rep)) ? Int(n_rep) : 300
 @assert r_rep_local >= 1 "n_rep (R_REP) must be ≥ 1, got $r_rep_local"
-n_block_local = granular_local ? maximum(N_HI_local) : 0
-@everywhere const R_REP   = $(granular_local ? r_rep_local : 0)
-@everywhere const N_BLOCK = $n_block_local
-@everywhere const N_POOL  = $(granular_local ? r_rep_local * n_block_local : 0)
+@everywhere const R_REP  = $(granular_local ? r_rep_local : 0)
+@everywhere const N_POOL = $(granular_local ? r_rep_local * n_rho_local : 0)
 
 if granular_local
-    @printf("\nGranular draw pool: R_REP=%d replications × N_BLOCK=%d varieties = %d rows × %d cells\n",
-            r_rep_local, n_block_local, r_rep_local * n_block_local, n_good_local)
-    @printf("  method = :%s ; ≈%.2f GB per (R_REP·N_BLOCK × n_good) Float64 array — solve_network\n",
-            granular_draw_method_local,
-            r_rep_local * n_block_local * n_good_local * 8 / 2^30)
+    @printf("\nGranular draw pool: R_REP=%d replications × N_rho=%d varieties = %d rows × %d cells\n",
+            r_rep_local, n_rho_local, r_rep_local * n_rho_local, n_good_local)
+    @printf("  method = :%s ; ≈%.2f GB per (R_REP·N_rho × n_good) Float64 array — solve_network\n",
+            draw_method_local, r_rep_local * n_rho_local * n_good_local * 8 / 2^30)
     println("  holds several of these (z, z^-1, linkages); lower --n_rep if memory binds.")
-    println("Generating granular draw pool (method = :$granular_draw_method_local)...")
-    u_draws_local, sample_weights_local = generate_draws(r_rep_local * n_block_local,
-                                                         n_good_local, granular_draw_method_local)
-else
-    println("Generating draws (method = :$DRAW_METHOD)...")
-    u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)
 end
-# U_DRAWS IS the pool under GRANULAR (row layout (rep−1)·N_BLOCK + ρ), so every
-# existing `u_draws = U_DRAWS` call site keeps working unchanged; `solve_network`
-# already sizes itself off `size(u_draws, 1)`.
+println("Generating draws (method = :$DRAW_METHOD)...")
+u_draws_local, sample_weights_local =
+    generate_draws(granular_local ? r_rep_local * n_rho_local : N_rho, n_good_local, DRAW_METHOD)
+# U_DRAWS IS the pool under GRANULAR (row layout (rep−1)·N_rho + ρ), so every existing
+# `u_draws = U_DRAWS` call site keeps working unchanged.
 @everywhere const U_DRAWS        = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
 @everywhere const U_POOL         = $(granular_local ? u_draws_local : Matrix{Float64}(undef, 0, 0))
@@ -953,23 +934,27 @@ function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
     return T, max_iters_used
 end
 
+# The Sinkhorn inversion is the T starting value in BOTH modes (:ze and :aa) — there
+# is no separate gravity guess. The old "gravity" init T ∝ γ·w^θ is just this
+# inversion at α = 0 (τ ≡ 1 ⇒ market access M is common within a sector and cancels),
+# so when the α prior is missing we fall back to α = 0 rather than to a second,
+# redundant code path.
 _prior_alpha = _read_prior_alpha(coefs)
+_init_alpha  = _prior_alpha === nothing ? 0.0 : Float64(_prior_alpha)
 if _prior_alpha === nothing
-    @warn "prior_alpha not found in stats.csv — falling back to gravity T init (τ≡1). " *
-          "Add a `prior_alpha` column or row to enable the trade-cost-aware inversion."
-    T_init_local = T_gravity ./ T_gravity   # active→1, inactive→NaN (masked out later)
-else
-    println("\nInverting T from γ_ls with prior_alpha = $_prior_alpha (wages ≡ 1)")
-    T_init_local, iters_used = invert_T_from_gamma(_prior_alpha)
-    active_vals = T_init_local[T_init_local .> 0]
-    if isempty(active_vals) || !all(isfinite, active_vals)
-        @warn "γ-inversion produced non-finite/empty T — falling back to gravity T init."
-        T_init_local = T_gravity ./ T_gravity
-    else
-        @printf("  γ-inversion done (≤%d iters). T range [%.3g, %.3g], median %.3g\n",
-                iters_used, minimum(active_vals), maximum(active_vals),
-                sort(active_vals)[cld(length(active_vals), 2)])
-    end
+    @warn "prior_alpha (reg_coef_cloglog_1) not found in stats.csv — inverting T at α = 0 " *
+          "(τ ≡ 1), which drops the trade-cost geometry. Add the stat to use it."
+end
+println("\nInverting T from γ (Sinkhorn) with α = $_init_alpha (wages ≡ 1), " *
+        "target = $(ca_level_local == :aa ? "AA-aggregated" : "ZE-level") γ̃")
+T_init_local, iters_used = invert_T_from_gamma(_init_alpha)
+let active_vals = T_init_local[T_init_local .> 0]
+    (isempty(active_vals) || !all(isfinite, active_vals)) &&
+        error("γ-inversion produced a non-finite or empty T starting value — check " *
+              "emp_gamma_ls / domestic_share / the attraction-area map.")
+    @printf("  γ-inversion done (≤%d iters). T range [%.3g, %.3g], median %.3g\n",
+            iters_used, minimum(active_vals), maximum(active_vals),
+            sort(active_vals)[cld(length(active_vals), 2)])
 end
 @everywhere const T_rs_init = $(T_init_local)
 
@@ -997,16 +982,19 @@ end
 # ZE-level only: the diagnostic contrasts market access ACROSS ZE, which has no
 # counterpart once comparative advantage lives at the area level.
 ca_level_local == :ze && try
-    # Reference-normalized gravity init (τ≡1): T_grav[s,r] = γ_ls[r,s]/γ_ls[ref,s].
+    # Baseline = the SAME inversion at α = 0 (τ ≡ 1). With uniform trade costs the
+    # market-access term M is common across the ZE of a sector and cancels, so this
+    # reduces exactly to T ∝ γ_ls — the old "gravity" guess, obtained without a
+    # second code path. Their ratio is therefore purely the market-access correction
+    #   T(α)/T(0) = M(ref)/M(r),  M[s,r] = Σ_dr (π̂_dr/Φ_{s,dr}) d_{r,dr}^{-θα}.
+    _T_alpha0, _ = invert_T_from_gamma(0.0)
     _ref_norm_gravity = begin
         G = fill(NaN, S_, R_full)
         for s in 1:S_
             regions_s = SECTOR_T_COLS_local[s]
             isempty(regions_s) && continue
-            ref  = T_REF_REGION_local[s] > 0 ? T_REF_REGION_local[s] : regions_s[1]
-            gref = T_gravity[s, ref]
             for r in regions_s
-                G[s, r] = gref > 0 ? T_gravity[s, r] / gref : NaN
+                G[s, r] = _T_alpha0[s, r] > 0 ? _T_alpha0[s, r] : NaN
             end
         end
         G
@@ -1031,17 +1019,17 @@ ca_level_local == :ze && try
         end
         isempty(xs) && return
         p = Plots.scatter(xs, ys; zcolor = ds, xscale = :log10, yscale = :log10,
-            xlabel = "gravity init  T/T_ref  (τ≡1)",
+            xlabel = "γ-inversion at α=0  T/T_ref  (τ≡1)",
             ylabel = "γ-inversion init  T/T_ref  (α=$alpha_val)",
-            title  = "T starting values: gravity vs γ-inversion (α=$alpha_val)",
+            title  = "T starting values: α=0 (τ≡1) vs γ-inversion (α=$alpha_val)",
             colorbar_title = "access-weighted mean dist to markets (km)",
             markersize = 5, markeralpha = 0.7, legend = false)
         lo = min(minimum(xs), minimum(ys)); hi = max(maximum(xs), maximum(ys))
         Plots.plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash)
-        png = joinpath(output_folder, "T_init_gravity_vs_inversion_a$(alpha_val).png")
+        png = joinpath(output_folder, "T_init_alpha0_vs_inversion_a$(alpha_val).png")
         Plots.savefig(p, png)
         NPZ.npzwrite(joinpath(output_folder, "T_init_pairs_a$(alpha_val).npz"),
-                     Dict("gravity" => xs, "inversion" => ys, "dist_km" => ds,
+                     Dict("alpha0" => xs, "inversion" => ys, "dist_km" => ds,
                           "sector" => Float64.(ss), "region" => Float64.(rs)))
         println("  saved $(png)")
 
@@ -1056,15 +1044,15 @@ ca_level_local == :ze && try
             med = srr[cld(length(srr), 2)]
             @printf("\n[T-init α=%.2f diagnostic, access-weighted d ≤ 200 km, n=%d active regions]\n",
                     alpha_val, count(keep))
-            @printf("  correction  T_inv/T_grav = M(ref)/M(r) (only geography + α differ):\n")
+            @printf("  correction  T(α)/T(0) = M(ref)/M(r) (only geography + α differ):\n")
             @printf("     min %.2f   median %.2f   max %.2f   mean|Δlog T| %.3f\n",
                     minimum(rr), med, maximum(rr), sum(abs.(lr)) / length(lr))
-            @printf("  effective  log(T_inv/T_grav) ≈ %+.3f %+.3f·log d̄\n", b[1], b[2])
+            @printf("  effective  log(T(α)/T(0)) ≈ %+.3f %+.3f·log d̄\n", b[1], b[2])
             @printf("     (functional form (d/d_ref)^{θα}=(·)^%.2f holds exactly only in the\n",
                     theta * alpha_val)
             @printf("      single-dominant-destination limit; M sums over all markets so the\n")
             @printf("      realized slope is geography-dependent, not a clean θα).\n")
-            @printf("  ⇒ at α=%.2f the γ-inversion repositions the gravity T by a factor\n", alpha_val)
+            @printf("  ⇒ at α=%.2f the trade-cost geometry repositions T by a factor\n", alpha_val)
             @printf("    ~%.2f× (median) and up to ~%.1f× for the most market-remote regions;\n",
                     med, maximum(rr))
             @printf("    ≈1× for regions near the reference.\n")
@@ -1072,8 +1060,8 @@ ca_level_local == :ze && try
     end
 
     _t_init_compare(0.5)                                # the requested α = 0.5 case
-    if _prior_alpha !== nothing && !isapprox(Float64(_prior_alpha), 0.5)
-        _t_init_compare(Float64(_prior_alpha))          # also the actual prior in use
+    if !isapprox(_init_alpha, 0.5) && _init_alpha > 0
+        _t_init_compare(_init_alpha)                    # also the actual α in use
     end
 catch e
     @warn "T-init comparison plot skipped: $e"

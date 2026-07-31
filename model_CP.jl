@@ -570,8 +570,8 @@ function concentrate_N_s(q_hat::AbstractVector{<:Real})
             end
             N_hat[s] = abs(Gs(lo) - tgt) <= abs(Gs(hi) - tgt) ? lo : hi
         end
-        @assert N_hat[s] <= N_BLOCK "N̂[$s] = $(N_hat[s]) exceeds the draw-pool width " *
-            "N_BLOCK = $N_BLOCK — widen N_BLOCK (it must be ≥ maximum(N_HI)) and restart."
+        @assert N_hat[s] <= N_rho "N̂[$s] = $(N_hat[s]) exceeds the per-replication variety " *
+            "block width N_rho = $N_rho — it must be ≥ maximum(N_HI); restart."
     end
     return N_hat, clamped
 end
@@ -582,13 +582,13 @@ end
 
 Row ranges of one realised economy inside the flat draw pool, and the per-cell
 observation weight. Replication `rep` occupies pool rows
-`(rep−1)·N_BLOCK + 1 … (rep−1)·N_BLOCK + N_BLOCK`, of which a realised economy uses
+`(rep−1)·N_rho + 1 … (rep−1)·N_rho + N_rho`, of which a realised economy uses
 only the first `N̂_{s(g)}` — the PREFIX property that lets one Ricardian solve at pool
 width serve every candidate `N_s` with no re-drawing (plan D1). The weight
 `1/N̂_{s(g)}` makes each cell carry total weight 1, as in the pooled design.
 """
 function granular_prefix_rows(N_hat::Vector{Int}, rep::Int)
-    base = (rep - 1) * N_BLOCK
+    base = (rep - 1) * N_rho
     rows = Vector{UnitRange{Int}}(undef, n_good)
     w    = Vector{Float64}(undef, n_good)
     @inbounds for g in 1:n_good
@@ -605,13 +605,12 @@ end
 
 Independent re-simulation draws for inference (Σ_sim in `build_step3_weight_matrix`,
 the Jacobian replications in `compute_jacobian`). Under `GRANULAR` the row count must
-stay `N_POOL` and the sampler `GRANULAR_DRAW_METHOD`, or the `(rep, ρ)` row layout the
-prefix arithmetic relies on would be destroyed; otherwise this is the historical
-`N_RHO_INFERENCE` resample.
+stay `N_POOL`, or the `(rep, ρ)` row layout the prefix arithmetic relies on would be
+destroyed; otherwise this is the historical `N_RHO_INFERENCE` resample.
 """
 function inference_draws(k::Int; draw_method::Symbol = DRAW_METHOD)
     return GRANULAR ?
-        generate_draws(N_POOL, n_good, GRANULAR_DRAW_METHOD;
+        generate_draws(N_POOL, n_good, draw_method;
                        randomise = true, rng = MersenneTwister(k)) :
         generate_draws(N_RHO_INFERENCE, n_good, draw_method;
                        randomise = true, rng = MersenneTwister(k))
@@ -1490,7 +1489,7 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
         # mass (finite_sample2.tex §3.2).
         G0 = zeros(S)
         @inbounds for rep in 1:R_REP
-            base = (rep - 1) * N_BLOCK
+            base = (rep - 1) * N_rho
             for s in 1:S
                 cells = CELLS_OF_SECTOR[s]
                 isempty(cells) && continue
@@ -1608,7 +1607,7 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
     # Realised supplier counts K_ls, replication by replication.
     K = zeros(Int, R_REP, n_good)
     @inbounds for rep in 1:R_REP
-        base = (rep - 1) * N_BLOCK
+        base = (rep - 1) * N_rho
         for g in 1:n_good
             acc = 0
             for rho in (base + 1):(base + m.N_hat[GOOD_S[g]])
@@ -1625,8 +1624,21 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
         sq > 0 ? N_HI[s] / sq : NaN
     end for s in 1:S]
 
+    # The CLOSED-FORM count moment the bisection actually targets,
+    # Ḡ_s(N̂) = mean_l (1 − q̂_ls)^{N̂_s}, evaluated at the profiled N̂. Comparing it to
+    # the REALISED empty share `G0` is validation gate V4: they must agree to
+    # Monte-Carlo error. A systematic gap points at the winner accounting, or at a
+    # stratified/QMC draw design making the prefix counts under-dispersed relative to
+    # Binomial(N̂_s, q) — in which case use --draws=mc.
+    G0_closed = [begin
+        cells = CELLS_OF_SECTOR[s]
+        isempty(cells) ? NaN :
+            sum((1.0 - m.q_hat[g])^m.N_hat[s] for g in cells) / length(cells)
+    end for s in 1:S]
+
     return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, b_logz = m.b_logz,
-            G0 = m.G0, G_target = collect(G_TARGET), K = K, N_count = N_count)
+            G0 = m.G0, G0_closed = G0_closed, G_target = collect(G_TARGET),
+            K = K, N_count = N_count)
 end
 
 

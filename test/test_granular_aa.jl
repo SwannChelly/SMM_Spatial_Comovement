@@ -28,6 +28,8 @@
 #   V5   Prefix stability — the winners of the first n varieties are identical
 #        whether the Ricardian solve runs at width n or at pool width. This is what
 #        licenses ONE solve per replication (plan D1).
+#   V4   Closed form vs simulation — the closed-form Ḡ_s(N̂) the bisection targets against
+#        the realised empty share (printed by report_granular / report.txt).
 #   V6   Firm ↔ champion — the log-z coefficient against −θ (Prop. 1(c)).
 #   V7   Two routes to N_s — N̂_s from Ḡ_s(0) against N^count_s = N_supplier_s / Σ_l q̂.
 #        A large gap is a mechanism finding, not a bug.
@@ -35,8 +37,8 @@
 #   V10  N_s-invariance of block 4 — the firm-level index contains no N_s term, so
 #        reg_coef should barely move between N̂ and 2N̂.
 #
-# Gates needing a fitted θ̂ or an external reference (V0, V4, V8, V11, V12, V13) are
-# NOT run here; see granular_validation.md.
+# Gates needing a fitted θ̂ or an external reference (V0, V8, V11, V12, V13) are NOT run
+# here; see granular_validation.md.
 
 using Distributed
 @everywhere using Random
@@ -241,12 +243,13 @@ end
 println("\n── V6 / V7 / V9 / V10  granular diagnostics at θ ────────────────────")
 let
     info = granular_report(θ0)
-    @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s\n",
-            "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_fit", "G0_target", "N^count")
+    @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s %10s\n",
+            "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_real", "G0_closed", "G0_target", "N^count")
     for s in 1:S
-        @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.1f\n",
+        @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.4f %10.1f\n",
                 s, N_LO[s], info.N_hat[s], N_HI[s], string(info.clamped[s]),
-                isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
+                isempty(info.G0) ? NaN : info.G0[s], info.G0_closed[s],
+                G_TARGET[s], info.N_count[s])
     end
 
     # V9 — a persistent clamp is a rejection signal for the mechanism.
@@ -255,6 +258,26 @@ let
     v9 || println("      ⚠ :hi means the model cannot generate enough sparsity even when every " *
                   "variety is sourced from a single origin — a rejection signal, not a nuisance.")
     record!("V9", v9)
+
+    # V4 — the closed form vs the realised empty share, in units of the MONTE-CARLO
+    # standard error of the realised share (a fixed tolerance would fire spuriously at
+    # small R_REP and hide a real problem at large R_REP).
+    if !isempty(info.G0)
+        gaps = abs.(info.G0 .- info.G0_closed)
+        z = [begin
+                 nc = length(CELLS_OF_SECTOR[s]); g = info.G0_closed[s]
+                 se = nc == 0 ? NaN : sqrt(max(g * (1 - g), 1e-6) / (nc * R_REP))
+                 (isfinite(se) && se > 0) ? gaps[s] / se : NaN
+             end for s in 1:S]
+        zmax = maximum(filter(isfinite, z); init = NaN)
+        v4 = !isfinite(zmax) || zmax <= 3
+        @printf("  V4  max |G0_realised − G0_closed| = %.4f  (max %.1f × MC s.e.) : %s\n",
+                maximum(gaps), zmax, v4 ? "PASS" : "REPORT")
+        println("      (beyond MC error points at the winner accounting, or at a stratified/QMC " *
+                "draw\n      design making prefix counts under-dispersed vs Binomial(N̂_s, q) — " *
+                "try --draws=mc.)")
+        record!("V4", v4, "reported")
+    end
 
     # V6 — the log-z coefficient is a free over-identifying test (Prop. 1(c)).
     v6 = isfinite(info.b_logz) && abs(info.b_logz + theta) < 0.30 * max(theta, 1e-8)
@@ -275,7 +298,7 @@ let
 
     # V10 — block 4 carries no N_s term (Prop. 1), so reg_coef should barely move.
     _, sim1 = full_SMM(θ0; u_draws=U_POOL, sample_weights=POOL_WEIGHTS)
-    N2 = [min(2 * n, N_BLOCK) for n in info.N_hat]
+    N2 = [min(2 * n, N_rho) for n in info.N_hat]
     _, sim2 = full_SMM(θ0; u_draws=U_POOL, sample_weights=POOL_WEIGHTS, N_fixed=N2)
     drift = maximum(abs.(vec(sim2[4]) .- vec(sim1[4])) ./ (abs.(vec(sim1[4])) .+ 1e-10))
     v10 = drift < 0.10
