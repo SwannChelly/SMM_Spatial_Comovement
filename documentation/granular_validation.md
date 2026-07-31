@@ -78,7 +78,8 @@ nothing before any modelling change is switched on.
 | # | Gate | What it checks | Pass criterion |
 |---|---|---|---|
 | **V0** | **Legacy reproduction** | `--granular=false --ca_level=ze` reproduces the current estimates | identical moment vector and loss to floating-point noise; this is the constraint the whole implementation is built around |
-| **V1** | AA map | `argmax_col(closest_downstream_region.npy) == CLOSEST_DOWNSTREAM_REGION`; rows sum to 1; shape `(R, R_downstream)` | exact, **asserted at load time** — a mismatch means the model's fixed effect and the empirical one are different partitions |
+| **V1** | AA map | `attraction_area_linkages.npy`: shape `(R, R_downstream)`, rows sum to 1, and `argmax_col(·) == CLOSEST_DOWNSTREAM_REGION` | exact, **asserted at load time** — a mismatch means the model's fixed effect and the empirical one are different partitions |
+| **V1b** | Filter containment | every cell with `filter_N_upstream == 1` lies in an attraction area active in its own sector | if it fires, the filter is broader than `𝒜⁺`; intersect and warn rather than proceed |
 | **V2** | `N_s` root-find | on synthetic `q̂`: `G(s,·)` monotone decreasing; bisection recovers a planted integer; clamps fire at both bounds | exact integer recovery |
 | **V3** | AA-level Sinkhorn | round-trip recovery of a planted `T_aa` from its own area aggregates | ~1e−8, mirroring `test/test_ge_inversion.jl` |
 | **V4** | Closed form vs simulation | at `θ̂`, `G(s, N̂_s)` from `q̂` against the realised empty share | agree to Monte-Carlo error; a gap points at a bug in the winner accounting |
@@ -154,6 +155,7 @@ support and the same regressors as the model.
    no floor, so a ZE hosting its own downstream plant gives `−inf`.
 3. **Which distance.** Julia's regressor is the distance to the **nearest** downstream region.
    Confirm `dist_com_w_arithmetic` is that, not an arithmetic mean over all downstream plants.
+   The same partition must underlie `attraction_area_linkages.npy` and the `A129_AA` grouping.
 4. **Make the bins explicit rather than lucky:**
    ```python
    df["dist_bin"] = pd.cut(d, [0, 50, 100, 150, 200, np.inf],

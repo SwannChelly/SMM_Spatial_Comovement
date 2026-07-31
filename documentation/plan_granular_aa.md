@@ -15,7 +15,7 @@ modelling changes:
 | Flag | Legacy value | New value | Governs |
 |---|---|---|---|
 | `--granular` | `false` | `true` | finite `N_s`, the count moment (block 6), the `N_s` profiling. `false` ⟹ the continuum extensive margin exactly as today, **no block 6**, moment vector of length 5 |
-| `--ca_level` | `ze` | `aa` | comparative advantage at ZE or attraction-area level, and correspondingly the γ block and the Σ file (`_aa` suffix) |
+| `--ca_level` | `ze` | `aa` | comparative advantage at ZE or attraction-area level, and correspondingly the γ block and the Σ file (`Sigma_aa_` prefix) |
 
 **`--granular=false --ca_level=ze` is the full EK model as it stands today.** It must be a
 supported configuration, not a historical curiosity: no dead code paths, no silent behaviour
@@ -29,9 +29,10 @@ Design rules that follow:
 * **The AA layer is a gather, not a rewrite.** `T[s,l] = T_aa[s, AA_OF_ZE[l]]` under
   `--ca_level=aa`; under `ze` the existing reduced-T scatter runs unchanged. `unpack_params`
   branches once, at the top.
-* **The active set is the one genuinely shared change.** Under `--ca_level=aa` the status-2
-  ("control") cells become ordinary goods; under `ze` they stay as they are. Keep both paths in
-  `load_parameters.jl` behind the same flag.
+* **The active set is the one genuinely shared change.** Under `--ca_level=aa` the control cells
+  (`filter == 1` and `X_rs == 0`) become ordinary goods; under `ze` they stay as they are. Keep
+  both paths in `load_parameters.jl` behind the same flag. Note the `filter_N_upstream` re-encoding
+  of §2 is *not* behind a flag — it changes how the control set is built in both modes.
 * **The regression keeps its `(ρ, g)` row structure in both modes.** Only the number of rows
   changes: `N_rho` under `false`, `N̂_s` under `true`. The outcome (`not_supply`) and the `log z`
   control are the same in both.
@@ -81,8 +82,9 @@ two ZE in an area share the Fréchet *scale*, not the realisation.
 
 Block 5 becomes the AA aggregate `γ_{s,a} = Σ_{l∈a} γ_{ls}`. A ZE inside an active AA with no
 supplier has `γ̂_ls = 0` and a bootstrap variance of zero — it cannot enter the γ block without
-infinite weight; its information goes to the extensive margin and the counts. Use the `..._aa.npy`
-Σ files. The γ block is then just-identified against `T_aa` (one moment per active `(s,a)`, minus
+infinite weight; its information goes to the extensive margin and the counts. Use the
+`Sigma_aa_beta_gamma*` files (§2), and note the aggregation runs over **(sector, AA)** pairs —
+an AA active in one sector may be empty in another. The γ block is then just-identified against `T_aa` (one moment per active `(s,a)`, minus
 one reference per sector).
 
 ### D4 — The extensive-margin regression is at the firm level, outcome `not_supply`
@@ -106,7 +108,7 @@ Two code consequences:
 * **Return the `log z` coefficient** alongside the `N_REG` distance coefficients. It should equal
   `−θ`; it is a free diagnostic and costs one array slot.
 * **Drop the `include_control` / `include_size_control` exclusion** (`model_CP.jl:846`, `:1053`)
-  under `--ca_level=aa`. It exists because status-2 cells had `T ≡ 0` and hence no productivity
+  under `--ca_level=aa`. It exists because control cells had `T ≡ 0` and hence no productivity
   draw; under D3 they inherit `T_{s,a} > 0` and have real draws, so both can be on at once. Keep
   the assertion under `--ca_level=ze`.
 
@@ -134,22 +136,121 @@ mechanism, not a numerical nuisance.
 
 ## 2. Data inputs
 
-| File | Convention |
-|---|---|
-| `G_K.csv` — `A129`, `K`, `G(K)`, `N_supplier_s` | `G(K) = Pr(K_ls ≤ K)`; `G(0)` = share of ZE with **0** suppliers. Denominator: **ZE inside active attraction areas only**. `N_supplier_s` repeated on every row — assert constant within `A129`. |
-| `Sigma_beta_gamma_cloglog[_1]_f_aa.npy` | Ordering **β → γ(AA) → G**, exactly `S` rows of `G_s(0)`. Used when `--ca_level=aa`. |
-| `Sigma_beta_gamma_cloglog[_1]_f.npy` | γ at ZE level. Used when `--ca_level=ze`; the `G` rows are read only in granular mode. |
-| `closest_downstream_region.npy` | `R × R_downstream` binary incidence, ZE → AA. Assert `argmax_col(·) == CLOSEST_DOWNSTREAM_REGION` at load time. |
+### `filter_N_upstream.npy` — new binary encoding
 
-**Deferred: `SIREN`** (cell-level firm count). When it arrives it is one extra column in the
-design and must simultaneously enter the empirical target. It is *not* a substitute for `log z`:
-`log z` is the firm's own productivity, `log SIREN` the cell's firm count. Until it is in, `α̂` is
-expected to be biased upward in magnitude.
+`(S, R)`, values in `{0, 1}` only. The three-status encoding (0 no firms / 1 has suppliers /
+2 firms but no supplier) is gone.
 
-**Open modelling decision, recorded not resolved.** The firm-level unit gives every cell exactly
-`N_s` firms while observed counts vary by orders of magnitude. v1 accepts the mismatch; the
-alternatives (a productivity floor making the count Poisson in `T_sl`, or taking the observed
-count as given) are in `granular_validation.md` §A.2, with gate V6 measuring the damage.
+```
+filter_N_upstream[s,l] == 1   ⟺   the (sector, ZE) cell enters the optimisation
+supplier cell                 ⟺   filter == 1  AND  X_rs[s,l] >  0
+control cell (no supplier)    ⟺   filter == 1  AND  X_rs[s,l] == 0
+```
+
+Three consequences for the code:
+
+* **`active_mat` is unchanged.** `(filter_N_upstream .== 1) .& (X_rs .> 0)`
+  (`load_parameters.jl:185`) still selects exactly the supplier cells under the new encoding, so
+  the legacy `--ca_level=ze` path needs no edit there — only the surrounding comment.
+* **The control set must be rewritten.** `findall(filter_N_upstream .== 2)`
+  (`load_parameters.jl:219`) becomes `findall((filter_N_upstream .== 1) .& (X_rs .== 0))`. Same
+  object, new encoding. Also update the comment at `test/test_control_group_regression.jl:3`.
+* **`CELL_MASK` is now given, not derived.** Under `--ca_level=aa` the cell set is simply
+  `filter_N_upstream .== 1`. The old `has_firms` construction disappears.
+
+Because the filter now encodes the modelling decision directly, **assert rather than assume** that
+it already excludes cells sitting in attraction areas with no supplier:
+
+```julia
+@assert all(AA_ACTIVE[s, AA_OF_ZE[l]] for (s,l) in findall(CELL_MASK))
+```
+
+If it fires, the filter is broader than `𝒜⁺`; intersect and warn rather than silently proceed.
+
+### `attraction_area_linkages.npy` — the ZE → attraction-area map
+
+`(R, R_downstream)` binary incidence. Each attraction area is anchored on a downstream region (its
+closest). `AA_OF_ZE[l]` is the column where row `l` is 1. Assert at load time:
+
+```julia
+@assert size(A) == (R, R_downstream)
+@assert all(sum(A, dims=2) .== 1)                       # exactly one AA per ZE
+@assert vec(argmax(A, dims=2) .|> last) == CLOSEST_DOWNSTREAM_REGION
+```
+
+The last one is the important one: the model's fixed effect and the empirical one must be the same
+partition, or the whole alignment argument fails.
+
+### Aggregating γ to the attraction-area level
+
+Two rules, both easy to get wrong.
+
+1. **The moment set is (sector, AA) pairs with a supplier in the data**, not AAs:
+   ```
+   AA_ACTIVE[s,a] = any( l ∈ a : filter[s,l] == 1 && X_rs[s,l] > 0 )
+   ```
+   A given AA can be active in one sector and empty in another; the sectoral dimension must be
+   carried through. Block 5 is the active `(s,a)` set minus one reference AA per sector.
+2. **The sum runs over every cell in `CELL_MASK`, control cells included**, on *both* sides:
+   ```
+   model :  γ_aa[a,s] = Σ_{l : AA_OF_ZE[l]==a, CELL_MASK[s,l]} γ_model[l,s]
+   data  :  emp_gamma_aa[a,s] = Σ_{l : AA_OF_ZE[l]==a, CELL_MASK[s,l]} emp_gamma_ls[l,s]
+   ```
+   Control cells contribute `0` on the data side and a strictly positive `γ` on the model side —
+   and that is correct, not a mismatch: `E[γ̂_ls] = γ_ls` holds unconditionally, so the realised
+   zero is an unbiased draw of the model's positive share. Excluding them from the model sum would
+   bias the aggregate downward. Assert `emp_gamma_ls == 0` wherever `!CELL_MASK`.
+
+### Σ files
+
+Eight files; the AA variant is a **prefix**, not a suffix:
+
+| level | link | `N_REG` | file |
+|---|---|---|---|
+| ZE × S | lpm | >1 | `Sigma_beta_gamma_f.npy` |
+| ZE × S | lpm | 1 | `Sigma_beta_gamma_1_f.npy` |
+| ZE × S | cloglog | >1 | `Sigma_beta_gamma_cloglog_f.npy` |
+| ZE × S | cloglog | 1 | `Sigma_beta_gamma_cloglog_1_f.npy` |
+| AA × S | lpm | >1 | `Sigma_aa_beta_gamma_f.npy` |
+| AA × S | lpm | 1 | `Sigma_aa_beta_gamma_1_f.npy` |
+| AA × S | cloglog | >1 | `Sigma_aa_beta_gamma_cloglog_f.npy` |
+| AA × S | cloglog | 1 | `Sigma_aa_beta_gamma_cloglog_1_f.npy` |
+
+so `sigma_beta_gamma_filename` becomes
+
+```julia
+function sigma_beta_gamma_filename(; smm::Bool, aa::Bool = (CA_LEVEL == :aa))
+    prefix = aa ? "Sigma_aa_beta_gamma" : "Sigma_beta_gamma"
+    link   = REG_METHOD == :cloglog ? "_cloglog" : ""
+    n1     = N_REG == 1 ? "_1" : ""
+    fsuf   = smm ? "_f" : ""
+    return prefix * link * n1 * fsuf * ".npy"
+end
+```
+
+verified to reproduce all eight names. Both call sites (`tools.jl:1140`, `main_gmm.jl:140`) get the
+`aa` keyword by default from `CA_LEVEL`.
+
+**The file names carry no marker of whether the `G` rows are present.** Ordering is β → γ → G,
+`S` rows of `G_s(0)`, but `reconcile_sigma_data` must branch on the **observed dimension**:
+`N_REG + n_γ` in legacy mode, `N_REG + n_γ + S` in granular mode. Error loudly on any third size
+rather than guessing.
+
+### `G_K.csv`
+
+`A129`, `K`, `G(K)`, `N_supplier_s`. `G(K) = Pr(K_ls ≤ K)`; `G(0)` = share of ZE with **0**
+suppliers; denominator = ZE inside active attraction areas. `N_supplier_s` repeated on every row —
+assert constant within `A129`. Bounds: `N_HI[s] = N_supplier_s`,
+`N_LO[s] = ceil(N_supplier_s / R_downstream)`.
+
+### Deferred and open
+
+**`SIREN`** (cell-level firm count) is not in this version. When it arrives it is one extra column
+in the design and must simultaneously enter the empirical target; it is *not* a substitute for
+`log z`. Until then `α̂` is expected to be biased upward in magnitude.
+
+**Firm counts per cell**: the firm-level unit gives every cell exactly `N_s` firms while observed
+counts vary by orders of magnitude. v1 accepts the mismatch; see `granular_validation.md` §A.2.
 
 ---
 
@@ -176,13 +277,13 @@ count as given) are in `granular_validation.md` §A.2, with gate V6 measuring th
 ════════════════════════════════════════════════════════════════════════════════
 PRECOMPUTED ONCE   (load_parameters.jl)
 ════════════════════════════════════════════════════════════════════════════════
-AA_OF_ZE        :: Vector{Int}(R)        from closest_downstream_region.npy
-                                         @assert == CLOSEST_DOWNSTREAM_REGION
-AA_ACTIVE       :: BitMatrix(S, R_d)     a hosts ≥1 observed supplier in s   → 𝒜⁺_s
-CELL_MASK       :: BitMatrix(S, R)       ca_level == :aa ?
-                                           has_firms[s,l] && AA_ACTIVE[s, AA_OF_ZE[l]]
+AA_OF_ZE        :: Vector{Int}(R)        from attraction_area_linkages.npy (R × R_d binary)
+                                         @assert rows sum to 1, and == CLOSEST_DOWNSTREAM_REGION
+AA_ACTIVE       :: BitMatrix(S, R_d)     any(l ∈ a : filter[s,l]==1 && X_rs[s,l] > 0)  → 𝒜⁺_s
+                                         NB sectoral: an AA can be active in s and empty in s'
+CELL_MASK       :: BitMatrix(S, R)       ca_level == :aa ? (filter_N_upstream .== 1)
                                          : (filter_N_upstream .== 1) .& (X_rs .> 0)   # legacy
-                                         has_firms = filter_N_upstream ∈ {1,2}
+                                         @assert CELL_MASK ⊆ AA_ACTIVE[s, AA_OF_ZE[l]]
 CELLS_OF_SECTOR :: Vector{Vector{Int}}(S)
 GOOD_S, GOOD_R, SR_TO_GOOD               rebuilt from CELL_MASK
 T_MASK_AA       :: BitMatrix(S, R_d)     = AA_ACTIVE                (aa mode only)
@@ -258,7 +359,9 @@ function loss(θ_c, W)
   b_logz   = mean over rep of reg[rep][N_REG+1]         # diagnostic: should equal −θ
 
   ── 5. block 5 — shares (AA-aggregated under --ca_level=aa) ─────────────────
-  γ_aa[a,s] = Σ_{l : AA_OF_ZE[l] == a} γ[l,s]
+  γ_aa[a,s] = Σ_{l : AA_OF_ZE[l]==a AND CELL_MASK[s,l]} γ[l,s]      for (s,a) ∈ AA_ACTIVE
+  #   control cells ARE in the sum on both sides: they contribute 0 in the data and a
+  #   positive γ in the model, and E[γ̂]=γ makes that an unbiased match, not a mismatch
 
   ── 6. block 6 — realised empty-ZE share, averaged over replications ────────
   G0[s] = mean over rep of ( share of l ∈ CELLS_OF_SECTOR[s] with K[rep,s,l] == 0 )
@@ -281,15 +384,18 @@ constant with probability one — and assert that no perturbation moved it.
 ### `load_parameters.jl`
 
 * **Flags.** Parse `--granular` and `--ca_level`; broadcast as `GRANULAR::Bool`, `CA_LEVEL::Symbol`.
-* **Active set.** Under `:aa`, replace `active_mat` by
-  * `has_firms[s,l] = filter_N_upstream[s,l] ∈ {1,2}` (status 0 = no firms, stays out);
-  * `AA_ACTIVE[s,a] = any(l ∈ a : filter==1 && X_rs>0)` → `𝒜⁺_s`;
-  * `CELL_MASK[s,l] = has_firms[s,l] && AA_ACTIVE[s, AA_OF_ZE[l]]`;
+* **New filter encoding** (§2), independent of the flags: rewrite the control set at `:219` to
+  `findall((filter_N_upstream .== 1) .& (X_rs .== 0))` and fix the comments at `:179` and
+  `test/test_control_group_regression.jl:3`. `active_mat` at `:185` is unchanged.
+* **Active set.** Under `:aa`:
+  * `AA_ACTIVE[s,a] = any(l ∈ a : filter[s,l]==1 && X_rs[s,l]>0)` → `𝒜⁺_s`, **per sector**;
+  * `CELL_MASK[s,l] = filter_N_upstream[s,l] == 1`, with the containment assertion of §2;
 
   then build `n_good`, `GOOD_S`, `GOOD_R`, `SR_TO_GOOD`, `SECTOR_GOOD_INDICES` from `CELL_MASK`.
-  Status-2 cells become ordinary goods with `T = T_{s,a} > 0` — **this is the endogenisation**.
+  Control cells become ordinary goods with `T = T_{s,a} > 0` — **this is the endogenisation**.
   Under `:ze` the current code path runs unchanged.
-* New constants: `AA_OF_ZE`, `n_AA`, `AA_CELLS`, `T_MASK_AA`, `T_REF_AA`, `CELL_MASK`,
+* New constants: `AA_OF_ZE` (from `attraction_area_linkages.npy`), `n_AA`, `AA_CELLS`,
+  `T_MASK_AA`, `T_REF_AA`, `CELL_MASK`,
   `CELLS_OF_SECTOR`, `N_LO`, `N_HI`, `N_BLOCK`, `G_TARGET`, `R_REP`, `U_POOL`, `GRANULAR`,
   `CA_LEVEL`.
 * γ target → `emp_gamma_aa` under `:aa`; keep `emp_gamma_ls`.
@@ -318,8 +424,11 @@ constant with probability one — and assert that no perturbation moved it.
 
 ### `tools.jl`
 
-* `sigma_beta_gamma_filename(; smm, aa)` → `_aa` suffix when `CA_LEVEL == :aa`.
-* `reconcile_sigma_data`: reconcile at the AA level under `:aa`; `G0` rows never pruned.
+* `sigma_beta_gamma_filename(; smm, aa)` → `Sigma_aa_` **prefix** when `CA_LEVEL == :aa` (§2);
+  both call sites (`tools.jl:1140`, `main_gmm.jl:140`) take the default from `CA_LEVEL`.
+* `reconcile_sigma_data`: reconcile at the AA level under `:aa`; branch on the **observed Σ
+  dimension** (`N_REG + n_γ` vs `+ S`) to detect the `G` rows, since the file name does not say;
+  `G0` rows never pruned.
 * `build_step3_weight_matrix`: `gb_indices` gains `BLOCK_RANGES[6]` when `GRANULAR`.
 * `compute_jacobian`: `hold_N_s` kwarg and the "no perturbation moved `N̂_s`" assertion.
 * `compute_smm_inference`: report `N̂_s` value-only.
