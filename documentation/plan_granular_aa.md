@@ -13,7 +13,12 @@ count moment, §6 for what must change, §3.9 for the empirical diagnostic).
 
 These are the load-bearing choices. Everything downstream follows from them.
 
-### D1 — Granularity is applied **analytically**, never by drawing `N_s` varieties
+### D1 — ~~Granularity is applied analytically~~ **superseded by §A: draw `N_s` varieties, `R` replications**
+
+> **Superseded.** See §A. The closed-form Binomial is retained for the `N_s` inner loop and as a
+> cross-check, but the moments are computed on simulated economies. The text below documents the
+> closed-form machinery, which is still used in that reduced role.
+
 
 `solve_network` already computes exactly the object granularity needs. At `model_CP.jl:720`,
 inside the loop over downstream buyers,
@@ -395,7 +400,13 @@ Mitigation: at the reported estimate recompute the Jacobian **holding `N̂_s` fi
 at `θ̂` — the correct object anyway, since `N̂_s` is integer-valued and locally constant with
 probability one — and assert that no FD perturbation changed `N̂_s`, reporting it if one did.
 
-### 4.5 The binding numerical constraint: resolving `q_ls` in the tail
+### 4.5 Resolving `q_ls` in the tail — now only for the `N_s` inner loop
+
+> **Scope reduced by §A.** With the moments computed on simulated economies there is no `q̂` in the
+> moment path, so the precision requirement below applies only to the closed-form `N_s` bisection,
+> where a monotone root-find tolerates far more noise. Kept because the analytic control variate is
+> still the right way to compute `q̂` cheaply.
+
 
 This is the largest practical risk in the whole design, and it should be measured in Phase 0
 before anything is built.
@@ -579,108 +590,118 @@ Suggested sequence: **Phase 0** (timing) → **G0** (refactor, zero behavioural 
 
 ## A. Design (a) "simulate `N_s` varieties" vs design (b) "`q̂` + closed form"
 
-**(a)** — the straightforward design: put `N_s` in the parameter vector, simulate an economy with
-exactly `N_s` varieties, compute `G` and the regression on the **realised 0/1** outcomes.
-**(b)** — the design this plan was built on: estimate `q_ls` from a large draw pool, apply the
-exact Binomial `Pr(K_ls = 0) = (1−q_ls)^{N_s}` in closed form, regress the resulting probability.
+**(a)** — put `N_s` in the parameter vector, draw firms in **every** ZE of every retained
+attraction area, run the Ricardian competition over `N_s` varieties, compute `G` and the
+regression on the **realised 0/1** outcomes.
+**(b)** — estimate `q_ls` from a large draw pool and apply `Pr(K_ls = 0) = (1−q_ls)^{N_s}` in
+closed form.
 
-They are **not** equivalent, and the differences do not all point the same way. Measured on a
-synthetic sector calibrated to the observed empty share (0.915), `θα = 0.30`, `N_s` solved to hit
-that share.
+**Conclusion: build (a).** The reasoning below corrects two numbers I previously reported from a
+mis-calibrated synthetic, and adds the argument that settles it.
 
-### A.1 (a) targets the right object for the regression — worth ~15% of `β`
+### A.1 The settling argument: you need the finite-variety solver anyway
 
-The empirical `reg_coef` is an auxiliary statistic computed on **one realised economy of fixed
-size**. A nonlinear fixed-effect estimator carries an incidental-parameters bias of order `1/T`
-in the number of observations per group. Design (a) matches the data's `β̂` against
-`E[β̂(simulated economy)]` — the *binding function* — so the same distortion sits on both sides and
-**cancels**. Design (b) matches it against `β(E[y])`, the `T → ∞` limit, and does not.
+Under (b) the estimation **never solves a finite-variety network**. It solves the continuum
+network (`N_rho` draws, self-normalised weights) to get `q_ls`, then layers the Binomial on top.
+The value block is therefore evaluated at the certainty-equivalent price index while the extensive
+margin is granular — a coherent hybrid (the note's expected-price-index GE), but a hybrid.
 
-| configuration | cells / FE group | `β(E[y])` | `E[β̂(realised)]` | gap | FE groups emptied |
-|---|---|---|---|---|---|
-| **sparse, like the data** | 9.7 | −0.3017 | **−0.3459** ± 0.014 | **−0.044 (15%)** | **59%** |
-| fewer, bigger groups | 48.4 | −0.3006 | −0.3025 ± 0.012 | −0.002 (0.6%) | 12% |
-| many cells per group | 75.0 | −0.3001 | −0.3053 ± 0.004 | −0.005 (1.7%) | 14% |
+That leaves the question unanswered: **once `N̂_s` is estimated, how do you solve the economy with
+a finite number of varieties?** You cannot avoid it, because that economy is the paper's actual
+object. Spatial comovement is about how a shock propagates through the *realised* network, and it
+is the granular extensive margin — suppliers appearing and disappearing — that makes the
+propagation interesting. A continuum network has a degenerate extensive margin, which is the
+problem the whole note exists to fix.
 
-The bias is **real and material exactly in the sparse configuration that resembles the data** —
-15% of `β`, three MC standard errors — and it vanishes as observations per group grow, as the
-`O(1/T)` theory predicts. Since `α = −β/θ`, that is a 15% bias in `α̂` that design (b) leaves in.
+So (a)'s machinery must be built regardless. Given that, running the estimation on a *different*
+economy than the counterfactuals is a consistency liability for no gain. Two economies also mean a
+re-mapping step: `T̂` is identified under the self-normalised (`1/N_rho`) price index, so a finite
+solve must keep weights `1/N̂_s` — an average, not a sum — or it silently reintroduces the
+love-of-variety factor `N_s^{1/(1−ν_s)}` and moves the calibration point (note App. D).
 
-*(No separation problem: an earlier run suggesting 100% non-convergence was an artefact of a bad
-IRLS warm start, `η = log(−log(1−y))` on 0/1 data. With a constant warm start and deviance step
-halving, 0% of realisations fail.)*
+### A.2 Correction: the bias advantage of (a) is 2–4%, not 15%
 
-### A.2 (a) also removes the tail-resolution risk of §4.5 entirely
+The incidental-parameters argument is right — (a) matches the binding function `E[β̂(sim)]`, which
+cancels the finite-sample bias of the auxiliary FE cloglog, while (b) matches `β(E[y])`, its
+`T → ∞` limit. But my earlier "15%" came from a synthetic with **0.82 suppliers per fixed-effect
+group**, which the data cannot produce: `𝒜⁺` guarantees ≥1 supplier per group, and with 99
+suppliers over `G` groups the ratio is `99/G ≥ 1`. Re-measured at 1161 cells and data-consistent
+group sizes, `θα = 0.30`:
 
-§4.5 exists only because of (b)'s two-step: `η ≈ ln(N_s q)` passes a relative error in `q̂`
-one-for-one, so `q` must be resolved to order `1/N_s`. In (a) there is no `q̂`. A cell with a tiny
-win probability simply wins zero varieties — the **right answer with the right probability**, not
-a resolution failure.
+| config | cells/group | suppliers/group | `β(E[y])` | `E[β̂(realised)]` | gap | MC se |
+|---|---|---|---|---|---|---|
+| `G = 20` | 58 | 5.0 | −0.3004 | −0.3053 | −0.005 (2%) | 0.008 |
+| `G = 30` | 39 | 3.3 | −0.3005 | −0.3139 | −0.013 (4%) | 0.009 |
+| `G = 50` | 23 | 2.0 | −0.3002 | −0.3122 | −0.012 (4%) | 0.009 |
 
-### A.3 What I overstated for (b): the variance advantage is a wash
+So the bias is **2–4% of `β`, around 1.5 MC standard errors** — real in direction, modest in size.
+It is a reason to prefer (a), not the decisive one.
 
-At an equal budget of 20,000 variety-draws:
+*(An intermediate run reporting 100% non-convergence of the realised-economy regression was an
+artefact of an IRLS warm start `η = log(−log(1−y))` applied to 0/1 data. With a constant start and
+deviance step halving, 0% fail and there is no separation problem.)*
 
-| estimator of `E[G(0)]` | mean | bias | sd | RMSE |
-|---|---|---|---|---|
-| (a) simulate economies, `R = 487` reps | 0.91579 | −0.00000 | 0.00029 | 0.00029 |
-| (b) `q̂` + closed form | 0.91586 | +0.00007 | 0.00023 | 0.00024 |
+### A.3 Retraction: the "support mismatch" objection does not stand
 
-Both unbiased, RMSE within 20%. `G(0)` is a mean over hundreds of cells, so averaging over cells
-already does most of the variance reduction; the Rao-Blackwellisation adds little.
+I previously argued that (a) is inconsistent with conditioning on `𝒜⁺` because a realised economy
+empties 59% of the retained groups. That figure came from the same mis-calibrated synthetic. The
+objection was also wrong in substance:
 
-### A.4 What (b) still has, and it is not small
+* `𝒜⁺` is a **choice of which attraction areas to study**, not a model prediction to be
+  reproduced. Within a retained area, (a) draws firms in **all** ZE — with and without observed
+  suppliers — and lets the Ricardian competition decide which host one. That *is* the
+  endogenisation the two-tier design is for.
+* When a simulated group does come out empty it contributes nothing to `β̂`, which is exactly what
+  the FE cloglog does to any degenerate group. Indirect inference requires the **same function**
+  applied to data and simulation, not the same realised support — so this is an efficiency
+  question, not a bias.
 
-**The support matches the conditioning; (a)'s does not.** `𝒜⁺_s` is defined **from the outcome**
-(areas with ≥1 supplier), so in the data every retained group has a supplier by construction. Under
-(b) the simulated outcome is a probability in (0,1), no group ever degenerates, and the simulated
-support is exactly the data's. Under (a) a realised economy empties **59%** of the `𝒜⁺` groups, so
-they drop from the cloglog and the simulated statistic is computed on a much smaller, fluctuating
-support. Conditioning the simulation on the same event is infeasible by rejection — the
-probability that all `𝒜⁺` groups come out non-empty is ~`0.41^40 ≈ 10⁻¹⁶`.
+What survives is a **diagnostic**, not an argument. The rate at which retained groups come out
+empty is governed by suppliers per group, which is directly countable in the data:
 
-This is not a technicality: the note's maintained assumption (§3.2) is that `𝒜⁺_s` is **taken as
-given, never explained**. Design (b) honours that; design (a) silently re-draws it.
+| `G` (active AA×sector groups) | cells/group | suppliers/group | P(group comes out empty) |
+|---|---|---|---|
+| 20 | 58 | 5.0 | 0.7% |
+| 30 | 39 | 3.3 | 3.7% |
+| 50 | 23 | 2.0 | 14% |
+| 99 (the extreme: one supplier each) | 12 | 1.0 | 37% |
 
-**Cheap `N_s` profiling.** `G(s,n) = mean_l (1−q̂_l)^n` is instant for any candidate. Under (a),
-profiling block 4 would need `R × (#candidates)` IRLS fits per loss evaluation — with `R ≈ 1000`
-and ~15 bisection steps, 15,000 fits. Not affordable as an inner loop.
+**Count `G` before starting.** If suppliers per group is ≥3 the effect is a few percent and can be
+ignored. If it is near 1, the model is saying the observed configuration is unlikely, which is
+itself worth knowing.
 
-**Cost.** Adequate `R` is set by the dispersion of `β̂` across economies, `sd ≈ 0.35` in the sparse
-case: `R ≈ 1000` for an MC se of ~0.011. At `N_s ≈ 41` that is ~41,000 variety-draws against
-today's `N_rho = 1000` — roughly **40× the current simulation cost** per loss evaluation. Common
-random numbers make much of that noise difference out across `θ`, but the raw cost stands.
+### A.4 What (b) keeps: the cheap inner loop
 
-### A.5 Verdict and recommendation
+`G(s,n) = mean_l (1−q̂_l)^n` is closed form, monotone in `n`, and instant for any candidate.
+Profiling `N_s` on realised economies would need `R ×` (number of candidates) IRLS fits per loss
+evaluation. So keep (b) **for the `N_s` root-find**: locate `N̂_s` with the closed form, then
+evaluate the loss with the simulated economies at that `N̂_s`. Also keep the closed form as a
+cross-check at `θ̂` (gate G8): the simulated `G(s, N̂_s)` and the closed-form one must agree to
+Monte-Carlo error, and a gap points at a bug in the winner accounting.
 
-I was wrong to present (b) as unambiguously better. The honest scorecard:
+### A.5 What (a) must not do
 
-| | (a) simulate | (b) closed form |
-|---|---|---|
-| estimand for `reg_coef` | **binding function — bias cancels** | 15% bias in the sparse case |
-| tail resolution of small `q` | **no `q̂` needed** | needs `q` to order `1/N_s` (§4.5) |
-| support vs the `𝒜⁺` conditioning | 59% of groups re-drawn empty | **exact match** |
-| `N_s` profiling | needs `R ×` candidates IRLS fits | **closed form, instant** |
-| cost per loss evaluation | ~40× today | ~today |
-| variance of `G(0)` at equal budget | tie | tie |
+**Never set `N_rho = N_s` for the whole simulation.** The value block is a numerical integral; the
+variety count is a structural parameter. At `N_s ≈ 110` the labor share, `π_s`, `π_r` and the
+shares would be computed from 110 draws. Use **`R` replications of `N_s` varieties**: granularity
+stays exactly `N_s` within a replication, while the value block averages over all `R × N_s` draws.
 
-**Recommended: implement (b), then measure the gap rather than assume it away.** (b) is what keeps
-the support consistent with the conditioning the whole two-tier design rests on, and what keeps
-`N_s` profiling free. But the 15% bias is real, so:
+Sizing `R`: the dispersion of `β̂` across economies is ~0.16–0.18 in the configurations above, so
+`R ≈ 300` gives an MC standard error of ~0.010 on the block-4 moment. At `N̂_s ≈ 110` that is
+~33,000 variety-draws against today's `N_rho = 1000` — roughly 33× the current simulation cost.
+Common random numbers (a fixed draw pool, with `N_s` taken as a prefix) make most of that noise
+difference out across `θ`, which is what keeps the optimiser usable.
 
-1. build (b) as specified in §4;
-2. at `θ̂`, run design (a) once with `R ≈ 1000` and report
-   `Δ = E[β̂(sim)] − β(E[y])` — this is gate **G10**;
-3. if `Δ` is material (it was 15% here), either report `α̂` with that known bias stated, or add
-   `Δ` as a fixed offset to the block-4 moment and re-run. `Δ` is a smooth, slowly-varying
-   function of `θ`, so a locally fixed offset is defensible;
-4. mitigate §4.5 with the analytic control variate regardless — it is cheap and it removes (b)'s
-   only *numerical* weakness.
+### A.6 Consequences for the plan
 
-The one thing not to do is set `N_rho = N_s` for the whole simulation. The value block is a
-numerical integral and the variety count is a structural parameter; at `N_s ≈ 41` the labor share,
-`π_s`, `π_r` and the shares would be computed from 41 draws. If (a) is ever adopted, it must be
-`R` replications of `N_s` varieties, with the value block averaged over all `R × N_s`.
+* **D1 flips.** Draw `N̂_s` varieties per replication, `R` replications; the closed-form Binomial
+  is demoted from the moment computation to the `N_s` inner loop and the cross-check.
+* **§4.5 (tail resolution of `q̂`) largely evaporates.** It was an artefact of (b)'s two-step: in
+  (a) there is no `q̂`, and a cell with a tiny win probability simply wins zero varieties — the
+  right answer with the right probability. `q̂` still appears in the `N_s` root-find, where only
+  moderate accuracy is needed since the bisection is on a monotone function.
+* **D4 stands**, with the loss evaluated on simulated economies: profile `N_s` by the closed-form
+  bisection, verify once at `θ̂` with the full loss.
 
 ---
 
