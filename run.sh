@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa] [--n_rep=N]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa]
 #
 # Examples:
 #   ./run.sh aero
@@ -18,13 +18,13 @@
 #   ./run.sh aero --n_coef=4 --reg=lpm                    # linear-probability extensive margin (default: cloglog)
 #   ./run.sh aero --n_coef=4 --controls=false             # drop the no-supplier control group (adds the size control)
 #   ./run.sh aero --n_coef=4 --granular=false --ca_level=ze  # the legacy model (V0 reference)
-#   ./run.sh aero --n_coef=4 --n_tau=1 --granular=true --ca_level=aa --n_rep=300
+#   ./run.sh aero --n_coef=4 --n_tau=1 --granular=true --ca_level=aa
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa] [--n_rep=N]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=qmc|mc|is|sobol] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa]"
     echo "  industry   : aero, auto, car, both"
     echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
@@ -38,7 +38,6 @@ if [ -z "$1" ]; then
     echo "  --controls : include the no-supplier control group — true  or false (default) (⇒ supplier pairs only, WITH the size control); SMM only"
     echo "  --granular : true|false (default false) — finite N_s varieties per sector + the count moment G_s(0); SMM only. REQUIRES --ca_level=aa"
     echo "  --ca_level : ze (default) or aa — comparative advantage (and the gamma block) at the ZE or attraction-area level; SMM only"
-    echo "  --n_rep    : replications per granular loss evaluation (default 300; only used with --granular=true)"
     echo ""
     echo "  NOTE: --granular=false --ca_level=ze is the continuum ZE-level model exactly as it stood."
     echo "        --granular=true is only valid with --ca_level=aa."
@@ -61,7 +60,6 @@ REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (defau
 CONTROLS="false"  # SMM only: include the no-supplier control group in the reg
 GRANULAR="false"  # SMM only: finite N_s varieties + the count moment (block 6)
 CA_LEVEL="ze"     # SMM only: comparative advantage at the ZE (:ze) or attraction-area (:aa) level
-N_REP="300"       # replications per granular loss evaluation
 
 for arg in "$@"; do
     case "$arg" in
@@ -77,7 +75,6 @@ for arg in "$@"; do
         --controls=*) CONTROLS="${arg#--controls=}" ;;
         --granular=*) GRANULAR="${arg#--granular=}" ;;
         --ca_level=*) CA_LEVEL="${arg#--ca_level=}" ;;
-        --n_rep=*)    N_REP="${arg#--n_rep=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -127,10 +124,6 @@ if [ "$CA_LEVEL" != "ze" ] && [ "$CA_LEVEL" != "aa" ]; then
     echo "Error: --ca_level must be ze or aa (got: $CA_LEVEL)"
     exit 1
 fi
-
-case "$N_REP" in
-    ''|*[!0-9]*) echo "Error: --n_rep must be a positive integer (got: $N_REP)"; exit 1 ;;
-esac
 
 # --granular=true REQUIRES --ca_level=aa. Under ZE-level comparative advantage only
 # the supplier cells are estimated, so no cell can come out empty: the count moment
@@ -207,14 +200,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf reg controls granular ca_level n_rep
+    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf reg controls granular ca_level
     # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
         local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
         echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF $REG $CONTROLS $GRANULAR $CA_LEVEL $N_REP"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF, reg=$REG, controls=$CONTROLS, granular=$GRANULAR, ca_level=$CA_LEVEL, n_rep=$N_REP)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF $REG $CONTROLS $GRANULAR $CA_LEVEL"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF, reg=$REG, controls=$CONTROLS, granular=$GRANULAR, ca_level=$CA_LEVEL)"
     fi
     echo "Logs: $log_file"
 

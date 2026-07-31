@@ -577,45 +577,6 @@ function concentrate_N_s(q_hat::AbstractVector{<:Real})
 end
 
 
-"""
-    granular_prefix_rows(N_hat, rep) -> (rows::Vector{UnitRange{Int}}, w::Vector{Float64})
-
-Row ranges of one realised economy inside the flat draw pool, and the per-cell
-observation weight. Replication `rep` occupies pool rows
-`(rep−1)·N_rho + 1 … (rep−1)·N_rho + N_rho`, of which a realised economy uses
-only the first `N̂_{s(g)}` — the PREFIX property that lets one Ricardian solve at pool
-width serve every candidate `N_s` with no re-drawing (plan D1). The weight
-`1/N̂_{s(g)}` makes each cell carry total weight 1, as in the pooled design.
-"""
-function granular_prefix_rows(N_hat::Vector{Int}, rep::Int)
-    base = (rep - 1) * N_rho
-    rows = Vector{UnitRange{Int}}(undef, n_good)
-    w    = Vector{Float64}(undef, n_good)
-    @inbounds for g in 1:n_good
-        n_g     = N_hat[GOOD_S[g]]
-        rows[g] = (base + 1):(base + n_g)
-        w[g]    = 1.0 / n_g
-    end
-    return rows, w
-end
-
-
-"""
-    inference_draws(k; draw_method=DRAW_METHOD) -> (U, W)
-
-Independent re-simulation draws for inference (Σ_sim in `build_step3_weight_matrix`,
-the Jacobian replications in `compute_jacobian`). Under `GRANULAR` the row count must
-stay `N_POOL`, or the `(rep, ρ)` row layout the prefix arithmetic relies on would be
-destroyed; otherwise this is the historical `N_RHO_INFERENCE` resample.
-"""
-function inference_draws(k::Int; draw_method::Symbol = DRAW_METHOD)
-    return GRANULAR ?
-        generate_draws(N_POOL, n_good, draw_method;
-                       randomise = true, rng = MersenneTwister(k)) :
-        generate_draws(N_RHO_INFERENCE, n_good, draw_method;
-                       randomise = true, rng = MersenneTwister(k))
-end
-
 
 ##################### log-T = (φ) reparameterization #####################
 # The optimizer searches φ (free, log-space, per-sector reference dropped); the
@@ -1046,8 +1007,8 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Matrix{
 
     # Per-good variety rows. `rho_range === nothing` ⇒ every drawn variety (the
     # continuum/legacy design). Under granularity the caller passes the PREFIX
-    # `1..N̂_{s(g)}` of one replication (`granular_prefix_rows`), with a flat
-    # `obs_weight` of `1/N̂` so each cell still carries total weight 1.
+    # varieties of a realised economy, with a flat `obs_weight` so each cell carries
+    # total weight 1. Unused on the production path, kept as a hook.
     rows_of = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
     n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
 
@@ -1427,33 +1388,52 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     #    REG_INCLUDE_SIZE are the effective design flags (load_parameters.jl SECTION 6);
     #    the empirical target loaded there matches REG_METHOD.
     #
-    #    Under GRANULAR the rows are the PREFIX ρ ≤ N̂_{s(g)} of one realised economy,
-    #    and the coefficients are averaged over the R_REP realisations rather than
-    #    estimated once on the pooled draws. That is deliberate: averaging the
-    #    auxiliary estimator over realised economies matches the binding function, so
-    #    the finite-sample bias of the cloglog cancels instead of being inherited
-    #    (plan Part III; validation gate V12). By Prop. 1 the firm-level index carries
-    #    NO N_s term, so block 4 should be ~invariant to N̂_s (gate V10).
+    #    IDENTICAL under GRANULAR: by Prop. 1 the firm-level index carries NO N_s term
+    #    (conditioning on the firm removes it), so the regression is run ONCE on the
+    #    ordinary draws in both modes. Block 4 is therefore the continuum-limit
+    #    coefficient β(E[y]); the finite-sample bias of the auxiliary cloglog is NOT
+    #    cancelled by a binding-function average — it is measured by validation gate
+    #    V12 and reported alongside α̂ (granular_validation.md Part III).
     # ─────────────────────────────────────────────────────────────────────────
     sw = network.sample_weights
     reg_fun = REG_METHOD == :cloglog ? fast_cloglog_regression : fast_weighted_regression
 
-    N_hat    = Int[]
-    clamped  = Symbol[]
-    q_hat    = Float64[]
-    b_logz   = NaN
-    G0       = Float64[]
+    reg_all  = reg_fun(linkages_flat, z_flat, sw;
+                       include_control      = REG_INCLUDE_CONTROL,
+                       include_size_control = REG_INCLUDE_SIZE,
+                       return_size_coef     = REG_INCLUDE_SIZE)
+    reg_coef = reg_all[1:N_REG]
+    # The log-z coefficient is a free over-identifying test (Prop. 1(c): it equals −θ).
+    b_logz   = REG_INCLUDE_SIZE ? reg_all[N_REG + 1] : NaN
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 4b. GRANULAR: profile the variety count, then the count moment — both from q̂
+    #     alone, in CLOSED FORM. No prefix of the draws is taken and no replicated
+    #     economy is simulated (see load_parameters.jl SECTION 9b).
+    #
+    #       q̂_ls   = share of varieties cell l wins SOMEWHERE downstream (Lemma 2:
+    #                free of N_s), i.e. a column mean of linkages_flat;
+    #       N̂_s    = monotone integer bisection on Ḡ_s(n) = mean_l (1 − q̂_ls)^n;
+    #       Ḡ_s(0) = that same closed form evaluated at N̂_s.
+    #
+    #     The closed form IS the expectation of the realised empty-cell share — by
+    #     linearity over cells, the dependence between cells (they share variety
+    #     draws) does not affect the mean — so it is unbiased AND noise-free.
+    # ─────────────────────────────────────────────────────────────────────────
+    N_hat   = Int[]
+    clamped = Symbol[]
+    q_hat   = Float64[]
+    G0      = Float64[]
 
     if GRANULAR
-        # ── The N_s inner loop: q̂ from ALL pooled varieties, then integer bisection
-        n_pool = size(linkages_flat, 1)
+        n_draw = size(linkages_flat, 1)
         q_hat  = Vector{Float64}(undef, n_good)
         @inbounds for g in 1:n_good
             acc = 0.0
-            for rho in 1:n_pool
+            for rho in 1:n_draw
                 acc += linkages_flat[rho, g]
             end
-            q_hat[g] = clamp(acc / n_pool, 0.5 / n_pool, 1.0 - 1e-12)
+            q_hat[g] = clamp(acc / n_draw, 0.5 / n_draw, 1.0 - 1e-12)
         end
         N_hat, clamped = concentrate_N_s(q_hat)
         if N_fixed !== nothing
@@ -1467,52 +1447,18 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
             N_hat = copy(N_fixed)
         end
 
-        # ── Block 4 on the prefix, averaged over the R_REP realised economies ────
-        coef_acc = zeros(N_REG + 1)
-        for rep in 1:R_REP
-            rows, ow = granular_prefix_rows(N_hat, rep)
-            coef_acc .+= reg_fun(linkages_flat, z_flat, sw;
-                                 include_control      = REG_INCLUDE_CONTROL,
-                                 include_size_control = REG_INCLUDE_SIZE,
-                                 rho_range            = rows,
-                                 obs_weight           = ow,
-                                 return_size_coef     = true)
-        end
-        coef_acc ./= R_REP
-        reg_coef = coef_acc[1:N_REG]
-        b_logz   = coef_acc[N_REG + 1]
-
-        # ── Block 6: realised empty-cell share, averaged over replications ───────
-        # K_ls = Σ_{ρ ≤ N̂_s} 1{cell l wins variety ρ somewhere}; Ḡ_s(0) is the share
-        # of cells of sector s with K = 0, over the cells inside active attraction
-        # areas (CELLS_OF_SECTOR) — empty cells included, since those ARE the K = 0
-        # mass (finite_sample2.tex §3.2).
+        # Block 6: Ḡ_s(0) over the cells inside active attraction areas — empty cells
+        # included, since those ARE the K = 0 mass (finite_sample2.tex §3.2).
         G0 = zeros(S)
-        @inbounds for rep in 1:R_REP
-            base = (rep - 1) * N_rho
-            for s in 1:S
-                cells = CELLS_OF_SECTOR[s]
-                isempty(cells) && continue
-                n_zero = 0
-                n_s    = N_hat[s]
-                for g in cells
-                    won = false
-                    for rho in (base + 1):(base + n_s)
-                        if linkages_flat[rho, g] > 0
-                            won = true
-                            break
-                        end
-                    end
-                    won || (n_zero += 1)
-                end
-                G0[s] += n_zero / length(cells)
+        @inbounds for s in 1:S
+            cells = CELLS_OF_SECTOR[s]
+            isempty(cells) && continue
+            acc = 0.0
+            for g in cells
+                acc += (1.0 - q_hat[g])^N_hat[s]
             end
+            G0[s] = acc / length(cells)
         end
-        G0 ./= R_REP
-    else
-        reg_coef = reg_fun(linkages_flat, z_flat, sw;
-                           include_control      = REG_INCLUDE_CONTROL,
-                           include_size_control = REG_INCLUDE_SIZE)
     end
 
 
@@ -1590,10 +1536,14 @@ end
 
 Non-moment granular diagnostics at a parameter vector: the profiled variety count
 `N̂_s`, which sectors clamped at a bound, the win-somewhere probability `q̂` per cell,
-the log-z coefficient (should equal `−θ`), the realised count distribution, and the
-two independent routes to `N_s` (the bisection on `Ḡ_s(0)` versus the closed-form
+the count moment `Ḡ_s(0)`, the log-z coefficient (should equal `−θ`), and the two
+independent routes to `N_s` (the bisection on `Ḡ_s(0)` versus the closed-form
 `N^count_s = N_supplier_s / Σ_l q̂_ls` of `finite_sample2.tex` §3.3 — a free
 over-identifying check, gate V7).
+
+Also returns the expected realised supplier counts `E[K_ls] = N̂_s · q̂_ls` and the
+implied dispersion. Nothing here is simulated on a realised economy: every quantity
+is a closed-form function of `q̂` and `N̂_s` (see load_parameters.jl SECTION 9b).
 
 Recomputed on demand rather than smuggled out of the loss, so nothing about the
 optimiser's return contract changes and no mutable state crosses the `pmap` workers.
@@ -1604,19 +1554,6 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
     network = solve_network(params; u_draws=u_draws, sample_weights=sample_weights)
     m = compute_moments(network, params; N_fixed=N_fixed)
 
-    # Realised supplier counts K_ls, replication by replication.
-    K = zeros(Int, R_REP, n_good)
-    @inbounds for rep in 1:R_REP
-        base = (rep - 1) * N_rho
-        for g in 1:n_good
-            acc = 0
-            for rho in (base + 1):(base + m.N_hat[GOOD_S[g]])
-                network.linkages_flat[rho, g] > 0 && (acc += 1)
-            end
-            K[rep, g] = acc
-        end
-    end
-
     # Second route to N_s (over-identifying check): N^count_s = N_supplier_s / Σ_l q̂_ls.
     N_count = [begin
         cells = CELLS_OF_SECTOR[s]
@@ -1624,21 +1561,11 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
         sq > 0 ? N_HI[s] / sq : NaN
     end for s in 1:S]
 
-    # The CLOSED-FORM count moment the bisection actually targets,
-    # Ḡ_s(N̂) = mean_l (1 − q̂_ls)^{N̂_s}, evaluated at the profiled N̂. Comparing it to
-    # the REALISED empty share `G0` is validation gate V4: they must agree to
-    # Monte-Carlo error. A systematic gap points at the winner accounting, or at a
-    # stratified/QMC draw design making the prefix counts under-dispersed relative to
-    # Binomial(N̂_s, q) — in which case use --draws=mc.
-    G0_closed = [begin
-        cells = CELLS_OF_SECTOR[s]
-        isempty(cells) ? NaN :
-            sum((1.0 - m.q_hat[g])^m.N_hat[s] for g in cells) / length(cells)
-    end for s in 1:S]
+    # Expected supplier count per cell, K_ls ~ Bin(N̂_s, q̂_ls) ⇒ E[K] = N̂_s q̂.
+    EK = [m.N_hat[GOOD_S[g]] * m.q_hat[g] for g in 1:n_good]
 
     return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, b_logz = m.b_logz,
-            G0 = m.G0, G0_closed = G0_closed, G_target = collect(G_TARGET),
-            K = K, N_count = N_count)
+            G0 = m.G0, G_target = collect(G_TARGET), N_count = N_count, EK = EK)
 end
 
 

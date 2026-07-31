@@ -326,20 +326,20 @@ function generate_dashboard_report(
             end
             if granular_info !== nothing
                 println(io, "\n>> Profiled variety count N_s (bisection on G_s(0)): \n")
-                println(io, @sprintf("%-10s %8s %8s %8s %8s %10s %10s",
-                    "sector", "N_LO", "N_hat", "N_HI", "clamp", "G0_closed", "N_count"))
+                println(io, @sprintf("%-10s %8s %8s %8s %8s %10s",
+                    "sector", "N_LO", "N_hat", "N_HI", "clamp", "N_count"))
                 for (k, sec) in enumerate(sectors)
                     k <= length(granular_info.N_hat) || continue
-                    println(io, @sprintf("%-10s %8d %8d %8d %8s %10.4f %10.1f",
+                    println(io, @sprintf("%-10s %8d %8d %8d %8s %10.1f",
                         string(sec), N_LO[k], granular_info.N_hat[k], N_HI[k],
-                        string(granular_info.clamped[k]),
-                        granular_info.G0_closed[k], granular_info.N_count[k]))
+                        string(granular_info.clamped[k]), granular_info.N_count[k]))
                 end
                 println(io, "\n  clamp: :none = interior (good). :lo/:hi = the variety count hit a")
                 println(io, "  bound — a rejection signal for the mechanism, not a numerical nuisance.")
-                println(io, "  G0_closed is the closed-form mean_l (1-q_hat)^N_hat that the bisection")
-                println(io, "  targets; G0 simulated above is the REALISED empty share. A material gap")
-                println(io, "  between them is validation gate V4 (winner accounting / draw design).")
+                println(io, "  Simulated G_s(0) above is the CLOSED FORM mean_l (1-q_hat)^N_hat, which")
+                println(io, "  is the exact expectation of the empty-cell share — unbiased and noise-free.")
+                println(io, "  N_count = N_supplier_s / sum_l q_hat is the independent second route to")
+                println(io, "  N_s (over-identifying check); a large gap is a mechanism finding.")
                 println(io, @sprintf("\n  log z coefficient: %+.4f   (theory: -theta = %+.4f)",
                     granular_info.b_logz, -theta))
             end
@@ -1141,52 +1141,12 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
         println("\n" * "="^72)
         println("GRANULAR DIAGNOSTICS" * (isempty(label) ? "" : "  [$label]"))
         println("="^72)
-        @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s %10s\n",
-                "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_real", "G0_closed",
-                "G0_target", "N^count")
+        @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s\n",
+                "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_fit", "G0_target", "N^count")
         for s in 1:S
-            @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.4f %10.1f\n",
+            @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.1f\n",
                     s, N_LO[s], info.N_hat[s], N_HI[s], string(info.clamped[s]),
-                    isempty(info.G0) ? NaN : info.G0[s], info.G0_closed[s],
-                    G_TARGET[s], info.N_count[s])
-        end
-        # V4 — the closed form the bisection targets vs the REALISED empty share. They
-        # can only agree to Monte-Carlo error, so the yardstick is the MC standard
-        # error of the realised share (≈ √(G(1−G)/(n_cells·R_REP))), not a constant:
-        # a fixed tolerance would fire spuriously at small R_REP and hide a real
-        # problem at large R_REP.
-        if !isempty(info.G0)
-            gaps = abs.(info.G0 .- info.G0_closed)
-            ses  = [begin
-                        nc = length(CELLS_OF_SECTOR[s])
-                        g  = info.G0_closed[s]
-                        nc == 0 ? NaN : sqrt(max(g * (1 - g), 1e-6) / (nc * R_REP))
-                    end for s in 1:S]
-            z    = [isfinite(ses[s]) && ses[s] > 0 ? gaps[s] / ses[s] : NaN for s in 1:S]
-            zmax = maximum(filter(isfinite, z); init = NaN)
-            @printf("\n  V4  max |G0_realised − G0_closed| = %.4f   (max %.1f × MC s.e.)%s\n",
-                    maximum(gaps), zmax, (isfinite(zmax) && zmax > 3) ? "  ← INVESTIGATE" : "")
-            (isfinite(zmax) && zmax > 3) &&
-                println("      Beyond Monte-Carlo error. Points at the winner accounting, or at a " *
-                        "stratified/QMC\n      draw design making prefix counts under-dispersed " *
-                        "vs Binomial(N̂_s, q) — try --draws=mc.")
-        end
-        n_clamp = count(!=(:none), info.clamped)
-        if n_clamp > 0
-            @warn "$n_clamp sector(s) clamped at a variety-count bound. This is a " *
-                  "rejection signal for the mechanism, not a numerical nuisance: :hi " *
-                  "means the model cannot generate enough sparsity even when every " *
-                  "variety is sourced from a single origin."
-        else
-            println("  no sector clamped at a bound (gate V9 passes).")
-        end
-        @printf("\n  log-z coefficient b_logz = %+.4f   (Prop. 1(c): should equal −θ = %+.4f)\n",
-                info.b_logz, -theta_const_for_report())
-        # Realised supplier-count distribution, pooled over replications and cells.
-        Kv = vec(info.K)
-        if !isempty(Kv)
-            @printf("  realised K_ls: mean %.3f  share(K=0) %.4f  max %d\n",
-                    sum(Kv) / length(Kv), count(==(0), Kv) / length(Kv), maximum(Kv))
+                    isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
         end
         println("="^72)
 
@@ -1197,20 +1157,18 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
                           "clamped"  => Float64.([c == :none ? 0.0 : (c == :lo ? -1.0 : 1.0)
                                                   for c in info.clamped]),
                           "G0_fit"   => Float64.(info.G0),
-                          "G0_closed"=> Float64.(info.G0_closed),
                           "G0_target"=> Float64.(collect(G_TARGET)),
                           "N_count"  => Float64.(info.N_count),
                           "q_hat"    => Float64.(info.q_hat),
                           "b_logz"   => [info.b_logz],
-                          "K"        => Float64.(info.K)))
+                          "EK"       => Float64.(info.EK)))
         open(joinpath(output_folder, "granular_diagnostics.txt"), "w") do io
             println(io, "Granular diagnostics", isempty(industry) ? "" : " — $industry",
                         isempty(label) ? "" : " [$label]")
-            println(io, "sector  N_LO  N_hat  N_HI  clamp  G0_real  G0_closed  G0_target  N_count")
+            println(io, "sector  N_LO  N_hat  N_HI  clamp  G0_fit  G0_target  N_count")
             for s in 1:S
                 println(io, "$s  $(N_LO[s])  $(info.N_hat[s])  $(N_HI[s])  $(info.clamped[s])  " *
-                            "$(isempty(info.G0) ? NaN : info.G0[s])  $(info.G0_closed[s])  " *
-                            "$(G_TARGET[s])  $(info.N_count[s])")
+                            "$(isempty(info.G0) ? NaN : info.G0[s])  $(G_TARGET[s])  $(info.N_count[s])")
             end
             println(io, "b_logz = $(info.b_logz)  (should equal -theta)")
         end
@@ -1404,8 +1362,8 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     M_sim_rows = pmap(1:K) do k
         # Σ_sim uses the INFERENCE draw count (N_RHO_INFERENCE), decoupled from the
         # optimization draw count N_rho (full_SMM sizes itself off size(u_draws,1)).
-        # Under GRANULAR the row count stays N_POOL so the (rep, ρ) layout survives.
-        u_k, w_k = inference_draws(k; draw_method=draw_method)
+        u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
+                                  randomise=true, rng=MersenneTwister(k))
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
         return moments_to_vec(moms)[gb_indices]
     end
@@ -1712,8 +1670,9 @@ function compute_jacobian(theta::Vector{Float64};
         else
             # Jacobian replications use the INFERENCE draw count (N_RHO_INFERENCE),
             # decoupled from the optimization N_rho (full_SMM sizes off size(u_draws,1)).
-            # Under GRANULAR the pool width N_POOL is kept instead (prefix layout).
-            u_k, w_k = inference_draws(base_seed + k; draw_method=draw_method)
+            u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
+                                                 randomise = true,
+                                                 rng       = MersenneTwister(base_seed + k))
             eval_one = p -> begin
                 # Under profiling, reconstruct T = T*(α,Ω,A) before evaluating, so a
                 # perturbation of α/head moves T accordingly (total derivative).

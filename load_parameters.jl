@@ -200,16 +200,14 @@ end
 @everywhere const N_HI     = $N_HI_local
 
 
-# ── N_rho: varieties (draws) per sector ─────────────────────────────────────
-# Continuum: the number of Monte-Carlo/QMC draws integrating over the variety
-# continuum. GRANULAR: the width of ONE replication's variety block — it must cover
-# the largest candidate N_s, so it is pinned to maximum(N_HI). Same object, same
-# name: a realised economy uses the PREFIX ρ ≤ N̂_s of those N_rho draws.
-n_rho_local = granular_local ? maximum(N_HI_local) : 1000
+# ── N_rho: draws per (sector, cell) ─────────────────────────────────────────
+# The number of Monte-Carlo/QMC draws integrating over the variety continuum, in
+# BOTH modes. Under GRANULAR it additionally sets the precision of `q̂` and hence of
+# the profiled `N̂_s`; it is NOT tied to N_HI, because no prefix of the draws is ever
+# taken (see SECTION 9b).
+n_rho_local = 1000
 @everywhere const N_rho = $(n_rho_local)
-println("\n N_rho = $n_rho_local — " *
-        (granular_local ? "varieties per sector per replication (= maximum(N_HI))" :
-                          "Entreprise par secteur x region"))
+println("\n N_rho = $n_rho_local — Entreprise par secteur x region")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 3 — EMPIRICAL SOURCING SHARES
@@ -751,57 +749,39 @@ n_rho_inference_local = (@isdefined(n_rho_inference)) ? n_rho_inference : N_rho
 println("\n N_rho (optimization) = $N_rho ; N_RHO_INFERENCE (Jacobian + Σ_sim) = $N_RHO_INFERENCE")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 9b — GRANULAR DRAW POOL (plan §4, D1)
-# One realised granular economy = N̂_s varieties per sector. The winner of a variety
-# is the argmin over cells of THAT VARIETY'S OWN draws, so it does not depend on how
-# many varieties exist: a single Ricardian solve at POOL width serves every candidate
-# N_s as a prefix — q̂ is a column mean over the whole pool, the realised counts are
-# prefix row-sums, and the R_REP economies are prefixes of the same pool. No re-solve,
-# no re-drawing, and prefixes give common random numbers across N_s candidates and
-# across θ, which is what keeps the outer optimiser usable.
+# SECTION 9b — WHY GRANULARITY NEEDS NO SEPARATE DRAW STRUCTURE
 #
-# The pool is stored FLAT as a (R_REP·N_rho, n_good) matrix so `solve_network` needs
-# no signature change (it already sizes off `size(u_draws, 1)`). Row layout:
-#     row(rep, ρ) = (rep − 1)·N_rho + ρ,     rep ∈ 1:R_REP,  ρ ∈ 1:N_rho
-# The value block is computed over ALL pooled rows — the certainty-equivalent price
-# index of D2, with the self-normalised 1/(R_REP·N_rho) weights implementing the
-# love-of-variety normalisation (finite_sample2.tex App. B).
+# Under the profiled design the ONLY things the variety count touches are:
+#   * the count moment  G_s(0) = mean_l (1 - qhat_ls)^{Nhat_s}  -- CLOSED FORM, and
+#   * Nhat_s itself, located by a monotone integer bisection on that closed form.
 #
-# The sampler is DRAW_METHOD, the same one the continuum path uses — there is no
-# separate granular sampler. One caveat worth knowing rather than configuring around:
-# a realised economy's counts are Binomial(N̂_s, q_ls), and a stratified/QMC design
-# across ρ makes the prefix counts slightly UNDER-dispersed relative to that binomial,
-# which touches the realised block-6 empty share. The closed-form Ḡ_s(n) driving the
-# N_s bisection is built from the pooled q̂ and is unaffected. `report_granular` prints
-# the realised Ḡ_s(0) against that closed form every run (validation gate V4): if they
-# separate materially, the QMC design is doing it — switch --draws=mc.
+# Both are functions of `qhat` alone, and `qhat_ls` -- the probability that cell l
+# wins a given variety SOMEWHERE downstream -- is free of N_s (finite_sample2.tex,
+# Lemma 2) and is just a column mean of `linkages_flat` over the ordinary draws. So:
+#
+#   * NO prefix of the draws is ever taken,
+#   * NO replicated economy is ever simulated,
+#   * every moment is computed ONCE, on the same draws, exactly as in the continuum.
+#
+# Simulation noise is therefore handled UNIFORMLY across all moment blocks by the
+# draw design (DRAW_METHOD, :sobol by default) and by N_rho -- not by a replication
+# device special-cased to one block. N_rho keeps its usual meaning and value; note
+# only that it now also sets the precision of qhat, hence of Nhat_s
+# (s.e.(qhat) ~ sqrt(q(1-q)/N_rho) before the QMC gain), so it is worth raising
+# under GRANULAR if the count moment looks noisy.
+#
+# The price of this design is that block 4 is the CONTINUUM-limit regression
+# beta(E[y]) rather than E[betahat(N_s)], so the auxiliary estimator's finite-sample
+# bias is no longer cancelled by matching a binding function. It is measured by
+# validation gate V12 (2-4% of beta in data-consistent configurations) and should be
+# reported alongside alphahat, or added as a local offset -- see
+# documentation/granular_validation.md Part III.
+# ═══════════════════════════════════════════════════════════════════════════
 
-# R_REP replications, never N_rho = N_s: the value block is a numerical integral while
-# the variety count is a structural parameter, so granularity holds exactly N̂_s WITHIN
-# a replication and the value block averages over all R_REP × N_rho draws. The
-# dispersion of β̂ across realised economies is ~0.16–0.18 in data-matching
-# configurations, so R_REP ≈ 300 gives an MC standard error of ~0.010 on block 4.
-r_rep_local = (@isdefined(n_rep)) ? Int(n_rep) : 300
-@assert r_rep_local >= 1 "n_rep (R_REP) must be ≥ 1, got $r_rep_local"
-@everywhere const R_REP  = $(granular_local ? r_rep_local : 0)
-@everywhere const N_POOL = $(granular_local ? r_rep_local * n_rho_local : 0)
-
-if granular_local
-    @printf("\nGranular draw pool: R_REP=%d replications × N_rho=%d varieties = %d rows × %d cells\n",
-            r_rep_local, n_rho_local, r_rep_local * n_rho_local, n_good_local)
-    @printf("  method = :%s ; ≈%.2f GB per (R_REP·N_rho × n_good) Float64 array — solve_network\n",
-            draw_method_local, r_rep_local * n_rho_local * n_good_local * 8 / 2^30)
-    println("  holds several of these (z, z^-1, linkages); lower --n_rep if memory binds.")
-end
 println("Generating draws (method = :$DRAW_METHOD)...")
-u_draws_local, sample_weights_local =
-    generate_draws(granular_local ? r_rep_local * n_rho_local : N_rho, n_good_local, DRAW_METHOD)
-# U_DRAWS IS the pool under GRANULAR (row layout (rep−1)·N_rho + ρ), so every existing
-# `u_draws = U_DRAWS` call site keeps working unchanged.
+u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, DRAW_METHOD)
 @everywhere const U_DRAWS        = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
-@everywhere const U_POOL         = $(granular_local ? u_draws_local : Matrix{Float64}(undef, 0, 0))
-@everywhere const POOL_WEIGHTS   = $(granular_local ? sample_weights_local : Matrix{Float64}(undef, 0, 0))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 10 — DISTANCE / GEOGRAPHY PRECOMPUTATION

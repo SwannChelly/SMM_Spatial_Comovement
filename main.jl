@@ -117,9 +117,6 @@ granular = length(ARGS) >= 11 && !isempty(strip(ARGS[11])) ?
 # 12th positional arg (run.sh --ca_level=ze|aa), default :ze.
 ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :ze
 @assert ca_level in (:ze, :aa) "ca_level must be ze|aa, got :$ca_level"
-# 13th positional arg (run.sh --n_rep=N): replications per granular loss evaluation.
-n_rep = length(ARGS) >= 13 && !isempty(strip(ARGS[13])) ? parse(Int, strip(ARGS[13])) : 300
-@assert n_rep >= 1 "n_rep must be ≥ 1, got $n_rep"
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
@@ -134,7 +131,7 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control | granular: $granular | ca_level: :$ca_level" * (granular ? " | n_rep: $n_rep" : ""))
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control | granular: $granular | ca_level: :$ca_level")
 
 input_folder  = "./baseline_$industry"
 # profile_T ⇒ isolate all step1..4 artifacts under a distinct tree (plan §6), so the

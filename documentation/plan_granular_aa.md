@@ -1,5 +1,27 @@
 # Implementation plan — granular varieties + comparative advantage at the attraction-area level
 
+> **IMPLEMENTATION NOTE (deviation from this plan, agreed after review).**
+> D1's `R_rep` replication design was **not** kept. In the implemented estimator the
+> variety count touches only two things, and both are CLOSED FORM in `q̂`: the count
+> moment `Ḡ_s(0) = mean_l (1−q̂_ls)^{N̂_s}` and `N̂_s` itself. Since `q̂` is free of
+> `N_s` (Lemma 2) and block 4 carries no `N_s` term (Prop. 1), **no prefix of the
+> draws is ever taken and no replicated economy is ever simulated** — every moment is
+> computed once, on the same draws, exactly as in the continuum. Simulation noise is
+> handled uniformly across all blocks by the draw design (`--draws=sobol`) rather than
+> by a replication device special-cased to block 4.
+>
+> Consequences: `R_rep` / `--n_rep`, `N_BLOCK` (it is `N_rho`), `U_POOL` and the
+> prefix helpers do not exist; gates **V4** and **V5** are vacuous and retired; **V10**
+> becomes an exact structural assertion rather than an approximate one. The price is
+> that block 4 is the continuum-limit `β(E[y])` rather than `E[β̂(N_s)]`, so the
+> auxiliary cloglog's finite-sample bias is no longer cancelled by matching a binding
+> function — it is measured by gate **V12** and reported with `α̂`, or added as a local
+> offset (`granular_validation.md` Part III). Granular estimation therefore costs the
+> same as the continuum model.
+>
+> The rest of the plan below is implemented as written. See the CLAUDE.md changelog.
+
+
 What to build. The model is in `documentation/finite_sample2.tex`; the validation gates and the
 open assumptions are in `documentation/granular_validation.md` and are **not** part of this
 implementation.

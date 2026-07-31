@@ -99,7 +99,7 @@ julia test/test_granular_aa.jl aero 4 1 true  aa      # granular + AA
 julia test/test_granular_aa.jl aero 4 1 false ze      # legacy reference
 ```
 
-Args: `industry n_coef n_tau granular ca_level [n_rep]`.
+Args: `industry n_coef n_tau granular ca_level`.
 
 **Enforced gates** (a failure means the implementation or the inputs are wrong):
 
@@ -114,30 +114,24 @@ Args: `industry n_coef n_tau granular ca_level [n_rep]`.
   recovers a planted integer exactly; the clamps fire at both bounds.
 * **V3 — AA-level Sinkhorn.** Round-trip recovery of a planted `T` from its own area
   aggregates (~1e−13 in practice), mirroring `test_ge_inversion.jl`.
-* **V5 — prefix stability.** The winners of the first `n` varieties are identical whether the
-  Ricardian solve runs at width `n` or at pool width. This is the property that licenses ONE
-  solve per replication (plan D1); without it every candidate `N_s` would need its own solve.
 * **`Ḡ_s(0)` monotone in `N_s`** — the property the bisection relies on.
+* **V10 — `N_s`-invariance of block 4.** Structural, not statistical: block 4 is computed once
+  on the ordinary draws and `N̂_s` never enters it, so `reg_coef` must be **exactly** invariant.
+  The gate confirms the code path really is `N_s`-free.
 
 **Reported diagnostics** (informative, not implementation bugs):
 
 * **V6 — firm ↔ champion.** `b_logz` against `−θ` (Prop. 1(c)). A large gap calls for
   `granular_validation.md` §A.2 option 2.
-* **V4 — closed form vs realised.** `report_granular` (and `report.txt`) print the closed-form
-  `Ḡ_s(N̂) = mean_l (1−q̂)^{N̂}` the bisection targets beside the REALISED empty share. A
-  material gap points at the winner accounting, or at a stratified/QMC draw design making the
-  prefix counts under-dispersed relative to `Binomial(N̂_s, q)` — in which case use `--draws=mc`.
 * **V7 — two routes to `N_s`.** `N̂_s` from `Ḡ_s(0)` against `N^count_s = N_supplier_s / Σ_l q̂`.
   A large gap is a mechanism finding, not a bug.
 * **V9 — bounds not binding.** A persistent clamp is a rejection signal for the mechanism:
   `:hi` means the model cannot generate enough sparsity even when every variety is sourced
   from a single origin.
-* **V10 — `N_s`-invariance of block 4.** `reg_coef` drift between `N̂` and `2N̂` should be ~0,
-  since the firm-level index carries no `N_s` term. A visible drift means the union-over-buyers
-  approximation or the firm mapping is doing something unintended — or that `R_REP` is too
-  small for the binding-function average to have settled.
+(V4 and V5 no longer apply: the count moment is the closed form, so there is nothing realised
+to compare against, and no prefix of the draws is ever taken, so there is nothing to be stable.)
 
-Gates needing a fitted `θ̂` or an external reference (V0, V4, V8, V11, V12, V13) are not run
+Gates needing a fitted `θ̂` or an external reference (V0, V8, V11, V12, V13) are not run
 here; see `granular_validation.md`.
 
 **Status.** Purely diagnostic — it changes no estimate, weight matrix, or production file.

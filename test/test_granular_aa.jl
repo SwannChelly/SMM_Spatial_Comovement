@@ -8,7 +8,7 @@
 #     julia test/test_granular_aa.jl aero 4 1 true aa      # granular + AA
 #     julia test/test_granular_aa.jl aero 4 1 false ze      # legacy reference
 #
-# Args: industry n_coef n_tau granular ca_level [n_rep]
+# Args: industry n_coef n_tau granular ca_level
 #
 # Gates run here (the numbering follows granular_validation.md Part II):
 #
@@ -25,17 +25,17 @@
 #        recovers a planted integer exactly; clamps fire at both bounds.
 #   V3   AA-level Sinkhorn — round-trip recovery of a planted T from its own area
 #        aggregates, mirroring test/test_ge_inversion.jl.
-#   V5   Prefix stability — the winners of the first n varieties are identical
-#        whether the Ricardian solve runs at width n or at pool width. This is what
-#        licenses ONE solve per replication (plan D1).
-#   V4   Closed form vs simulation — the closed-form Ḡ_s(N̂) the bisection targets against
-#        the realised empty share (printed by report_granular / report.txt).
 #   V6   Firm ↔ champion — the log-z coefficient against −θ (Prop. 1(c)).
 #   V7   Two routes to N_s — N̂_s from Ḡ_s(0) against N^count_s = N_supplier_s / Σ_l q̂.
 #        A large gap is a mechanism finding, not a bug.
 #   V9   Bounds not binding — clamped == :none for every sector.
-#   V10  N_s-invariance of block 4 — the firm-level index contains no N_s term, so
-#        reg_coef should barely move between N̂ and 2N̂.
+#   V10  N_s-invariance of block 4 — asserted STRUCTURALLY here rather than measured:
+#        block 4 is computed once on the ordinary draws and N̂_s never enters it, so the
+#        moment is exactly invariant by construction (Prop. 1). The check below confirms
+#        the code path really is N_s-free.
+#
+# V4 and V5 no longer apply: the count moment is the CLOSED FORM (nothing realised to
+# compare against) and no prefix of the draws is ever taken (nothing to be stable).
 #
 # Gates needing a fitted θ̂ or an external reference (V0, V8, V11, V12, V13) are NOT run
 # here; see granular_validation.md.
@@ -54,7 +54,6 @@ n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 granular = length(ARGS) >= 4 ? (lowercase(strip(ARGS[4])) in ("true","1","yes")) : true
 ca_level = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :aa
-n_rep    = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? parse(Int, ARGS[6]) : 20
 K_sim    = 10000   # unused here; load_parameters.jl may reference it
 reg_method = :cloglog
 
@@ -68,8 +67,8 @@ include("../profiling.jl")
 
 println("\n" * "="^72)
 println("GRANULAR / ATTRACTION-AREA VALIDATION GATES")
-@printf("  industry=%s  N_REG=%d  N_TAU=%d  GRANULAR=%s  CA_LEVEL=:%s  R_REP=%d\n",
-        industry, N_REG, N_TAU, GRANULAR, CA_LEVEL, R_REP)
+@printf("  industry=%s  N_REG=%d  N_TAU=%d  GRANULAR=%s  CA_LEVEL=:%s  N_rho=%d\n",
+        industry, N_REG, N_TAU, GRANULAR, CA_LEVEL, N_rho)
 @printf("  cells=%d  T columns=%d  moments=%d  blocks=%d\n",
         n_good, count(T_MASK), length(empirical_moments), N_BLOCKS)
 println("="^72)
@@ -222,34 +221,18 @@ end
 # ═══════════════════════════════════════════════════════════════════════════
 # V5 — prefix stability (the property that licenses ONE solve per replication)
 # ═══════════════════════════════════════════════════════════════════════════
-println("\n── V5  prefix stability ─────────────────────────────────────────────")
-let
-    net_pool = solve_network(θ0; u_draws=U_POOL, sample_weights=POOL_WEIGHTS)
-    n    = min(17, size(U_POOL, 1))
-    Usub = U_POOL[1:n, :]
-    Wsub = fill(1.0 / n, n, n_good)
-    net_sub = solve_network(θ0; u_draws=Usub, sample_weights=Wsub)
-    ok = net_sub.linkages_flat == net_pool.linkages_flat[1:n, :]
-    @printf("  winners for the first %d varieties identical at width %d vs pool width %d : %s\n",
-            n, n, size(U_POOL, 1), ok ? "PASS" : "FAIL")
-    ok || println("    ⚠ without this, the prefix arithmetic of plan D1 is invalid and every " *
-                  "candidate N_s would need its own Ricardian solve.")
-    record!("V5", ok)
-end
-
 # ═══════════════════════════════════════════════════════════════════════════
 # V6 / V7 / V9 / V10 — the fitted-model diagnostics
 # ═══════════════════════════════════════════════════════════════════════════
 println("\n── V6 / V7 / V9 / V10  granular diagnostics at θ ────────────────────")
 let
     info = granular_report(θ0)
-    @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s %10s\n",
-            "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_real", "G0_closed", "G0_target", "N^count")
+    @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s\n",
+            "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_fit", "G0_target", "N^count")
     for s in 1:S
-        @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.4f %10.1f\n",
+        @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.1f\n",
                 s, N_LO[s], info.N_hat[s], N_HI[s], string(info.clamped[s]),
-                isempty(info.G0) ? NaN : info.G0[s], info.G0_closed[s],
-                G_TARGET[s], info.N_count[s])
+                isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
     end
 
     # V9 — a persistent clamp is a rejection signal for the mechanism.
@@ -258,26 +241,6 @@ let
     v9 || println("      ⚠ :hi means the model cannot generate enough sparsity even when every " *
                   "variety is sourced from a single origin — a rejection signal, not a nuisance.")
     record!("V9", v9)
-
-    # V4 — the closed form vs the realised empty share, in units of the MONTE-CARLO
-    # standard error of the realised share (a fixed tolerance would fire spuriously at
-    # small R_REP and hide a real problem at large R_REP).
-    if !isempty(info.G0)
-        gaps = abs.(info.G0 .- info.G0_closed)
-        z = [begin
-                 nc = length(CELLS_OF_SECTOR[s]); g = info.G0_closed[s]
-                 se = nc == 0 ? NaN : sqrt(max(g * (1 - g), 1e-6) / (nc * R_REP))
-                 (isfinite(se) && se > 0) ? gaps[s] / se : NaN
-             end for s in 1:S]
-        zmax = maximum(filter(isfinite, z); init = NaN)
-        v4 = !isfinite(zmax) || zmax <= 3
-        @printf("  V4  max |G0_realised − G0_closed| = %.4f  (max %.1f × MC s.e.) : %s\n",
-                maximum(gaps), zmax, v4 ? "PASS" : "REPORT")
-        println("      (beyond MC error points at the winner accounting, or at a stratified/QMC " *
-                "draw\n      design making prefix counts under-dispersed vs Binomial(N̂_s, q) — " *
-                "try --draws=mc.)")
-        record!("V4", v4, "reported")
-    end
 
     # V6 — the log-z coefficient is a free over-identifying test (Prop. 1(c)).
     v6 = isfinite(info.b_logz) && abs(info.b_logz + theta) < 0.30 * max(theta, 1e-8)
@@ -296,19 +259,19 @@ let
     println("      (a large gap is a mechanism finding, not a bug.)")
     record!("V7", v7, "reported")
 
-    # V10 — block 4 carries no N_s term (Prop. 1), so reg_coef should barely move.
-    _, sim1 = full_SMM(θ0; u_draws=U_POOL, sample_weights=POOL_WEIGHTS)
-    N2 = [min(2 * n, N_rho) for n in info.N_hat]
-    _, sim2 = full_SMM(θ0; u_draws=U_POOL, sample_weights=POOL_WEIGHTS, N_fixed=N2)
-    drift = maximum(abs.(vec(sim2[4]) .- vec(sim1[4])) ./ (abs.(vec(sim1[4])) .+ 1e-10))
-    v10 = drift < 0.10
-    @printf("  V10 reg_coef drift from N̂ to 2N̂ = %.3f : %s\n", drift, v10 ? "PASS" : "REPORT")
-    @printf("      reg_coef(N̂)  = %s\n", string(round.(vec(sim1[4]), digits=4)))
-    @printf("      reg_coef(2N̂) = %s\n", string(round.(vec(sim2[4]), digits=4)))
-    println("      (should be ~0: the firm-level index contains no N_s term. A visible drift " *
-            "means the union-over-buyers approximation or the firm mapping is doing something " *
-            "unintended — or R_REP is too small for the binding-function average to settle.)")
-    record!("V10", v10, "reported")
+    # V10 — block 4 carries no N_s term (Prop. 1). Under this design that is exact by
+    # construction, not approximate: the regression runs once on the ordinary draws and
+    # N̂_s never enters it. Confirm the code path really is N_s-free.
+    _, sim1 = full_SMM(θ0; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+    N2 = [min(2 * n, 10^6) for n in info.N_hat]
+    _, sim2 = full_SMM(θ0; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS, N_fixed=N2)
+    drift = maximum(abs.(vec(sim2[4]) .- vec(sim1[4])))
+    v10 = drift == 0.0
+    @printf("  V10 |reg_coef(N̂) − reg_coef(2N̂)| = %.3e : %s  (must be EXACTLY 0)\n",
+            drift, v10 ? "PASS" : "FAIL")
+    v10 || println("      ⚠ block 4 moved with N̂_s — it must not: the regression is run once on " *
+                   "the\n      ordinary draws and the variety count never enters it.")
+    record!("V10", v10)
 
     # Ḡ_s(0) must be decreasing in N_s — the property the bisection relies on.
     if !isempty(sim1[6]) && !isempty(sim2[6])
