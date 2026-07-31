@@ -19,7 +19,9 @@ modelling changes:
 
 **`--granular=false --ca_level=ze` is the full EK model as it stands today.** It must be a
 supported configuration, not a historical curiosity: no dead code paths, no silent behaviour
-change, and it is the first thing to check after every commit.
+change, and it is the first thing to check after every commit. For now only the two diagonal
+configurations are exercised — `(false, ze)` and `(true, aa)` — and the Σ selection follows
+accordingly (§2).
 
 Design rules that follow:
 
@@ -196,14 +198,23 @@ Two rules, both easy to get wrong.
    model :  γ_aa[a,s] = Σ_{l : AA_OF_ZE[l]==a, CELL_MASK[s,l]} γ_model[l,s]
    data  :  emp_gamma_aa[a,s] = Σ_{l : AA_OF_ZE[l]==a, CELL_MASK[s,l]} emp_gamma_ls[l,s]
    ```
-   Control cells contribute `0` on the data side and a strictly positive `γ` on the model side —
-   and that is correct, not a mismatch: `E[γ̂_ls] = γ_ls` holds unconditionally, so the realised
-   zero is an unbiased draw of the model's positive share. Excluding them from the model sum would
-   bias the aggregate downward. Assert `emp_gamma_ls == 0` wherever `!CELL_MASK`.
+   Control cells contribute `0` on the data side and a strictly positive `γ` on the model side.
+   That is the correct treatment, not a mismatch: **the data are one realisation of the model**, so
+   a control cell has `E[γ_ls] > 0` while its realised draw happens to be `0`, and
+   `E[γ̂_ls] = γ_ls` holds unconditionally. Excluding those cells from the model sum would bias the
+   aggregate downward — it would compare the model's conditional-on-activity aggregate with the
+   data's unconditional one. Assert `emp_gamma_ls == 0` wherever `!CELL_MASK`.
 
 ### Σ files
 
-Eight files; the AA variant is a **prefix**, not a suffix:
+Eight files, all of them carrying **three blocks in the order β → γ → G**, with `S` rows of
+`G_s(0)`. On disk the dimension is therefore always
+
+```
+size(Σ) = (N_REG + n_γ + S)²          n_γ = ZE-level or AA-level depending on the file
+```
+
+The AA variant is a **prefix**, not a suffix:
 
 | level | link | `N_REG` | file |
 |---|---|---|---|
@@ -216,7 +227,7 @@ Eight files; the AA variant is a **prefix**, not a suffix:
 | AA × S | cloglog | >1 | `Sigma_aa_beta_gamma_cloglog_f.npy` |
 | AA × S | cloglog | 1 | `Sigma_aa_beta_gamma_cloglog_1_f.npy` |
 
-so `sigma_beta_gamma_filename` becomes
+so
 
 ```julia
 function sigma_beta_gamma_filename(; smm::Bool, aa::Bool = (CA_LEVEL == :aa))
@@ -228,13 +239,35 @@ function sigma_beta_gamma_filename(; smm::Bool, aa::Bool = (CA_LEVEL == :aa))
 end
 ```
 
-verified to reproduce all eight names. Both call sites (`tools.jl:1140`, `main_gmm.jl:140`) get the
-`aa` keyword by default from `CA_LEVEL`.
+verified to reproduce all eight names. Both call sites (`tools.jl:1140`, `main_gmm.jl:140`) take
+the `aa` keyword by default from `CA_LEVEL`.
 
-**The file names carry no marker of whether the `G` rows are present.** Ordering is β → γ → G,
-`S` rows of `G_s(0)`, but `reconcile_sigma_data` must branch on the **observed dimension**:
-`N_REG + n_γ` in legacy mode, `N_REG + n_γ + S` in granular mode. Error loudly on any third size
-rather than guessing.
+**Selection and reduction — the operative rule.**
+
+| mode | file | blocks kept |
+|---|---|---|
+| `--granular=false` | **ZE**-level (`Sigma_beta_gamma*`) | `reg_coef` + `γ` — the `G` rows and columns are **dropped** |
+| `--granular=true` | **AA**-level (`Sigma_aa_beta_gamma*`) | `reg_coef` + `γ` + `G_s(0)` — all three |
+
+Since the file layout is fixed, the reduction is a leading-block slice, not a search:
+
+```julia
+n_G          = S
+n_gamma_file = size(Σ, 1) - N_REG - n_G
+@assert n_gamma_file > 0  "Σ must carry N_REG + n_γ + S rows (β → γ → G)"
+keep = GRANULAR ? (1:size(Σ,1)) : (1:(N_REG + n_gamma_file))
+Σ    = Σ[keep, keep]
+```
+
+Order of operations in `reconcile_sigma_data`: load the file for the current level, split into
+β / γ / G, reconcile **the γ block only** against the active set, then reassemble — keeping `G`
+only under `--granular`. The `G` rows are never pruned.
+
+**For now the two flags move together.** The supported configurations are
+`(--granular=false, --ca_level=ze)` — the current model — and
+`(--granular=true, --ca_level=aa)`. The flags stay separate in the code because the γ level is
+what semantically drives the Σ file (its γ rows must match the γ moments), but the cross
+combinations are not exercised: warn if one is requested.
 
 ### `G_K.csv`
 
@@ -265,7 +298,8 @@ counts vary by orders of magnitude. v1 accepts the mismatch; see `granular_valid
 | 5 | `gamma_ls` | active (s,ZE) − ref, or (s,AA) − ref under `--ca_level=aa` | same |
 | 6 | `G0` | **absent** | `S` entries |
 
-Σ ordering **β → γ → G**, extending the existing `gb_indices` invariant.
+Σ ordering **β → γ → G**, extending the existing `gb_indices` invariant. The file always carries
+all three blocks; the legacy mode slices off the `G` rows and columns (§2).
 
 ---
 
@@ -426,9 +460,9 @@ constant with probability one — and assert that no perturbation moved it.
 
 * `sigma_beta_gamma_filename(; smm, aa)` → `Sigma_aa_` **prefix** when `CA_LEVEL == :aa` (§2);
   both call sites (`tools.jl:1140`, `main_gmm.jl:140`) take the default from `CA_LEVEL`.
-* `reconcile_sigma_data`: reconcile at the AA level under `:aa`; branch on the **observed Σ
-  dimension** (`N_REG + n_γ` vs `+ S`) to detect the `G` rows, since the file name does not say;
-  `G0` rows never pruned.
+* `reconcile_sigma_data`: split β / γ / G on the fixed layout (`n_γ = size(Σ,1) − N_REG − S`),
+  reconcile the **γ block only** against the active set — at the AA level under `:aa` — then
+  reassemble, dropping the `G` rows and columns when `!GRANULAR` (§2). `G` rows are never pruned.
 * `build_step3_weight_matrix`: `gb_indices` gains `BLOCK_RANGES[6]` when `GRANULAR`.
 * `compute_jacobian`: `hold_N_s` kwarg and the "no perturbation moved `N̂_s`" assertion.
 * `compute_smm_inference`: report `N̂_s` value-only.

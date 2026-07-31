@@ -79,6 +79,7 @@ nothing before any modelling change is switched on.
 |---|---|---|---|
 | **V0** | **Legacy reproduction** | `--granular=false --ca_level=ze` reproduces the current estimates | identical moment vector and loss to floating-point noise; this is the constraint the whole implementation is built around |
 | **V1** | AA map | `attraction_area_linkages.npy`: shape `(R, R_downstream)`, rows sum to 1, and `argmax_col(·) == CLOSEST_DOWNSTREAM_REGION` | exact, **asserted at load time** — a mismatch means the model's fixed effect and the empirical one are different partitions |
+| **V1a** | Σ layout | every Σ file has `size = N_REG + n_γ + S`; legacy mode slices to the leading `N_REG + n_γ` block; granular keeps all three | assert on load — a wrong size means the file was regenerated with a different block set |
 | **V1b** | Filter containment | every cell with `filter_N_upstream == 1` lies in an attraction area active in its own sector | if it fires, the filter is broader than `𝒜⁺`; intersect and warn rather than proceed |
 | **V2** | `N_s` root-find | on synthetic `q̂`: `G(s,·)` monotone decreasing; bisection recovers a planted integer; clamps fire at both bounds | exact integer recovery |
 | **V3** | AA-level Sinkhorn | round-trip recovery of a planted `T_aa` from its own area aggregates | ~1e−8, mirroring `test/test_ge_inversion.jl` |

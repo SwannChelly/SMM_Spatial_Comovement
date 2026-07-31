@@ -117,7 +117,7 @@ T SEs run ~`c_s` too tight. For exact inference regenerate the Σ file with the 
 
 | File | Shape | Content |
 |---|---|---|
-| `[Sigma_aa_]Sigma_beta_gamma[_cloglog][_1][_f].npy` | `(N_REG + n_γ)²` | joint bootstrap covariance of β+γ moments, **β block first**. Selected by `sigma_beta_gamma_filename` on `REG_METHOD`, `N_REG==1`, entry point (`_f` = SMM) and γ level (`Sigma_aa_` **prefix** = attraction-area γ) |
+| `[Sigma_aa_]Sigma_beta_gamma[_cloglog][_1][_f].npy` | `(N_REG + n_γ + S)²` | joint bootstrap covariance, blocks **β → γ → G**, `S` rows of `G_s(0)`. Selected by `sigma_beta_gamma_filename` on `REG_METHOD`, `N_REG==1`, entry point (`_f` = SMM) and γ level (`Sigma_aa_` **prefix** = attraction-area γ). Non-granular runs slice off the `G` block |
 | `w_beta.npy` / `w_gamma.npy` | `(N_REG)²` / `(n_γ)²` | block-diagonal fallback |
 | `X_rs.npy` | `(S, R)` | drives `T_MASK` and the Σ reconciliation |
 | `filter_N_upstream.npy` | `(S, R)` | binary: 1 = cell enters the optimisation, 0 = out. Supplier cell ⟺ `filter==1 & X_rs>0`; control cell ⟺ `filter==1 & X_rs==0` |
