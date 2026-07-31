@@ -12,11 +12,12 @@ time, and the assumptions whose cost has been measured but not removed.
 
 **What is assumed.** The variety count is located by a closed-form root-find on the count moment
 (`plan_granular_aa.md` D5) while the value block — labour share, `π_s`, `π_r`, the sourcing shares
-— is computed at the **certainty-equivalent** price index, i.e. from the pooled draws rather than
-from the `N̂_s` prefix. Downstream firms optimise against `E[P^{1−ν_s}]^{1/(1−ν_s)}`, neglecting
+— is computed at the **certainty-equivalent** price index, i.e. from the full draw set rather than
+from a realised economy of `N̂_s` varieties. Downstream firms optimise against `E[P^{1−ν_s}]^{1/(1−ν_s)}`, neglecting
 granular price randomness.
 
-**Why it is needed.** If the realised prefix price index drove the general equilibrium, `N_s`
+**Why it is needed.** If the price index of a realised `N̂_s`-variety economy drove the general
+equilibrium, `N_s`
 would enter every value moment, the closed-form inner loop would no longer be the profiled
 optimum, and `N_s` would have to be searched on the full loss.
 
@@ -83,56 +84,62 @@ nothing before any modelling change is switched on.
 | **V1b** | Filter containment | every cell with `filter_N_upstream == 1` lies in an attraction area active in its own sector | if it fires, the filter is broader than `𝒜⁺`; intersect and warn rather than proceed |
 | **V2** | `N_s` root-find | on synthetic `q̂`: `G(s,·)` monotone decreasing; bisection recovers a planted integer; clamps fire at both bounds | exact integer recovery |
 | **V3** | AA-level Sinkhorn | round-trip recovery of a planted `T_aa` from its own area aggregates | ~1e−8, mirroring `test/test_ge_inversion.jl` |
-| **V4** | Closed form vs simulation | at `θ̂`, `G(s, N̂_s)` from `q̂` against the realised empty share | agree to Monte-Carlo error; a gap points at a bug in the winner accounting |
-| **V5** | Prefix stability | winners for the first `n` varieties are identical whether the solve is run at width `n` or at pool width | exact — this is what licenses one solve per replication |
 | **V6** | Firm↔champion mapping | distribution of model `log z` (champions) against the empirical firms' `log z`; and `b_logz ≈ −θ = −1.0` on **both** | report the overlap and the coefficient; a large gap invalidates the coefficient comparison and calls for A.2 option 2 |
 | **V7** | Two routes to `N_s` | `N̂_s` from `G_s(0)` against `N^count_s = N_supplier_s / Σ_l q̂_ls` | same order of magnitude; a large gap is a mechanism finding, not a bug |
 | **V8** | Whole count curve | simulated `G_s(K)` for `K ≥ 1` against `G_K.csv` (only `K=0` is targeted) | reported max deviation — a genuinely untargeted fit check |
 | **V9** | Bounds not binding | `clamped == :none` for every sector at the optimum | a persistent clamp is a rejection signal for the mechanism, not a numerical nuisance |
-| **V10** | `N_s`-invariance of block 4 | drift of `reg_coef` across `N_s` at `θ̂` | should be ~0: the firm-level index contains no `N_s` term. A visible drift means the union-over-buyers approximation or the firm mapping is doing something unintended |
-| **V11** | **Value-block sensitivity (tests A.1)** | recompute `π_s`, `π_r`, labour share at `N̂_s` and `2N̂_s` under the *realised* prefix price index | quantifies exactly what A.1 assumes away; the table above predicts a few percent |
-| **V12** | Binding-function bias | at `θ̂`, `E[β̂(sim)]` against `β(E[y])` | measured at 2–4% of `β` in configurations matching the data; report it with `α̂` or add it as a local offset |
-| **V13** | Group-emptying rate | share of `𝒜⁺` groups that come out empty in a realised economy | governed by suppliers per group: 0.7% at 5, 3.7% at 3.3, 14% at 2, 37% at 1. Count the active groups first |
+| **V10** | `N_s`-invariance of block 4 | drift of `reg_coef` across `N_s` at `θ̂` | **exactly** 0. The regression runs once on the ordinary draws and `N̂_s` never enters it, so this is a structural assertion, not a tolerance: any drift is a coding error |
+| **V11** | **Value-block sensitivity (tests A.1)** | recompute `π_s`, `π_r`, labour share at `N̂_s` and `2N̂_s` under the *realised* price index of a drawn `N̂_s`-variety economy | quantifies exactly what A.1 assumes away; the table above predicts a few percent |
+| **V12** | Binding-function bias | at `θ̂`, `E[β̂(sim)]` against `β(E[y])` | **the price of the design** (Part III): block 4 is `β(E[y])`, so this bias is not differenced out. Measured at 2–4% of `β` in configurations matching the data; report it with `α̂` or add it as a local offset |
+| **V13** | Group-emptying rate | implied share of `𝒜⁺` groups with no supplier, `∏_{l∈a}(1−q̂_ls)^{N̂_s}` | governed by suppliers per group: 0.7% at 5, 3.7% at 3.3, 14% at 2, 37% at 1. Count the active groups first — a high rate means much of `β̂`'s support is degenerate |
 
 ### Phase 0 — before any of this
 
 Two measurements that cost nothing and size everything else.
 
-1. **Time one loss evaluation.** `n_good` goes from ~142 to ~1161, and the regression from
-   `n_good × N_rho` rows to `n_cells × N̂_s × R_rep`. The net is not predictable a priori.
+1. **Time one loss evaluation.** `n_good` goes from ~142 to ~1161, so the regression goes from
+   `n_good × N_rho` rows to `n_cells × N_rho`. That is the whole cost change — granularity
+   itself adds nothing, since `N_s` never enters the simulation.
 2. **Bracket `N̂_s` from `G_K.csv` directly**, using the bounds `[N_supplier_s / R_downstream,
    N_supplier_s]` and the empty-ZE share. It decides the cost of everything downstream and it is
    pure arithmetic.
 
 ---
 
-## Part III — Why the simulate-`N_s` design was chosen
+## Part III — Why `N_s` is never simulated
 
-Recorded so the choice is not relitigated. **(a)** simulate `N_s` varieties on realised outcomes;
-**(b)** estimate `q_ls` from a large pool and apply `Pr(K = 0) = (1−q)^{N_s}` analytically.
+Recorded so the choice is not relitigated. Two designs were on the table: **(a)** simulate `N_s`
+varieties and compute the moments on realised economies; **(b)** estimate `q_ls` from the full
+draw set and apply `Pr(K = 0) = (1−q)^{N_s}` analytically. **(b) is what is implemented.**
 
-**The settling argument.** Under (b) the estimation never solves a finite-variety network: the
-value block sits at the certainty-equivalent index while the extensive margin is granular. That
-leaves "how do you solve the economy at `N̂_s`?" unanswered — and that economy is the object of
-interest, since comovement is propagation through the *realised* network. The solver must exist
-regardless, so estimating on a different economy than the counterfactuals is a consistency
-liability for no gain.
+**The settling argument.** Under (a), `N_s` reaches the moment vector through exactly one block
+that (b) does not already handle in closed form — block 4 — and it reaches it only through the
+finite-sample bias of the auxiliary cloglog. Everything else is identical: by Lemma 2 `q_ls` is
+free of `N_s`, so `q̂` and hence `N̂_s` are the same object under both; by Proposition 1 the
+firm-level index carries no `N_s` term, so the *estimand* of block 4 is the same under both; and
+by D2 the value block already sits at the certainty-equivalent index computed on the full draw
+set, so (a) was never solving a finite-variety economy for blocks 1, 2, 3 or 5 either.
 
-**Secondary arguments.** (a) matches the binding function, cancelling the auxiliary estimator's
-finite-sample bias — 2–4% of `β` at data-consistent group sizes (V12). And there is no `q̂` to
-resolve in the moment path: a cell with a tiny win probability simply wins zero varieties.
+So the question reduces to: is `E[β̂(N_s)]` or `β(E[y])` the better target for block 4? Design (a)
+buys the first, which cancels the auxiliary estimator's finite-sample bias against the identical
+bias in the data — worth 2–4% of `β` (V12). It pays for it by treating simulation noise on one
+block with a bespoke replication device while every other block relies on the accuracy of the draw
+design, and by costing `R_rep ×` more per loss evaluation. That asymmetry has no counterpart
+elsewhere in the estimator, and the closed form removes the need for it entirely.
+
+**Two things (b) gets for free.** The count moment `Ḡ_s(n) = mean_l (1−q̂_ls)^n` *is* the
+expectation of the realised empty-cell share — by linearity over cells, the dependence between
+cells does not affect a mean — so it is unbiased **and** noise-free, and the `N_s` inner loop is a
+bisection on it with no re-simulation. And block 4 becomes exactly `N_s`-invariant rather than
+approximately so, which turns V10 from a tolerance into an assertion.
 
 **What is *not* an argument.** Variance at equal draw budget is a wash — estimating `E[G(0)]` with
 20,000 variety-draws gives bias −0.00000 / sd 0.00029 for (a) against +0.00007 / 0.00023 for (b).
-And the "support mismatch" objection to (a) does not stand: `𝒜⁺` is a choice of which areas to
-study, within a retained area (a) draws firms in every ZE and lets Ricardian competition decide,
-and a degenerate group contributes nothing to `β̂` — which is what the fixed-effect cloglog does on
-either side. What survives is V13, a diagnostic.
+And the "support mismatch" objection to (a) does not stand either: `𝒜⁺` is a choice of which areas
+to study, and a degenerate group contributes nothing to `β̂` on either side.
 
-**What (b) keeps.** The `N_s` inner loop, where profiling on realised economies would need
-`R ×` (number of candidates) regressions per evaluation, and the cross-check V4.
-
----
+**What must be reported.** The V12 bias, alongside `α̂`. It is the one thing design (a) would have
+removed, and it is now an assumed, measured cost rather than a differenced-out one.
 
 ## Part IV — Empirical-target script
 

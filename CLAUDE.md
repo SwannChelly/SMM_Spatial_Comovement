@@ -79,7 +79,7 @@ file's* directory: root entry points reach into `optimizers/`, `test/`, and
 - **`cmaes_integration.jl`** — CMA-ES backend (`parallel_cmaes_smm`)
 - **`tiktak_integration.jl`** — TikTak multistart backend (`parallel_tiktak_smm`)
 
-**`documentation/`** — conceptual docs: `model.md` (model + math + Sobol draws), `optimizer.md` (PSO/CMA-ES), `inference.md` (SEs, Jacobian, Hansen J).
+**`documentation/`** — conceptual docs: `model.md` (model + math + Sobol draws), `optimizer.md` (PSO/CMA-ES), `inference.md` (SEs, Jacobian, Hansen J), and the granular / attraction-area set: `finite_sample2.tex` (the model), `plan_granular_aa.md` (the design as implemented), `granular_validation.md` (gates + open assumptions), `granular_aa_changes.md` (the complete record of what changed and why).
 **`test/`** — validation & diagnostics (`run_internal_validity.jl`, `run_untargeted_validation.jl`, `test_extensive_margin.jl`, `test_t_reorder.jl`, `run_test.sh`).
 **`extras/`** — post-estimation analysis (`untargeted_moments.jl`, `compute_amplification_weights.jl`, `run_amplification_analysis.jl`).
 
