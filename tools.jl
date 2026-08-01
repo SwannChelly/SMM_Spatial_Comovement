@@ -1504,6 +1504,13 @@ function compute_jacobian(theta::Vector{Float64};
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
 
+    # Fail here, not deep inside the AD tape: the analytical moment vector has no
+    # block 6, so under GRANULAR it is one block short of MOMENT_MASK.
+    @assert !(analytical && GRANULAR) "compute_jacobian: analytical=true is not " *
+        "available under GRANULAR — the analytical extensive margin is the " *
+        "FKG-approximated continuum object and has no closed form for the count " *
+        "moment Ḡ_s(0) (block 6). Use the simulation Jacobian (analytical=false)."
+
     # ── Granular: hold N̂_s fixed across the finite-difference perturbations ──
     # N̂_s(θ) is a STEP function of the continuous parameters, so the profiled loss is
     # piecewise smooth with jumps and a central FD can straddle one. At θ̂ the correct

@@ -123,6 +123,18 @@ ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[1
 run_2x2_test = true
 n_quad       = 200
 
+# The 2×2 test crosses a SIMULATED against an ANALYTICAL Jacobian, and the analytical
+# path has no closed form for the granular count moment (block 6) — its extensive
+# margin is the FKG-approximated continuum object, so it returns a 5-block vector
+# against a 6-block MOMENT_MASK. Disable it here, at parse time, rather than let it
+# fail after Step 2 has already spent the compute.
+if run_2x2_test && granular
+    @warn "run_2x2_test is not available under --granular=true: it needs an ANALYTICAL " *
+          "Jacobian, and block 6 (the count moment Ḡ_s(0)) has no closed form on that " *
+          "path. The test is skipped; estimation and inference are unaffected."
+    run_2x2_test = false
+end
+
 
 if !(n_coef in [1, 4, 5])
     error("n_coef must be 1, 4 or 5, got: $n_coef")

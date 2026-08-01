@@ -253,6 +253,15 @@ Returns the same 5 moment blocks using closed-form EK formulas.
 Blocks {Ω^L, Ω^s, π_r, γ_ls} are exact; reg_coef uses Gauss-Legendre quadrature.
 """
 function compute_moments_analytical(params; n_quad::Int=200)
+    # The single choke point for every analytical entry (`full_SMM(analytical=true)`,
+    # `moments_vec_analytical`, `analytical_jacobian_ad`, `test_analytical_vs_simulated`).
+    # Without it, the AD path bypasses `full_SMM`'s guard and fails downstream in
+    # `moments_to_vec` with a BoundsError — a 5-block vector against a 6-block MOMENT_MASK.
+    @assert !GRANULAR "the analytical/GMM path does not implement the granular count " *
+        "moment (block 6): the extensive margin there is the FKG-approximated continuum " *
+        "object, so this returns 5 blocks against a 6-block MOMENT_MASK. Run granular " *
+        "estimation through the SMM path (main.jl), and switch off any diagnostic that " *
+        "asks for an analytical Jacobian (`run_2x2_test`, `analytical=true`)."
     Omega_L, Omega_s_vec, A_vec, alpha, T_vec = unpack_params(params)
     T_mat = reshape(T_vec, S, R)
 
