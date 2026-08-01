@@ -205,7 +205,7 @@ end
 # BOTH modes. Under GRANULAR it additionally sets the precision of `q̂` and hence of
 # the profiled `N̂_s`; it is NOT tied to N_HI, because no prefix of the draws is ever
 # taken (see SECTION 9b).
-n_rho_local = 1000
+n_rho_local = granular_local ? 100 : 1000
 @everywhere const N_rho = $(n_rho_local)
 println("\n N_rho = $n_rho_local — Entreprise par secteur x region")
 

@@ -64,7 +64,7 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 20
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
 run_step3 = true
 run_step4 = true
@@ -106,16 +106,16 @@ reg_method = length(ARGS) >= 9 && !isempty(strip(ARGS[9])) ? Symbol(strip(ARGS[9
 # regression. false ⇒ supplier pairs only WITH the log-z size control (coupled). 10th
 # positional arg (run.sh --controls=true|false). Read by load_parameters.jl into INCLUDE_CONTROL.
 include_control = length(ARGS) >= 10 && !isempty(strip(ARGS[10])) ?
-    (lowercase(strip(ARGS[10])) in ("true", "1", "yes")) : true
+    (lowercase(strip(ARGS[10])) in ("true", "1", "yes")) : false
 
 # ── Granularity + comparative-advantage level (documentation/plan_granular_aa.md) ──
 # 11th positional arg (run.sh --granular=true|false), default FALSE: with
 # --granular=false --ca_level=ze the estimator is the continuum ZE-level model exactly
 # as it stood, which is a supported configuration, not a historical curiosity.
 granular = length(ARGS) >= 11 && !isempty(strip(ARGS[11])) ?
-    (lowercase(strip(ARGS[11])) in ("true", "1", "yes")) : true
+    (lowercase(strip(ARGS[11])) in ("true", "1", "yes")) : false
 # 12th positional arg (run.sh --ca_level=ze|aa), default :ze.
-ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :aa
+ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :ze
 @assert ca_level in (:ze, :aa) "ca_level must be ze|aa, got :$ca_level"
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
@@ -164,6 +164,7 @@ T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
 # New layout: [Ω^L | Ω^s | A | α(N_TAU) | T] — alpha is inserted between A and T
 init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
 warm_start = vcat(init_other_prefix, P_alpha, T_init_nz)
+
 
 if run_step1
     println("\n" * "="^70)
