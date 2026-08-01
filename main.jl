@@ -303,7 +303,9 @@ if run_step2
             param_labels_gb  = PARAM_LABELS[gb_cols],
             moment_labels_gb = MOMENT_LABELS[gb_indices],
             head_labels      = head_labels,
-            head_values      = head_values)
+            head_values      = head_values,
+            J_free_gb        = J_gb,          # free-parameter FD Jacobian ⇒ T's se_fd
+            N_s_base_seed    = 7_000_000)
     else
         inf_res_1 = compute_smm_inference(
              theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
@@ -527,7 +529,9 @@ if run_step4
             param_labels_gb  = PARAM_LABELS[gb_cols],
             moment_labels_gb = MOMENT_LABELS[gb_indices],
             head_labels      = head_labels,
-            head_values      = head_values)
+            head_values      = head_values,
+            J_free_gb        = J2_gb,         # free-parameter FD Jacobian ⇒ T's se_fd
+            N_s_base_seed    = 7_100_000)
     else
         inf_res = compute_smm_inference(
             theta_hat_2, J2_gb, W_step3, Omega_inf;
