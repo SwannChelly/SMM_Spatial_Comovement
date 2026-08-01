@@ -86,8 +86,15 @@ Consequences in code:
 
 `compute_moments` gains an `N_fixed` kwarg (threaded through `SMM` and `full_SMM`) that pins
 `N̂_s`; `compute_jacobian` uses it via `hold_N_s` (default `true` under `GRANULAR`) because
-`N̂_s(θ)` is a step function and a central FD could straddle a jump. `compute_moments` warns
-when a pinned evaluation would have moved the count — i.e. when `θ` sits on a jump.
+`N̂_s(θ)` is a step function and a central FD could straddle a jump. `compute_moments` returns
+the free bisection value as `N_hat_free` beside the pinned `N_hat`, but does **not** warn on a
+difference: it runs on every worker for every FD evaluation, and the two differ for a second,
+benign reason — an evaluation on a different draw set has a different `q̂` hence a different
+`N̂_s`. `compute_jacobian` is the only place that can separate the two, and it does so once:
+before the replications it evaluates `N̂_s` freely on `min(K, 5)` independent draw sets, pins
+the per-sector median, and prints the observed spread. A spread above 10% of the pinned value
+warns once — that is Monte-Carlo noise in `q̂`, not a jump, and the fix is a larger
+`N_RHO_INFERENCE` (and `N_rho`, which sets `q̂` in the loss).
 
 ### Why not replicate
 

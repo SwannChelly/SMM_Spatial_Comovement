@@ -1509,13 +1509,43 @@ function compute_jacobian(theta::Vector{Float64};
     # piecewise smooth with jumps and a central FD can straddle one. At θ̂ the correct
     # object is the derivative at fixed N̂_s anyway (N̂_s is locally constant with
     # probability one), so under GRANULAR the count is pinned at its θ̂ value for the
-    # whole Jacobian and we ASSERT that no perturbation moved it — a fired assertion
-    # means θ̂ sits on a jump and the Jacobian there is not the object you want.
+    # whole Jacobian.
+    #
+    # The pin is computed on the INFERENCE draw design (the same width the replications
+    # use), and its MONTE-CARLO dispersion is measured once here: N̂_s is a bisection on
+    # q̂, so independent draw sets give different N̂_s even at a FIXED θ. That dispersion
+    # is a property of `N_RHO_INFERENCE`, not of θ sitting on a jump, and it is the
+    # number to look at if the count moment looks unstable — raise `N_RHO_INFERENCE`.
     N_fixed = nothing
     if hold_N_s && GRANULAR && !analytical
-        N_fixed = granular_report(theta; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS).N_hat
-        println("Jacobian: holding N̂_s fixed at $(N_fixed) across all FD perturbations " *
-                "(a perturbation that would have moved it warns from compute_moments).")
+        n_probe = min(K, 5)
+        probes  = pmap(1:n_probe) do k
+            u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
+                                      randomise = true,
+                                      rng       = MersenneTwister(base_seed + k))
+            granular_report(theta; u_draws=u_k, sample_weights=w_k).N_hat
+        end
+        N_mat   = reduce(hcat, probes)                      # S × n_probe
+        N_fixed = [round(Int, median(view(N_mat, s, :))) for s in axes(N_mat, 1)]
+
+        println("Jacobian: holding N̂_s fixed at $(N_fixed) across all FD perturbations.")
+        println("  N̂_s Monte-Carlo dispersion over $(n_probe) independent draw sets " *
+                "(N_RHO_INFERENCE = $(N_RHO_INFERENCE)):")
+        println("    sector      pinned       min       max   spread/pinned")
+        worst = 0.0
+        for s in axes(N_mat, 1)
+            lo, hi = minimum(view(N_mat, s, :)), maximum(view(N_mat, s, :))
+            rel    = N_fixed[s] > 0 ? (hi - lo) / N_fixed[s] : 0.0
+            worst  = max(worst, rel)
+            @printf("    %6d  %10d  %8d  %8d  %14.3f\n", s, N_fixed[s], lo, hi, rel)
+        end
+        if worst > 0.10
+            @warn "N̂_s varies by $(round(100*worst, digits=1))% across independent draw " *
+                  "sets at a FIXED θ. That is simulation noise in q̂, not a jump of " *
+                  "N̂_s(θ): the count moment Ḡ_s(0) and its Jacobian row carry that " *
+                  "noise. Raise N_RHO_INFERENCE (and N_rho, which sets q̂ in the loss)."
+        end
+        flush(stdout)
     end
 
     # ── T-profiling: perturb only the head/α; T follows via the Sinkhorn image ──

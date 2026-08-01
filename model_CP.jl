@@ -1420,10 +1420,11 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     #     linearity over cells, the dependence between cells (they share variety
     #     draws) does not affect the mean — so it is unbiased AND noise-free.
     # ─────────────────────────────────────────────────────────────────────────
-    N_hat   = Int[]
-    clamped = Symbol[]
-    q_hat   = Float64[]
-    G0      = Float64[]
+    N_hat      = Int[]
+    N_hat_free = Int[]
+    clamped    = Symbol[]
+    q_hat      = Float64[]
+    G0         = Float64[]
 
     if GRANULAR
         n_draw = size(linkages_flat, 1)
@@ -1435,17 +1436,16 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
             end
             q_hat[g] = clamp(acc / n_draw, 0.5 / n_draw, 1.0 - 1e-12)
         end
-        N_hat, clamped = concentrate_N_s(q_hat)
-        if N_fixed !== nothing
-            # Finite-difference / counterfactual mode: the caller pins N̂_s (it is a
-            # STEP function of θ, so a central FD could otherwise straddle a jump).
-            # We still run the bisection, purely to flag a θ sitting ON a jump.
-            N_fixed == N_hat || @warn "compute_moments: the profiled variety count moved " *
-                "under a pinned-N̂ evaluation (pinned $(N_fixed), bisection would give " *
-                "$(N_hat)) — θ is on a jump of N̂_s(θ) and the Jacobian there is not the " *
-                "fixed-N̂ object."
-            N_hat = copy(N_fixed)
-        end
+        N_hat_free, clamped = concentrate_N_s(q_hat)
+        # Finite-difference / counterfactual mode: the caller pins N̂_s (it is a STEP
+        # function of θ, so a central FD could otherwise straddle a jump). The free
+        # bisection value is returned as a diagnostic (`N_hat_free`) rather than warned
+        # about here — this runs on every worker for every FD evaluation, and the free
+        # value differs from the pinned one for a SECOND, benign reason: an evaluation on
+        # a different draw set has a different q̂ hence a different N̂. The caller
+        # (`compute_jacobian`) is the only place that can tell the two apart, and it
+        # reports the dispersion once.
+        N_hat = N_fixed === nothing ? N_hat_free : copy(N_fixed)
 
         # Block 6: Ḡ_s(0) over the cells inside active attraction areas — empty cells
         # included, since those ARE the K = 0 mass (finite_sample2.tex §3.2).
@@ -1482,6 +1482,7 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
         G0                = G0,                         # block 6 — empty (Float64[]) unless GRANULAR
         # ── Non-moment diagnostics (never enter the moment vector) ───────────
         N_hat             = N_hat,                      # profiled variety count per sector
+        N_hat_free        = N_hat_free,                 # the bisection value BEFORE any pin
         clamped           = clamped,                    # :none / :lo / :hi per sector
         q_hat             = q_hat,                      # win-somewhere probability per cell
         b_logz            = b_logz,                     # log-z coefficient (should equal −θ)
