@@ -722,17 +722,39 @@ function solve_network(params; return_firm_level=false,
             if isempty(g_indices); continue; end
             regions_s = SECTOR_GOOD_REGIONS[s]
 
-            # Prices only for active upstream (s,r') pairs
-            tau_sr = reshape(tau[regions_s, r_d], 1, :)      # (1, n_active_in_s); tau is R × R_downstream
-            w_sr = reshape(W_RS_FLAT[g_indices], 1, :)       # (1, n_active_in_s)
-            prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr  # (N_rho_eff, n_active_in_s)
-
-            # Ricardian selection: lowest-cost supplier wins each variety
-            min_local = argmin(prices_s, dims=2)  # (N_rho_eff, 1)
-            for rho in 1:N_rho_eff
-                local_idx = min_local[rho][2]
-                winner_good_idx[rho, s] = g_indices[local_idx]
-                p_rho_s[rho, s] = prices_s[rho, local_idx]
+            # Ricardian selection: lowest-cost supplier wins each variety.
+            #
+            # Fused min-and-argmin. The previous form materialised
+            #   prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr
+            # and then reduced it with argmin(...; dims=2), allocating an
+            # (N_rho × n_active_in_s) matrix plus a CartesianIndex array for EVERY
+            # (downstream region, sector) pair — of the order of 60 MB per
+            # solve_network call at production sizes, purely to be reduced away.
+            #
+            # The arithmetic is unchanged: `z * t * w` associates left-to-right
+            # exactly as the broadcast `z .* tau .* w` did, so the products are
+            # bit-identical. Ties keep the FIRST minimiser and a NaN wins outright,
+            # both matching `argmin`.
+            tv = tau[regions_s, r_d]           # (n_active_in_s,) — tau is R × R_downstream
+            wv = W_RS_FLAT[g_indices]          # (n_active_in_s,)
+            n_act = length(g_indices)
+            @inbounds for rho in 1:N_rho_eff
+                g1   = g_indices[1]
+                best = z_inv_flat[rho, g1] * tv[1] * wv[1]
+                bidx = 1
+                if !isnan(best)
+                    for li in 2:n_act
+                        gl = g_indices[li]
+                        p  = z_inv_flat[rho, gl] * tv[li] * wv[li]
+                        if isnan(p)
+                            best = p; bidx = li; break
+                        elseif p < best
+                            best = p; bidx = li
+                        end
+                    end
+                end
+                winner_good_idx[rho, s] = g_indices[bidx]
+                p_rho_s[rho, s] = best
             end
         end
 
@@ -1033,114 +1055,56 @@ end
 ##################### Fast cloglog (IRLS over the FWL kernel) ###################
 
 """
-    _cloglog_irls(y, X, w, fe_group; max_iter=50, tol=1e-9, eta_clamp=30.0) -> β
+    CloglogDesign
 
-Fit a complementary-log-log GLM  `P(y=1) = 1 − exp(−exp(η))`, `η = Xβ + a_{fe}`,
-by IRLS. The single categorical fixed effect `fe_group` is absorbed via **weighted
-within-group demeaning** each iteration (Frisch–Waugh–Lovell — exact for ONE FE
-dimension), so no dummy matrix is built. This is the nonlinear analogue of the
-`fast_weighted_regression` kernel: each IRLS step is a weighted LS on the demeaned
-design. `w` are analytic (observation) weights. Returns the coefficient vector `β`
-(length `size(X,2)`); the fixed effects are profiled out.
+Per-process cache of the part of the extensive-margin regression design that does
+NOT move with θ: the distance columns of `X`, the observation weights `w`, the
+fixed-effect labels `fe_group`, and the group → row index derived from them. Only
+the not-supply indicator `y` and the log-z size column are refreshed per call, via
+the `row_g`/`row_rho` maps.
 
-The IRLS quantities for cloglog: with `μ = 1 − exp(−exp(η))`,
-`dμ/dη = e^{η}(1−μ)`, working response `z = η + (y−μ)/(dμ/dη)`, and IRLS weight
-`W = w·(dμ/dη)² / (μ(1−μ))`.
+Validity is checked on two things: the design SHAPE (`key`) and the IDENTITY of the
+weight matrix the design was built from (`weights_ref`, compared with `===`). The
+second is what makes it safe under the Jacobian and Σ_sim replications, which pass
+their own draws: a different weight matrix object is a cache miss, not a silent
+reuse. Holding the reference also pins the matrix, which is intended.
+
+Julia's `Distributed` gives every worker its own copy of module state and no
+threads are used anywhere in this codebase, so this global is not shared.
 """
-function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
-                       w::AbstractVector{<:Real}, fe_group::AbstractVector{<:Integer};
-                       max_iter::Int=50, tol::Float64=1e-9, eta_clamp::Float64=30.0)
-    n, k = size(X)
-    yf = Float64.(y); Xf = Float64.(X); wf = Float64.(w)
-
-    # Precompute group → row indices once (weighted within-transform is one pass/FE).
-    groups  = unique(fe_group)
-    rows_of = Dict(g => findall(==(g), fe_group) for g in groups)
-
-    # Init: μ shrunk toward 0.5 (avoids η = ±∞ at all-0 / all-1 starts), η = cloglog link.
-    μ = (yf .+ 0.5) ./ 2
-    η = clamp.(log.(.-log.(1 .- μ)), -eta_clamp, eta_clamp)
-
-    β = zeros(k)
-    for _ in 1:max_iter
-        μ    = clamp.(1 .- exp.(.-exp.(η)), 1e-12, 1 - 1e-12)
-        dμdη = exp.(η) .* (1 .- μ)                       # e^{η}·e^{−e^{η}}
-        zwork = η .+ (yf .- μ) ./ dμdη                   # working response
-        W    = wf .* (dμdη .^ 2) ./ (μ .* (1 .- μ))      # IRLS × analytic weights
-
-        # Weighted within-group demeaning (FWL) of zwork and each X column.
-        zt = copy(zwork); Xt = copy(Xf)
-        for g in groups
-            r  = rows_of[g]
-            sw = sum(@view W[r])
-            sw < 1e-300 && continue
-            zt[r] .-= sum(W[r] .* zwork[r]) / sw
-            @inbounds for j in 1:k
-                Xt[r, j] .-= sum(W[r] .* Xf[r, j]) / sw
-            end
-        end
-
-        # Weighted LS on the demeaned system: (Xt' W Xt) β = Xt' W zt.
-        WXt   = W .* Xt
-        β_new = (Xt' * WXt) \ (Xt' * (W .* zt))
-
-        # Rebuild η = Xβ + a_fe, with a_g = weighted group mean of (zwork − Xβ).
-        resid = zwork .- Xf * β_new
-        η_new = Xf * β_new
-        for g in groups
-            r  = rows_of[g]
-            sw = sum(@view W[r])
-            sw < 1e-300 && continue
-            η_new[r] .+= sum(W[r] .* resid[r]) / sw
-        end
-        η_new = clamp.(η_new, -eta_clamp, eta_clamp)
-
-        Δ = maximum(abs.(β_new .- β))
-        β = β_new; η = η_new
-        Δ < tol && break
-    end
-    return β
+mutable struct CloglogDesign
+    key          :: NTuple{6, Int}
+    weights_ref  :: Matrix{Float64}
+    X            :: Matrix{Float64}
+    w            :: Vector{Float64}
+    fe_group     :: Vector{Int}
+    group_rows   :: Vector{Vector{Int}}
+    y            :: Vector{Float64}
+    row_g        :: Vector{Int}
+    row_rho      :: Vector{Int}
+    n_rows_goods :: Int
 end
 
+const _CLOGLOG_DESIGN = Ref{Union{Nothing, CloglogDesign}}(nothing)
+
 """
-    fast_cloglog_regression(linkages_flat, z_flat, sample_weights; kwargs...) -> Vector (N_REG)
+    reset_cloglog_design!()
 
-Complementary-log-log extensive-margin regression, fit by IRLS over the weighted-FWL
-kernel (`_cloglog_irls`). Drop-in sibling of `fast_weighted_regression` (same design:
-distance-bin regressors + optional log-z size control + optional control-group rows,
-same `(sector × nearest-downstream)` FE), but the correct nonlinear link instead of a
-linear probability model.
-
-The outcome is `not_supply = 1 − supplier`, so with `P(not_supply)=1−exp(−exp(η))` the
-distance coefficient equals **αθ** (the empirical `reg_coef_cloglog` convention — note the
-SIGN/OUTCOME differ from `fast_weighted_regression`, which returns the LPM slope of
-`P(supplier)`). Under this specification the coefficients are, in the single-destination
-limit, `β_distance = θα` and `β_logz = −θ`, so conditioning on size (`include_size_control`)
-purges the T-through-productivity confound and loads the distance slope on α.
-Returns the `N_REG` distance coefficients.
+Drop the cached design. Only needed by tests that want to force a rebuild; the
+identity check on the weight matrix handles every production path.
 """
-function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
-                                 include_control::Bool=true,
-                                 include_size_control::Bool=!include_control,
-                                 rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
-                                 obs_weight::Union{Nothing, Vector{Float64}}=nothing,
-                                 return_size_coef::Bool=false,
-                                 max_iter::Int=50, tol::Float64=1e-9)
-    @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
-        "size control needs firm productivity; control firms have z ≡ −∞ under :ze")
-    n_size       = include_size_control ? 1 : 0
-    n_regressors = N_REG + n_size
-    size_col     = N_REG + 1
-    N_rho_eff    = size(sample_weights, 1)
-    rows_of      = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
-    n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
-    n_ctrl_eff   = include_control ? N_CONTROL : 0
-    N_valid      = n_rows_goods + n_ctrl_eff * N_rho_eff
+reset_cloglog_design!() = (_CLOGLOG_DESIGN[] = nothing)
 
+function _build_cloglog_design(sample_weights::Matrix{Float64}, key, include_control::Bool,
+                               include_size_control::Bool, rows_of, obs_weight,
+                               N_rho_eff::Int, n_ctrl_eff::Int, N_valid::Int,
+                               n_regressors::Int, n_rows_goods::Int, size_col::Int)
     y        = Vector{Float64}(undef, N_valid)
     X        = zeros(N_valid, n_regressors)
     w        = Vector{Float64}(undef, N_valid)
     fe_group = Vector{Int}(undef, N_valid)
+    row_g    = Vector{Int}(undef, n_rows_goods)
+    row_rho  = Vector{Int}(undef, n_rows_goods)
 
     idx = 0
     for g in 1:n_good
@@ -1155,17 +1119,16 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{F
         end
         for rho in rows_of(g)
             idx += 1
-            y[idx] = linkages_flat[rho, g] > 0 ? 0.0 : 1.0   # not_supply
+            y[idx] = 0.0                                  # overwritten per call
             w[idx] = obs_weight === nothing ? sample_weights[rho, g] : obs_weight[g]
             fe_group[idx] = group_id
+            row_g[idx] = g; row_rho[idx] = rho
             if N_REG == 1
                 X[idx, 1] = log_dist
             else
                 (b > 0 && b <= N_REG) && (X[idx, b] = 1.0)
             end
-            if include_size_control
-                X[idx, size_col] = log(z_flat[rho, g])
-            end
+            # X[idx, size_col] is written per call when include_size_control.
         end
     end
 
@@ -1194,8 +1157,232 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{F
             end
         end
     end
+    @assert idx == N_valid "cloglog design built $idx rows, expected $N_valid"
 
-    β = _cloglog_irls(y, X, w, fe_group; max_iter=max_iter, tol=tol)
+    return CloglogDesign(key, sample_weights, X, w, fe_group,
+                         build_fe_group_rows(fe_group), y, row_g, row_rho, n_rows_goods)
+end
+
+"""
+    build_fe_group_rows(fe_group) -> Vector{Vector{Int}}
+
+Row indices of each non-empty fixed-effect group, in one O(n) counting pass.
+
+Replaces `Dict(g => findall(==(g), fe_group) for g in unique(fe_group))`, which
+costs one full scan of `fe_group` PER GROUP — with `S × R_downstream` groups over
+`n_good × N_rho` rows that is tens of millions of comparisons on every call, for a
+result that is identical every time (`fe_group` is pure geography). The FE loops that
+consume this are per-group and operate on disjoint row sets, so group ORDER does not
+affect any result; this returns them in group-id order rather than first-appearance
+order.
+"""
+function build_fe_group_rows(fe_group::AbstractVector{<:Integer})
+    isempty(fe_group) && return Vector{Int}[]
+    gmax   = maximum(fe_group)
+    counts = zeros(Int, gmax)
+    @inbounds for g in fe_group
+        counts[g] += 1
+    end
+    out = Vector{Vector{Int}}()
+    slot = zeros(Int, gmax)          # slot[g] = position of group g in `out`, 0 if empty
+    for g in 1:gmax
+        if counts[g] > 0
+            push!(out, Vector{Int}(undef, counts[g]))
+            slot[g] = length(out)
+        end
+    end
+    fill_at = zeros(Int, length(out))
+    @inbounds for i in eachindex(fe_group)
+        p = slot[fe_group[i]]
+        fill_at[p] += 1
+        out[p][fill_at[p]] = i
+    end
+    return out
+end
+
+"""
+    _cloglog_irls(y, X, w, fe_group; max_iter=50, tol=1e-9, eta_clamp=30.0) -> β
+
+Fit a complementary-log-log GLM  `P(y=1) = 1 − exp(−exp(η))`, `η = Xβ + a_{fe}`,
+by IRLS. The single categorical fixed effect `fe_group` is absorbed via **weighted
+within-group demeaning** each iteration (Frisch–Waugh–Lovell — exact for ONE FE
+dimension), so no dummy matrix is built. This is the nonlinear analogue of the
+`fast_weighted_regression` kernel: each IRLS step is a weighted LS on the demeaned
+design. `w` are analytic (observation) weights. Returns the coefficient vector `β`
+(length `size(X,2)`); the fixed effects are profiled out.
+
+The IRLS quantities for cloglog: with `μ = 1 − exp(−exp(η))`,
+`dμ/dη = e^{η}(1−μ)`, working response `z = η + (y−μ)/(dμ/dη)`, and IRLS weight
+`W = w·(dμ/dη)² / (μ(1−μ))`.
+
+Pass `group_rows` (from `build_fe_group_rows`) to skip rebuilding the FE index, and
+`iters_out` to read back how many IRLS iterations were actually used.
+"""
+
+function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
+                       w::AbstractVector{<:Real}, fe_group::AbstractVector{<:Integer};
+                       group_rows::Union{Nothing,Vector{Vector{Int}}}=nothing,
+                       max_iter::Int=50, tol::Float64=1e-9, eta_clamp::Float64=30.0,
+                       iters_out::Union{Nothing,Base.RefValue{Int}}=nothing)
+    n, k = size(X)
+    yf = y isa Vector{Float64} ? y : Float64.(y)
+    Xf = X isa Matrix{Float64} ? X : Float64.(X)
+    wf = w isa Vector{Float64} ? w : Float64.(w)
+
+    # Group → row indices. Supplied by the caller when the design is cached (the
+    # common case); otherwise built in one pass.
+    grows = group_rows === nothing ? build_fe_group_rows(fe_group) : group_rows
+
+    # Init: μ shrunk toward 0.5 (avoids η = ±∞ at all-0 / all-1 starts), η = cloglog link.
+    μ = (yf .+ 0.5) ./ 2
+    η = clamp.(log.(.-log.(1 .- μ)), -eta_clamp, eta_clamp)
+
+    # ── Buffers, allocated ONCE rather than once per IRLS iteration ────────────
+    # The loop below used to `copy(Xf)` every pass; at production sizes that is
+    # ~17 MB of churn per iteration and up to 50 iterations per evaluation.
+    dμdη  = Vector{Float64}(undef, n)
+    zwork = Vector{Float64}(undef, n)
+    W     = Vector{Float64}(undef, n)
+    zt    = Vector{Float64}(undef, n)
+    Xt    = Matrix{Float64}(undef, n, k)
+    Xb    = Vector{Float64}(undef, n)
+    η_new = Vector{Float64}(undef, n)
+    sw_g  = Vector{Float64}(undef, length(grows))
+
+    β = zeros(k)
+    n_it = 0
+    for _ in 1:max_iter
+        n_it += 1
+        @inbounds for i in 1:n
+            μi      = clamp(1 - exp(-exp(η[i])), 1e-12, 1 - 1e-12)
+            di      = exp(η[i]) * (1 - μi)               # e^{η}·e^{−e^{η}}
+            dμdη[i] = di
+            zwork[i] = η[i] + (yf[i] - μi) / di          # working response
+            W[i]     = wf[i] * (di^2) / (μi * (1 - μi))  # IRLS × analytic weights
+            zt[i]    = zwork[i]
+        end
+        copyto!(Xt, Xf)
+
+        # Weighted within-group demeaning (FWL) of zwork and each X column.
+        @inbounds for (p, r) in enumerate(grows)
+            sw = sum(@view W[r])
+            sw_g[p] = sw
+            sw < 1e-300 && continue
+            cz = sum(i -> W[i] * zwork[i], r) / sw
+            for i in r
+                zt[i] -= cz
+            end
+            for j in 1:k
+                cx = sum(i -> W[i] * Xf[i, j], r) / sw
+                for i in r
+                    Xt[i, j] -= cx
+                end
+            end
+        end
+
+        # Weighted LS on the demeaned system: (Xt' W Xt) β = Xt' W zt.
+        WXt   = W .* Xt
+        β_new = (Xt' * WXt) \ (Xt' * (W .* zt))
+
+        # Rebuild η = Xβ + a_fe, with a_g = weighted group mean of (zwork − Xβ).
+        # Xf*β is formed ONCE (it was computed twice: for `resid` and for `η_new`).
+        mul!(Xb, Xf, β_new)
+        @inbounds for i in 1:n
+            η_new[i] = Xb[i]
+        end
+        @inbounds for (p, r) in enumerate(grows)
+            sw = sw_g[p]
+            sw < 1e-300 && continue
+            cr = sum(i -> W[i] * (zwork[i] - Xb[i]), r) / sw
+            for i in r
+                η_new[i] += cr
+            end
+        end
+        @inbounds for i in 1:n
+            η_new[i] = clamp(η_new[i], -eta_clamp, eta_clamp)
+        end
+
+        Δ = maximum(abs.(β_new .- β))
+        β = β_new
+        copyto!(η, η_new)
+        Δ < tol && break
+    end
+    iters_out === nothing || (iters_out[] = n_it)
+    return β
+end
+
+"""
+    fast_cloglog_regression(linkages_flat, z_flat, sample_weights; kwargs...) -> Vector (N_REG)
+
+Complementary-log-log extensive-margin regression, fit by IRLS over the weighted-FWL
+kernel (`_cloglog_irls`). Drop-in sibling of `fast_weighted_regression` (same design:
+distance-bin regressors + optional log-z size control + optional control-group rows,
+same `(sector × nearest-downstream)` FE), but the correct nonlinear link instead of a
+linear probability model.
+
+The outcome is `not_supply = 1 − supplier`, so with `P(not_supply)=1−exp(−exp(η))` the
+distance coefficient equals **αθ** (the empirical `reg_coef_cloglog` convention — note the
+SIGN/OUTCOME differ from `fast_weighted_regression`, which returns the LPM slope of
+`P(supplier)`). Under this specification the coefficients are, in the single-destination
+limit, `β_distance = θα` and `β_logz = −θ`, so conditioning on size (`include_size_control`)
+purges the T-through-productivity confound and loads the distance slope on α.
+Returns the `N_REG` distance coefficients.
+"""
+function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
+                                 include_control::Bool=true,
+                                 include_size_control::Bool=!include_control,
+                                 rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
+                                 obs_weight::Union{Nothing, Vector{Float64}}=nothing,
+                                 return_size_coef::Bool=false,
+                                 max_iter::Int=50, tol::Float64=1e-9,
+                                 iters_out::Union{Nothing,Base.RefValue{Int}}=nothing)
+    @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
+        "size control needs firm productivity; control firms have z ≡ −∞ under :ze")
+    n_size       = include_size_control ? 1 : 0
+    n_regressors = N_REG + n_size
+    size_col     = N_REG + 1
+    N_rho_eff    = size(sample_weights, 1)
+    rows_of      = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
+    n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
+    n_ctrl_eff   = include_control ? N_CONTROL : 0
+    N_valid      = n_rows_goods + n_ctrl_eff * N_rho_eff
+
+    # ── Reuse the θ-invariant design ──────────────────────────────────────────
+    # Only `y` (the not-supply indicator) and the log-z size column move with θ.
+    # The distance columns are pure geography, `w` is a function of the frozen
+    # draws, `fe_group` is geography, and the group → rows index derived from it is
+    # the same on every call. Rebuilding all of that per evaluation dominated the
+    # cost of the moment. The cache is keyed on the design SHAPE and on the IDENTITY
+    # of the weight matrix (`===`), so a different draw set — the Jacobian and Σ_sim
+    # replications pass their own — forces a rebuild rather than silently reusing a
+    # stale design. Bypassed entirely for the non-production `rho_range`/`obs_weight`
+    # variants.
+    use_cache = rho_range === nothing && obs_weight === nothing
+    key = (N_rho_eff, n_good, n_ctrl_eff, N_REG, n_size, N_valid)
+    D   = use_cache ? _CLOGLOG_DESIGN[] : nothing
+    if D === nothing || D.key != key || D.weights_ref !== sample_weights
+        D = _build_cloglog_design(sample_weights, key, include_control,
+                                  include_size_control, rows_of, obs_weight,
+                                  N_rho_eff, n_ctrl_eff, N_valid, n_regressors,
+                                  n_rows_goods, size_col)
+        use_cache && (_CLOGLOG_DESIGN[] = D)
+    end
+
+    y = D.y; X = D.X
+    @inbounds for i in 1:D.n_rows_goods
+        g = D.row_g[i]; rho = D.row_rho[i]
+        y[i] = linkages_flat[rho, g] > 0 ? 0.0 : 1.0     # not_supply
+    end
+    if include_size_control
+        @inbounds for i in 1:D.n_rows_goods
+            X[i, size_col] = log(z_flat[D.row_rho[i], D.row_g[i]])
+        end
+    end
+    # Control rows keep y = 1 and a zero size column from the build: control firms
+    # never supply and have no productivity draw.
+
+    β = _cloglog_irls(y, X, D.w, D.fe_group; group_rows=D.group_rows,
+                      max_iter=max_iter, tol=tol, iters_out=iters_out)
     # Under the firm-level reduced form (finite_sample2.tex Prop. 1) the log-z
     # coefficient equals −θ exactly: a free over-identifying test, returned on
     # request. The historical N_REG-long return is unchanged by default.

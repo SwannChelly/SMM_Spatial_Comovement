@@ -511,7 +511,14 @@ function run_optimization(;
     warm_start_params::Union{Nothing, Vector{Float64}} = nothing,
     output_subfolder::String = "step1",
     max_loop::Int = 50,
-    n_particles::Int = 100,
+    # Population size. `pmap` hands out one particle per free worker, so a swarm that
+    # is not a MULTIPLE of nworkers() pays for a final wave that runs almost empty:
+    # 100 particles on 49 workers is 49 + 49 + 2, i.e. three full evaluation rounds
+    # for 100 evaluations (68% utilisation). 98 = 2 × 49 costs two rounds — a third
+    # off the wall-clock per iteration for a two-particle change in the swarm.
+    # Re-tune this if the worker count changes: it should stay a multiple of
+    # nworkers() (= addprocs argument), not a round decimal number.
+    n_particles::Int = 98,
     max_iter_initial::Int = 200,
     max_iter_stage::Int = 50,
     alpha_search_method::String = "lhs",
