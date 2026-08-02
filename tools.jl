@@ -2041,15 +2041,17 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                moment_labels = nothing,    # NEW: names for kept moments (rows of J))
                                display_labels = nothing,   # NEW: names of non-inferred params to display (value only)
                                display_values = nothing,   # NEW: values of those non-inferred params (no SE/CI)    # optional override; default uses local Var_m
-                               # Extra SE block, printed after the main table. Under the
+                               # Extra NAIVE block, printed after the main table. Under the
                                # PROFILED estimator T and N_s are not columns of `J`, so
-                               # they carry no SE there; these are their SEs from the
-                               # first-difference Jacobian (T as a free parameter; N_s by
-                               # the unit first difference m(N+1)−m(N)).
+                               # they carry no SE there. `fd_G` holds their first-difference
+                               # Jacobian columns (T as a FREE parameter; N_s by the unit
+                               # first difference m(N+1)−m(N)); this function then applies
+                               # the SAME naive machinery as the main table — (G'WG)^{-1}
+                               # and the sandwich — so the whole file is one method.
+                               fd_G      = nothing,
                                fd_labels = nothing,
                                fd_values = nothing,
-                               fd_se     = nothing,
-                               fd_title  = "First-difference-Jacobian SEs (T, N_s)")
+                               fd_title  = "Naive sandwich inference on the first-difference Jacobian (α, T, N_s free)")
 
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
@@ -2268,6 +2270,10 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     end
 
     # ── 9. Write inference_summary.txt ───────────────────────────────────────
+    # Captured by the naive-block closure below and returned, so inference_delta.txt
+    # can contrast the structural SEs against the numbers this file actually prints.
+    fd_se_sw_out  = nothing
+    fd_se_eff_out = nothing
     open(joinpath(inf_dir, "inference_summary.txt"), "w") do io
         # Header
         println(io, "="^72)
@@ -2342,28 +2348,48 @@ function compute_smm_inference(theta_hat::Vector{Float64},
             end
         end
 
-        # First-difference-Jacobian SEs for parameters that are NOT columns of J.
-        # Under profiling the inference Jacobian is α-only, so T (a deterministic
-        # Sinkhorn image) and N_s (profiled by bisection) appear above with no SE.
-        # These are their SEs from the FD Jacobian: T as a free parameter in
-        # (G'WG)^{-1}, N_s from the unit first difference m(N_s+1) − m(N_s).
-        if fd_labels !== nothing && fd_se !== nothing && fd_values !== nothing &&
-           length(fd_labels) == length(fd_se) && length(fd_labels) == length(fd_values) &&
+        # NAIVE sandwich inference on the first-difference Jacobian, for parameters
+        # that are not columns of the (profiled) J above. This file reports ONE
+        # method — the mechanical sandwich, Jacobian × moment covariance — so T and
+        # N_s are treated here exactly like any free parameter: stack their FD
+        # Jacobian columns, form (G'WG)^{-1} and the sandwich. The STRUCTURAL
+        # alternative, which respects that T is calibrated by (α̂, γ̂) and N_s by the
+        # bisection on Ḡ_s(0), lives in inference_delta.txt.
+        if fd_G !== nothing && fd_labels !== nothing && fd_values !== nothing &&
+           size(fd_G, 2) == length(fd_labels) && length(fd_labels) == length(fd_values) &&
            !isempty(fd_labels)
             println(io, "\n--- $(fd_title) ---")
-            println(io, "  T   : free-parameter FD Jacobian, se = √diag((G'WG)^{-1}) over α+T columns.")
-            println(io, "  N_s : unit first difference ∂m/∂N_s = m(N_s+1) − m(N_s), efficient (G'WG)^{-1}.")
-            fh = @sprintf("  %-24s  %-12s  %-12s  %-8s  %-12s  %-12s",
-                          "parameters", "estimate", "se_fd", "t", "CI_lo", "CI_hi")
+            println(io, "  α   : profiled Jacobian columns (as in the main table above).")
+            println(io, "  T   : free-parameter FD Jacobian columns ∂m/∂T — T treated as free,")
+            println(io, "        NOT as the Sinkhorn image T*(α̂,γ̂).")
+            println(io, "  N_s : unit first difference ∂m/∂N_s = m(N_s+1) − m(N_s). N_s is an")
+            println(io, "        INTEGER, so one variety IS the step; the SE is in varieties.")
+            println(io, "  All three enter ONE G, so this is their JOINT naive variance.")
+            Gf  = Matrix{Float64}(fd_G)
+            Vef, fl_f = _gtwg_inv(Gf, W)
+            fl_f && println(io, "  (G'WG) was not PD; eigenvalue floor applied.")
+            Vsf = Vef * (Gf' * W * Omega * W * Gf) * Vef
+            Vsf = (Vsf .+ Vsf') ./ 2
+            se_ef = sqrt.(max.(diag(Vef), 0.0))
+            se_sf = sqrt.(max.(diag(Vsf), 0.0))
+            fh = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                          "parameters", "estimate", "se_eff", "se_sw", "ratio", "t",
+                          "CI_lo", "CI_hi")
             println(io, fh)
             println(io, "  " * "-"^(length(fh)-2))
             for j in eachindex(fd_labels)
-                sej = fd_se[j]; vj = fd_values[j]
-                tj  = (isfinite(sej) && sej > 0) ? vj / sej : NaN
-                @printf(io, "  %-24s  %-12.6f  %-12.6e  %-8.4f  %-12.6f  %-12.6f\n",
-                        fd_labels[j], vj, sej, isnan(tj) ? -999.0 : tj,
-                        vj - 1.96 * sej, vj + 1.96 * sej)
+                sj = se_sf[j]; vj = fd_values[j]
+                rj = se_ef[j] > 0 ? sj / se_ef[j] : NaN
+                tj = (isfinite(sj) && sj > 0) ? vj / sj : NaN
+                @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                        fd_labels[j], vj, se_ef[j], sj,
+                        isnan(rj) ? -999.0 : rj, isnan(tj) ? -999.0 : tj,
+                        vj - 1.96 * sj, vj + 1.96 * sj)
             end
+            NPZ.npzwrite(joinpath(inf_dir, "se_theta_naive_fd.npy"),          se_sf)
+            NPZ.npzwrite(joinpath(inf_dir, "se_theta_naive_fd_efficient.npy"), se_ef)
+            fd_se_sw_out  = se_sf
+            fd_se_eff_out = se_ef
         end
 
         # Sandwich vs efficient ratio
@@ -2454,6 +2480,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         "J_stat"        => J_stat,
         "df"            => df,
         "pval"          => pval,
+        "se_fd_sw"      => fd_se_sw_out,
+        "se_fd_eff"     => fd_se_eff_out,
+        "fd_labels"     => fd_labels,
     )
 end
 
@@ -2872,9 +2901,13 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
                                       alpha_values::Vector{Float64} = Float64[],
                                       alpha_se_eff::Vector{Float64} = Float64[],
                                       alpha_se_sw::Vector{Float64} = Float64[],
-                                      # N_s section — efficient variance on ∂m/∂N_s.
+                                      # N_s section. `se_N_naive` is the mechanical
+                                      # (G_N'W G_N)^{-1}; the STRUCTURAL SE is built here
+                                      # from q̂ and the free-parameter Jacobian.
                                       N_hat::Union{Nothing,Vector{Int}} = nothing,
-                                      se_N::Union{Nothing,Vector{Float64}} = nothing)
+                                      se_N_naive::Union{Nothing,Vector{Float64}} = nothing,
+                                      q_hat::Union{Nothing,Vector{Float64}} = nothing,
+                                      J_free_gb::Union{Nothing,AbstractMatrix} = nothing)
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
@@ -3019,6 +3052,86 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
     mean_share_a = mean([se_T[i] > 0 ? (se_T_alpha[i] / se_T[i])^2 : NaN for i in 1:n_T])
     mean_share_g = mean([se_T[i] > 0 ? (se_T_gamma[i] / se_T[i])^2 : NaN for i in 1:n_T])
 
+    # ── STRUCTURAL N̂_s variance (the same idea as T's delta method) ─────────────
+    # N̂_s is not estimated as a free parameter: it is CALIBRATED, solving
+    #
+    #     Ḡ_s(n; q̂) = Ĝ_s,        Ḡ_s(n; q̂) = mean_{l∈L_s} (1 − q̂_ls)^n,
+    #
+    # where Ĝ_s is the empirical count target (its bootstrap noise is the G block of
+    # Sigma_data) and q̂ = q̂(α̂, T*(α̂, γ̂)) — free of N_s by Lemma 2. So N̂_s inherits
+    # noise from THREE correlated sources, and the implicit function theorem gives
+    #
+    #     dN_s = [ dĜ_s − a_s dα̂ − b_s dγ̂ ] / D_s,
+    #     D_s = ∂Ḡ_s/∂n = mean_l (1−q̂_ls)^{N̂_s} ln(1−q̂_ls)  < 0,
+    #     a_s = ∂Ḡ_s/∂α  (TOTAL, along the profiled manifold) = G_alpha[G0 row s, :],
+    #     b_s = ∂Ḡ_s/∂γ  = (∂Ḡ_s/∂T)·f_γ, the block-6 row of the FREE-parameter
+    #           Jacobian times ∂T*/∂γ — no new simulation needed.
+    #
+    # Var(N̂) = L·JointCov(Ĝ, α̂, γ̂)·L' with L = [D^{-1}, −D^{-1}A, −D^{-1}B]. PSD by
+    # construction (a linear image of the data/simulation noise), like V_T.
+    #
+    # NOTE the direction of causation: T̂ = T*(α̂, γ̂) does NOT depend on N_s at all
+    # (invert_T_ge is the continuum inversion, and q̂ is N_s-free by Lemma 2), so the
+    # system is TRIANGULAR — α̂ → T̂ → q̂ → N̂_s. N_s noise does not feed back into T.
+    se_N_delta   = nothing
+    se_N_target  = nothing   # Ĝ channel only
+    se_N_alpha   = nothing   # α channel only
+    se_N_gamma   = nothing   # γ channel only
+    D_analytic   = nothing
+    D_firstdiff  = nothing
+    if GRANULAR && q_hat !== nothing && N_hat !== nothing &&
+       length(gb_block_ranges) >= 3 && J_free_gb !== nothing
+        G0_rng = gb_block_ranges[3]
+        nS     = length(G0_rng)
+        if nS == S && size(J_free_gb, 2) == length(param_labels_gb)
+            # D_s: exact ∂Ḡ_s/∂n, plus the unit first difference for comparison
+            # (they agree to O(q̂); the first difference is the integer-step scale).
+            D_analytic  = zeros(S)
+            D_firstdiff = zeros(S)
+            for s in 1:S
+                cells = CELLS_OF_SECTOR[s]
+                isempty(cells) && continue
+                acc_d = 0.0; acc_f = 0.0
+                for g in cells
+                    q  = q_hat[g]
+                    pw = (1.0 - q)^N_hat[s]
+                    acc_d += pw * log(max(1.0 - q, 1e-300))
+                    acc_f += -q * pw                       # Ḡ(n+1) − Ḡ(n)
+                end
+                D_analytic[s]  = acc_d / length(cells)
+                D_firstdiff[s] = acc_f / length(cells)
+            end
+
+            A_mat = Matrix{Float64}(G_alpha[G0_rng, :])                      # S × N_TAU
+            B_mat = Matrix{Float64}(J_free_gb[G0_rng, T_pos]) * f_gamma      # S × n_gam
+            Sig_GG = Sigma_data[G0_rng, G0_rng]                              # S × S
+            Cov_aG = P * Sigma_data[:, G0_rng]                               # N_TAU × S
+            Sig_gG = Sigma_data[gam_rng, G0_rng]                             # n_gam × S
+
+            Dinv = Diagonal([abs(D_analytic[s]) > 1e-14 ? 1.0 / D_analytic[s] : 0.0
+                             for s in 1:S])
+            L = hcat(Matrix(Dinv), -(Dinv * A_mat), -(Dinv * B_mat))         # S × (S+N_TAU+n_gam)
+            Joint = [ Sig_GG        Cov_aG'          Sig_gG';
+                      Cov_aG        Var_alpha_sw     Cov_ag;
+                      Sig_gG        Cov_ag'          Sig_gg ]
+            V_N = L * Joint * L';  V_N = (V_N .+ V_N') ./ 2
+            se_N_delta = sqrt.(max.(diag(V_N), 0.0))
+
+            # Marginal channels (same loadings, one covariance block at a time).
+            se_N_target = sqrt.(max.(diag(Dinv * Sig_GG * Dinv'), 0.0))
+            Va = (Dinv * A_mat) * Var_alpha_sw * (Dinv * A_mat)'
+            se_N_alpha  = sqrt.(max.(diag(Va), 0.0))
+            Vg = (Dinv * B_mat) * Sig_gg * (Dinv * B_mat)'
+            se_N_gamma  = sqrt.(max.(diag(Vg), 0.0))
+
+            NPZ.npzwrite(joinpath(inf_dir, "var_theta_N_s_delta.npy"), V_N)
+            NPZ.npzwrite(joinpath(inf_dir, "se_theta_N_s_delta.npy"),  se_N_delta)
+            NPZ.npzwrite(joinpath(inf_dir, "jacobian_N_s_wrt_alpha.npy"), A_mat)
+            NPZ.npzwrite(joinpath(inf_dir, "jacobian_N_s_wrt_gamma.npy"), B_mat)
+            NPZ.npzwrite(joinpath(inf_dir, "dGbar_dn.npy"), D_analytic)
+        end
+    end
+
     # α-only t and CI for T: the interval T̂ would carry if γ̂ were known exactly, i.e.
     # T's precision attributable to the estimation error of α̂ alone.
     t_T_alpha  = [se_T_alpha[i] > 0 ? T_hat_active[i] / se_T_alpha[i] : NaN for i in 1:n_T]
@@ -3031,7 +3144,7 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         println(io, "PROFILED-ESTIMATOR INFERENCE — α, T, N_s")
         println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
         println(io, "  n_α (N_TAU): $n_alpha   n_T : $n_T   n_γ : $n_gam" *
-                    (se_N === nothing ? "" : "   n_N_s : $(length(se_N))"))
+                    (N_hat === nothing ? "" : "   n_N_s : $(length(N_hat))"))
         println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))")
         println(io, "="^108)
         println(io, "\nThree parameter groups, each with the variance that matches how it is estimated:")
@@ -3097,28 +3210,63 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
 
         # ── N_s ──────────────────────────────────────────────────────────────────
         println(io, "\n" * "-"^108)
-        println(io, "--- parameters: N_s  (efficient matrix, as α) ---")
-        if se_N === nothing || N_hat === nothing
+        println(io, "--- parameters: N_s  (calibrated — structural delta method) ---")
+        if N_hat === nothing
             println(io, "  (not applicable — N_s exists only under GRANULAR)")
+        elseif se_N_delta === nothing
+            println(io, "  (structural SE unavailable — needs q̂ and the free-parameter Jacobian;")
+            println(io, "   only the naive SE below is reported)")
+            if se_N_naive !== nothing
+                for s in eachindex(se_N_naive)
+                    @printf(io, "  %-24s  N̂=%-8.0f  se_naive=%-12.6e\n",
+                            "N_s[sector $s]", Float64(N_hat[s]), se_N_naive[s])
+                end
+            end
         else
-            println(io, "  G_N = ∂m/∂N_s by the unit first difference m(N_s+1) − m(N_s). N_s is an")
-            println(io, "  INTEGER, so one variety IS the step: there is nothing to choose and no")
-            println(io, "  log step. Only Ḡ_s(0) depends on N_s (block 4 is N_s-free, Prop. 1), and")
-            println(io, "  Ḡ_s depends on N_s alone, so G_N is diagonal and the SE is in VARIETIES.")
-            println(io, "  se_N = √diag((G_N' W G_N)^{-1}) — the efficient variance, α's formula,")
-            println(io, "  holding α̂ fixed (α's own SE is unchanged by this block).")
-            nh = @sprintf("  %-24s  %-12s  %-12s  %-8s  %-12s  %-12s",
-                          "parameters", "estimate", "se_N", "t", "CI_lo", "CI_hi")
+            println(io, "  N̂_s is NOT a free parameter: it is CALIBRATED, solving Ḡ_s(n; q̂) = Ĝ_s")
+            println(io, "  with Ḡ_s(n; q̂) = mean_l (1−q̂_ls)^n. So — exactly as for T — its noise is")
+            println(io, "  inherited, here from THREE correlated sources, via the implicit function")
+            println(io, "  theorem:")
+            println(io, "      dN_s = [ dĜ_s − a_s dα̂ − b_s dγ̂ ] / D_s")
+            println(io, "    D_s = ∂Ḡ_s/∂n = mean_l (1−q̂)^{N̂} ln(1−q̂)   (< 0: Ḡ decreasing in n)")
+            println(io, "    a_s = ∂Ḡ_s/∂α  — the TOTAL derivative along the profiled manifold")
+            println(io, "    b_s = ∂Ḡ_s/∂γ  = (∂Ḡ_s/∂T)·f_γ")
+            println(io, "  Var(N̂) = L·JointCov(Ĝ, α̂, γ̂)·L', L = [D⁻¹, −D⁻¹A, −D⁻¹B]. PSD by")
+            println(io, "  construction. Units: VARIETIES.")
+            println(io, "  se_N_target : Ĝ-channel only — the bootstrap noise of the count target")
+            println(io, "                (the G block of Sigma_data). Usually dominant.")
+            println(io, "  se_N_alpha  : α-channel only.   se_N_gamma : γ-channel only.")
+            println(io, "  se_N_naive  : the NAIVE sandwich SE printed by inference_summary.txt")
+            println(io, "                (N_s as a free parameter, jointly with α and T), shown for")
+            println(io, "                contrast — it has no notion of the calibration above.")
+            nh = @sprintf("  %-18s  %-10s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-12s  %-12s",
+                          "parameters", "estimate", "se_N", "se_N_target",
+                          "se_N_alpha", "se_N_gamma", "se_N_naive", "t", "CI_lo", "CI_hi")
             println(io, nh)
             println(io, "  " * "-"^(length(nh)-2))
-            for s in eachindex(se_N)
-                v = Float64(N_hat[s]); sd = se_N[s]
+            for s in eachindex(se_N_delta)
+                v = Float64(N_hat[s]); sd = se_N_delta[s]
                 ts = (isfinite(sd) && sd > 0) ? v / sd : NaN
-                @printf(io, "  %-24s  %-12.6f  %-12.6e  %-8.4f  %-12.6f  %-12.6f\n",
-                        "N_s[sector $s]", v, sd, isnan(ts) ? -999.0 : ts,
-                        v - 1.96 * sd, v + 1.96 * sd)
+                @printf(io, "  %-18s  %-10.0f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-12.4f  %-12.4f\n",
+                        "N_s[sector $s]", v, sd, se_N_target[s], se_N_alpha[s],
+                        se_N_gamma[s],
+                        se_N_naive === nothing ? NaN : se_N_naive[s],
+                        isnan(ts) ? -999.0 : ts, v - 1.96 * sd, v + 1.96 * sd)
             end
-            println(io, "  N.B. the CI is continuous; N_s is an integer, so read it as the set of")
+            println(io, "\n  ∂Ḡ_s/∂n — the denominator that converts count-moment error into")
+            println(io, "  varieties. A small |D_s| means the count moment barely moves with one")
+            println(io, "  more variety there, so N̂_s is weakly identified in that sector.")
+            @printf(io, "  %-18s  %-16s  %-16s  %-10s\n",
+                    "sector", "D_s (exact)", "Ḡ(n+1)−Ḡ(n)", "gap")
+            for s in 1:S
+                gap = abs(D_analytic[s]) > 1e-14 ?
+                      abs(D_firstdiff[s] - D_analytic[s]) / abs(D_analytic[s]) : NaN
+                @printf(io, "  %-18d  %-16.6e  %-16.6e  %-10.4f\n",
+                        s, D_analytic[s], D_firstdiff[s], isnan(gap) ? -999.0 : gap)
+            end
+            println(io, "  (the two agree to O(q̂); the first difference is the integer-step scale,")
+            println(io, "   the exact derivative is the implicit-function object used above.)")
+            println(io, "\n  N.B. the CI is continuous; N_s is an integer, so read it as the set of")
             println(io, "  integer counts the count moment cannot distinguish at 95%.")
         end
 
@@ -3136,12 +3284,16 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         println(io, "  * f_γ perturbs EMP_GAMMA_T[c,s]; Σ_γγ must be the covariance of the SAME")
         println(io, "    (thresholded/renormalized) γ moments — regenerate Sigma_beta_gamma if the")
         println(io, "    active set was gamma-thresholded (see reconcile_sigma_data caveat).")
-        if se_N !== nothing
-            println(io, "  * N_s is profiled OUT (bisection on Ḡ_s(0)), so its SE is the marginal")
-            println(io, "    efficient SE holding α̂ fixed — it is not a joint (α, N_s) variance, and")
-            println(io, "    the α block above is unchanged by it. It also does not carry the")
-            println(io, "    Monte-Carlo dispersion of N̂_s across draw sets, which compute_jacobian")
-            println(io, "    reports separately; raise N_RHO_INFERENCE if that spread is large.")
+        if se_N_delta !== nothing
+            println(io, "  * The system is TRIANGULAR: α̂ → T̂ = T*(α̂,γ̂) → q̂ → N̂_s. T does NOT")
+            println(io, "    depend on N_s — invert_T_ge is the continuum inversion and q̂ is")
+            println(io, "    N_s-free (Lemma 2) — so N_s noise does not feed back into V_T. The")
+            println(io, "    arrow runs the other way, and that transmission IS in Var(N̂) above.")
+            println(io, "  * Var(N̂) holds α̂'s own variance at its reported value; it is not a")
+            println(io, "    joint (α, N_s) re-estimation, so the α block above is unchanged.")
+            println(io, "  * It also does not carry the Monte-Carlo dispersion of N̂_s across draw")
+            println(io, "    sets (compute_jacobian reports that separately) — that is simulation")
+            println(io, "    noise in q̂, removable by raising N_RHO_INFERENCE, not sampling error.")
         end
         println(io, "\n" * "="^108)
     end
@@ -3231,55 +3383,53 @@ function run_profiled_inference(theta_hat::Vector{Float64},
     G_alpha = G_alpha_full[gb_indices, :]                    # β+γ rows × N_TAU
     alpha_param_idx = gb_param_idx[alpha_pos]
 
-    # ── First-difference-Jacobian SEs for the parameters that are NOT columns of
-    #    the profiled α Jacobian, so they would otherwise be reported value-only.
-    #    T : the free-parameter FD Jacobian, i.e. the SE T carries when treated as a
-    #        free parameter rather than as the Sinkhorn image (a different object
-    #        from the delta-method SE, and worth seeing beside it).
-    #    N_s : the unit first difference m(N_s+1) − m(N_s) — N_s is an integer, so
-    #        one variety IS the step — with the efficient variance, α's formula.
+    # ── The NAIVE block: one Jacobian holding α, T and N_s as FREE parameters, so
+    #    inference_summary.txt reports a single method throughout (the mechanical
+    #    sandwich). The structural treatment — T as the Sinkhorn image, N_s as the
+    #    calibrated solution of Ḡ_s(n)=Ĝ_s — is inference_delta.txt's job.
+    #    T   : columns of the free-parameter FD Jacobian.
+    #    N_s : the unit first difference m(N_s+1) − m(N_s); N_s is an integer, so one
+    #          variety IS the step and the SE comes out in varieties.
     T_disp_labels = param_labels_gb[T_pos]
     T_disp_values = theta_hat[gb_param_idx[T_pos]]
 
-    se_T_fd = nothing
-    if J_free_gb !== nothing
-        if size(J_free_gb, 2) != length(param_labels_gb)
-            @warn "run_profiled_inference: J_free_gb has $(size(J_free_gb,2)) columns but " *
-                  "$(length(param_labels_gb)) gb params — skipping the free-parameter T SE."
-        else
-            V_free, floored = _gtwg_inv(J_free_gb, W)
-            floored && @warn "free-parameter (G'WG) was not PD; eigenvalue floor applied " *
-                             "for the first-difference T SEs."
-            se_T_fd = sqrt.(max.(diag(V_free)[T_pos], 0.0))
-        end
+    J_free_ok = J_free_gb !== nothing && size(J_free_gb, 2) == length(param_labels_gb)
+    if J_free_gb !== nothing && !J_free_ok
+        @warn "run_profiled_inference: J_free_gb has $(size(J_free_gb,2)) columns but " *
+              "$(length(param_labels_gb)) gb params — skipping the naive T block."
     end
 
-    N_hat_v, se_N = nothing, nothing
+    N_hat_v, se_N_naive, q_hat_v = nothing, nothing, nothing
+    G_N_gb = nothing
     if GRANULAR
+        gr = granular_report(profiled_theta(theta_hat);
+                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+        q_hat_v = gr.q_hat
         G_N, G_N_sd, N_hat_v, _ = compute_N_s_jacobian(
-            theta_hat; K=N_s_K, base_seed=N_s_base_seed,
+            theta_hat; N_hat=gr.N_hat, K=N_s_K, base_seed=N_s_base_seed,
             draw_method=draw_method, profile_T=true)
         G_N_gb = G_N[gb_indices, :]
-        NPZ.npzwrite(joinpath(output_folder, "inference", "jacobian_N_s.npy"),      G_N_gb)
-        NPZ.npzwrite(joinpath(output_folder, "inference", "jacobian_N_s_sd.npy"),   G_N_sd[gb_indices, :])
+        NPZ.npzwrite(joinpath(output_folder, "inference", "jacobian_N_s.npy"),    G_N_gb)
+        NPZ.npzwrite(joinpath(output_folder, "inference", "jacobian_N_s_sd.npy"), G_N_sd[gb_indices, :])
         V_N, floored_N = _gtwg_inv(G_N_gb, W)
         floored_N && @warn "N_s (G_N'W G_N) was not PD; eigenvalue floor applied. A sector " *
                            "whose ∂Ḡ_s(0)/∂N_s ≈ 0 has no local information on N_s."
-        se_N = sqrt.(max.(diag(V_N), 0.0))
-        NPZ.npzwrite(joinpath(output_folder, "inference", "se_theta_N_s.npy"), se_N)
+        se_N_naive = sqrt.(max.(diag(V_N), 0.0))
+        NPZ.npzwrite(joinpath(output_folder, "inference", "se_theta_N_s.npy"), se_N_naive)
     end
 
-    fd_labels = String[]; fd_values = Float64[]; fd_se = Float64[]
-    if se_T_fd !== nothing
-        append!(fd_labels, T_disp_labels)
-        append!(fd_values, T_disp_values)
-        append!(fd_se,     se_T_fd)
+    fd_labels = String[]; fd_values = Float64[]; fd_blocks = Matrix{Float64}[]
+    if J_free_ok
+        append!(fd_labels, vcat(param_labels_gb[alpha_pos], T_disp_labels))
+        append!(fd_values, vcat(theta_hat[alpha_param_idx], T_disp_values))
+        push!(fd_blocks, Matrix{Float64}(J_free_gb[:, vcat(alpha_pos, T_pos)]))
     end
-    if se_N !== nothing
-        append!(fd_labels, ["N_s[sector $s]" for s in eachindex(se_N)])
+    if G_N_gb !== nothing
+        append!(fd_labels, ["N_s[sector $s]" for s in 1:size(G_N_gb, 2)])
         append!(fd_values, Float64.(N_hat_v))
-        append!(fd_se,     se_N)
+        push!(fd_blocks, Matrix{Float64}(G_N_gb))
     end
+    fd_G = isempty(fd_blocks) ? nothing : reduce(hcat, fd_blocks)
 
     # ── Profiled α inference (reduced Jacobian) — T shown value-only in report ──
     inf_alpha = compute_smm_inference(
@@ -3297,9 +3447,9 @@ function run_profiled_inference(theta_hat::Vector{Float64},
         moment_labels         = moment_labels_gb,
         display_labels        = vcat(collect(head_labels), collect(T_disp_labels)),
         display_values        = vcat(collect(head_values), collect(T_disp_values)),
-        fd_labels             = isempty(fd_labels) ? nothing : fd_labels,
-        fd_values             = isempty(fd_labels) ? nothing : fd_values,
-        fd_se                 = isempty(fd_labels) ? nothing : fd_se)
+        fd_G                  = fd_G,
+        fd_labels             = fd_G === nothing ? nothing : fd_labels,
+        fd_values             = fd_G === nothing ? nothing : fd_values)
 
     # ── Correlated T inference (α error + γ data noise + covariance) ────────────
     inf_T = compute_profiled_T_inference(
@@ -3321,7 +3471,15 @@ function run_profiled_inference(theta_hat::Vector{Float64},
         alpha_se_eff  = collect(inf_alpha["se_eff"]),
         alpha_se_sw   = collect(inf_alpha["se_sw"]),
         N_hat         = N_hat_v,
-        se_N          = se_N)
+        # Prefer the JOINT naive SE that inference_summary.txt actually prints (last
+        # S entries of its naive block); fall back to the marginal (G_N'W G_N)^{-1}.
+        se_N_naive    = begin
+            sfd = get(inf_alpha, "se_fd_sw", nothing)
+            (sfd !== nothing && N_hat_v !== nothing && length(sfd) >= length(N_hat_v)) ?
+                collect(sfd[end-length(N_hat_v)+1:end]) : se_N_naive
+        end,
+        q_hat         = q_hat_v,
+        J_free_gb     = J_free_ok ? J_free_gb : nothing)
 
     return inf_alpha, inf_T
 end
