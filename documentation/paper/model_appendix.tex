@@ -1,0 +1,684 @@
+% =====================================================================
+% model_appendix.tex — replaces Appendix B ("Details on the Structural Model")
+% of the paper, sections B.1 and B.2. B.3 (untargeted moment derivation) and
+% the EV eco-score appendix are unchanged and should follow this file.
+%
+% \input{model_appendix} from the main file. Requires amsmath, amssymb, amsthm,
+% booktabs, enumitem and natbib. Add to the preamble if not already present:
+%
+%   \newtheorem{proposition}{Proposition}
+%   \newtheorem{lemma}{Lemma}
+%   \newtheorem{assumption}{Assumption}
+%   \newtheorem{remark}{Remark}
+%   \DeclareMathOperator*{\argmin}{arg\,min}
+%
+% Labels used by core_model.tex: app:model-derivation, app:model-foreign,
+% app:model-calibration, app:model-prop, app:model-zeros, app:model-bounds.
+% =====================================================================
+
+\section{Details on the Structural Model}
+\label{app:model}
+
+\subsection{Derivation}
+\label{app:model-derivation}
+
+\paragraph{Setup.} The economy is divided into $R+1$ regions, populated by two types of firms:
+producers of a final good and producers of intermediate goods used as inputs in the production
+of the final good. The $(R+1)$th region represents the rest of the world. The analysis primarily
+focuses on the matching of firms across domestic regions, controlling for competition from
+foreign firms using their shares in total sales as reference. We assume that each domestic
+region hosts at most one representative firm in the downstream sector, identified by its region
+of origin. Intermediate goods are produced across $S$ sectors, with each region potentially
+hosting many suppliers in each sector. We define a market $(s,r')$ as the collection of firms
+located in region $r'$ that belong to upstream sector $s$.
+
+Domestic regions are partitioned into attraction areas,
+$\mathcal{R}=\bigsqcup_{a\in\mathcal{A}}\mathcal{R}_{a}$, where $\mathcal{R}_{a}$ is the set of
+regions whose nearest downstream producer is the anchor of area $a$, and $a(r')$ denotes the
+area of region $r'$.
+
+\paragraph{Demand for final manufacturing products.} Firms in the downstream sector each own the
+blueprint to produce a unique differentiated variety of the final good. The market for the final
+good is characterized by monopolistic competition and iso-elastic demand functions:
+\begin{equation}
+q_{r}=\left(\frac{p_{r}}{P}\right)^{\varepsilon-1}\frac{E}{P}\,\delta_{r},
+\end{equation}
+where $q_{r}$ denotes the quantity demanded of the variety produced in region $r$ at price
+$p_{r}$, given nominal consumption $E$ and the downstream sector's price index $P$. The
+parameter $\varepsilon$ measures the price elasticity of sales, and $\delta_{r}$ is an exogenous
+component of demand, varying across downstream producers and later used to simulate demand
+shocks and their diffusion along production linkages. We abstract from foreign demand and assume
+that the domestic market for final consumption goods is perfectly integrated.
+
+\paragraph{Technology in the downstream sector.} Production of final goods requires the assembly
+of intermediates, combined with labor, under a nested CES structure:
+\begin{equation}
+y_{r}=A_{r}\Big[\Omega_{L}^{\frac{1}{\lambda}}\ell_{r}^{\frac{\lambda-1}{\lambda}}
++(1-\Omega_{L})^{\frac{1}{\lambda}}\big(q^{I}_{r}\big)^{\frac{\lambda-1}{\lambda}}\Big]^{\frac{\lambda}{\lambda-1}},
+\end{equation}
+where $\ell_{r}$ is labor demand and $q^{I}_{r}$ the firm's intermediate input consumption. The
+parameter $\Omega_{L}$ governs the share of labor in total production costs, while $\lambda$ is
+the elasticity of substitution between labor and intermediates. Firm productivity $A_{r}$ is
+exogenous. Intermediate consumption is itself a nested CES aggregator across sectors and, within
+each sector, across varieties:
+\begin{equation}
+q^{I}_{r}=\Big[\sum_{s=1}^{S}\Omega_{s}^{\frac{1}{\nu}}q_{rs}^{\frac{\nu-1}{\nu}}\Big]^{\frac{\nu}{\nu-1}},
+\qquad
+q_{rs}=\Big[\frac{1}{N_{s}}\sum_{\rho=1}^{N_{s}}q_{rs}(\rho)^{\frac{\nu_{s}-1}{\nu_{s}}}\Big]^{\frac{\nu_{s}}{\nu_{s}-1}},
+\label{eq:app-ces}
+\end{equation}
+where $\Omega_{s}$ governs the share of sector $s$ in intermediate consumption, $\nu$ is the
+elasticity of substitution across sectors and $\nu_{s}$ that across varieties within a sector.
+
+The only change relative to the continuum formulation is the inner aggregator: the integral over
+$j\in[0,1]$ is replaced by an average over the $N_{s}$ varieties. Writing it as an
+\emph{average} rather than a sum is a normalization of the love-of-variety level, discussed and
+justified in Appendix~\ref{app:model-price}; it leaves every sourcing share, and hence the
+entire extensive margin, unchanged.
+
+Given the nested CES structure, the nominal demand for intermediate products is
+\begin{equation}
+x_{rs}(\rho)=\Omega_{s}(1-\Omega_{L})
+\left(\frac{p_{rs}(\rho)}{p_{rs}}\right)^{1-\nu_{s}}
+\left(\frac{p_{rs}}{p_{r}}\right)^{1-\nu}
+\left(\frac{p_{r}}{c_{r}}\right)^{1-\lambda}\frac{c_{r}y_{r}}{A_{r}},
+\end{equation}
+with $p_{rs}\equiv\big[\tfrac{1}{N_{s}}\sum_{\rho}p_{rs}(\rho)^{1-\nu_{s}}\big]^{\frac{1}{1-\nu_{s}}}$
+the cost index for intermediates in sector $s$,
+$p_{r}\equiv\big[\sum_{s}\Omega_{s}p_{rs}^{1-\nu}\big]^{\frac{1}{1-\nu}}$ the cost index for
+intermediates, and
+$c_{r}\equiv\big[\Omega_{L}w_{r}^{1-\lambda}+(1-\Omega_{L})p_{r}^{1-\lambda}\big]^{\frac{1}{1-\lambda}}$
+the unit cost of the firm. In equilibrium $y_{r}=q_{r}$.
+
+\paragraph{Technology in upstream sectors.} Intermediate goods are produced with labor using a
+constant-returns-to-scale technology. Wages in sector $s$ and region $r'$ are denoted $w_{r's}$
+and taken as given. As in Eaton and Kortum (2002) we assume that varieties produced within and
+across regions are perfect substitutes and that productivity draws are independent. The
+departure from the continuum case is that each sector contains $N_{s}$ varieties.
+
+\begin{assumption}[Granularity]
+\label{as:granular}
+Each upstream sector $s$ consists of $N_{s}\in\mathbb{N}$ horizontally differentiated varieties
+$\rho=1,\dots,N_{s}$. Within each variety $\rho$ and each region $r'$ there is a continuum of
+firms whose productivities above $z$ form a Poisson process with mean $T_{r's}z^{-\theta}$.
+Draws are independent across varieties, regions and sectors.
+\end{assumption}
+
+The continuum of firms is what keeps the model tractable. The number of firms above $z$ in
+$(r',s,\rho)$ is Poisson with mean $T_{r's}z^{-\theta}$, so the most productive one satisfies
+\begin{equation}
+\Pr\big(\varphi_{r'\rho s}\le z\big)=\Pr(\text{no firm above }z)=e^{-T_{r's}z^{-\theta}},
+\label{eq:app-champion}
+\end{equation}
+that is, $\varphi_{r'\rho s}$ is exactly $\mathrm{Fr\acute{e}chet}(T_{r's},\theta)$. One
+Fr\'echet draw per (region, variety) pair \emph{is} the champion of a continuum of firms, not an
+approximation to it. Since the iceberg cost scales all firms of region $r'$ identically, that
+champion is the unique region-$r'$ firm that ever serves any buyer sourcing $\rho$ from $r'$:
+\textbf{a firm is a (region, variety) champion}, with delivered cost
+$c_{r'\rho s}(r)=w_{r's}\tau_{r'rs}/\varphi_{r'\rho s}$. This is the ``fixed number of
+independent Ricardian draws'' form of granular Eaton--Kortum \citep[cf.][]{eks2012,bejk2003}.
+
+\begin{assumption}[Area-level comparative advantage]
+\label{as:geo}
+Comparative advantage is area-specific: $T_{r's}=T_{a(r')s}$ for every $r'\in\mathcal{R}_{a}$,
+with one parameter per (sector, area). Productivity draws remain independent across regions ---
+two regions in the same area share the Fr\'echet scale, not the realization of their champions.
+\end{assumption}
+
+Assumption~\ref{as:geo} does not make regions within an area interchangeable. Each runs its own
+Ricardian competition for each variety, and two regions at different distances from a buyer have
+different win probabilities. What it removes is unobserved technological heterogeneity within an
+area, which is what allows the model to explain the same variation the extensive-margin
+regression uses.
+
+\paragraph{Equilibrium.} The resolution follows the same steps as in Eaton and Kortum (2002).
+Given the Fr\'echet assumption, the minimum price at which suppliers from $(r',s)$ can serve
+market $r$ is distributed
+\begin{equation}
+G_{r'rs}(p)=\Pr\Big(\frac{w_{r's}\tau_{r'rs}}{\varphi_{r'\rho s}}\le p\Big)
+=1-e^{-\left[T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}\right]p^{\theta}},
+\end{equation}
+so the distribution of input prices for downstream firms in region $r$ is
+\begin{equation}
+G_{rs}(p)=1-\prod_{r'=1}^{R+1}\big[1-G_{r'rs}(p)\big]=1-e^{-\Phi_{rs}p^{\theta}},
+\qquad
+\Phi_{rs}=\sum_{a'}T_{a's}\sum_{r'\in\mathcal{R}_{a'}}(w_{r's}\tau_{r'rs})^{-\theta}.
+\label{eq:app-Phi}
+\end{equation}
+The probability that a downstream firm in location $r$ picks a supplier in market $(r',s)$ is
+thus
+\begin{equation}
+\gamma_{r'rs}=\frac{T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}}{\Phi_{rs}} .
+\label{eq:app-share}
+\end{equation}
+Taking the perspective of the supplier, the probability of being the lowest-cost supplier in
+market $(r,s)$, given location $r'$ and productivity $z$, is
+\begin{equation}
+\rho_{r'rs}(z)=e^{-\Phi_{rs}(w_{r's}\tau_{r'rs})^{\theta}z^{-\theta}}
+=e^{-T_{a(r')s}\gamma^{-1}_{r'rs}z^{-\theta}} .
+\label{eq:app-rho}
+\end{equation}
+Because the conditional distribution of prices is not origin-specific,
+$G_{r'rs}(p)=G_{rs}(p)$, and $\gamma_{r'rs}$ is also the expected share of intermediates from
+$r'$ purchased by a downstream firm in $r$. The expected cost indices are
+\begin{equation}
+p_{rs}=\Big[\Gamma\Big(\frac{\theta+1-\nu_{s}}{\theta}\Big)\Big]^{\frac{1}{1-\nu_{s}}}\Phi_{rs}^{-1/\theta},
+\qquad
+p_{r}=\Big[\sum_{s}\Omega_{s}p_{rs}^{1-\nu}\Big]^{\frac{1}{1-\nu}},
+\qquad
+c_{r}=\Big[\Omega_{L}w_{r}^{1-\lambda}+(1-\Omega_{L})p_{r}^{1-\lambda}\Big]^{\frac{1}{1-\lambda}},
+\end{equation}
+where the first expression is the certainty-equivalent index of Appendix~\ref{app:model-price}.
+Bilateral flows are
+\begin{equation}
+X_{r'rs}=\gamma_{r'rs}\,x_{rs}
+=\gamma_{r'rs}\,\Omega_{s}(1-\Omega_{L})
+\left(\frac{p_{rs}}{p_{r}}\right)^{1-\nu}\left(\frac{p_{r}}{c_{r}}\right)^{1-\lambda}\frac{c_{r}y_{r}}{A_{r}} .
+\end{equation}
+Since we do not observe these bilateral flows directly, we cannot use this equation to estimate
+the model's structural parameters and rely instead on simulated moments.
+
+\subsection{The extensive margin and the two classes of zeros}
+\label{app:model-zeros}
+
+Across the $N_{s}$ varieties the win events are i.i.d., so with $K_{r'rs}$ the number of
+sector-$s$ varieties buyer $r$ sources from $r'$,
+\begin{equation}
+K_{r'rs}\sim\mathrm{Bin}\big(N_{s},\gamma_{r'rs}\big),
+\qquad
+\Pr(K_{r'rs}=0)=(1-\gamma_{r'rs})^{N_{s}}>0 .
+\end{equation}
+Under a continuum this probability is $\lim_{N\to\infty}(1-\gamma_{r'rs})^{N}=0$ for every
+origin with $T_{r's}>0$: the extensive margin is degenerate and the observed zeros are not a
+model outcome. Finiteness is exactly what restores it.
+
+\begin{remark}[Dependence across buyers]
+\label{rem:dependence}
+For a given variety the champion costs are common across buyers; only $\tau_{r'rs}$ differs. Win
+events are therefore positively dependent across buyers, and the union probability $q_{r's}$ is
+not the product of the per-market marginals. The per-market marginal above is nonetheless exact,
+and $q_{r's}$ is evaluated by simulation. This matters because the survey records whether a firm
+supplies the industry, not which buyer it serves: the empirical outcome is the union, and the
+model counterpart is computed as the same union.
+\end{remark}
+
+Assumption~\ref{as:geo} sorts observed zeros into two economically distinct classes, and the
+distinction determines what is estimated.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.21\textwidth}p{0.24\textwidth}p{0.19\textwidth}p{0.28\textwidth}@{}}
+\toprule
+\textbf{Zero} & \textbf{Treatment} & \textbf{Probability} & \textbf{Role}\\
+\midrule
+Whole attraction area $a$ has no supplier in $s$
+& \emph{Structural}: $T_{as}=0$, $(s,a)$ outside the active set
+& $1$ by construction
+& None --- absorbed by the $a\times s$ fixed effect (Lemma~\ref{lem:fe}); no parameter estimated\\[4pt]
+Region $r'$ inside an active area has no supplier
+& \emph{Endogenous}: inherits $T_{as}>0$, own distance $d_{r'}$
+& $(1-q_{r's})^{N_{s}}$
+& \textbf{The identifying variation}: disciplined by distance alone\\
+\bottomrule
+\end{tabular}
+\caption{The two classes of extensive-margin zeros. The second row is exactly the set of regions
+that host firms but no supplier. Under region-level comparative advantage these had to be
+assigned $T\equiv0$, making their zeros exogenous; under Assumption~\ref{as:geo} they inherit
+their area's comparative advantage and their zeros become model predictions.}
+\label{tab:app-hierarchy}
+\end{table}
+
+The reason the fixed effect dictates this split is the following.
+
+\begin{lemma}[All-zero groups carry no information about the distance slope]
+\label{lem:fe}
+Index observations by firm $i$ within fixed-effect group $g=(a,s)$, with outcome $y_{i}$,
+regressor $x_{i}$, weights $\omega_{i}>0$ and group effect $\phi_{g}$.
+\begin{enumerate}[nosep,topsep=2pt,label=(\roman*)]
+\item \emph{Complementary log-log.} The log-likelihood of a group in which $y\equiv0$ is
+$\ell_{g}=-e^{\phi_{g}}\sum_{i}e^{\beta x_{i}}$, whose supremum over $\phi_{g}$ is attained as
+$\phi_{g}\to-\infty$ with $\ell_{g}\to0$ and $\partial\ell_{g}/\partial\beta\to0$: the group
+drops out of the concentrated likelihood and contributes exactly nothing to $\hat\beta$.
+\item \emph{Linear probability model.} By Frisch--Waugh--Lovell an all-zero group has
+$\tilde y\equiv0$, contributing zero to the numerator and a positive amount to the denominator,
+so $\hat\beta=\varkappa\hat\beta^{+}$ with
+$\varkappa=\big(\sum_{a\in\mathcal{A}^{+}}\sum\omega\tilde x^{2}\big)/\big(\sum_{a}\sum\omega\tilde x^{2}\big)\in(0,1]$,
+where $\mathcal{A}^{+}$ is the set of areas hosting at least one supplier.
+\end{enumerate}
+\end{lemma}
+
+Under the cloglog link --- the link the model implies --- $\alpha$ is therefore identified
+exclusively from variation \emph{within} attraction areas that host at least one supplier. Under
+a linear probability model the empty areas enter only as a mechanical dilution of the same
+within-area signal. Either way, an area with no supplier at all carries no information about the
+distance slope, which is why the model does not attempt to explain it.
+
+\subsection{The firm-level reduced form}
+\label{app:model-prop}
+
+\begin{proposition}[Firm-level reduced form]
+\label{prop:firm}
+Let a firm be a (region, variety) champion with productivity $z$ located in $r'$, and let $a$ be
+its area's downstream anchor. Writing
+$\Phi^{-r'}_{as}=\sum_{r''\neq r'}T_{a(r'')s}(w_{r''s}\tau_{r''as})^{-\theta}$ for the
+competitors' cost scale,
+\begin{equation}
+\Pr\big(\text{the firm supplies}\mid z\big)
+=\exp\Big(-\Phi^{-r'}_{as}\big(w_{r's}\tau_{r'as}\big)^{\theta}z^{-\theta}\Big),
+\label{eq:app-firm-win}
+\end{equation}
+so the probability that it does \emph{not} supply is a complementary log-log function
+\begin{equation}
+\Pr\big(\text{no supply}\mid z\big)=1-\exp\big(-\exp(\eta)\big),
+\qquad
+\eta=\underbrace{\ln\Phi^{-r'}_{as}}_{\text{area}\times\text{sector FE}}
++\theta\ln w_{r's}
++\theta\alpha\,\ln d_{r'a}
+-\theta\,\ln z .
+\label{eq:app-firm-cloglog}
+\end{equation}
+The variety count $N_{s}$ does not appear.
+\end{proposition}
+
+Three consequences, and they are the backbone of the estimation.
+
+\begin{enumerate}[nosep,topsep=3pt,label=(\alph*)]
+\item \textbf{The empirical specification is the model's own auxiliary model.} A cloglog of the
+``does not supply'' indicator on log distance and log own productivity, with an
+area$\times$sector fixed effect, is exactly \eqref{eq:app-firm-cloglog} for a single downstream
+market, with distance coefficient $+\theta\alpha$ and productivity coefficient $-\theta$. The
+empirical outcome is the union over buyers rather than a single market (Remark~\ref{rem:dependence}),
+so \eqref{eq:app-firm-cloglog} is exact in the single-destination limit and is otherwise an
+auxiliary model. We therefore estimate the \emph{same} regression on simulated and observed data
+and match the coefficients, which is consistent for $\alpha$ whether or not the link is exact.
+\item \textbf{$\alpha$ and $N_{s}$ separate.} $N_{s}$ is absent from
+\eqref{eq:app-firm-cloglog}: conditioning on the firm removes it. The regression identifies
+$\alpha$; the count level identifies $N_{s}$; there is no residual coupling.
+\item \textbf{The productivity coefficient is a free over-identifying test.} It equals
+$-\theta$. Extending the moment vector to include it would let $\theta$ be estimated rather than
+calibrated.
+\end{enumerate}
+
+The outcome convention is dictated by the unit of observation rather than chosen. Simulating the
+exact object at $\theta=1$, $\alpha=0.30$, with firms as (region $\times$ variety) champions,
+the ``does not supply'' outcome recovers $\hat\beta_{\ln d}=+0.327$ and
+$\hat\beta_{\ln z}=-1.051$ against truths $\theta\alpha=0.30$ and $-\theta=-1.0$; the reversed
+outcome recovers neither ($-0.426$ and $+1.452$).
+
+\subsection{The count moment and bounds on the variety count}
+\label{app:model-bounds}
+
+The zeros are a cell-level object. With $\mathcal{R}^{+}_{s}$ the regions inside active
+attraction areas, the empirical moment is the share of those regions hosting at most $n$
+suppliers,
+\begin{equation}
+\bar G_{s}(n)=\frac{1}{|\mathcal{R}^{+}_{s}|}
+\#\big\{r'\in\mathcal{R}^{+}_{s}:K_{r's}\le n\big\},
+\qquad
+\mathbb{E}\big[\bar G_{s}(0)\big]=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'}(1-q_{r's})^{N_{s}} .
+\label{eq:app-count}
+\end{equation}
+Writing $\mu_{r's}=N_{s}q_{r's}$ and using the Poisson approximation,
+$\partial\bar G_{s}(K)/\partial N_{s}
+=-|\mathcal{R}^{+}_{s}|^{-1}\sum_{r'}q_{r's}e^{-\mu_{r's}}\mu_{r's}^{K}/K!$, which peaks at
+$K\approx\mu_{r's}$ and vanishes as $\bar G_{s}(K)\to1$: saturated thresholds carry no
+identifying variation and a poorly estimated variance, so we use the empty-region share
+$\bar G_{s}(0)$, which is both the most interpretable threshold and typically near-optimal.
+
+Because the iceberg cost never changes which firm is cheapest within a region, each variety
+generates one distinct supplying firm per winning origin. So if $N^{\mathrm{obs}}_{s}$ is the
+number of distinct upstream firms observed to supply the downstream industry,
+$N^{\mathrm{obs}}_{s}=\sum_{\rho}\#\{\text{origins winning }\rho\text{ somewhere}\}\in[N_{s},N_{s}R^{D}]$,
+where $R^{D}$ is the number of downstream buyers, hence
+\begin{equation}
+\frac{N^{\mathrm{obs}}_{s}}{R^{D}}\;\le\;N_{s}\;\le\;N^{\mathrm{obs}}_{s} .
+\label{eq:app-bounds}
+\end{equation}
+The bounds are tight: the upper when every variety is globally sourced from a single origin, the
+lower when each of the $R^{D}$ buyers sources it from a different origin. Since
+$\mathbb{E}[\sum_{r'}K_{r's}]=N_{s}\sum_{r'}q_{r's}$, matching the observed firm count gives a second,
+closed-form estimate $N^{\mathrm{count}}_{s}=N^{\mathrm{obs}}_{s}/\sum_{r'}q_{r's}$ that lies
+inside \eqref{eq:app-bounds} by construction --- a free over-identifying check.
+
+\paragraph{Degrees of freedom.} Fix a sector, let $A^{+}=|\mathcal{A}^{+}_{s}|$ and let
+$R^{\mathrm{act}}_{a}$ be the number of regions in area $a$ with a strictly positive observed
+share. The $T$ block has $A^{+}-1$ free elements after the reference normalization, against
+$\sum_{a}R^{\mathrm{act}}_{a}$ share moments, so Assumption~\ref{as:geo} converts what were free
+parameters into
+\begin{equation}
+\sum_{a\in\mathcal{A}^{+}}\big(R^{\mathrm{act}}_{a}-1\big)
+\quad\text{over-identifying restrictions,}
+\end{equation}
+one per active region beyond the first in each area. Each is a within-area statement: given the
+area aggregate, the split across its regions must follow the distance profile. Under
+region-level comparative advantage this count is zero.
+
+\subsection{Structural estimation: the moments}
+\label{app:model-moments}
+
+We use six sets of theoretical moments, observed in the data using a combination of IO tables
+and micro-level data.
+
+\begin{enumerate}[topsep=3pt,itemsep=3pt,label=\arabic*.]
+\item \textbf{Aggregate labor share at the level of the industry:}
+\begin{equation}
+\tilde\Omega_{L}\equiv\frac{\sum_{r}w_{r}\ell_{r}}{\sum_{r}c_{r}A_{r}^{-1}y_{r}}
+=\sum_{r}\frac{c_{r}A_{r}^{-1}y_{r}}{\sum_{r}c_{r}A_{r}^{-1}y_{r}}\,\Omega_{L}
+\left(\frac{w_{r}}{c_{r}}\right)^{1-\lambda}.
+\end{equation}
+In the model it is a sales-weighted average of firm-level labor shares. In the data we use the
+share of labor costs in total costs from IO tables.
+
+\item \textbf{Aggregate share of sector $s$ in the industry's input purchases:}
+\begin{equation}
+\tilde\Omega_{s}\equiv\frac{\sum_{r}p_{rs}q_{rs}}{\sum_{r}\sum_{s}p_{rs}q_{rs}}
+=\sum_{r}\frac{p_{r}q^{I}_{r}}{\sum_{r}p_{r}q^{I}_{r}}\,\Omega_{s}
+\left(\frac{p_{rs}}{p_{r}}\right)^{1-\nu}.
+\end{equation}
+In the data we use technical coefficients for the downstream industry from IO tables.
+
+\item \textbf{The share of each region in downstream sales:}
+\begin{equation}
+\pi_{r}\equiv\frac{c_{r}A_{r}^{-1}y_{r}}{\sum_{r}c_{r}A_{r}^{-1}y_{r}}
+=\left(\frac{p_{r}}{P}\right)^{-\varepsilon}
+=\frac{(c_{r}A_{r}^{-1})^{-\varepsilon}}{\sum_{r}(c_{r}A_{r}^{-1})^{-\varepsilon}},
+\end{equation}
+recovered from sales data on the population of downstream producers.
+
+\item \textbf{The extensive-margin distance coefficient.} The cloglog of
+\eqref{eq:app-firm-cloglog}, estimated on the simulated firm population with the same
+specification as Equation~(1) in the data: outcome ``does not supply'', regressors log distance
+to the area anchor and log own productivity, area$\times$sector fixed effects.
+
+\item \textbf{Area-aggregated sourcing shares.} The share of the downstream industry's purchases
+of sector $s$ sourced from area $a$:
+\begin{equation}
+\tilde\gamma_{as}\equiv\sum_{r'\in\mathcal{R}_{a}}\frac{\sum_{r}X_{r'rs}}{\sum_{r}\sum_{r''}X_{r''rs}}
+=\sum_{r'\in\mathcal{R}_{a}}\sum_{r}\frac{\sum_{r''}X_{r''rs}}{\sum_{r''}\sum_{r}X_{r''rs}}\,\gamma_{r'rs}.
+\label{eq:app-gamma-area}
+\end{equation}
+In the data we reconstitute firm-level sales to the downstream industry using sales-share data,
+$x_{i(r',s)d}=\mathbf{1}(\mathrm{Sup}_{i(r',s)})\,a^{D}_{d\,i(r',s)}\,x_{i(s,r')}$, sum over all
+firms in the area and normalize by the sum over all firms from sector $s$. The aggregation runs
+over \emph{every} region of the area, including those hosting no supplier, on both the model and
+the data side.
+
+\item \textbf{The count moment} $\bar G_{s}(0)$ of \eqref{eq:app-count}: the share of regions
+inside active attraction areas that host no supplier of sector $s$.
+\end{enumerate}
+
+Moments 1--3 and 5 are the same objects as in the continuum version of the model, with 5 now
+aggregated to the area. Moments 4 and 6 are what the granular structure adds.
+
+\paragraph{Notes on foreign parameters.}
+\label{app:model-foreign}
+We do not have the data to estimate parameters relating to foreign firms. Instead we take the
+share of foreign inputs in sourcing as an exogenous parameter used in the simulated data, so the
+vector of parameters to be estimated excludes region $R+1$. Moments 1--4 and 6 do not involve
+$R+1$. For moment 5, with $w_{R+1,s}$ the share of foreign inputs in sector $s$'s input
+purchases,
+\begin{equation}
+\tilde\gamma_{as}=(1-w_{R+1,s})\sum_{r'\in\mathcal{R}_{a}}\sum_{r}
+\frac{\sum_{r''\neq R+1}X_{r''rs}}{\sum_{r''\neq R+1}\sum_{r}X_{r''rs}}\,\tilde\gamma_{r'rs},
+\qquad
+\tilde\gamma_{r'rs}=\frac{T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}}{\tilde\Phi_{rs}},
+\end{equation}
+with $\tilde\Phi_{rs}=\sum_{r'=1}^{R}T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}$. Foreign
+competition still enters the win probabilities through $\Phi_{rs}$ in \eqref{eq:app-Phi}; what
+is not estimated is foreign comparative advantage.
+
+\paragraph{Calibrated parameters.}
+\label{app:model-calibration}
+The remaining parameters $\{\varepsilon,\theta,\lambda,\nu,\{\nu_{s}\},\{w_{r's}\}\}$ are
+calibrated. We use the estimates from Fontagn\'e et al.\ (2022) for $\varepsilon$: the sales
+elasticity for motor vehicles and aerospace is respectively $-9$ and $-16$. The shape $\theta$
+of the Fr\'echet distribution is calibrated following Antr\`as et al.\ (2017). Elasticities of
+substitution in production follow the literature, notably Baqaee and Farhi (2019): $\lambda=0.5$
+for the elasticity between labor and intermediate inputs and $\nu=0.9$ across sectors. Local
+wages are calibrated using labor cost information from employer--employee data in 2019
+(DADS/BTS). Note that Proposition~\ref{prop:firm}(c) makes $\theta$ over-identified: the
+coefficient on log own productivity in moment 4 should equal $-\theta$, and we report it.
+
+\subsection{Estimation}
+\label{app:model-estimation}
+
+\paragraph{Simulation algorithm.} Given the calibrated elasticities and a candidate parameter
+vector, we simulate the productivity champions of every (region, variety) pair, solve for all
+bilateral trade flows --- from each potential supplier to each downstream region --- and
+construct the simulated moments. All six blocks are computed from a \emph{single} Ricardian
+solve on one set of draws. The SMM estimator is
+\begin{equation}
+\hat\mu=\argmin_{\mu}\;\big(\tilde M(\mu)-\hat M\big)'W\big(\tilde M(\mu)-\hat M\big),
+\label{eq:app-smm}
+\end{equation}
+where $\tilde M$ (resp.\ $\hat M$) denotes the vector of theoretical (resp.\ empirical) moments
+and $W$ is a weighting matrix. Optimal weights assign lower importance to imprecisely estimated
+moments.
+
+The variety count never enters the simulation. It is confined to two objects, both closed form,
+and that confinement is the content of Proposition~\ref{prop:firm} together with:
+
+\begin{lemma}[$q_{r's}$ is free of $N_{s}$]
+\label{lem:qfree}
+Winning a variety is the comparison
+$w_{r's}\tau_{r'rs}/\varphi_{r'\rho s}<\min_{r''\neq r'}w_{r''s}\tau_{r''rs}/\varphi_{r''\rho s}$,
+so $q_{r's}=q_{r's}(T_{\cdot s},w,\tau,\theta)$ and nothing else. The variety count, the price
+index, downstream costs and expenditures do not appear.
+\end{lemma}
+
+The economics is that winning is a statement about \emph{relative costs}, whereas $N_{s}$ and
+$P_{rs}$ are aggregators built after the winners are known: expenditure allocates value across
+winners, it does not choose them. The one condition that would break the lemma is endogenous
+upstream wages, since $w$ enters the comparison directly; wages are taken as data.
+
+Together the two results say that $N_{s}$ reaches the moment vector only through
+$\bar G_{s}(0)$ and through $\widehat N_{s}$ itself, and that both are functions of $q_{r's}$
+alone. Writing $k_{r's}$ for the number of the $m$ simulated varieties won somewhere by region
+$r'$ --- by Lemma~\ref{lem:qfree} an estimate of $q_{r's}$ valid whatever the variety count ---
+the count moment is evaluated by the unbiased combinatorial estimator
+\begin{equation}
+\bar G_{s}(n)=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}
+\frac{\binom{m-k_{r's}}{n}}{\binom{m}{n}},
+\qquad
+\mathbb{E}\left[\frac{\binom{m-k}{n}}{\binom{m}{n}}\right]=(1-q)^{n}\ \ \text{for } n\le m,
+\label{eq:app-Gclosed}
+\end{equation}
+which is the probability that $n$ varieties drawn without replacement from the $m$ simulated
+ones were all lost. We use \eqref{eq:app-Gclosed} rather than the plug-in $(1-\hat q_{r's})^{n}$
+because the latter is convex in $\hat q$ and therefore biased upward. Cross-cell dependence ---
+two regions in a sector face the same variety draws --- does not affect either expression, since
+an expectation of an average is the average of expectations whatever the dependence. No economy
+of size $N_{s}$ is ever drawn and no replication is needed.
+
+\begin{remark}[What is given up]
+\label{rem:binding}
+Moment 4 is then the coefficient of a regression run on the full simulated sample, i.e.\ the
+continuum limit $\beta(\mathbb{E}[y])$ rather than $\mathbb{E}[\hat\beta(N_{s})]$. The finite-sample bias of the
+auxiliary cloglog --- which an average of $\hat\beta$ over realized economies of size $N_{s}$
+would have cancelled against the same bias in the data --- is therefore not differenced out. It
+is a measurable quantity, of the order of $2$--$4\%$ of $\beta$ at data-consistent group sizes,
+and we report it alongside $\hat\alpha$. The alternative is not free: it would treat simulation
+noise on one block by replication while every other block relies on the accuracy of the draw
+design, and it would sit oddly beside Appendix~\ref{app:model-price}, where the value block is
+already evaluated at the certainty-equivalent index rather than on a realized economy.
+\end{remark}
+
+\paragraph{Concentrating out the variety count.} $N_{s}$ is estimated by the same weighted
+objective as every other parameter, concentrated rather than searched jointly:
+\begin{equation}
+\widehat N(\mu_{-N})=\argmin_{N\in\prod_{s}[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
+\;r(\mu_{-N},N)'W\,r(\mu_{-N},N),
+\label{eq:app-profile}
+\end{equation}
+with the bounds of \eqref{eq:app-bounds}. This is a profiled extremum estimator: $\widehat N_{s}$
+is an integer at every evaluation, so integrality is never relaxed and never rounded, and by
+Lemma~\ref{lem:qfree} the inner minimization needs no re-simulation. Since $\bar G_{s}(0;n)$ is
+closed form and decreasing in $n$, \eqref{eq:app-profile} reduces to a monotone integer
+bisection. Clamping at either bound is informative rather than benign: the upper bound binding
+means the model cannot generate enough sparsity even when every variety is sourced from a single
+origin, which is a rejection signal for the mechanism rather than a numerical nuisance.
+
+\paragraph{Concentrating out comparative advantage.} Given $(\alpha,\Omega_{L},\{\Omega_{s}\},\{A_{r}\})$,
+the area-level comparative advantage that reproduces the observed sourcing shares
+\eqref{eq:app-gamma-area} exactly is the solution of a matrix-scaling problem. We solve it by
+the damped multiplicative iteration
+\begin{equation}
+T^{+}_{as}=T_{as}\left(\frac{\hat{\tilde\gamma}_{as}}{\tilde\gamma_{as}(T)}\right)^{\varsigma},
+\qquad \varsigma\in(0,1],
+\label{eq:app-sinkhorn}
+\end{equation}
+recomputing the general-equilibrium expenditure weights at each pass and renormalizing to the
+reference area per sector. The map is a contraction in the relevant region of the parameter
+space, and the fixed point $T^{*}(\alpha,\Omega,A)$ is unique. Substituting it into
+\eqref{eq:app-smm} collapses the outer search from several hundred parameters to a handful, and
+makes the sourcing-share block just-identified along the profiled manifold, so that the
+extensive-margin coefficient is fit by $(\alpha,\Omega,A)$ alone.
+
+\paragraph{Weighting matrix.} In the SMM framework noise arises from two sources: sampling
+variability in the data and simulation error. We distinguish between moments for which
+bootstrapping is feasible (sourcing shares, extensive-margin coefficients and count moments) and
+those for which it is not (input--output coefficients and the downstream sales distribution). We
+therefore approximate the variance--covariance matrix of the data moments, $\Sigma_{\mathrm{data}}$,
+with a block matrix that accounts for within-group interactions; the block corresponding to
+non-bootstrappable moments is set to zero. Because the same firms generate the sourcing shares,
+the extensive-margin coefficients and the counts, these three blocks are estimated by a
+\emph{single joint} bootstrap, which is what delivers the cross-covariance blocks the efficient
+weight matrix requires. The resampling unit is the supplier firm, pooled over the geography of
+active areas, with the denominator of $\bar G_{s}(0)$ held fixed --- so that a region with one
+or two firms can draw zero and flip into the empty set, which is precisely the variance the
+count moment needs.
+
+\paragraph{Optimization procedure.} The estimator is computed using Particle Swarm Optimization
+\citep{kennedy1995}, which explores the parameter space through parallel evaluation, with
+adaptive inertia weights declining from $0.9$ to $0.4$ over iterations and cognitive and social
+parameters set to $1.5$ and $2.5$. The estimation proceeds in three steps.
+
+\begin{enumerate}[topsep=3pt,itemsep=3pt,label=\arabic*.]
+\item Starting values are set as follows: $\Omega_{L}$ and $\{\Omega_{s}\}$ at their empirical
+counterparts from input--output tables; $\{A_{r}\}$ proportional to $\pi_{r}^{1/\varepsilon}$;
+$\alpha$ at the extensive-margin regression estimate divided by $\theta$; and $\{T_{as}\}$ at the
+matrix-scaling solution \eqref{eq:app-sinkhorn} evaluated at that $\alpha$. We then run the
+optimizer over the profiled parameter vector using the identity weighting matrix, refining with
+an alternating block scheme in which each iteration sequentially optimizes $\{\Omega_{L},\Omega_{s}\}$,
+then $\alpha$, then $\{A_{r}\}$, with a search radius progressively reduced across iterations.
+This yields $\hat\mu_{1}$.
+\item Using $\hat\mu_{1}$ we estimate the variance--covariance matrix of the simulated moments,
+$\Sigma_{\mathrm{sim}}$, from repeated re-simulation with independent draws, and construct
+$W=(\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}})^{-1}$.
+\item We re-estimate the model with the updated weighting matrix, initializing at $\hat\mu_{1}$,
+to obtain $\hat\mu_{2}$.
+\end{enumerate}
+
+\paragraph{Standard errors.} Let $G=\partial\tilde M/\partial\mu$ evaluated at $\hat\mu_{2}$ by
+finite differences on common random numbers, and $\Omega=\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}}$.
+We report the efficient variance $(G'WG)^{-1}$ alongside the sandwich form
+$(G'WG)^{-1}G'W\Omega WG(G'WG)^{-1}$, which coincide when $W=\Omega^{-1}$; the ratio is a
+diagnostic on the weighting matrix. Because $T$ is concentrated out through
+\eqref{eq:app-sinkhorn} rather than searched, the Jacobian is taken along the profiled manifold
+--- perturbing $\alpha$ and letting $T^{*}(\alpha)$ follow --- so the reported standard error on
+$\alpha$ is a total derivative, and confidence intervals for $T$ are obtained by the delta
+method, propagating both the uncertainty in $\hat\alpha$ and the sampling uncertainty in the
+sourcing-share targets that \eqref{eq:app-sinkhorn} inverts.
+
+\subsection{The price index, love of variety, and the normalization}
+\label{app:model-price}
+
+The one place where granularity meets the value block requires an explicit assumption. For
+variety $\rho$ in market $(r,s)$, origin $r'$'s champion cost satisfies
+$\Pr(c_{r'\rho s}(r)>x)=\exp(-T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}x^{\theta})$, so by
+independence across origins the minimum $c^{*}_{\rho}$ is Weibull:
+\begin{equation}
+\Pr\big(c^{*}_{\rho}>x\big)=\exp\big(-\Phi_{rs}x^{\theta}\big),
+\qquad
+\mathbb{E}\big[(c^{*}_{\rho})^{k}\big]=\Phi_{rs}^{-k/\theta}\,\Gamma\Big(1+\tfrac{k}{\theta}\Big),
+\quad k>-\theta .
+\end{equation}
+With the CES aggregate taken as a sum,
+$\mathbb{E}[P_{rs}^{1-\nu_{s}}]=N_{s}\Gamma(1+\tfrac{1-\nu_{s}}{\theta})\Phi_{rs}^{-\frac{1-\nu_{s}}{\theta}}$
+up to a constant, so the certainty-equivalent index
+$\widetilde P_{rs}=(\mathbb{E}[P_{rs}^{1-\nu_{s}}])^{1/(1-\nu_{s})}$ satisfies
+\begin{equation}
+\widetilde P_{rs}=N_{s}^{\frac{1}{1-\nu_{s}}}\times
+\underbrace{\Gamma\Big(1+\tfrac{1-\nu_{s}}{\theta}\Big)^{\frac{1}{1-\nu_{s}}}\Phi_{rs}^{-1/\theta}}_{N_{s}\text{-free}} .
+\label{eq:app-loveofvariety}
+\end{equation}
+Since $1-\nu_{s}<0$ the factor is decreasing in $N_{s}$: more varieties lower the sector price
+index. Rescaling $\widetilde T_{as}=T_{as}N_{s}^{\kappa}$ with $\kappa=\theta/(1-\nu_{s})$ maps
+$\Phi_{rs}\mapsto N_{s}^{\kappa}\Phi_{rs}$ and cancels the two powers exactly, leaving
+$\widetilde P_{rs}$ invariant to $N_{s}$. Equivalently, taking the CES aggregate as an
+\emph{average} rather than a sum --- as in \eqref{eq:app-ces} --- implements the same
+normalization. It is consistent because it acts on a gauge the sourcing shares do not see: the
+share \eqref{eq:app-share} is a ratio of $T$'s within a sector, so the extensive margin, the
+count moment and the within-area contrast are all unchanged. It is also a gauge the estimator
+already fixes, by normalizing one reference area per sector.
+
+Two caveats. First, $P_{rs}$ is a \emph{convex} transform of the average in \eqref{eq:app-ces},
+so the realized index exceeds its certainty-equivalent value by Jensen's inequality, and the gap
+closes only as fast as the average concentrates. At the calibration the regularity condition
+$\theta>2(\nu_{s}-1)$ holds with little slack, and the gap is of the order of $6\%$ at
+$N_{s}\approx10^{2}$, falling to $1\%$ at $N_{s}\approx10^{3}$. The estimator adopts the
+certainty-equivalent reading --- downstream firms optimize against
+$\mathbb{E}[P^{1-\nu_{s}}]^{1/(1-\nu_{s})}$, neglecting granular price randomness, the
+general-equilibrium embedding of \citet{lmm2023}. Most of that $6\%$ would not have been
+identifying variation in any case: a price-level shift is observationally equivalent to a
+technology shift, so the sector technology terms absorb it and only the cross-sector pattern of
+$N_{s}$ survives as signal. And by Lemma~\ref{lem:qfree} none of it touches $q_{r's}$ or the
+extensive margin, so the identification of $\alpha$ and $N_{s}$ is unaffected either way.
+
+Second, the assumption must not survive into counterfactuals. The elasticity
+$\partial\ln\widetilde P_{rs}/\partial\ln N_{s}=1/(1-\nu_{s})<0$ is a genuine gain from variety
+and a live propagation channel: a shock that removes suppliers in one region raises $P_{rs}$
+downstream through exactly this elasticity, and that channel is absent from the continuum model.
+Any counterfactual that moves the variety set must map back to the physical $T$ and use the
+realized index.
+
+\subsection{Proofs}
+\label{app:model-proofs}
+
+\paragraph{Equation \eqref{eq:app-champion}.} The number of firms in $(r',s,\rho)$ with
+productivity above $z$ is Poisson with mean $T_{r's}z^{-\theta}$, so the probability that none
+exceeds $z$ --- equivalently that the maximum is below $z$ --- is $\exp(-T_{r's}z^{-\theta})$,
+the $\mathrm{Fr\acute{e}chet}(T_{r's},\theta)$ CDF. \hfill$\square$
+
+\paragraph{Lemma~\ref{lem:fe}.} (i) With $\Pr(y=1)=1-\exp(-\exp(\phi_{g}+\beta x))$, a group in
+which $y\equiv0$ contributes
+$\ell_{g}=\sum_{i}\ln\exp(-e^{\phi_{g}+\beta x_{i}})=-e^{\phi_{g}}\sum_{i}e^{\beta x_{i}}$. This
+is increasing in $-\phi_{g}$ with supremum $0$ as $\phi_{g}\to-\infty$, at which
+$\partial\ell_{g}/\partial\beta=-e^{\phi_{g}}\sum_{i}x_{i}e^{\beta x_{i}}\to0$. The group
+therefore drops from the concentrated likelihood.
+
+(ii) By Frisch--Waugh--Lovell,
+$\hat\beta=\sum_{g,i}\omega\tilde x\tilde y/\sum_{g,i}\omega\tilde x^{2}$ with $\tilde{\cdot}$
+the weighted within-group demeaning. A group with $y\equiv0$ has $\tilde y\equiv0$, so it
+contributes zero to the numerator and $\sum\omega\tilde x^{2}>0$ to the denominator. Splitting
+the denominator between $\mathcal{A}^{+}$ and its complement gives
+$\hat\beta=\varkappa\hat\beta^{+}$. \hfill$\square$
+
+\paragraph{Proposition~\ref{prop:firm}.} Condition on the firm's productivity $z$; its delivered
+cost to buyer $a$ is $c=w_{r's}\tau_{r'as}/z$. Each competitor $r''$ has champion cost
+$w_{r''s}\tau_{r''as}/\varphi_{r''}$ with
+$\varphi_{r''}\sim\mathrm{Fr\acute{e}chet}(T_{a(r'')s},\theta)$, so
+$\Pr(w_{r''s}\tau_{r''as}/\varphi_{r''}>x)=\exp(-T_{a(r'')s}(w_{r''s}\tau_{r''as})^{-\theta}x^{\theta})$.
+By independence across competitors the minimum competing cost $M$ satisfies
+$\Pr(M>x)=\exp(-\Phi^{-r'}_{as}x^{\theta})$. The firm supplies iff $M>c$, giving
+\eqref{eq:app-firm-win}. Taking the complement,
+$\Pr(\text{no supply}\mid z)=1-\exp(-\exp(\eta))$ with
+$\eta=\ln\Phi^{-r'}_{as}+\theta\ln(w_{r's}\tau_{r'as})-\theta\ln z$, and
+$\tau_{r'as}=d_{r'a}^{\alpha}$ gives \eqref{eq:app-firm-cloglog}. No step involves the variety
+count. \hfill$\square$
+
+\paragraph{Lemma~\ref{lem:qfree}.} Origin $r'$ wins variety $\rho$ for buyer $r$ iff
+$w_{r's}\tau_{r'rs}/\varphi_{r'\rho s}<\min_{r''\neq r'}w_{r''s}\tau_{r''rs}/\varphi_{r''\rho s}$,
+an event measurable with respect to $\{\varphi_{\cdot\rho s}\}$, $w$ and $\tau$ alone; the
+$\varphi$ have distribution governed by $(T_{\cdot s},\theta)$. The win-somewhere event is the
+union over $r$ of those events, hence measurable with respect to the same objects. Neither the
+variety count nor any price or expenditure aggregate enters. \hfill$\square$
+
+\paragraph{Unbiasedness of \eqref{eq:app-Gclosed}.} Let $k$ be the number of the $m$ simulated
+varieties won by $r'$, each won independently with probability $q$. Draw $n\le m$ of the $m$
+varieties uniformly without replacement; conditional on $k$, the probability that all $n$ are
+losses is $\binom{m-k}{n}/\binom{m}{n}$. Marginalizing over the draws, each of the $n$ selected
+varieties is a loss independently with probability $1-q$, so the unconditional probability is
+$(1-q)^{n}$. Hence $\mathbb{E}[\binom{m-k}{n}/\binom{m}{n}]=(1-q)^{n}$ exactly, with the convention
+$\binom{a}{n}=0$ for $a<n$. \hfill$\square$

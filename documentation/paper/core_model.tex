@@ -1,0 +1,249 @@
+% =====================================================================
+% core_model.tex — replaces Section 4 ("Structural model") of the paper.
+%
+% \input{core_model} from the main file. Requires amsmath, amssymb and the
+% \citep/\citet macros already used in the paper. Cross-references assume the
+% appendix file model_appendix.tex is also included (labels app:model-*).
+%
+% What changed relative to the previous version of this section:
+%   (i)  upstream sectors now contain a FINITE number N_s of varieties, so the
+%        sourcing extensive margin is a genuine random object and observed
+%        zeros are model predictions rather than dropped cells;
+%   (ii) comparative advantage is located at the ATTRACTION-AREA level, the
+%        level at which the extensive-margin regression identifies the
+%        trade-cost elasticity;
+%  (iii) trade costs are the power law tau = d^alpha, so the extensive-margin
+%        distance coefficient maps into alpha with no attenuation correction.
+% =====================================================================
+
+\section{Structural model}
+\label{sec:model}
+
+We next develop a structural model that rationalizes the spatial propagation patterns
+documented in the data and allows us to quantify the role of production networks in shaping
+the incidence of sectoral shocks. The model has a Ricardian structure that is used to recover
+firm-to-firm linkages not directly observed in the data. Based on the predicted production
+network, we then simulate shocks to the downstream industry and quantify their spatial
+diffusion.
+
+Relative to a textbook Eaton--Kortum economy the model departs on one dimension: upstream
+sectors contain a \emph{finite} number of varieties. This is what makes the sourcing extensive
+margin --- the object our survey data measure --- a genuine random outcome. With a continuum of
+varieties every region with a positive comparative advantage supplies every buyer, so the
+zeros that dominate our data could only be accommodated by discarding the corresponding cells.
+Here they are model predictions.
+
+\subsection{Model}
+\label{sec:model-model}
+
+\paragraph{Environment.} The economy consists of $R+1$ regions, where the $(R+1)$th region
+represents the rest of the world. Firms operate either in upstream sectors $s=1,\dots,S$ or in
+the downstream industry $d$ (motor vehicles or aerospace). Each domestic region hosts at most
+one representative downstream firm. Firm locations and sectoral assignments are taken as
+exogenous. We allow for imports, but in the absence of balance-sheet information on foreign
+suppliers we do not model firm-level linkages abroad; the foreign share of sourcing is
+calibrated (Appendix~\ref{app:model-foreign}).
+
+Domestic regions are additionally grouped into \emph{attraction areas}. An attraction area $a$
+is the set of upstream regions sharing the same nearest downstream producer, and we write
+$a(r')$ for the area of region $r'$ and $\mathcal{R}_{a}$ for its members. This is the same
+partition as the fixed effect of the extensive-margin regression in Equation~(1), and that is
+not a coincidence: it is the level at which the data identify the trade-cost elasticity.
+
+Because the model is estimated separately for the motor vehicles and aerospace industries, we
+omit the downstream-industry index in the remainder of the exposition. Unless otherwise stated,
+all variables and parameters should therefore be understood as industry-specific.
+
+\paragraph{Final demand.} Downstream firms compete under monopolistic competition and face an
+isoelastic demand function:
+\begin{equation}
+q_{r}=\left(\frac{p_{r}}{P}\right)^{\varepsilon-1}\frac{E}{P}\,\delta^{D}_{r},
+\end{equation}
+where $\delta^{D}_{r}$ is a region-specific demand shifter, $E/P$ denotes aggregate real
+expenditure and $p_{r}/P$ is the relative price of the variety produced in region $r$. Demand
+shifters are later used to simulate downstream shocks and trace their propagation through
+production networks. The market for final goods is assumed to be perfectly integrated.
+
+\paragraph{Production.} Downstream firms produce using labor and intermediate inputs according
+to a constant-returns-to-scale production technology:
+\begin{equation}
+y_{r}=A_{r}\,g\big(\ell_{r},\{q_{rs}\}_{s=1}^{S}\big),
+\label{eq:downstream-tech}
+\end{equation}
+where $A_{r}$ denotes total factor productivity, $\ell_{r}$ is labor input and $q_{rs}$ is the
+quantity of the input bundle from sector $s$ used in production. As discussed in
+Appendix~\ref{app:model-derivation}, the structural estimation assumes a nested CES
+specification, where $\Omega_{L}$ scales the labor share, $\Omega_{s}$ denotes the expenditure
+share on inputs from sector $s$, and each $q_{rs}$ is itself a CES aggregate over the varieties
+of sector $s$.
+
+\paragraph{Upstream technology.} Each upstream sector $s$ consists of $N_{s}$ horizontally
+differentiated varieties, indexed $\rho=1,\dots,N_{s}$. Within each variety and each region
+there is a continuum of firms whose productivities above $z$ form a Poisson process with mean
+$T_{r's}z^{-\theta}$. The most productive firm of region $r'$ for variety $\rho$ --- its
+\emph{champion} --- therefore satisfies
+\begin{equation}
+\Pr\big(\varphi_{r'\rho s}\le z\big)=e^{-T_{r's}z^{-\theta}},
+\qquad T_{r's}>0,
+\label{eq:frechet}
+\end{equation}
+so one Fr\'echet draw per (region, variety) pair \emph{is} the champion of a continuum of
+firms rather than an approximation to it. Because the iceberg cost scales all firms of a region
+identically, that champion is the only firm of region $r'$ that ever serves a buyer sourcing
+$\rho$ from $r'$: a firm in the model is a (region, variety) champion. As in Eaton and Kortum
+(2002), $T_{r's}$ governs average productivity while $\theta$ controls the dispersion of
+productivity draws and hence the strength of comparative advantage. Only the number of
+\emph{varieties} is finite; the firms are not discretized.
+
+\paragraph{Comparative advantage at the area level.} Comparative advantage is a property of the
+attraction area rather than of the individual region:
+\begin{equation}
+T_{r's}=T_{a(r')s}\qquad\text{for every }r'\in\mathcal{R}_{a}.
+\label{eq:T-area}
+\end{equation}
+Productivity draws remain independent across regions: two regions in the same area share the
+Fr\'echet \emph{scale}, not the realization of their champions, so each still runs its own
+Ricardian competition for every variety. What \eqref{eq:T-area} removes is unobserved
+technological heterogeneity \emph{within} an area, and the payoff is that within an area the
+only thing separating a region that hosts a supplier from one that does not is distance. This
+is what makes the model explain the same variation the regression uses.
+
+\paragraph{Sourcing.} Shipping intermediate goods from region $r'$ to region $r$ involves
+iceberg trade costs $\tau_{r'rs}$, which we parameterize as a power law in geographic distance,
+\begin{equation}
+\tau_{r'rs}=d_{r'r}^{\,\alpha}.
+\label{eq:tau}
+\end{equation}
+Following Eaton and Kortum (2002), downstream firms source each variety from the lowest-cost
+supplier, in France or abroad. The probability that a downstream firm located in region $r$
+sources a given variety of sector $s$ from region $r'$ is
+\begin{equation}
+\gamma_{r'rs}=\frac{T_{a(r')s}\,(w_{r's}\tau_{r'rs})^{-\theta}}
+{\sum_{k=1}^{R+1}T_{a(k)s}\,(w_{ks}\tau_{krs})^{-\theta}}
+\;\equiv\;\frac{T_{a(r')s}\,(w_{r's}\tau_{r'rs})^{-\theta}}{\Phi_{rs}},
+\label{eq:ek-share}
+\end{equation}
+where $w_{r's}$ denotes the unit production cost in region--sector pair $(r',s)$. Because trade
+costs increase with geographic distance, sourcing probabilities decline with spatial
+separation, generating localized production networks. Two regions $r',r''$ in the same area
+facing the same buyer satisfy
+\begin{equation}
+\ln\frac{\gamma_{r'rs}}{\gamma_{r''rs}}
+=-\theta\alpha\big(\ln d_{r'r}-\ln d_{r''r}\big)-\theta\ln\frac{w_{r's}}{w_{r''s}},
+\label{eq:within-area}
+\end{equation}
+the technology term and the price index having cancelled: the within-area sourcing profile is a
+function of $(\theta,\alpha)$ and observed distances alone.
+
+\paragraph{The extensive margin.} Equation~\eqref{eq:ek-share} is the probability that a
+\emph{single} variety is won by $r'$. With $N_{s}$ varieties the win events are independent
+across $\rho$, so the number $K_{r'rs}$ of sector-$s$ varieties that buyer $r$ sources from
+$r'$ is binomial and
+\begin{equation}
+K_{r'rs}\sim\mathrm{Bin}\big(N_{s},\gamma_{r'rs}\big),
+\qquad
+\Pr\big(K_{r'rs}=0\big)=(1-\gamma_{r'rs})^{N_{s}}>0 .
+\label{eq:binomial}
+\end{equation}
+The zero-supplier probability is strictly positive and endogenous: it falls with comparative
+advantage, rises with distance through \eqref{eq:tau}, and falls with the variety count. Under
+a continuum this probability is zero for every region with $T_{r's}>0$, which is the sense in
+which the extensive margin previously had no content. Letting $q_{r's}$ denote the probability
+that $r'$ wins a given variety \emph{somewhere} in the downstream industry --- the union over
+buyers, which is the event our surveys record, since they report whether a firm supplies the
+industry and not which buyer it serves --- the industry-wide count is
+$K_{r's}\sim\mathrm{Bin}(N_{s},q_{r's})$.
+
+\paragraph{What the model implies for the extensive-margin regression.} Conditioning on a
+firm's own productivity delivers the empirical specification of Equation~(1) in closed form.
+For a champion of productivity $z$ located in $r'$, whose area anchor is the downstream buyer
+$a$, the probability of \emph{not} supplying that buyer is complementary log-log,
+\begin{equation}
+\Pr\big(\text{no supply}\mid z\big)=1-\exp\big(-\exp(\eta)\big),
+\qquad
+\eta=\underbrace{\ln\Phi^{-r'}_{as}}_{\text{area}\times\text{sector FE}}
++\,\theta\ln w_{r's}
++\,\theta\alpha\,\ln d_{r'a}
+\;-\;\theta\,\ln z ,
+\label{eq:cloglog}
+\end{equation}
+where $\Phi^{-r'}_{as}$ collects the competitors' cost scale (Appendix~\ref{app:model-prop}).
+Three features drive the estimation. The distance coefficient is $+\theta\alpha$, so a cloglog
+of the ``does not supply'' indicator on log distance and log own productivity, with an
+area$\times$sector fixed effect, recovers $\alpha=\hat\beta_{\ln d}/\theta$ directly. The
+variety count is \emph{absent} from \eqref{eq:cloglog}: conditioning on the firm removes it, so
+$\alpha$ and $N_{s}$ are identified from separate features of the data. And the coefficient on
+own productivity equals $-\theta$, which is a free over-identifying test of a parameter we
+otherwise calibrate.
+
+\subsection{Estimation and fit}
+\label{sec:model-estimation}
+
+We estimate the model using Simulated Method of Moments. Unlike the standard Ricardian trade
+literature, which relies on bilateral input--output flows, such flows are not observed in our
+setting. Instead, we exploit survey information on supplier relationships together with VAT
+data on firm sales to discipline the spatial structure of sourcing and demand.
+
+The vector of estimated parameters is
+\begin{equation}
+\mu=\big\{\Omega_{L},\;\{\Omega_{s}\},\;\{T_{as}\},\;\alpha,\;\{A_{r}\},\;\{N_{s}\}\big\}.
+\end{equation}
+Beyond these, the model includes several demand- and supply-side elasticities, which we
+calibrate as described in Appendix~\ref{app:model-calibration}. We also provide there
+additional details on the optimization procedure and on the calculation of standard errors.
+
+\paragraph{Targeted moments.} The model is matched to six families of moments. The first three
+are as before. The downstream industry's labor share and the sectoral composition of
+intermediate expenditures are constructed from input-output tables and identify $\Omega_{L}$
+and $\{\Omega_{s}\}_{s=1}^{S}$. The regional distribution of downstream sales, $\pi_{r}$, is
+recovered from the VAT data and identifies the downstream productivity parameters $\{A_{r}\}$,
+up to a multiplicative constant and therefore normalized relative to the largest commuting
+zone. The extensive-margin distance coefficient of Equation~(1) identifies the trade-cost
+elasticity $\alpha$ through \eqref{eq:cloglog}.
+
+The remaining two families are where the granular structure enters. \emph{Sourcing shares} are
+now aggregated to the attraction area,
+\begin{equation}
+\tilde\gamma_{as}=\sum_{r'\in\mathcal{R}_{a}}\tilde\gamma_{r's},
+\qquad
+\tilde\gamma_{r's}=\sum_{r}\frac{X_{rs}}{\sum_{r}X_{rs}}\,\gamma_{r'rs},
+\label{eq:gamma-area}
+\end{equation}
+where $X_{rs}$ denotes the value of intermediate inputs from sector $s$ shipped to downstream
+firms located in region $r$, and identify the area-level comparative advantage $\{T_{as}\}$.
+For each sector these are normalized relative to the area with the largest sourcing share.
+\emph{Count moments} discipline the variety count: writing $\mathcal{R}^{+}_{s}$ for the set of
+regions lying inside attraction areas that host at least one supplier of sector $s$, the share
+of those regions hosting no supplier is
+\begin{equation}
+\bar G_{s}(0)=\frac{1}{|\mathcal{R}^{+}_{s}|}\,
+\#\big\{r'\in\mathcal{R}^{+}_{s}:K_{r's}=0\big\},
+\qquad
+\mathbb{E}\big[\bar G_{s}(0)\big]
+=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}(1-q_{r's})^{N_{s}} .
+\label{eq:count-moment}
+\end{equation}
+This is the count analogue of the number-of-buyers-per-seller moment in \citet{lmm2023}. It is
+decreasing in $N_{s}$, which is what identifies the variety count: given the sourcing shares
+--- pinned by the area aggregates and by $\alpha$, neither of which involves $N_{s}$ --- the
+only free object shaping \eqref{eq:count-moment} is the number of varieties. The support is
+restricted to active areas because regions in areas with no supplier at all are structural
+zeros, absorbed by the fixed effect of Equation~(1) and carrying no information about
+$(\alpha,N_{s})$; Appendix~\ref{app:model-zeros} makes the distinction precise.
+
+Two observations discipline the exercise further. The variety count is bounded by the observed
+number of distinct suppliers: since each variety generates one supplying firm per winning
+origin, $N^{\mathrm{obs}}_{s}/R^{D}\le N_{s}\le N^{\mathrm{obs}}_{s}$ where $R^{D}$ is the
+number of downstream buyers, and matching the observed firm count gives a second, independent
+estimate that must fall inside those bounds (Appendix~\ref{app:model-bounds}). And because
+$T_{as}$ is constant within an area, the area aggregate \eqref{eq:gamma-area} no longer
+exhausts the region-level shares: each active region beyond the first in an area becomes an
+over-identifying restriction, requiring that the split of an area's sourcing across its regions
+follow the distance profile \eqref{eq:within-area}.
+
+\paragraph{Identification.} The channels are close to orthogonal by construction. $\alpha$ is
+read from a \emph{within}-area gradient that comparative advantage cannot touch, because
+comparative advantage is constant within the area. $T_{as}$ is read from \emph{across}-area
+value shares. $N_{s}$ is read from the \emph{level} of the empty-region share, which the fixed
+effect strips out of the $\alpha$ regression. And $\theta$, which we calibrate, is over-identified
+by the own-productivity coefficient in \eqref{eq:cloglog}.
