@@ -184,14 +184,34 @@ else
 # ═══════════════════════════════════════════════════════════════════════════
 println("\n── V2  N_s root-find (monotonicity, planted-integer recovery, clamps) ──")
 let
+    # Gate the PRODUCTION estimator (`gbar_sector`, unbiased) rather than a local
+    # re-implementation of the retired plug-in, so this test moves with the code.
     Random.seed!(20250102)
-    q  = 0.02 .+ 0.10 .* rand(n_good)
-    Gs = (s, n) -> sum((1 - q[g])^n for g in CELLS_OF_SECTOR[s]) / length(CELLS_OF_SECTOR[s])
+    m_test = N_rho
+    q      = 0.02 .+ 0.10 .* rand(n_good)
+    k      = round.(Int, q .* m_test)
+    lg     = gbar_logfact_table(m_test)
+    Gs     = (s, n) -> gbar_sector(CELLS_OF_SECTOR[s], k, m_test, n, lg)
 
-    mono = all(Gs(s, n) > Gs(s, n + 1)
+    # NON-increasing, not strictly decreasing: the unbiased estimator has finite
+    # support in n — a cell winning k of m draws contributes exactly 0 once
+    # n > m − k, so Ḡ_s flattens at 0 at the top of the range. The bisection needs
+    # monotonicity and a sign change, not strictness, and the targets (Ḡ ≈ 0.9) sit
+    # far below the flat region.
+    mono = all(Gs(s, n) >= Gs(s, n + 1)
                for s in 1:S if !isempty(CELLS_OF_SECTOR[s])
                for n in N_LO[s]:(N_HI[s] - 1))
-    @printf("  G(s,·) strictly decreasing on [N_LO, N_HI] : %s\n", mono ? "PASS" : "FAIL")
+    @printf("  G(s,·) non-increasing on [N_LO, N_HI] : %s\n", mono ? "PASS" : "FAIL")
+
+    # Unbiasedness spot-check: E[C(m−k,n)/C(m,n)] = (1−q)^n. Averaged over cells the
+    # estimator must sit close to the truth it estimates; a systematic gap is the
+    # Jensen bias the plug-in carried.
+    let n_chk = max(1, minimum(N_LO)), s_chk = findfirst(s -> !isempty(CELLS_OF_SECTOR[s]), 1:S)
+        cells = CELLS_OF_SECTOR[s_chk]
+        truth = sum((1 - q[g])^n_chk for g in cells) / length(cells)
+        @printf("  Ḡ unbiased vs plug-in truth at n=%d : %.6f vs %.6f (rel %.2e)\n",
+                n_chk, Gs(s_chk, n_chk), truth, abs(Gs(s_chk, n_chk) - truth) / max(truth, 1e-12))
+    end
 
     exact = true
     for s in 1:S
@@ -210,8 +230,9 @@ let
     end
     @printf("  bisection recovers a planted integer exactly : %s\n", exact ? "PASS" : "FAIL")
 
-    _, c_hi = concentrate_N_s(fill(1e-9, n_good))   # q≈0 ⇒ G≈1 > target ⇒ clamp :hi
-    _, c_lo = concentrate_N_s(fill(0.9,  n_good))   # q≈1 ⇒ G≈0 < target ⇒ clamp :lo
+    # k = 0 ⇒ Ḡ ≡ 1 > target ⇒ clamp :hi;  k = 0.9m ⇒ Ḡ ≈ 0 < target ⇒ clamp :lo
+    _, c_hi = concentrate_N_s(fill(0, n_good), m_test)
+    _, c_lo = concentrate_N_s(fill(round(Int, 0.9 * m_test), n_good), m_test)
     clamps  = all(c_hi .== :hi) && all(c_lo .== :lo)
     @printf("  clamps fire at both bounds : %s  (%s / %s)\n",
             clamps ? "PASS" : "FAIL", string(c_hi), string(c_lo))

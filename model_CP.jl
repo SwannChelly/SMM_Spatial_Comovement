@@ -349,19 +349,22 @@ end
 
 
 """
-    concentrate_N_s(q_hat) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
+    concentrate_N_s(k_counts, m) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
 
 Profile the variety count `N_s` out of the loss by a **monotone integer bisection**
 on the count moment (plan D5; `finite_sample2.tex` §4.2).
 
-`q_hat[g]` is the probability that cell `g` wins a given variety SOMEWHERE in the
-downstream industry, estimated as the column mean of `linkages_flat` over the whole
-draw pool. By Lemma 2 (`q ⊥ N_s`) it does not depend on the variety count, so
+`k_counts[g]` is the number of the `m` simulated varieties that cell `g` wins
+SOMEWHERE in the downstream industry (the column sum of `linkages_flat`). By Lemma 2
+(`q ⊥ N_s`) the underlying win probability does not depend on the variety count, so
 
-    Ḡ_s(n) = mean over cells l of sector s of (1 − q̂_ls)^n
+    Ḡ_s(n) = mean over cells l of sector s of (1 − q_ls)^n
 
-is closed form and strictly decreasing in `n`; matching it to `G_TARGET[s]` needs no
-re-simulation. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
+is closed form and decreasing in `n`; matching it to `G_TARGET[s]` needs no
+re-simulation. It is evaluated by `gbar_sector`/`gbar_cell`, the UNBIASED
+combinatorial estimator — see `gbar_cell` for why the earlier plug-in
+`(1 − q̂)^n` with `q̂` floored at `0.5/m` capped the reachable `N̂_s` and biased
+`Ḡ` upward. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
 implied by the observed distinct-supplier count, so `N̂_s` is an integer at every
 evaluation — never relaxed, never rounded — and the outer optimiser never sees it.
 
@@ -370,9 +373,91 @@ INFORMATIVE, not benign: `:hi` means the model cannot generate enough sparsity e
 when every variety is sourced from a single origin — a rejection signal for the
 mechanism, which is why it is reported per sector rather than silently absorbed.
 """
-function concentrate_N_s(q_hat::AbstractVector{<:Real})
+"""
+    gbar_logfact_table(m) -> Vector{Float64}
+
+`lg[i+1] = log(i!)` for `i = 0:m`. Built by cumulative sum (no SpecialFunctions
+dependency); `m + 1` entries, rebuilt per call — negligible beside one moment
+evaluation.
+"""
+function gbar_logfact_table(m::Integer)
+    lg = Vector{Float64}(undef, m + 1)
+    lg[1] = 0.0
+    @inbounds for i in 1:m
+        lg[i+1] = lg[i] + log(i)
+    end
+    return lg
+end
+
+"""
+    gbar_cell(k, m, n, lg) -> Float64
+
+UNBIASED estimator of `(1 − q_l)^n`, the probability that cell `l` hosts no
+supplier among `n` varieties, from `k` observed wins out of `m` draws.
+
+    E[ C(m−k, n) / C(m, n) ] = (1 − q)^n      for every n ≤ m
+
+Read it as: draw `n` of the `m` simulated varieties without replacement and ask
+whether all of them lost. Marginalising over the draws, each is a win with
+probability `q` independently, so the expectation is exactly `(1 − q)^n` — no
+approximation, no tuning constant.
+
+This REPLACES the plug-in `(1 − q̂)^n` with its `q̂` floored at `0.5/m`. Two
+defects of that construction are removed at once:
+
+  * **The floor capped identification.** `q̂ ≥ 0.5/m` forced
+    `Ḡ_s(0) ≤ (1 − 0.5/m)^n` for every θ, so no `N̂_s` above
+    `ln(Ḡ_target)/ln(1 − 0.5/m)` was reachable — roughly 11–53 at `m = 100`
+    against variety-count bounds `N_HI` of 24–291. The upper half of the
+    bisection range was unreachable, so a `:hi` clamp could never occur and the
+    over-identification check was silently one-sided. The estimator below has no
+    such ceiling: it spans the whole `[N_LO, N_HI]` range.
+  * **Jensen bias.** `(1 − q)^n` is convex in `q`, so the plug-in is biased
+    upward by roughly `n(n−1)q / (2m(1−q))` — several percent of `Ḡ` at
+    production draw counts, enough to move `N̂_s` by tens of percent.
+
+Evaluated in logs off a shared log-factorial table, so it costs `O(1)` per
+(cell, n) rather than `O(n)`:
+
+    log Ḡ = log(m−k)! − log(m−k−n)! − log m! + log(m−n)!
+
+`n > m − k` ⇒ 0 (a cell winning `k` of `m` draws cannot leave `n` varieties
+unserved once `n` exceeds the losing draws). `n ≤ 0` ⇒ 1.
+
+**Caveat.** Unbiasedness assumes the `m` draws are i.i.d. within a cell. The
+optimisation draws are `:sobol`, which is equidistributed rather than
+independent — that makes the win count LESS dispersed than Binomial, so the
+residual bias is smaller than the plug-in's, not larger, but it is not exactly
+zero. Inference draws (`:mc`) do satisfy the assumption.
+"""
+@inline function gbar_cell(k::Integer, m::Integer, n::Integer, lg::Vector{Float64})
+    n <= 0 && return 1.0
+    n > m - k && return 0.0
+    return exp(lg[m-k+1] - lg[m-k-n+1] - lg[m+1] + lg[m-n+1])
+end
+
+"""
+    gbar_sector(cells, k_counts, m, n, lg) -> Float64
+
+`Ḡ_s(n) = mean over cells l of (1 − q_l)^n`, via the unbiased `gbar_cell`. This
+is the ONE definition of the count moment: `concentrate_N_s` bisects on it and
+block 6 reports it at `N̂_s`, so the moment being matched and the moment being
+reported cannot drift apart.
+"""
+function gbar_sector(cells, k_counts::AbstractVector{<:Integer}, m::Integer,
+                     n::Integer, lg::Vector{Float64})
+    isempty(cells) && return 1.0
+    acc = 0.0
+    @inbounds for g in cells
+        acc += gbar_cell(k_counts[g], m, n, lg)
+    end
+    return acc / length(cells)
+end
+
+function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer)
     N_hat   = zeros(Int, S)
     clamped = fill(:none, S)
+    lg      = gbar_logfact_table(m)
     @inbounds for s in 1:S
         cells = CELLS_OF_SECTOR[s]
         lo0, hi0 = N_LO[s], N_HI[s]
@@ -380,13 +465,7 @@ function concentrate_N_s(q_hat::AbstractVector{<:Real})
             N_hat[s] = lo0
             continue
         end
-        Gs = n -> begin
-            acc = 0.0
-            for g in cells
-                acc += (1.0 - q_hat[g])^n
-            end
-            acc / length(cells)
-        end
+        Gs = n -> gbar_sector(cells, k_counts, m, n, lg)
         tgt = G_TARGET[s]
         if Gs(lo0) <= tgt
             N_hat[s], clamped[s] = lo0, :lo
@@ -1258,15 +1337,21 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
 
     if GRANULAR
         n_draw = size(linkages_flat, 1)
-        q_hat  = Vector{Float64}(undef, n_good)
+        # Win COUNTS, not a floored share: the count moment is now evaluated with the
+        # unbiased `gbar_cell` (see its docstring), which needs k and m rather than q̂.
+        # `q_hat` is kept as the raw diagnostic — unclamped, since nothing downstream
+        # raises it to a power any more.
+        k_counts = Vector{Int}(undef, n_good)
+        q_hat    = Vector{Float64}(undef, n_good)
         @inbounds for g in 1:n_good
-            acc = 0.0
+            acc = 0
             for rho in 1:n_draw
-                acc += linkages_flat[rho, g]
+                acc += linkages_flat[rho, g] != 0
             end
-            q_hat[g] = clamp(acc / n_draw, 0.5 / n_draw, 1.0 - 1e-12)
+            k_counts[g] = acc
+            q_hat[g]    = acc / n_draw
         end
-        N_hat_free, clamped = concentrate_N_s(q_hat)
+        N_hat_free, clamped = concentrate_N_s(k_counts, n_draw)
         # Finite-difference / counterfactual mode: the caller pins N̂_s (it is a STEP
         # function of θ, so a central FD could otherwise straddle a jump). The free
         # bisection value is returned as a diagnostic (`N_hat_free`) rather than warned
@@ -1279,15 +1364,14 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
 
         # Block 6: Ḡ_s(0) over the cells inside active attraction areas — empty cells
         # included, since those ARE the K = 0 mass (finite_sample2.tex §3.2).
+        # Same estimator the bisection matched on, so the moment reported to the loss
+        # and the moment N̂_s was chosen against cannot drift apart.
+        lg_G0 = gbar_logfact_table(n_draw)
         G0 = zeros(S)
         @inbounds for s in 1:S
             cells = CELLS_OF_SECTOR[s]
             isempty(cells) && continue
-            acc = 0.0
-            for g in cells
-                acc += (1.0 - q_hat[g])^N_hat[s]
-            end
-            G0[s] = acc / length(cells)
+            G0[s] = gbar_sector(cells, k_counts, n_draw, N_hat[s], lg_G0)
         end
     end
 

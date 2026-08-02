@@ -70,6 +70,20 @@ Everything resting on it (V7, V9, the counterfactual love-of-variety channel) is
 `E[C(m−k_g,N)/C(m,N)] = (1−q)^N` for `N ≤ m−k_g`; drop the floor; raise `N_rho` so
 `1/N_rho ≪ min_l q_ls`.
 
+> **FIXED — the U-statistic route was taken; the floor is gone.** `gbar_cell` /
+> `gbar_sector` in `model_CP.jl` implement `C(m−k,n)/C(m,n)` in logs off a shared
+> log-factorial table (`O(1)` per cell per `n`), `concentrate_N_s` bisects on it, and
+> block 6 reports it at `N̂_s` so the matched and reported moments cannot drift apart.
+> Raising `N_rho` was rejected as the primary fix: memory caps it near 300, and at
+> `m=291` the floor still truncated 7 of 10 sectors (ceilings
+> `[66,44,47,84,47,114,153,33,53,33]` against `N_HI = [33,62,7,291,51,280,235,24,254,70]`).
+> Any clamp `c/m` is a free parameter that *directly sets* the identification ceiling
+> at `≈(m/c)·ln(1/Ḡ_target)`; the unbiased estimator has no such parameter. Verified
+> numerically: `E[Ĝ]` matches `(1−q)^n` to Monte-Carlo precision across
+> `q ∈ {0.002…0.05}`, `n ∈ {5…50}`. One property changed — `Ḡ_s(n)` is now weakly
+> (not strictly) decreasing, hitting exactly 0 for `n > m−k`; the bisection needs
+> monotonicity and a sign change, not strictness, and the V2 gate was relaxed to match.
+
 ---
 
 ## 2. CRITICAL — Step 3 crashes under `GRANULAR`, and block 6 is silently excluded from the efficient objective
@@ -174,7 +188,13 @@ slope estimated without a size control and with appended control-group zeros is 
 estimand from one with log own productivity and no control rows. The paper's own Table 5
 quantifies the wedge: adding size moves the distance coefficient `−0.017 → −0.011` in levels
 and `−0.284 → −0.130` in logs (35–55%). At most one of the two configurations matches its
-target. **Still open — the fix is data-side, outside this repo.**
+target.
+
+> **NOT AN ISSUE — author's response.** This is a deliberate modelling choice. The ZE
+> level is an older specification kept for testing; the AA level is the intended one
+> and is what matches the cloglog estimated in the data. The single target file is
+> therefore correct for `:aa`, and `:ze` is understood to be a diagnostic
+> configuration rather than one whose target is meant to line up. **Closed.**
 
 **Related, SUSPECTED.** `raph.md:44` writes the empirical control as `ν log X_i`, "`X_i` un
 proxy **pour la taille** de l'entreprise", while the model regresses on `log z`, the firm's
@@ -227,6 +247,14 @@ link — *provided the empirical outcome is also "supplies any downstream buyer"
 paper's stronger claims ("the empirical specification is the model, not an approximation to
 it"; "`α = β̂/θ` with no attenuation correction") do not hold for the object the code
 computes. Fix the text, and confirm the empirical `Sup_i` is union-over-buyers.
+
+> **CONFIRMED BY THE AUTHOR — the code is right, the text should move.** The empirical
+> left-hand-side supply dummy IS the union over buyers, because bilateral flows are not
+> observed in the data. So `linkages_flat` set across every downstream region is the
+> correct model counterpart, and the indirect-inference reading applies: the same
+> regression is matched on both sides. What remains is a `finite_sample2.tex` edit —
+> Prop. 1's anchor-market framing and the "`α = β̂/θ` with no attenuation correction"
+> claim overstate what the union regressand delivers. **No code change.**
 
 ---
 

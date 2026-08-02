@@ -169,7 +169,15 @@ while `Σ_sim`, the Jacobian and `compute_N_s_jacobian` use `N_RHO_INFERENCE=400
 **attraction-area** index under `:aa`. `findall(!=(ref), regs)` therefore drops (usually)
 nothing, and `M^s` is built in ZE space while the parameters are AA-level. The printed
 "sector s: M λ_min/λ_max" is not the identification of the estimated T block — and it is
-precisely the diagnostic a reader will use to judge AA-level T. **Still open.**
+precisely the diagnostic a reader will use to judge AA-level T.
+
+> **FIXED.** `M^s` is now built in the T-PARAMETER column space: the cell-level
+> bilateral shares are collapsed onto `SECTOR_T_COLS[s]` via `T_GATHER` before forming
+> `M = Σ_dr ω_dr (diag g − g g')`, and the reference row is dropped by position within
+> that column set. The multinomial structure survives the grouping precisely because
+> `T` is constant within an attraction area, so the aggregated shares give the right
+> block. Under `:ze`, `T_GATHER` is the identity and the result is the previous
+> cell-level matrix exactly. The printed line now names the space and the free count.
 
 ## 9–13. Smaller items
 
@@ -379,7 +387,8 @@ build (670-679) and read (684) use the same `(l,s,rho)` key ✓.
     `julia -e '@assert [(i,j) for i in 1:2, j in 1:2 if i==j] == [(1,1),(2,2)]'`; if it
     errors, rewrite as `for s in 1:S for l in 1:R if cond`.
 11. Inside `screen_T_identification`, assert `T_REF_REGION[s] ∈ SECTOR_T_COLS[s]` and that
-    `regs`' index space matches — surfaces finding 8 immediately.
+    `regs`' index space matches — surfaces finding 8 immediately. *(Fixed; the screen now
+    builds `M^s` in the T-column space directly.)*
 12. **Fresh-tree smoke test:** `rm -rf reporting_<ind>_profiled_aa_gran_pso && ./run.sh <ind>
     --n_coef=4 --n_tau=1 --profile_T=true --granular=true --ca_level=aa` with tiny
     `n_particles`/`max_iter`. That single run exercises findings 1, 2, 3, 4 and 6 in order.
