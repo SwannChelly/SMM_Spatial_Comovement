@@ -1654,6 +1654,14 @@ function loss_function(simulated_moments, emp, W;
         # size == length(moment_indices)), use it as-is — err is subset to the same
         # moments in the same (β-then-γ) order. Otherwise subset a full-size W.
         if size(W, 1) != length(moment_indices)
+            # A W that is neither already-restricted nor full-size means the caller's
+            # moment_blocks and the moment set W was built over have drifted apart;
+            # subsetting here would index a restricted W with global positions.
+            size(W, 1) >= maximum(moment_indices) || error(
+                "loss_function: W is $(size(W,1))×$(size(W,1)) but moment_indices has " *
+                "$(length(moment_indices)) entries reaching index $(maximum(moment_indices)). " *
+                "W is restricted to a DIFFERENT moment set than the one requested — check " *
+                "that moment_blocks matches inference_moment_indices() (β → γ → G).")
             W = W[moment_indices, moment_indices]
         end
     end

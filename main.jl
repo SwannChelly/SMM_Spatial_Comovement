@@ -201,7 +201,13 @@ end
 
 ############## Load θ̂_1 ##############
 #output_folder = "./reporting_gmm_$industry"
-step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
+step1_dir = joinpath(output_folder, "step1")
+isdir(step1_dir) || error(
+    "θ̂_1 cannot be loaded: $(step1_dir) does not exist. run_step1 = $(run_step1); " *
+    "a fresh output tree (a new --granular/--ca_level/--optimizer combination writes " *
+    "to its own folder, here $(output_folder)) has no Step-1 artefacts to resume from. " *
+    "Set run_step1 = true for the first run in this tree.")
+step1_last = find_last_stage_folder(step1_dir)
 theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
 
 if ndims(theta_hat_1) > 1

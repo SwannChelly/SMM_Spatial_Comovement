@@ -526,7 +526,14 @@ function run_optimization(;
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
 
-    moment_blocks = moments_loss_gamma_beta ? [4, 5] : nothing   # reg_coef + gamma_ls (β+γ)
+    # reg_coef + gamma_ls (β+γ), plus the count block Ḡ_s(0) under GRANULAR. This MUST
+    # enumerate the same moments as `inference_moment_indices()`, because Step 3 is
+    # handed the `W_step3` built over exactly those: `loss_function` uses a W whose
+    # size already matches `moment_indices` as-is, and subsets it otherwise. Leaving
+    # this at [4,5] under GRANULAR made the two disagree by S, so the restricted
+    # W_step3 was indexed with GLOBAL masked positions → BoundsError on the first
+    # Step-3 evaluation (or, if a try/catch absorbed it, a constant objective).
+    moment_blocks = moments_loss_gamma_beta ? (GRANULAR ? [4, 5, 6] : [4, 5]) : nothing
 
     best_params = nothing
     best_fitness = Inf

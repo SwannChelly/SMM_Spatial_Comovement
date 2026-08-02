@@ -3402,6 +3402,10 @@ function run_profiled_inference(theta_hat::Vector{Float64},
     N_hat_v, se_N_naive, q_hat_v = nothing, nothing, nothing
     G_N_gb = nothing
     if GRANULAR
+        # The GRANULAR block below writes into <output_folder>/inference/ BEFORE
+        # compute_smm_inference (the only other creator of that directory) runs, so
+        # create it here or the first granular run loses the Jacobian it just paid for.
+        mkpath(joinpath(output_folder, "inference"))
         gr = granular_report(profiled_theta(theta_hat);
                              u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
         q_hat_v = gr.q_hat
