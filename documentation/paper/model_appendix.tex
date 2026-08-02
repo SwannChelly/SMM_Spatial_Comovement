@@ -257,10 +257,15 @@ distance slope, which is why the model does not attempt to explain it.
 \subsection{The firm-level reduced form}
 \label{app:model-prop}
 
-\begin{proposition}[Firm-level reduced form]
+The object the estimation matches is the union event \eqref{eq:q}: whether a firm supplies the
+downstream industry at all. That probability has no tractable closed form. The single-buyer case
+does, and it is what gives the empirical cloglog its structural interpretation; we state it
+first and then say precisely what survives when there are several buyers.
+
+\begin{proposition}[Firm-level reduced form, single buyer]
 \label{prop:firm}
-Let a firm be a (region, variety) champion with productivity $z$ located in $r'$, and let $a$ be
-its area's downstream anchor. Writing
+Let a firm be a (region, variety) champion with productivity $z$ located in $r'$, and suppose it
+faces a single downstream buyer, its area's anchor $a$. Writing
 $\Phi^{-r'}_{as}=\sum_{r''\neq r'}T_{a(r'')s}(w_{r''s}\tau_{r''as})^{-\theta}$ for the
 competitors' cost scale,
 \begin{equation}
@@ -284,14 +289,10 @@ The variety count $N_{s}$ does not appear.
 Three consequences, and they are the backbone of the estimation.
 
 \begin{enumerate}[nosep,topsep=3pt,label=(\alph*)]
-\item \textbf{The empirical specification is the model's own auxiliary model.} A cloglog of the
-``does not supply'' indicator on log distance and log own productivity, with an
-area$\times$sector fixed effect, is exactly \eqref{eq:app-firm-cloglog} for a single downstream
-market, with distance coefficient $+\theta\alpha$ and productivity coefficient $-\theta$. The
-empirical outcome is the union over buyers rather than a single market (Remark~\ref{rem:dependence}),
-so \eqref{eq:app-firm-cloglog} is exact in the single-destination limit and is otherwise an
-auxiliary model. We therefore estimate the \emph{same} regression on simulated and observed data
-and match the coefficients, which is consistent for $\alpha$ whether or not the link is exact.
+\item \textbf{The cloglog is the model's own auxiliary model.} A cloglog of the ``does not
+supply'' indicator on log distance and log own productivity, with an area$\times$sector fixed
+effect, is exactly \eqref{eq:app-firm-cloglog} when a firm faces one buyer, with distance
+coefficient $+\theta\alpha$ and productivity coefficient $-\theta$.
 \item \textbf{$\alpha$ and $N_{s}$ separate.} $N_{s}$ is absent from
 \eqref{eq:app-firm-cloglog}: conditioning on the firm removes it. The regression identifies
 $\alpha$; the count level identifies $N_{s}$; there is no residual coupling.
@@ -299,6 +300,41 @@ $\alpha$; the count level identifies $N_{s}$; there is no residual coupling.
 $-\theta$. Extending the moment vector to include it would let $\theta$ be estimated rather than
 calibrated.
 \end{enumerate}
+
+\paragraph{Several buyers: what survives.} Our surveys record supply to the industry, not to a
+named buyer, so the empirical outcome is the union event $\bigcup_{r}W_{r}$, where $W_{r}$
+denotes winning buyer $r$. Its probability is \emph{not} $1-\prod_{r}[1-\rho_{r'rs}(z)]$: that
+expression would require the $W_{r}$ to be independent, and they are not.
+
+The dependence is positive and structural: conditional on $z$, the firm's delivered cost to
+every buyer is the same number scaled by $\tau_{r'rs}$, so a firm cheap enough to beat the
+competition in one market tends to beat it everywhere. The exact object is the
+inclusion--exclusion sum
+\begin{equation}
+\Pr\Big(\bigcup_{r}W_{r}\,\Big|\,z\Big)
+=\sum_{\emptyset\neq\mathcal{S}\subseteq\{1,\dots,R\}}(-1)^{|\mathcal{S}|+1}
+\exp\Big(-z^{-\theta}\max_{r\in\mathcal{S}}\big\{\Phi^{-r'}_{rs}(w_{r's}\tau_{r'rs})^{\theta}\big\}\Big),
+\label{eq:app-inclexcl}
+\end{equation}
+where the maximum appears because $\cap_{r\in\mathcal{S}}W_{r}$ requires the firm to beat the
+\emph{tightest} of the thresholds it faces. Equation~\eqref{eq:app-inclexcl} has $2^{R}-1$
+terms. Many are redundant --- if the threshold for buyer $r$ dominates that for $r''$ then
+$W_{r}\subseteq W_{r''}$ and the pair collapses --- and pruning the dominated buyers reduces the
+sum to the non-dominated set, but that set is still large enough in our geography that
+evaluating \eqref{eq:app-inclexcl} inside an optimizer is not practical. The independence
+approximation $1-\prod_{r}(1-\rho_{r'rs}(z))$, which is what a closed-form estimator would have
+to use, is a strict \emph{under}-statement of \eqref{eq:app-inclexcl} by positive dependence, and
+the error is largest exactly where the extensive margin has content, at high $z$.
+
+This is the reason the model is estimated by simulated rather than analytical method of moments.
+Simulation evaluates the union exactly --- each variety's champion costs are drawn once and
+compared against every buyer, so the dependence is reproduced by construction --- at the cost of
+simulation noise, which the weighting matrix accounts for. We therefore treat
+\eqref{eq:app-firm-cloglog} as an auxiliary model rather than an estimating equation: the same
+cloglog is run on simulated and observed data, with the union as the outcome on both sides, and
+the coefficients are matched. This is consistent for $\alpha$ whether or not the link is exact,
+and it is why the distance coefficient enters the moment vector rather than being inverted
+analytically.
 
 The outcome convention is dictated by the unit of observation rather than chosen. Simulating the
 exact object at $\theta=1$, $\alpha=0.30$, with firms as (region $\times$ variety) champions,
@@ -519,21 +555,82 @@ bisection. Clamping at either bound is informative rather than benign: the upper
 means the model cannot generate enough sparsity even when every variety is sourced from a single
 origin, which is a rejection signal for the mechanism rather than a numerical nuisance.
 
-\paragraph{Concentrating out comparative advantage.} Given $(\alpha,\Omega_{L},\{\Omega_{s}\},\{A_{r}\})$,
-the area-level comparative advantage that reproduces the observed sourcing shares
-\eqref{eq:app-gamma-area} exactly is the solution of a matrix-scaling problem. We solve it by
-the damped multiplicative iteration
+\paragraph{Concentrating out comparative advantage.} Given
+$(\alpha,\Omega_{L},\{\Omega_{s}\},\{A_{r}\})$, the area-level comparative advantage that
+reproduces the observed sourcing shares \eqref{eq:app-gamma-area} is the solution of a
+matrix-scaling problem. We solve it by the damped multiplicative iteration
 \begin{equation}
 T^{+}_{as}=T_{as}\left(\frac{\hat{\tilde\gamma}_{as}}{\tilde\gamma_{as}(T)}\right)^{\varsigma},
 \qquad \varsigma\in(0,1],
 \label{eq:app-sinkhorn}
 \end{equation}
-recomputing the general-equilibrium expenditure weights at each pass and renormalizing to the
-reference area per sector. The map is a contraction in the relevant region of the parameter
-space, and the fixed point $T^{*}(\alpha,\Omega,A)$ is unique. Substituting it into
-\eqref{eq:app-smm} collapses the outer search from several hundred parameters to a handful, and
-makes the sourcing-share block just-identified along the profiled manifold, so that the
-extensive-margin coefficient is fit by $(\alpha,\Omega,A)$ alone.
+renormalizing to the reference area of each sector after every pass, and recomputing the
+general-equilibrium expenditure weights that enter \eqref{eq:app-gamma-area}.
+
+It is useful to separate the two things this iteration does, because only the first is covered
+by a standard argument.
+
+\emph{Step one: the scaling problem at fixed expenditure.} Hold the expenditure weights
+$\omega_{rs}=X_{rs}/\sum_{r}X_{rs}$ of \eqref{eq:app-gamma-area} fixed. Then
+$\tilde\gamma_{as}(T)$ is a ratio of positive linear forms in $T$: writing
+$B_{ar}=\sum_{r'\in\mathcal{R}_{a}}(w_{r's}\tau_{r'rs})^{-\theta}$ for the (strictly positive)
+bilateral access matrix, $\tilde\gamma_{as}(T)=\sum_{r}\omega_{rs}T_{as}B_{ar}/\sum_{a'}T_{a's}B_{a'r}$.
+Recovering $T$ from target shares is then the classical matrix-scaling (Sinkhorn--Knopp)
+problem, and \eqref{eq:app-sinkhorn} with $\varsigma=1$ is its standard iteration. Because
+$B$ has full support --- every area can serve every buyer at finite cost --- the associated
+positive linear map contracts the Hilbert projective metric with a modulus
+$\kappa_{S}=\tanh(\Delta/4)<1$, where $\Delta$ is the projective diameter of the image cone
+(Birkhoff--Hopf). Two consequences: the iteration converges geometrically from any strictly
+positive start, and \textbf{the fixed point is unique up to the per-sector scale}, which is
+exactly the gauge the reference normalization fixes. Given trade costs and expenditures, there
+is one and only one vector of comparative advantages consistent with the observed area shares.
+
+\emph{Step two: the general-equilibrium feedback.} Expenditure is not fixed. A change in $T$
+moves the price indices $p_{rs}$, hence $c_{r}$, hence downstream sales $y_{r}$ and the weights
+$\omega_{rs}$. The map actually iterated is the composition $\Psi=\mathcal{S}\circ\omega$, whose
+Jacobian decomposes as
+\begin{equation}
+D\Psi = \underbrace{D\mathcal{S}\big|_{\omega\text{ fixed}}}_{\text{scaling channel}}
+\;+\;\underbrace{J_{\mathrm{GE}}}_{\text{expenditure channel}},
+\qquad
+J_{\mathrm{GE}}\equiv D\Psi-D\mathcal{S}\big|_{\omega\text{ fixed}} .
+\label{eq:app-jacobian-split}
+\end{equation}
+Birkhoff's theorem bounds the first term by $\kappa_{S}$ but says nothing about the second, so a
+sufficient condition for $\Psi$ to be a contraction is
+\begin{equation}
+\kappa_{S}+\big\|J_{\mathrm{GE}}\big\|<1 .
+\label{eq:app-contraction}
+\end{equation}
+The size of $J_{\mathrm{GE}}$ is governed by how far the technology is from Cobb--Douglas: the
+expenditure weights are invariant to $T$ when $\lambda=\nu=1$, so $\|J_{\mathrm{GE}}\|$ vanishes
+with $|1-\lambda|$ and $|1-\nu|$. Our calibration is not close to Cobb--Douglas, so
+\eqref{eq:app-contraction} is an empirical question rather than an assumption, and we verify it
+numerically at the estimated parameters by finite differences on the one-step map. We find
+$\kappa_{S}\approx0.005$ and $\|J_{\mathrm{GE}}\|\approx0.015$, so the sufficient condition
+\eqref{eq:app-contraction} holds with a wide margin ($\approx0.02\ll1$); the measured spectral
+radius of the full map is $\approx0.012$, and convergence to $10^{-9}$ takes a handful of
+iterations.%
+% NOTE: these three numbers were measured by the Phase-0 inversion gate
+% (test/test_ge_inversion.jl). Re-run it under --granular=true --ca_level=aa to
+% refresh them before circulating, since the earlier measurement was taken on the
+% ZE-level continuum configuration.
+\ We further confirm that the inversion recovers a known $T$ from its own implied
+shares to machine precision, and that ten dispersed starting values converge to the same fixed
+point.
+
+This is a local, numerically verified statement at the estimated parameters, not a global
+theorem: \eqref{eq:app-contraction} is sufficient, not necessary, and we do not characterize the
+region of the parameter space over which it holds. Should it fail at some candidate parameter
+vector, the iteration is not used blindly --- non-convergence is detected and the candidate
+retains its warm-start $T$, so the outer optimizer sees a well-defined objective throughout.
+
+Substituting $T^{*}(\alpha,\Omega,A)$ into \eqref{eq:app-smm} collapses the outer search from
+several hundred parameters to a handful and makes the sourcing-share block just-identified along
+the profiled manifold, so that the extensive-margin coefficient is fit by $(\alpha,\Omega,A)$
+alone. Note that just-identification here is at the \emph{area} level: within an area, the split
+of sourcing across regions remains over-identified by the distance profile, which is the content
+of Assumption~\ref{as:geo}.
 
 \paragraph{Weighting matrix.} In the SMM framework noise arises from two sources: sampling
 variability in the data and simulation error. We distinguish between moments for which
