@@ -203,9 +203,22 @@ end
 # ── N_rho: draws per (sector, cell) ─────────────────────────────────────────
 # The number of Monte-Carlo/QMC draws integrating over the variety continuum, in
 # BOTH modes. Under GRANULAR it additionally sets the precision of `q̂` and hence of
-# the profiled `N̂_s`; it is NOT tied to N_HI, because no prefix of the draws is ever
-# taken (see SECTION 9b).
-n_rho_local = granular_local ? 100 : 1000
+# the profiled `N̂_s`, and it must COVER the largest candidate variety count:
+# `concentrate_N_s` (model_CP.jl) asserts `N̂_s ≤ N_rho`, while `N̂_s` ranges over
+# `[N_LO[s], N_HI[s]]`. Setting `N_rho ≥ maximum(N_HI)` turns that assert into a
+# true invariant instead of an abort that fires precisely on the `:hi` clamp — the
+# case its own docstring calls a rejection signal for the mechanism, i.e. a result
+# to report, not a crash. (The earlier comment here claimed N_rho was NOT tied to
+# N_HI because no prefix of the draws is taken. The premise is right — `N̂_s` only
+# ever enters the closed form `(1-q̂)^N̂` — but the assert says otherwise, and this
+# is the resolution that keeps the guard meaningful.)
+#
+# Rounded UP to a power of two: the Sobol (t,m,s)-net equidistribution is sharp
+# only at N = 2^m, and away from it the per-sector net leaves measurable
+# cross-cell correlation, which biases the Ricardian min-over-cells and hence
+# q̂, γ_ls and the count moment. It also lowers the `q̂` floor `0.5/N_rho`
+# (model_CP.jl), which caps the attainable `N̂_s` at ≈ ln(Ḡ_target)/ln(1-0.5/N_rho).
+n_rho_local = granular_local ? max(128, Int(nextpow(2, maximum(N_HI_local)))) : 1000
 @everywhere const N_rho = $(n_rho_local)
 println("\n N_rho = $n_rho_local — Entreprise par secteur x region")
 
