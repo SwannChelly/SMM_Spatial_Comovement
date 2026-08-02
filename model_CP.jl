@@ -1220,7 +1220,6 @@ The IRLS quantities for cloglog: with `μ = 1 − exp(−exp(η))`,
 Pass `group_rows` (from `build_fe_group_rows`) to skip rebuilding the FE index, and
 `iters_out` to read back how many IRLS iterations were actually used.
 """
-
 function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
                        w::AbstractVector{<:Real}, fe_group::AbstractVector{<:Integer};
                        group_rows::Union{Nothing,Vector{Vector{Int}}}=nothing,
