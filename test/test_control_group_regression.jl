@@ -1,6 +1,10 @@
 ##### test_control_group_regression.jl #####
 # Compare the extensive-margin distance regression WITH vs WITHOUT the no-supplier
-# control group (filter_N_upstream status == 2), at a FIXED parameter vector.
+# control group — the cells kept by the filter that have no observed supplier, i.e.
+# `filter_N_upstream == 1 & X_rs == 0` under the current BINARY encoding (formerly
+# status 2) — at a FIXED parameter vector. Note this contrast only exists under
+# CA_LEVEL == :ze; under :aa those cells inherit T_{s,a} > 0 and are simulated as
+# ordinary goods, so there is no separate control group to add or remove.
 # STANDALONE + PRINT-ONLY: includes the model files and load_parameters.jl exactly
 # like main.jl / test_extensive_margin.jl, then evaluates fast_weighted_regression
 # twice on the same solved network and contrasts the two coefficient vectors.

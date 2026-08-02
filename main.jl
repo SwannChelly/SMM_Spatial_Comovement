@@ -64,7 +64,7 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 20
 
-run_step1 = true#true
+run_step1 = false#true
 run_step2 = true
 run_step3 = true
 run_step4 = true
@@ -73,7 +73,7 @@ run_step4 = true
 # K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
 # Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
 # present, else fall back to computing. Set false to always recompute.
-load_jacobian = false
+load_jacobian = true
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
@@ -106,12 +106,34 @@ reg_method = length(ARGS) >= 9 && !isempty(strip(ARGS[9])) ? Symbol(strip(ARGS[9
 # regression. false ⇒ supplier pairs only WITH the log-z size control (coupled). 10th
 # positional arg (run.sh --controls=true|false). Read by load_parameters.jl into INCLUDE_CONTROL.
 include_control = length(ARGS) >= 10 && !isempty(strip(ARGS[10])) ?
-    (lowercase(strip(ARGS[10])) in ("true", "1", "yes")) : true
+    (lowercase(strip(ARGS[10])) in ("true", "1", "yes")) : false
+
+# ── Granularity + comparative-advantage level (documentation/plan_granular_aa.md) ──
+# 11th positional arg (run.sh --granular=true|false), default FALSE: with
+# --granular=false --ca_level=ze the estimator is the continuum ZE-level model exactly
+# as it stood, which is a supported configuration, not a historical curiosity.
+granular = length(ARGS) >= 11 && !isempty(strip(ARGS[11])) ?
+    (lowercase(strip(ARGS[11])) in ("true", "1", "yes")) : false
+# 12th positional arg (run.sh --ca_level=ze|aa), default :ze.
+ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :ze
+@assert ca_level in (:ze, :aa) "ca_level must be ze|aa, got :$ca_level"
 
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
 run_2x2_test = true
 n_quad       = 200
+
+# The 2×2 test crosses a SIMULATED against an ANALYTICAL Jacobian, and the analytical
+# path has no closed form for the granular count moment (block 6) — its extensive
+# margin is the FKG-approximated continuum object, so it returns a 5-block vector
+# against a 6-block MOMENT_MASK. Disable it here, at parse time, rather than let it
+# fail after Step 2 has already spent the compute.
+if run_2x2_test && granular
+    @warn "run_2x2_test is not available under --granular=true: it needs an ANALYTICAL " *
+          "Jacobian, and block 6 (the count moment Ḡ_s(0)) has no closed form on that " *
+          "path. The test is skipped; estimation and inference are unaffected."
+    run_2x2_test = false
+end
 
 
 if !(n_coef in [1, 4, 5])
@@ -121,12 +143,16 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control")
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control | granular: $granular | ca_level: :$ca_level")
 
 input_folder  = "./baseline_$industry"
 # profile_T ⇒ isolate all step1..4 artifacts under a distinct tree (plan §6), so the
 # joint-search reporting is never overwritten and the two estimators stay comparable.
-output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "") * "_$optimizer_backend"
+# granular / :aa likewise get their own tree, so the legacy fit stays reproducible
+# side by side (the V0 gate compares the two).
+output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "") *
+                (ca_level == :aa ? "_aa" : "") * (granular ? "_gran" : "") *
+                "_$optimizer_backend"
 mkpath(output_folder)
 
 ############## Load and distribute constants ##############
@@ -150,6 +176,7 @@ T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
 # New layout: [Ω^L | Ω^s | A | α(N_TAU) | T] — alpha is inserted between A and T
 init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
 warm_start = vcat(init_other_prefix, P_alpha, T_init_nz)
+
 
 if run_step1
     println("\n" * "="^70)
@@ -213,13 +240,11 @@ if run_step2
     # Inference at θ̂_1 using efficient weight W_step3 and Ω from step2/
     Omega_step2 = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
     _, sim_moments_1 = full_SMM(theta_hat_1; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-    sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
+    sim_vec_1 = moments_to_vec(sim_moments_1)
     emp_vec   = vec(empirical_moments)
 
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))   # β then γ
-    n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
-    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
-    gb_block_names  = ("reg_coef", "gamma_ls")
+    gb_indices = inference_moment_indices()   # β then γ (then G0 under GRANULAR)
+    gb_block_ranges, gb_block_names = inference_block_layout()
 
     # Restrict Jacobian columns to α+T (the only params β+γ moments identify)
     alpha_T_start = 1 + S + R_downstream + 1                       # first α (trade-cost) raw index
@@ -279,7 +304,9 @@ if run_step2
             param_labels_gb  = PARAM_LABELS[gb_cols],
             moment_labels_gb = MOMENT_LABELS[gb_indices],
             head_labels      = head_labels,
-            head_values      = head_values)
+            head_values      = head_values,
+            J_free_gb        = J_gb,          # free-parameter FD Jacobian ⇒ T's se_fd
+            N_s_base_seed    = 7_000_000)
     else
         inf_res_1 = compute_smm_inference(
              theta_hat_1, J_gb, Weight_matrix_inference, Omega_step2;
@@ -332,6 +359,10 @@ if run_step2
             joinpath(output_folder, "step2", "inference_2x2_test");
             label="theta_1")
     end
+
+    # ── Granular diagnostics at θ̂_1 (N̂_s, clamps, Ḡ_s(0) fit, b_logz vs −θ) ──
+    report_granular(theta_hat_1, joinpath(output_folder, "step2");
+                    industry=industry, label="theta_1")
 
     println("Step 2 complete. W_step3 and θ̂_1 inference saved.")
 else
@@ -425,14 +456,12 @@ if run_step4
     Omega_inf   = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
 
     _, sim_moments_2 = full_SMM(theta_hat_2; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-    sim_vec_2 = vcat([vec(sim_moments_2[i]) for i in 1:5]...)[MOMENT_MASK]
+    sim_vec_2 = moments_to_vec(sim_moments_2)
     emp_vec   = vec(empirical_moments)
 
     # Restrict to β+γ moments (β then γ) for inference
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
-    n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
-    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
-    gb_block_names  = ("reg_coef", "gamma_ls")
+    gb_indices = inference_moment_indices()
+    gb_block_ranges, gb_block_names = inference_block_layout()
 
     # Restrict Jacobian columns to α+T (the only params β+γ moments identify)
     alpha_T_start = 1 + S + R_downstream + 1                       # first α (trade-cost) raw index
@@ -440,7 +469,7 @@ if run_step4
     gb_param_idx = jacobian_param_indices[gb_cols]
 
     # Correctness check: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
-    @assert size(Omega_inf, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_inf size $(size(Omega_inf,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+    @assert size(Omega_inf, 1) == length(gb_indices) "Omega_inf size $(size(Omega_inf,1)) != n_gb=$(length(gb_indices)) (N_REG + n_γ" * (GRANULAR ? " + S" : "") * ")"
     # Correctness check: exactly N_TAU α labels must appear in the restricted param columns.
     n_alpha_labels = count(l -> startswith(l, "alpha"), PARAM_LABELS[gb_cols])
     @assert n_alpha_labels == N_TAU "Expected $N_TAU α labels in gb_cols, found $n_alpha_labels — alpha_T_start misaligned with N_TAU"
@@ -501,7 +530,9 @@ if run_step4
             param_labels_gb  = PARAM_LABELS[gb_cols],
             moment_labels_gb = MOMENT_LABELS[gb_indices],
             head_labels      = head_labels,
-            head_values      = head_values)
+            head_values      = head_values,
+            J_free_gb        = J2_gb,         # free-parameter FD Jacobian ⇒ T's se_fd
+            N_s_base_seed    = 7_100_000)
     else
         inf_res = compute_smm_inference(
             theta_hat_2, J2_gb, W_step3, Omega_inf;
@@ -526,6 +557,10 @@ if run_step4
             output_folder = joinpath(output_folder, "step3"),
             industry      = industry)
     end
+
+    # ── Granular diagnostics at θ̂_2 ──────────────────────────────────────────
+    report_granular(theta_hat_2, joinpath(output_folder, "step3");
+                    industry=industry, label="theta_2")
 
     # ── Optional 2×2 noise-decomposition test (isolated; off by default) ──────
     if run_2x2_test
@@ -615,10 +650,11 @@ for s in 1:S, r_prime in 1:R
 end
 npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-suppliers = zeros(Bool, S, N_rho, R)
+N_rho_out = size(network.linkages_flat, 1)   # pool width under GRANULAR, N_rho otherwise
+suppliers = zeros(Bool, S, N_rho_out, R)
 for g in 1:n_good
     s = GOOD_S[g]; r = GOOD_R[g]
-    for rho in 1:N_rho
+    for rho in 1:N_rho_out
         if network.linkages_flat[rho, g] > 0
             suppliers[s, rho, r] = true
         end
@@ -633,7 +669,7 @@ siren_map = Dict{Tuple{Int,Int,Int}, Int}()
 siren_counter = 0
 for g in 1:n_good
     l = GOOD_R[g]; s = GOOD_S[g]
-    for rho in 1:N_rho
+    for rho in 1:N_rho_out
         key = (l, s, rho)
         if !haskey(siren_map, key)
             siren_counter += 1

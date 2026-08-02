@@ -110,7 +110,9 @@ linkages_flat realises the true win-anywhere event with shared competitor draws
 (positively correlated), so the product over-states the extensive margin (FKG/Harris).
 Expect max_rel_err ≈ 1e-2 vs. simulated moments, not machine zero.
 """
-function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
+function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200,
+                                       include_control::Bool = REG_INCLUDE_CONTROL,
+                                       include_size_control::Bool = REG_INCLUDE_SIZE)
     FT = eltype(Phi)
 
     nodes_raw, weights_raw = gausslegendre(n_quad)
@@ -118,10 +120,16 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
     gl_wts  = weights_raw ./ 2
 
     # n_good supplier pairs (n_quad quadrature nodes each) + N_CONTROL control-only
-    # pairs (one y=0 row each). Distance-bin dummies only — the log-z control column
-    # is dropped, mirroring fast_weighted_regression (control pairs have no z).
-    N_total = n_good * n_quad + N_CONTROL
-    n_reg   = N_REG
+    # pairs (one y=0 row each) when include_control. Distance-bin dummies, plus the
+    # log-z size control when include_size_control — the two mirror
+    # fast_weighted_regression / fast_cloglog_regression exactly (under :aa the
+    # control cells are ordinary goods, so the appended rows are off and the size
+    # control is on).
+    n_ctrl  = include_control ? N_CONTROL : 0
+    N_total = n_good * n_quad + n_ctrl
+    n_size  = include_size_control ? 1 : 0
+    n_reg   = N_REG + n_size
+    size_col = N_REG + 1
     y        = Vector{FT}(undef, N_total)
     X        = zeros(FT, N_total, n_reg)
     w_arr    = Vector{Float64}(undef, N_total)
@@ -174,15 +182,18 @@ function compute_regression_quadrature(T_mat, tau, Phi; n_quad::Int=200)
             else
                 (b > 0 && b <= N_REG) && (X[idx, b] = FT(1.0))
             end
+            if include_size_control
+                X[idx, size_col] = log(z_k)
+            end
         end
     end
 
-    # ── Control-only (filter==2) pairs: one y=0 row each ────────────────────────
+    # ── Control-only pairs: one y=0 row each (skipped when include_control=false) ─
     # Exogenous extensive-margin zeros. No quadrature over z (no productivity); a
     # single y=0 observation at the pair's distance bin, weight 1 (matching a supplier
     # pair, whose n_quad Gauss-Legendre weights sum to 1), sharing the (sector ×
     # nearest-downstream) fixed effect. No log-z term.
-    for c in 1:N_CONTROL
+    for c in 1:n_ctrl
         r_p = CONTROL_R[c]
         s   = CONTROL_S[c]
         dr0 = CLOSEST_DOWNSTREAM_REGION[r_p]
@@ -242,6 +253,15 @@ Returns the same 5 moment blocks using closed-form EK formulas.
 Blocks {Ω^L, Ω^s, π_r, γ_ls} are exact; reg_coef uses Gauss-Legendre quadrature.
 """
 function compute_moments_analytical(params; n_quad::Int=200)
+    # The single choke point for every analytical entry (`full_SMM(analytical=true)`,
+    # `moments_vec_analytical`, `analytical_jacobian_ad`, `test_analytical_vs_simulated`).
+    # Without it, the AD path bypasses `full_SMM`'s guard and fails downstream in
+    # `moments_to_vec` with a BoundsError — a 5-block vector against a 6-block MOMENT_MASK.
+    @assert !GRANULAR "the analytical/GMM path does not implement the granular count " *
+        "moment (block 6): the extensive margin there is the FKG-approximated continuum " *
+        "object, so this returns 5 blocks against a 6-block MOMENT_MASK. Run granular " *
+        "estimation through the SMM path (main.jl), and switch off any diagnostic that " *
+        "asks for an analytical Jacobian (`run_2x2_test`, `analytical=true`)."
     Omega_L, Omega_s_vec, A_vec, alpha, T_vec = unpack_params(params)
     T_mat = reshape(T_vec, S, R)
 
@@ -293,7 +313,7 @@ function compute_moments_analytical(params; n_quad::Int=200)
     # ── Block 4: Regression coefficients via quadrature ─────────────────────────
     reg_coef_sim = compute_regression_quadrature(T_mat, tau, Phi; n_quad=n_quad)
 
-    # ── Block 5: Sourcing shares γ_ls ───────────────────────────────────────────
+    # ── Block 5: Sourcing shares γ_ls (AA-aggregated under CA_LEVEL == :aa) ────
     gamma_ls = zeros(FT, R, S)
     for s in 1:S
         xs = X_s[s]
@@ -302,13 +322,25 @@ function compute_moments_analytical(params; n_quad::Int=200)
             gamma_ls[r, s] = X_ls[r, s] / xs * domestic_share[s]
         end
     end
+    gamma_out = gamma_ls
+    if CA_LEVEL === :aa
+        gamma_out = zeros(FT, T_COL_DIM, S)
+        for g in 1:n_good
+            l = GOOD_R[g]; s = GOOD_S[g]
+            gamma_out[T_GATHER[l], s] += gamma_ls[l, s]
+        end
+    end
 
     return (
         agg_labor_share    = [agg_ls],
         agg_industry_share = vec(agg_industry_share),
         pi_r               = pi_r,
         reg_coef           = reg_coef_sim,
-        gamma_ls           = gamma_ls,
+        gamma_ls           = gamma_out,
+        # Block 6 has no closed form here (the analytical extensive margin is the
+        # FKG-approximated continuum object); full_SMM asserts !GRANULAR in
+        # analytical mode, so this stays empty.
+        G0                 = FT[],
     )
 end
 
@@ -465,7 +497,7 @@ exact object whose rows are the Jacobian's moment axis. Generic in `eltype(param
 """
 function moments_vec_analytical(params; n_quad::Int=200)
     m = compute_moments_analytical(params; n_quad=n_quad)
-    return vcat(vec(m[1]), vec(m[2]), vec(m[3]), vec(m[4]), vec(m[5]))[MOMENT_MASK]
+    return moments_to_vec(m)
 end
 
 
@@ -553,12 +585,12 @@ function validate_analytical_jacobian(theta::Vector{Float64},
         end
         return vec(compute_moments_analytical(p; n_quad=n_quad).gamma_ls)
     end
-    Jg = ForwardDiff.jacobian(gvec, x0)          # (R*S) × length(param_indices)
+    Jg = ForwardDiff.jacobian(gvec, x0)          # (T_COL_DIM*S) × length(param_indices)
     worst = 0.0; worst_s = 0; worst_k = 0
     for s in 1:S, k in 1:length(param_indices)
         colsum = 0.0
-        for r in 1:R
-            colsum += Jg[(s - 1) * R + r, k]
+        for c in 1:T_COL_DIM
+            colsum += Jg[(s - 1) * T_COL_DIM + c, k]
         end
         if abs(colsum) > worst
             worst = abs(colsum); worst_s = s; worst_k = k

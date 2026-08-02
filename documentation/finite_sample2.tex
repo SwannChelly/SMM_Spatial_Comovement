@@ -395,13 +395,11 @@ ZE-level comparative advantage this count is zero.
 
 The moment vector has six blocks: the aggregate labour share, industry shares $\pi_{s}$, regional
 sales shares $\pi_{r}$, the firm-level distance coefficients of \eqref{eq:firm-cloglog}, the
-area-aggregated sourcing shares, and the count moment $\bar G_{s}(0)$. The economy is simulated
-with exactly $N_{s}$ varieties per sector, replicated, and moments are computed on the realised
-economies and averaged.
+area-aggregated sourcing shares, and the count moment $\bar G_{s}(0)$. All six are computed from a
+\emph{single} Ricardian solve on one set of draws. The variety count never enters the simulation:
+it is confined to two objects, both of them closed form.
 
-Two properties keep this tractable. First, the winner of a variety is the argmin over ZE of that
-variety's own draws, so it does not depend on how many varieties exist: one Ricardian solve at
-pool width serves every candidate $N_{s}$ as a prefix, with no re-drawing. Second:
+That confinement is the content of Proposition~\ref{prop:firm} and of:
 
 \begin{lemma}[$q_{ls}$ is free of $N_{s}$]
 \label{lem:qfree}
@@ -415,6 +413,34 @@ The economics is that winning is a statement about \emph{relative costs}, wherea
 $P_{sr}$ are aggregators built after the winners are known: expenditure allocates value across
 winners, it does not choose them. The one condition that would break the lemma is endogenous
 upstream wages, since $w$ enters the comparison directly; wages are taken as data.
+
+Together the two results say that $N_{s}$ reaches the moment vector only through
+$\bar G_{s}(0)$ and through the estimate $\widehat N_{s}$ itself, and that both are functions of
+$q_{ls}$ alone. Writing $\hat q_{ls}$ for the share of simulated varieties won somewhere by ZE
+$l$ --- a column mean of the win indicators, and by Lemma~\ref{lem:qfree} a consistent estimate of
+$q_{ls}$ whatever the variety count --- the count moment is evaluated as
+\begin{equation}
+\bar G_{s}(n)=\frac{1}{|\mathcal{L}^{+}_{s}|}\sum_{l\in\mathcal{L}^{+}_{s}}(1-\hat q_{ls})^{n},
+\label{eq:Gclosed}
+\end{equation}
+which is exactly the expectation in \eqref{eq:count}. The dependence across cells --- two ZE in a
+sector face the same variety draws --- does not affect it, because an expectation of an average is
+the average of expectations whatever the dependence. So \eqref{eq:Gclosed} is unbiased for the
+realised empty-ZE share \emph{and} carries no simulation noise of its own: no economy of size
+$N_{s}$ is ever drawn, and no replication is needed.
+
+\begin{remark}[What is given up]
+\label{rem:binding}
+Block 4 is then the coefficient of a regression run on the full simulated sample, i.e.\ the
+continuum limit $\beta(\E[y])$ rather than $\E[\hat\beta(N_{s})]$. The finite-sample bias of the
+auxiliary cloglog --- which an average of $\hat\beta$ over realised economies of size $N_{s}$ would
+have cancelled against the same bias in the data --- is therefore not differenced out. It is a
+measurable quantity, of the order of $2$--$4\%$ of $\beta$ at data-consistent group sizes, and is
+reported alongside $\hat\alpha$. The alternative is not free: it would treat simulation noise on
+one block by replication while every other block relies on the accuracy of the draw design, and it
+would sit oddly beside Section~\ref{sec:priceindex}, where the value block is already evaluated at
+the certainty-equivalent index rather than on a realised economy.
+\end{remark}
 
 \subsection{The variety count}
 

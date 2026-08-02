@@ -213,7 +213,7 @@ function build_theta0()
 end
 
 # Flatten a SMM moment tuple → masked moment vector (MOMENT_MASK order).
-masked_moments(sim) = vcat([vec(sim[i]) for i in 1:5]...)[MOMENT_MASK]
+masked_moments(sim) = moments_to_vec(sim)
 
 """
     set_synthetic_targets!(masked_m)

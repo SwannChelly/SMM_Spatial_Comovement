@@ -153,7 +153,7 @@ if run_step2
     end
 
     # β-then-γ ordering (invariant: BLOCK_RANGES[4] then BLOCK_RANGES[5])
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    gb_indices = inference_moment_indices()
     N_gb = length(gb_indices)
 
     # Reconcile the on-disk Σ with the (possibly gamma-thresholded) active set —
@@ -197,12 +197,10 @@ if run_step2
 
     # Inference at θ̂_1 (GMM: Ω = Σ_data, K_sim = 0)
     _, sim_moments_1 = full_SMM(theta_hat_1; analytical=true, n_quad=n_quad)
-    sim_vec_1 = vcat([vec(sim_moments_1[i]) for i in 1:5]...)[MOMENT_MASK]
+    sim_vec_1 = moments_to_vec(sim_moments_1)
     emp_vec   = vec(empirical_moments)
 
-    n_reg_loc = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
-    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
-    gb_block_names  = ("reg_coef", "gamma_ls")
+    gb_block_ranges, gb_block_names = inference_block_layout()
 
     # Restrict Jacobian columns to α+T (the only params β+γ moments identify)
     alpha_T_start = 1 + S + R_downstream + 1                       # first α (trade-cost) raw index
@@ -214,7 +212,7 @@ if run_step2
 
     # Correctness check: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
     Omega_gmm = Sigma_data_gb
-    @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+    @assert size(Omega_gmm, 1) == length(gb_indices) "Omega_gmm size $(size(Omega_gmm,1)) != n_gb=$(length(gb_indices))"
 
     J1_gb      = J1[gb_indices, gb_cols]
     sim_vec_gb = sim_vec_1[gb_indices]
@@ -262,7 +260,7 @@ else
     W_eff = NPZ.npzread(step2_W_path)
 
     # Recompute gb_indices / Sigma_data_gb for use in later steps
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    gb_indices = inference_moment_indices()
     N_gb = length(gb_indices)
     Sigma_data_gb = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data_gb.npy"))
 end
@@ -349,14 +347,12 @@ if run_step4
     Sigma_data_gb = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data_gb.npy"))
 
     _, sim_moments_2 = full_SMM(theta_hat_2; analytical=true, n_quad=n_quad)
-    sim_vec_2 = vcat([vec(sim_moments_2[i]) for i in 1:5]...)[MOMENT_MASK]
+    sim_vec_2 = moments_to_vec(sim_moments_2)
     emp_vec   = vec(empirical_moments)
 
     # β-then-γ ordering (invariant)
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
-    n_reg_loc  = length(BLOCK_RANGES[4]); n_gam_loc = length(BLOCK_RANGES[5])
-    gb_block_ranges = (1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc))
-    gb_block_names  = ("reg_coef", "gamma_ls")
+    gb_indices = inference_moment_indices()
+    gb_block_ranges, gb_block_names = inference_block_layout()
 
     # Restrict Jacobian columns to α+T (ensures G'WG full-rank, order condition)
     alpha_T_start = 1 + S + R_downstream + 1                       # first α (trade-cost) raw index
@@ -365,7 +361,7 @@ if run_step4
 
     # Correctness check 1: Σ_data leading β-block must be N_REG × N_REG (moments, not params).
     Omega_gmm = Sigma_data_gb
-    @assert size(Omega_gmm, 1) == N_REG + length(BLOCK_RANGES[5]) "Omega_gmm size $(size(Omega_gmm,1)) != N_REG+n_γ=$(N_REG+length(BLOCK_RANGES[5]))"
+    @assert size(Omega_gmm, 1) == length(gb_indices) "Omega_gmm size $(size(Omega_gmm,1)) != n_gb=$(length(gb_indices))"
     # Correctness check 2: exactly N_TAU α labels in the restricted param columns.
     n_alpha_labels = count(l -> startswith(l, "alpha"), PARAM_LABELS[gb_cols])
     @assert n_alpha_labels == N_TAU "Expected $N_TAU α labels in gb_cols, found $n_alpha_labels — alpha_T_start misaligned with N_TAU"
@@ -533,7 +529,7 @@ function test_sobol_variance(params; K::Int = 64, N::Int = 8192)
         M = reduce(hcat, pmap(1:K) do k
             u, w = generate_draws(N, n_good, method; randomise = true, rng = MersenneTwister(k))
             _, m = full_SMM(params; u_draws = u, sample_weights = w)   # (loss, moment 5-tuple)
-            vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK][γidx]
+            moments_to_vec(m)[γidx]
         end)'
         vec(var(M; dims = 1))
     end

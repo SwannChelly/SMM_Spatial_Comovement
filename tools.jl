@@ -213,7 +213,7 @@ end
 
 function generate_dashboard_report(
     n,agg_labor_share_,agg_industry_share_,gamma_ls_,reg_,pi_r,best_score,
-    output_file::String,variable,alpha
+    output_file::String,variable,alpha; G0_ = nothing, granular_info = nothing
 )   
 
     # gamma_ls summary table
@@ -313,6 +313,36 @@ function generate_dashboard_report(
         for row in eachrow(reg_df)
             println(io, @sprintf("%-15s  Empirical: %8.3f  |  Simulated: %8.3f",
                 row.bins, row.empirical, row.simulated))
+        end
+
+        # ── Block 6: the count moment Ḡ_s(0), granular runs only ────────────
+        if G0_ !== nothing
+            G0_emp, G0_sim = G0_
+            println(io, "\n>> Count moment  G_s(0)  (share of cells with ZERO suppliers): \n")
+            for (k, sec) in enumerate(sectors)
+                k <= length(G0_emp) && k <= length(G0_sim) || continue
+                println(io, @sprintf("%-15s  Empirical: %8.4f  |  Simulated: %8.4f",
+                    string(sec), G0_emp[k], G0_sim[k]))
+            end
+            if granular_info !== nothing
+                println(io, "\n>> Profiled variety count N_s (bisection on G_s(0)): \n")
+                println(io, @sprintf("%-10s %8s %8s %8s %8s %10s",
+                    "sector", "N_LO", "N_hat", "N_HI", "clamp", "N_count"))
+                for (k, sec) in enumerate(sectors)
+                    k <= length(granular_info.N_hat) || continue
+                    println(io, @sprintf("%-10s %8d %8d %8d %8s %10.1f",
+                        string(sec), N_LO[k], granular_info.N_hat[k], N_HI[k],
+                        string(granular_info.clamped[k]), granular_info.N_count[k]))
+                end
+                println(io, "\n  clamp: :none = interior (good). :lo/:hi = the variety count hit a")
+                println(io, "  bound — a rejection signal for the mechanism, not a numerical nuisance.")
+                println(io, "  Simulated G_s(0) above is the CLOSED FORM mean_l (1-q_hat)^N_hat, which")
+                println(io, "  is the exact expectation of the empty-cell share — unbiased and noise-free.")
+                println(io, "  N_count = N_supplier_s / sum_l q_hat is the independent second route to")
+                println(io, "  N_s (over-identifying check); a large gap is a mechanism finding.")
+                println(io, @sprintf("\n  log z coefficient: %+.4f   (theory: -theta = %+.4f)",
+                    granular_info.b_logz, -theta))
+            end
         end
     end
 end
@@ -419,13 +449,14 @@ function plot_T_vs_initial(best_params, out_folder; label::String = "")
         cur_alpha  = length(beta_best) >= 1 ? Float64(beta_best[1]) : NaN
         init_alpha = (TAU_PRIOR !== nothing) ? Float64(TAU_PRIOR[1]) : NaN
 
-        # unpack_params returns vec(T_mat) with T_mat (S,R); recover (S,R). Both this
-        # and T_rs_init are already per-sector ref-normalised → directly comparable.
-        T_best = reshape(Float64.(T_best_flat), S, R)
+        # Compare in the T-PARAMETER space (T_COL_DIM wide: ZE under :ze, attraction
+        # areas under :aa), which is where T_rs_init lives. Both are already
+        # per-sector ref-normalised → directly comparable.
+        T_best = unpack_T_par(best_params)
         T_init = T_rs_init
 
         xs = Float64[]; ys = Float64[]; ss = Int[]; rs = Int[]
-        for s in 1:S, r in 1:R
+        for s in 1:S, r in 1:T_COL_DIM
             ti = T_init[s, r]; tb = T_best[s, r]
             (isfinite(ti) && isfinite(tb) && ti > 1e-8 && tb > 1e-8) || continue
             push!(xs, ti); push!(ys, tb); push!(ss, s); push!(rs, r)
@@ -497,7 +528,7 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
     # ── Extract empirical & simulated vectors ──
     # Use the same masked gamma subset as the optimizer and compute_smm_inference:
     # apply MOMENT_MASK to the raw simulated blocks, then index BLOCK_RANGES[5].
-    sim_flat_masked = vcat([vec(results[best_index][2][i]) for i in 1:length(results[best_index][2])]...)[MOMENT_MASK]
+    sim_flat_masked = moments_to_vec(results[best_index][2])
     emp_gamma = empirical_moments[collect(BLOCK_RANGES[5])]
     sim_gamma = sim_flat_masked[collect(BLOCK_RANGES[5])]
 
@@ -636,8 +667,21 @@ function generate_report(loop_folder, stage, n, variable=nothing, best_params=no
 
     best_score = results[best_index][1][1]
 
+    # Block 6 (granular only): empirical vs realised Ḡ_s(0), plus the profiled N̂_s.
+    G0_ = nothing; granular_info = nothing
+    if GRANULAR
+        try
+            G0_emp = vec(empirical_moments)[collect(BLOCK_RANGES[6])]
+            G0_sim = vec(results[best_index][2][6])
+            G0_    = [G0_emp, G0_sim]
+            granular_info = granular_report(best_params)
+        catch e
+            @warn "count-moment section of report.txt skipped: $e"
+        end
+    end
+
     generate_dashboard_report(n, agg_labor_share_, agg_industry_share_, gamma_ls_, reg_, pi_r, best_score,
-        folder * "/report.txt", variable, alpha)
+        folder * "/report.txt", variable, alpha; G0_ = G0_, granular_info = granular_info)
 end
 
 
@@ -996,17 +1040,23 @@ end
 
 
 """
-    compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask)
+    compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask; n_G0=0)
 
 Compute indices into masked moment vector for each moment block.
-Moment order: [labor | industry | pi_r | reg_coef | gamma_ls]
-Returns tuple of 5 index vectors (one per block).
+Moment order: [labor | industry | pi_r | reg_coef | gamma_ls (| G0)]
+
+Returns a tuple of 5 index ranges, or 6 when `n_G0 > 0` (granular mode: block 6 is
+the per-sector count moment Ḡ_s(0), **appended** so every existing index into the
+first five blocks is unchanged).
 """
 
-function compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask)
-    cuts = cumsum([0, n_labor, n_industry, n_pi, n_reg, n_gamma])
+function compute_block_ranges(n_labor, n_industry, n_pi, n_reg, n_gamma, mask; n_G0::Int = 0)
+    sizes = n_G0 > 0 ? [n_labor, n_industry, n_pi, n_reg, n_gamma, n_G0] :
+                       [n_labor, n_industry, n_pi, n_reg, n_gamma]
+    cuts  = cumsum(vcat(0, sizes))
+    nblk  = length(sizes)
 
-    masked_ranges = ntuple(5) do k
+    masked_ranges = ntuple(nblk) do k
         base    = count(mask[1 : cuts[k]])
         count_k = count(mask[cuts[k]+1 : cuts[k+1]])
         (base + 1):(base + count_k)
@@ -1026,7 +1076,7 @@ Uses global constants: U_DRAWS, SAMPLE_WEIGHTS, MOMENT_MASK,
 function loss_decomposition(params)
     _, sim = full_SMM(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
-    sim_vec = vcat([vec(sim[i]) for i in 1:length(sim)]...)[MOMENT_MASK]
+    sim_vec = moments_to_vec(sim)
     emp_vec = vec(empirical_moments)
     w = diag(Weight_matrix_custom)
 
@@ -1042,39 +1092,159 @@ end
 Name of the on-disk β+γ moment covariance to load, keyed on the extensive-margin
 regression method (`REG_METHOD`), the moment count (`N_REG`), and the entry point:
 
-  * `REG_METHOD == :cloglog` → `Sigma_beta_gamma_cloglog…`, else `Sigma_beta_gamma…`
+  * `aa == true` (γ at the ATTRACTION-AREA level) → `Sigma_aa_beta_gamma…` PREFIX,
+    else `Sigma_beta_gamma…`. Defaults from `CA_LEVEL`, since the γ level is what
+    semantically drives the file: its γ rows must match the γ moments.
+  * `REG_METHOD == :cloglog` → `…_cloglog…`, else nothing
   * `N_REG == 1`             → `…_1…` (single reg_coef stat), else no suffix
   * `smm == true` (SMM path) → trailing `…_f.npy`  (the SMM convention, as used by
     `build_step3_weight_matrix`); `smm == false` (GMM) → `….npy`.
 
 Examples: LPM/SMM/N_REG=4 → `Sigma_beta_gamma_f.npy`; cloglog/SMM/N_REG=1 →
 `Sigma_beta_gamma_cloglog_1_f.npy`; cloglog/GMM/N_REG=4 →
-`Sigma_beta_gamma_cloglog.npy`. The cloglog files carry the joint bootstrap
-covariance of the cloglog reg_coef + γ_ls moments (same β-then-γ ordering).
+`Sigma_beta_gamma_cloglog.npy`; AA/cloglog/SMM/N_REG=4 →
+`Sigma_aa_beta_gamma_cloglog_f.npy`.
+
+Every file carries **three blocks in the order β → γ → G**, with `S` rows of
+`Ḡ_s(0)`, so on disk `size(Σ) = (N_REG + n_γ + S)²`. The legacy (`!GRANULAR`) mode
+slices off the trailing `G` rows/cols; see `reconcile_sigma_data`.
 """
-function sigma_beta_gamma_filename(; smm::Bool)
-    base = REG_METHOD == :cloglog ? "Sigma_beta_gamma_cloglog" : "Sigma_beta_gamma"
-    n1   = N_REG == 1 ? "_1" : ""
-    fsuf = smm ? "_f" : ""
-    return base * n1 * fsuf * ".npy"
+function sigma_beta_gamma_filename(; smm::Bool, aa::Bool = (CA_LEVEL === :aa))
+    prefix = aa ? "Sigma_aa_beta_gamma" : "Sigma_beta_gamma"
+    link   = REG_METHOD == :cloglog ? "_cloglog" : ""
+    n1     = N_REG == 1 ? "_1" : ""
+    fsuf   = smm ? "_f" : ""
+    return prefix * link * n1 * fsuf * ".npy"
 end
+
+"""
+    report_granular(theta, output_folder; industry="", label="") -> NamedTuple
+
+Write and print the granular diagnostics at a parameter vector: the profiled variety
+count `N̂_s` with its clamp flag, the fitted vs targeted empty-cell share `Ḡ_s(0)`,
+the log-z coefficient against `−θ`, the realised supplier-count distribution, and the
+second route to the variety count `N^count_s = N_supplier_s / Σ_l q̂_ls`.
+
+Reporting only — no estimate, weight matrix or inference output is affected. Guarded,
+so a reporting failure never blocks estimation. A clamp is a rejection signal for the
+mechanism rather than a numerical nuisance (validation gate V9), which is why it is
+printed per sector; `N̂_s` vs `N^count_s` is the free over-identifying check (V7) and
+`b_logz` vs `−θ` the free test of Prop. 1(c) (V6).
+"""
+function report_granular(theta::Vector{Float64}, output_folder::String;
+                         industry::String = "", label::String = "")
+    GRANULAR || return nothing
+    try
+        info = granular_report(theta)
+        mkpath(output_folder)
+
+        println("\n" * "="^72)
+        println("GRANULAR DIAGNOSTICS" * (isempty(label) ? "" : "  [$label]"))
+        println("="^72)
+        @printf("  %-8s %8s %8s %8s %8s %10s %10s %10s\n",
+                "sector", "N_LO", "N̂_s", "N_HI", "clamp", "G0_fit", "G0_target", "N^count")
+        for s in 1:S
+            @printf("  %-8d %8d %8d %8d %8s %10.4f %10.4f %10.1f\n",
+                    s, N_LO[s], info.N_hat[s], N_HI[s], string(info.clamped[s]),
+                    isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
+        end
+        println("="^72)
+
+        NPZ.npzwrite(joinpath(output_folder, "granular_diagnostics.npz"),
+                     Dict("N_hat"    => Float64.(info.N_hat),
+                          "N_LO"     => Float64.(N_LO),
+                          "N_HI"     => Float64.(N_HI),
+                          "clamped"  => Float64.([c == :none ? 0.0 : (c == :lo ? -1.0 : 1.0)
+                                                  for c in info.clamped]),
+                          "G0_fit"   => Float64.(info.G0),
+                          "G0_target"=> Float64.(collect(G_TARGET)),
+                          "N_count"  => Float64.(info.N_count),
+                          "q_hat"    => Float64.(info.q_hat),
+                          "b_logz"   => [info.b_logz],
+                          "EK"       => Float64.(info.EK)))
+        open(joinpath(output_folder, "granular_diagnostics.txt"), "w") do io
+            println(io, "Granular diagnostics", isempty(industry) ? "" : " — $industry",
+                        isempty(label) ? "" : " [$label]")
+            println(io, "sector  N_LO  N_hat  N_HI  clamp  G0_fit  G0_target  N_count")
+            for s in 1:S
+                println(io, "$s  $(N_LO[s])  $(info.N_hat[s])  $(N_HI[s])  $(info.clamped[s])  " *
+                            "$(isempty(info.G0) ? NaN : info.G0[s])  $(G_TARGET[s])  $(info.N_count[s])")
+            end
+            println(io, "b_logz = $(info.b_logz)  (should equal -theta)")
+        end
+        return info
+    catch e
+        @warn "granular diagnostics skipped: $e"
+        return nothing
+    end
+end
+
+# `theta` is both a model parameter name and the Fréchet shape constant; this keeps
+# the report unambiguous where a local named `theta` shadows the global.
+theta_const_for_report() = theta
+
+
+"""
+    inference_moment_indices() -> Vector{Int}
+
+The moments the efficient weight matrix and the α/T inference are built on, in the
+invariant **β → γ (→ G)** order: `BLOCK_RANGES[4]`, then `BLOCK_RANGES[5]`, then —
+only under `GRANULAR` — the count block `BLOCK_RANGES[6]`. This is the ordering every
+Σ file on disk uses; do not reverse it. Extends the historical `gb_indices` without
+disturbing it (block 6 is appended, so the β and γ positions are unchanged).
+"""
+function inference_moment_indices()
+    idx = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    GRANULAR && append!(idx, collect(BLOCK_RANGES[6]))
+    return idx
+end
+
+
+"""
+    inference_block_layout() -> (ranges::Tuple, names::Tuple)
+
+Per-block ranges/names *within* the restricted β+γ(+G) subsystem, for the residual
+diagnostics of `compute_smm_inference`. Local 1-based coordinates, not global
+`BLOCK_RANGES`.
+"""
+function inference_block_layout()
+    n_reg_loc = length(BLOCK_RANGES[4])
+    n_gam_loc = length(BLOCK_RANGES[5])
+    if GRANULAR
+        n_G_loc = length(BLOCK_RANGES[6])
+        return ((1:n_reg_loc,
+                 (n_reg_loc + 1):(n_reg_loc + n_gam_loc),
+                 (n_reg_loc + n_gam_loc + 1):(n_reg_loc + n_gam_loc + n_G_loc)),
+                ("reg_coef", "gamma_ls", "G0"))
+    else
+        return ((1:n_reg_loc, (n_reg_loc + 1):(n_reg_loc + n_gam_loc)),
+                ("reg_coef", "gamma_ls"))
+    end
+end
+
 
 """
     reconcile_sigma_data(Sigma_full, input_folder) -> Sigma_data
 
-Reconcile an on-disk β+γ moment covariance (`Sigma_beta_gamma[_1].npy`, or the
-`w_beta`/`w_gamma` block-diagonal fallback) with the current, possibly
-gamma-thresholded active set, and return it subset to the active β+γ moments in
-**β-then-γ order** (`BLOCK_RANGES[4]` then `BLOCK_RANGES[5]`).
+Reconcile an on-disk moment covariance with the current active set and return it
+subset to the moments the estimator actually uses, in **β → γ (→ G) order**
+(`BLOCK_RANGES[4]`, `BLOCK_RANGES[5]`, and `BLOCK_RANGES[6]` under `GRANULAR`).
 
-The file may have been bootstrapped on the PRE-threshold active set; if a
-`gamma_threshold` pruned (s,r) pairs the γ block shrank, so the matching β+γ
-rows/cols must be dropped. The β block (`1:N_REG`) is never pruned.
+The on-disk layout is FIXED at `N_REG + n_γ + S` (β → γ → G), so the split is a
+leading-block slice, not a search: `n_γ_file = size(Σ,1) − N_REG − S`. The order of
+operations is (1) split, (2) reconcile the **γ block only** against the active set,
+(3) reassemble — keeping the `G` rows/columns only under `GRANULAR`. The `G` rows are
+never pruned, and neither is the β block.
 
-Three-way size branch:
-  * `size == n_gb`     → already regenerated post-threshold, use as-is
-  * `size == n_gb_old` → pre-threshold full file, subset to surviving (s,r)
-  * otherwise          → error (regenerate the file)
+| mode | file | blocks kept |
+|---|---|---|
+| `GRANULAR = false` | ZE-level (`Sigma_beta_gamma*`) | β + γ — `G` dropped |
+| `GRANULAR = true`  | AA-level (`Sigma_aa_beta_gamma*`) | β + γ + `Ḡ_s(0)` |
+
+The γ block may have been bootstrapped on the PRE-threshold active set; if a
+`gamma_threshold` pruned (s,r) pairs, the matching γ rows/cols are dropped. That
+subset branch is ZE-level only (it keys on `X_rs.npy`); under `CA_LEVEL == :aa` the
+file must already match the active AA-level γ moments.
 
 NOTE: the subset branch returns Cov(raw γ); the loss uses renormalized γ (factor
 `c_s ≈ sum_before/sum_after`), so subset γ rows are over-weighted by ~`c_s^2` and
@@ -1085,39 +1255,79 @@ Shared by `build_step3_weight_matrix` (SMM) and `main_gmm.jl` Step 2 (GMM) so th
 two paths cannot silently diverge on which moments enter the weight matrix.
 """
 function reconcile_sigma_data(Sigma_full::AbstractMatrix, input_folder::String)
-    # ── Gamma+beta moment indices in the masked vector ───────────────────────
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
-    n_gb = length(gb_indices)
+    # ── Moment indices in the masked vector (β then γ, then G under GRANULAR) ──
+    n_beta  = N_REG
+    n_gam   = length(BLOCK_RANGES[5])
+    n_G     = S                                     # the file ALWAYS carries S G rows
+    n_gb    = n_beta + n_gam + (GRANULAR ? length(BLOCK_RANGES[6]) : 0)
 
-    # ── Reconcile file size with the (possibly thresholded) active set ───────
-    X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
-    T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
-    T_mask_moment_new = collect(T_MASK)                                      # thresholded; T_MASK is now s-major (= moment convention)
-
-    # In the old mask, remove reference regions.
-    keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
-    for s in 1:S
-        ref_r = T_REF_REGION[s]
-        ref_r > 0 && (keep_old[(s - 1) * R + ref_r] = false)
+    # ── Split the fixed on-disk layout β → γ → G ─────────────────────────────
+    # The file dimension is (N_REG + n_γ_file + S); n_γ_file is whatever the γ level
+    # of that file implies (ZE- or AA-level), so it is derived, never searched.
+    n_total_file = size(Sigma_full, 1)
+    n_gamma_file = n_total_file - n_beta - n_G
+    if n_gamma_file <= 0
+        # Backward compatibility: a pre-granular file with no G block at all.
+        n_gamma_file = n_total_file - n_beta
+        n_gamma_file > 0 || error("Σ file has $(n_total_file) rows — too few for " *
+            "N_REG=$n_beta plus a γ block. Expected N_REG + n_γ + S (β → γ → G).")
+        GRANULAR && error("Σ file has $(n_total_file) rows = N_REG + n_γ with NO G block, " *
+            "but GRANULAR=true needs the $S rows of Ḡ_s(0). Regenerate the joint bootstrap " *
+            "with all three blocks (β → γ → G).")
+        @warn "Σ file carries no G block ($(n_total_file) = N_REG + n_γ). Proceeding in " *
+              "legacy (5-block) mode; regenerate it with the β → γ → G layout."
+        has_G = false
+    else
+        has_G = true
     end
-    gamma_old_positions = findall(keep_old)                                  # Get indices of the old set (without reference regions)
-    survive  = T_mask_moment_new[gamma_old_positions]                        # Get indices of the new set and remove reference regions
-    keep_idx = vcat(collect(1:N_REG), N_REG .+ findall(survive))
+    beta_rows  = 1:n_beta
+    gamma_rows = (n_beta + 1):(n_beta + n_gamma_file)
+    G_rows     = has_G ? ((n_beta + n_gamma_file + 1):(n_beta + n_gamma_file + n_G)) : (1:0)
 
-    n_gb_old = N_REG + length(gamma_old_positions)
-    if size(Sigma_full, 1) == n_gb
-        Sigma_data = Sigma_full                                              # already regenerated
-    elseif size(Sigma_full, 1) == n_gb_old
-        Sigma_data = Sigma_full[keep_idx, keep_idx]                          # full file → subset
-        @assert size(Sigma_data, 1) == N_REG + count(survive) "Sigma subset row count $(size(Sigma_data,1)) != N_REG+count(survive)=$(N_REG+count(survive))"
-        @assert size(Sigma_data, 1) == n_gb "subset $(size(Sigma_data,1)) != n_gb=$n_gb"
+    # ── Reconcile the γ BLOCK ONLY against the (possibly thresholded) active set ──
+    # Under :aa the γ block is AA-level and the files are generated post-hoc for the
+    # current active set, so only the use-as-is branch applies; the ZE-level
+    # pre-threshold subset branch keys on X_rs.npy, which has no AA counterpart.
+    gamma_keep = nothing                                  # nothing ⇒ use the γ block as-is
+    if n_gamma_file != n_gam
+        CA_LEVEL === :aa && error(
+            "Σ γ block has $(n_gamma_file) rows but the active AA-level γ moment count " *
+            "is $(n_gam). Regenerate $(sigma_beta_gamma_filename(; smm=true)) for the " *
+            "current active set (the pre-threshold subset branch is ZE-level only).")
+        X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
+        T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
+        T_mask_moment_new = collect(T_MASK)                                      # thresholded; s-major (= moment convention)
+
+        # In the old mask, remove reference regions.
+        keep_old = copy(T_mask_moment_old)                                       # active − ref/sector
+        for s in 1:S
+            ref_r = T_REF_REGION[s]
+            ref_r > 0 && (keep_old[(s - 1) * T_COL_DIM + ref_r] = false)
+        end
+        gamma_old_positions = findall(keep_old)                                  # old set (without reference regions)
+        survive  = T_mask_moment_new[gamma_old_positions]                        # new set, reference regions removed
+
+        length(gamma_old_positions) == n_gamma_file || error(
+            "Σ γ block has $(n_gamma_file) rows, matching neither the active count " *
+            "$(n_gam) nor the pre-threshold count $(length(gamma_old_positions)). Regenerate it.")
+        gamma_keep = findall(survive)
+        length(gamma_keep) == n_gam || error(
+            "γ subset gives $(length(gamma_keep)) rows != active n_γ = $(n_gam)")
         # NOTE: subset is Cov(raw γ); loss uses renormalized γ (factor c_s≈sum_before/
         # sum_after). Raw subset over-weights γ rows by ~c_s^2 → T SEs ~c_s too tight.
-        # For exact inference, regenerate Sigma_beta_gamma with the threshold applied.
-    else
-        error("Sigma_beta_gamma size $(size(Sigma_full,1)) matches neither n_gb=$n_gb " *
-              "nor pre-threshold n_gb_old=$n_gb_old. Regenerate it.")
+        # For exact inference, regenerate the Σ file with the threshold applied.
     end
+
+    # ── Reassemble: β + (reconciled) γ, plus G only under GRANULAR ───────────
+    keep_idx = vcat(collect(beta_rows),
+                    gamma_keep === nothing ? collect(gamma_rows) : collect(gamma_rows)[gamma_keep])
+    if GRANULAR
+        length(BLOCK_RANGES[6]) == n_G || error(
+            "block 6 has $(length(BLOCK_RANGES[6])) moments but the Σ G block has $n_G rows")
+        append!(keep_idx, collect(G_rows))          # G rows are NEVER pruned
+    end
+    Sigma_data = Sigma_full[keep_idx, keep_idx]
+    @assert size(Sigma_data, 1) == n_gb "reconciled Σ has $(size(Sigma_data,1)) rows != n_gb=$n_gb"
 
     @assert isapprox(Sigma_data, Sigma_data'; atol=1e-10) "Sigma is non-symmetric"
     return Sigma_data
@@ -1129,11 +1339,12 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
                                    draw_method::Symbol=DRAW_METHOD)
     N_moments = length(empirical_moments)
 
-    # ── Gamma+beta moment indices in the masked vector ───────────────────────
-    gb_indices = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]))
+    # ── Estimated-moment indices in the masked vector: β, γ, and (under
+    #    GRANULAR) the count block Ḡ_s(0) — the β → γ → G ordering invariant ──
+    gb_indices = inference_moment_indices()
     n_gb = length(gb_indices)
 
-    # ── Load Σ_data: joint bootstrap covariance of β+γ (β block first) ───────
+    # ── Load Σ_data: joint bootstrap covariance of β+γ(+G) (β block first) ───
     # File selection keyed on N_REG (moment count) and REG_METHOD (:lpm vs :cloglog).
     # The β-block of Σ_data has N_REG rows/cols (one per reg_coef moment), independent of N_TAU.
     # SMM path ⇒ the `_f` variant (smm=true); cloglog ⇒ the `_cloglog` family.
@@ -1152,11 +1363,9 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
         # Σ_sim uses the INFERENCE draw count (N_RHO_INFERENCE), decoupled from the
         # optimization draw count N_rho (full_SMM sizes itself off size(u_draws,1)).
         u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
-                                      randomise=true,
-                                      rng=MersenneTwister(k))
+                                  randomise=true, rng=MersenneTwister(k))
         _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
-        moms_flat = vcat([vec(moms[i]) for i in 1:5]...)[MOMENT_MASK]
-        return moms_flat[gb_indices]
+        return moments_to_vec(moms)[gb_indices]
     end
     M_sim = reduce(hcat, M_sim_rows)'   # (K, n_gb)
 
@@ -1290,9 +1499,61 @@ function compute_jacobian(theta::Vector{Float64};
                           richardson_rel_tol = 0.05,
                           load_existing::Bool = false,
                           profile_T::Bool = false,
+                          hold_N_s::Bool = GRANULAR,
                           draw_method::Symbol = DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
+
+    # Fail here, not deep inside the AD tape: the analytical moment vector has no
+    # block 6, so under GRANULAR it is one block short of MOMENT_MASK.
+    @assert !(analytical && GRANULAR) "compute_jacobian: analytical=true is not " *
+        "available under GRANULAR — the analytical extensive margin is the " *
+        "FKG-approximated continuum object and has no closed form for the count " *
+        "moment Ḡ_s(0) (block 6). Use the simulation Jacobian (analytical=false)."
+
+    # ── Granular: hold N̂_s fixed across the finite-difference perturbations ──
+    # N̂_s(θ) is a STEP function of the continuous parameters, so the profiled loss is
+    # piecewise smooth with jumps and a central FD can straddle one. At θ̂ the correct
+    # object is the derivative at fixed N̂_s anyway (N̂_s is locally constant with
+    # probability one), so under GRANULAR the count is pinned at its θ̂ value for the
+    # whole Jacobian.
+    #
+    # The pin is computed on the INFERENCE draw design (the same width the replications
+    # use), and its MONTE-CARLO dispersion is measured once here: N̂_s is a bisection on
+    # q̂, so independent draw sets give different N̂_s even at a FIXED θ. That dispersion
+    # is a property of `N_RHO_INFERENCE`, not of θ sitting on a jump, and it is the
+    # number to look at if the count moment looks unstable — raise `N_RHO_INFERENCE`.
+    N_fixed = nothing
+    if hold_N_s && GRANULAR && !analytical
+        n_probe = min(K, 5)
+        probes  = pmap(1:n_probe) do k
+            u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
+                                      randomise = true,
+                                      rng       = MersenneTwister(base_seed + k))
+            granular_report(theta; u_draws=u_k, sample_weights=w_k).N_hat
+        end
+        N_mat   = reduce(hcat, probes)                      # S × n_probe
+        N_fixed = [round(Int, median(view(N_mat, s, :))) for s in axes(N_mat, 1)]
+
+        println("Jacobian: holding N̂_s fixed at $(N_fixed) across all FD perturbations.")
+        println("  N̂_s Monte-Carlo dispersion over $(n_probe) independent draw sets " *
+                "(N_RHO_INFERENCE = $(N_RHO_INFERENCE)):")
+        println("    sector      pinned       min       max   spread/pinned")
+        worst = 0.0
+        for s in axes(N_mat, 1)
+            lo, hi = minimum(view(N_mat, s, :)), maximum(view(N_mat, s, :))
+            rel    = N_fixed[s] > 0 ? (hi - lo) / N_fixed[s] : 0.0
+            worst  = max(worst, rel)
+            @printf("    %6d  %10d  %8d  %8d  %14.3f\n", s, N_fixed[s], lo, hi, rel)
+        end
+        if worst > 0.10
+            @warn "N̂_s varies by $(round(100*worst, digits=1))% across independent draw " *
+                  "sets at a FIXED θ. That is simulation noise in q̂, not a jump of " *
+                  "N̂_s(θ): the count moment Ḡ_s(0) and its Jacobian row carry that " *
+                  "noise. Raise N_RHO_INFERENCE (and N_rho, which sets q̂ in the loss)."
+        end
+        flush(stdout)
+    end
 
     # ── T-profiling: perturb only the head/α; T follows via the Sinkhorn image ──
     # Under `profile_T`, T is NOT a free parameter — it is the deterministic image
@@ -1441,7 +1702,7 @@ function compute_jacobian(theta::Vector{Float64};
             # We still loop K times for API compatibility; K=1 is recommended.
             eval_one = p -> begin
                 _, m = full_SMM(p; analytical=true, n_quad=n_quad)
-                vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+                moments_to_vec(m)
             end
         else
             # Jacobian replications use the INFERENCE draw count (N_RHO_INFERENCE),
@@ -1453,8 +1714,8 @@ function compute_jacobian(theta::Vector{Float64};
                 # Under profiling, reconstruct T = T*(α,Ω,A) before evaluating, so a
                 # perturbation of α/head moves T accordingly (total derivative).
                 p_eval = profile_T ? profiled_theta(p) : p
-                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k)
-                vcat([vec(m[i]) for i in 1:5]...)[MOMENT_MASK]
+                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k, N_fixed=N_fixed)
+                moments_to_vec(m)
             end
         end
 
@@ -1578,8 +1839,8 @@ function compute_jacobian(theta::Vector{Float64};
         n_before_gamma    = count(MOMENT_MASK[1:gamma_full_offset])
         moment_sector     = zeros(Int, size(J, 1))
         let lg = 0
-            for s in 1:S, r in 1:R
-                MOMENT_MASK[gamma_full_offset + (s-1)*R + r] || continue
+            for s in 1:S, c in 1:T_COL_DIM
+                MOMENT_MASK[gamma_full_offset + (s-1)*T_COL_DIM + c] || continue
                 lg += 1
                 moment_sector[n_before_gamma + lg] = s
             end
@@ -1589,7 +1850,7 @@ function compute_jacobian(theta::Vector{Float64};
             idx < T_first && return 0
             t = idx - T_first + 1
             (t < 1 || t > length(active_T_flat)) && return 0
-            ((active_T_flat[t] - 1) ÷ R) + 1
+            ((active_T_flat[t] - 1) ÷ T_COL_DIM) + 1
         end
 
         println("\nRichardson step-doubling check (J(δ) vs J(2δ), all columns):")
@@ -1779,7 +2040,18 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                                param_labels  = nothing,   # NEW: names for active params (cols of J)
                                moment_labels = nothing,    # NEW: names for kept moments (rows of J))
                                display_labels = nothing,   # NEW: names of non-inferred params to display (value only)
-                               display_values = nothing)   # NEW: values of those non-inferred params (no SE/CI)    # optional override; default uses local Var_m
+                               display_values = nothing,   # NEW: values of those non-inferred params (no SE/CI)    # optional override; default uses local Var_m
+                               # Extra NAIVE block, printed after the main table. Under the
+                               # PROFILED estimator T and N_s are not columns of `J`, so
+                               # they carry no SE there. `fd_G` holds their first-difference
+                               # Jacobian columns (T as a FREE parameter; N_s by the unit
+                               # first difference m(N+1)−m(N)); this function then applies
+                               # the SAME naive machinery as the main table — (G'WG)^{-1}
+                               # and the sandwich — so the whole file is one method.
+                               fd_G      = nothing,
+                               fd_labels = nothing,
+                               fd_values = nothing,
+                               fd_title  = "Naive sandwich inference on the first-difference Jacobian (α, T, N_s free)")
 
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
@@ -1998,6 +2270,10 @@ function compute_smm_inference(theta_hat::Vector{Float64},
     end
 
     # ── 9. Write inference_summary.txt ───────────────────────────────────────
+    # Captured by the naive-block closure below and returned, so inference_delta.txt
+    # can contrast the structural SEs against the numbers this file actually prints.
+    fd_se_sw_out  = nothing
+    fd_se_eff_out = nothing
     open(joinpath(inf_dir, "inference_summary.txt"), "w") do io
         # Header
         println(io, "="^72)
@@ -2005,7 +2281,7 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
         println(io, "  θ̂_2 source : $(joinpath(output_folder, "theta_hat_2.npy"))")
         println(io, "  K_sim      : $(K_sim == 0 ? "(not recorded)" : string(K_sim))")
-        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS UTC"))")
+        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))")
         println(io, "="^72)
 
         # Identification
@@ -2070,6 +2346,50 @@ function compute_smm_inference(theta_hat::Vector{Float64},
                     @printf(io, "  %-22s  %-12.6f\n", display_labels[j], display_values[j])
                 end
             end
+        end
+
+        # NAIVE sandwich inference on the first-difference Jacobian, for parameters
+        # that are not columns of the (profiled) J above. This file reports ONE
+        # method — the mechanical sandwich, Jacobian × moment covariance — so T and
+        # N_s are treated here exactly like any free parameter: stack their FD
+        # Jacobian columns, form (G'WG)^{-1} and the sandwich. The STRUCTURAL
+        # alternative, which respects that T is calibrated by (α̂, γ̂) and N_s by the
+        # bisection on Ḡ_s(0), lives in inference_delta.txt.
+        if fd_G !== nothing && fd_labels !== nothing && fd_values !== nothing &&
+           size(fd_G, 2) == length(fd_labels) && length(fd_labels) == length(fd_values) &&
+           !isempty(fd_labels)
+            println(io, "\n--- $(fd_title) ---")
+            println(io, "  α   : profiled Jacobian columns (as in the main table above).")
+            println(io, "  T   : free-parameter FD Jacobian columns ∂m/∂T — T treated as free,")
+            println(io, "        NOT as the Sinkhorn image T*(α̂,γ̂).")
+            println(io, "  N_s : unit first difference ∂m/∂N_s = m(N_s+1) − m(N_s). N_s is an")
+            println(io, "        INTEGER, so one variety IS the step; the SE is in varieties.")
+            println(io, "  All three enter ONE G, so this is their JOINT naive variance.")
+            Gf  = Matrix{Float64}(fd_G)
+            Vef, fl_f = _gtwg_inv(Gf, W)
+            fl_f && println(io, "  (G'WG) was not PD; eigenvalue floor applied.")
+            Vsf = Vef * (Gf' * W * Omega * W * Gf) * Vef
+            Vsf = (Vsf .+ Vsf') ./ 2
+            se_ef = sqrt.(max.(diag(Vef), 0.0))
+            se_sf = sqrt.(max.(diag(Vsf), 0.0))
+            fh = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-8s  %-8s  %-12s  %-12s",
+                          "parameters", "estimate", "se_eff", "se_sw", "ratio", "t",
+                          "CI_lo", "CI_hi")
+            println(io, fh)
+            println(io, "  " * "-"^(length(fh)-2))
+            for j in eachindex(fd_labels)
+                sj = se_sf[j]; vj = fd_values[j]
+                rj = se_ef[j] > 0 ? sj / se_ef[j] : NaN
+                tj = (isfinite(sj) && sj > 0) ? vj / sj : NaN
+                @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-8.4f  %-8.4f  %-12.6f  %-12.6f\n",
+                        fd_labels[j], vj, se_ef[j], sj,
+                        isnan(rj) ? -999.0 : rj, isnan(tj) ? -999.0 : tj,
+                        vj - 1.96 * sj, vj + 1.96 * sj)
+            end
+            NPZ.npzwrite(joinpath(inf_dir, "se_theta_naive_fd.npy"),          se_sf)
+            NPZ.npzwrite(joinpath(inf_dir, "se_theta_naive_fd_efficient.npy"), se_ef)
+            fd_se_sw_out  = se_sf
+            fd_se_eff_out = se_ef
         end
 
         # Sandwich vs efficient ratio
@@ -2160,6 +2480,9 @@ function compute_smm_inference(theta_hat::Vector{Float64},
         "J_stat"        => J_stat,
         "df"            => df,
         "pval"          => pval,
+        "se_fd_sw"      => fd_se_sw_out,
+        "se_fd_eff"     => fd_se_eff_out,
+        "fd_labels"     => fd_labels,
     )
 end
 
@@ -2167,19 +2490,22 @@ end
 """
     _gamma_block_rs() -> Vector{Tuple{Int,Int}}
 
-The `(r, s)` pairs of the γ_ls moment block (`BLOCK_RANGES[5]`), in the SAME order
-as that block: sector-major, region-minor, active & non-reference. Reconstructed
+The `(column, s)` pairs of the γ moment block (`BLOCK_RANGES[5]`), in the SAME order
+as that block: sector-major, column-minor, active & non-reference. The column is an
+upstream ZE under `CA_LEVEL == :ze` and an attraction area under `:aa`. Reconstructed
 from `MOMENT_MASK` (the ground truth), so it stays aligned with the γ rows/cols of
-`Sigma_data` and with the empirical `emp_gamma_ls` entries. The γ block is the LAST
-block of the full moment layout (labor, industry, π_r, reg_coef, γ_ls), occupying
-the trailing `R*S` slots; slot `(s-1)*R + r` maps to `emp_gamma_ls[r, s]`.
+`Sigma_data` and with the empirical `EMP_GAMMA_T` entries. In the full moment layout
+(labor, industry, π_r, reg_coef, γ [, G0]) the γ block occupies `T_COL_DIM*S` slots
+ending just before block 6; slot `(s-1)*T_COL_DIM + c` maps to `EMP_GAMMA_T[c, s]`.
 """
 function _gamma_block_rs()
-    off = length(MOMENT_MASK) - R * S      # 0-based offset to the γ portion of the full vector
+    # 0-based offset to the γ portion of the FULL (unmasked) vector. Under GRANULAR the
+    # γ block is no longer last — block 6 (S entries of Ḡ_s(0)) is appended after it.
+    off = length(MOMENT_MASK) - T_COL_DIM * S - (GRANULAR ? S : 0)
     rs  = Tuple{Int,Int}[]
-    for s in 1:S, r in 1:R
-        MOMENT_MASK[off + (s - 1) * R + r] || continue
-        push!(rs, (r, s))
+    for s in 1:S, c in 1:T_COL_DIM
+        MOMENT_MASK[off + (s - 1) * T_COL_DIM + c] || continue
+        push!(rs, (c, s))
     end
     return rs
 end
@@ -2203,7 +2529,7 @@ function _dTstar_dalpha(theta_hat::Vector{Float64},
                         gb_param_idx::Vector{Int},
                         param_labels_gb::Vector{String};
                         step_rel::Float64 = 1e-2,
-                        target::AbstractMatrix = emp_gamma_ls)
+                        target::AbstractMatrix = EMP_GAMMA_T)
     alpha_pos = findall(l -> startswith(l, "alpha"), param_labels_gb)
     T_pos     = findall(l -> startswith(l, "T["),   param_labels_gb)
     (isempty(alpha_pos) || isempty(T_pos)) && return nothing
@@ -2212,7 +2538,7 @@ function _dTstar_dalpha(theta_hat::Vector{Float64},
 
     # Head + α at θ̂, normalized exactly as invert_T_ge / unpack_params read them.
     ΩL, Ωs, A, α, Tvec = unpack_params(theta_hat)
-    T_hat_mat    = reshape(Tvec, S, R)               # (S,R) ref-normalized warm start
+    T_hat_mat    = unpack_T_par(theta_hat)           # (S, T_COL_DIM) ref-normalized warm start
     T_hat_active = theta_hat[gb_param_idx[T_pos]]     # reported T̂ (CI centers)
 
     # `vec(permutedims(T*))[T_MASK]` gives ALL active T entries (s-major, incl. the
@@ -2248,7 +2574,7 @@ end
 """
     compute_T_delta_inference(theta_hat, inf_result, gb_param_idx, param_labels_gb;
                               output_folder, industry="", step_rel=1e-2,
-                              target=emp_gamma_ls) -> Dict
+                              target=EMP_GAMMA_T) -> Dict
 
 Delta-method confidence intervals for the comparative-advantage block **T**,
 treating T as the deterministic GE-Sinkhorn image `T*(α, Ω, A)` of the OTHER
@@ -2294,7 +2620,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
                                    output_folder::String = ".",
                                    industry::String = "",
                                    step_rel::Float64 = 1e-2,
-                                   target::AbstractMatrix = emp_gamma_ls)
+                                   target::AbstractMatrix = EMP_GAMMA_T)
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
@@ -2356,7 +2682,7 @@ function compute_T_delta_inference(theta_hat::Vector{Float64},
         println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
         println(io, "  Θ scope    : α only (Ω^L, Ω^s, A held fixed at θ̂)")
         println(io, "  n_T        : $n_T   n_α (N_TAU) : $n_alpha   rank(∂T*/∂α) : $rank_JT")
-        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS UTC"))")
+        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))")
         println(io, "="^72)
         println(io, "\nT is the deterministic GE-Sinkhorn image T*(α,Ω,A) (invert_T_ge). With")
         println(io, "Ω,A fixed, T's uncertainty is entirely inherited from Var(α̂), so V_T has")
@@ -2415,10 +2741,99 @@ end
 
 
 """
+    _gtwg_inv(G, W) -> (Matrix, floored::Bool)
+
+`(G'WG)^{-1}` — the efficient GMM variance — with the same PD guard
+`compute_smm_inference` uses: Cholesky, falling back to an eigenvalue floor when the
+information matrix is not positive definite. Returned symmetrised.
+"""
+function _gtwg_inv(G::AbstractMatrix, W::AbstractMatrix)
+    GtWG = Symmetric(Matrix(G)' * Matrix(W) * Matrix(G))
+    floored = false
+    Vi = try
+        inv(cholesky(GtWG))
+    catch
+        F = eigen(GtWG)
+        floored = true
+        Symmetric(F.vectors * Diagonal(1.0 ./ max.(F.values, F.values[end] * 1e-10)) * F.vectors')
+    end
+    M = Matrix(Vi)
+    return (M .+ M') ./ 2, floored
+end
+
+
+"""
+    compute_N_s_jacobian(theta; N_hat=nothing, K=10, base_seed=7_000_000,
+                         draw_method=DRAW_METHOD, profile_T=false)
+        -> (G_N::Matrix, G_N_sd::Matrix, N_hat::Vector{Int}, diff::Vector{Float64})
+
+`∂m/∂N_s` — the moment Jacobian w.r.t. the profiled variety counts — by a **unit
+first difference** `m(N̂_s + 1) − m(N̂_s)`. `N_s` is an INTEGER, so a first difference
+in one variety is the derivative; there is no step size to choose and no log step.
+
+The two evaluations of a replication share the same draws, so every moment that does
+not depend on `N_s` differences to EXACTLY zero. Under the profiled design only block
+6 (`Ḡ_s(0) = mean_l (1−q̂_ls)^{N_s}`) carries an `N_s` term, and `Ḡ_s` depends on
+`N_s` alone — block 4 is exactly `N_s`-free by Proposition 1 (gate V10). The Jacobian
+block is therefore DIAGONAL: one nonzero per column, at that sector's `G0` row. That
+lets all `S` columns be recovered from a single simultaneous bump of every `N̂_s`, and
+it is **asserted**, not assumed: a nonzero difference outside block 6, or off the
+sector's own `G0` row, means an `N_s` dependence the design does not have.
+
+Returns the `(N_moments × S)` Jacobian, its across-replication SD, the `N̂_s` used,
+and the raw mean difference vector.
+"""
+function compute_N_s_jacobian(theta::Vector{Float64};
+                              N_hat::Union{Nothing,Vector{Int}} = nothing,
+                              K::Int = 10,
+                              base_seed::Int = 7_000_000,
+                              draw_method::Symbol = DRAW_METHOD,
+                              profile_T::Bool = false)
+    @assert GRANULAR "compute_N_s_jacobian is only defined under GRANULAR=true " *
+        "(N_s exists only in the granular model)."
+    theta_eval = profile_T ? profiled_theta(theta) : theta
+    N0 = N_hat === nothing ?
+        granular_report(theta_eval; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS).N_hat :
+        copy(N_hat)
+    N1 = N0 .+ 1
+
+    diffs = pmap(1:K) do k
+        u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
+                                  randomise = true,
+                                  rng       = MersenneTwister(base_seed + k))
+        _, m0 = full_SMM(theta_eval; u_draws=u_k, sample_weights=w_k, N_fixed=N0)
+        _, m1 = full_SMM(theta_eval; u_draws=u_k, sample_weights=w_k, N_fixed=N1)
+        moments_to_vec(m1) .- moments_to_vec(m0)
+    end
+
+    D      = reduce(hcat, diffs)                       # N_moments × K
+    d_mean = vec(mean(D, dims = 2))
+    d_sd   = K > 1 ? vec(std(D, dims = 2)) : zeros(length(d_mean))
+
+    g_rng = BLOCK_RANGES[6]
+    @assert length(g_rng) == S "block 6 has $(length(g_rng)) rows, expected S = $S"
+    off_rows = setdiff(1:length(d_mean), collect(g_rng))
+    bad = findall(i -> D[i, :] != zeros(K), off_rows)
+    isempty(bad) || error("compute_N_s_jacobian: bumping N̂_s moved $(length(bad)) " *
+        "moment(s) OUTSIDE block 6 (first: row $(off_rows[bad[1]])). Only Ḡ_s(0) may " *
+        "depend on N_s — block 4 is N_s-free by Prop. 1 (gate V10). This is a bug in " *
+        "the moment code, not a numerical tolerance issue.")
+
+    G_N    = zeros(length(d_mean), S)
+    G_N_sd = zeros(length(d_mean), S)
+    for (s, row) in enumerate(g_rng)
+        G_N[row, s]    = d_mean[row]
+        G_N_sd[row, s] = d_sd[row]
+    end
+    return G_N, G_N_sd, N0, d_mean
+end
+
+
+"""
     compute_profiled_T_inference(theta_hat, gb_param_idx, param_labels_gb;
         dTa, G_alpha, W, Sigma_data, Var_alpha_sw, Var_alpha_eff,
         Var_alpha_reg=nothing, gb_block_ranges,
-        output_folder, industry="", step_rel=1e-2, target=emp_gamma_ls) -> Dict
+        output_folder, industry="", step_rel=1e-2, target=EMP_GAMMA_T) -> Dict
 
 **Profiling-path** confidence intervals for the comparative-advantage block **T**,
 propagating BOTH the estimation error of α̂ AND the DATA noise of the γ_ls target
@@ -2431,7 +2846,7 @@ of the same β+γ data moments, so
     T̂ − T ≈ f_α·(α̂ − α) + f_γ·(γ̂ − γ),
 
 with `f_α = ∂T*/∂α` (from `dTa.J_T`) and `f_γ = ∂T*/∂γ` (central log-step FD on
-`invert_T_ge`, perturbing each `emp_gamma_ls[r,s]` target entry). The joint
+`invert_T_ge`, perturbing each `EMP_GAMMA_T[c,s]` target entry). The joint
 covariance of `(α̂, γ̂)` is
 
     [ Var(α̂)            Cov(α̂, γ̂) ]
@@ -2462,7 +2877,8 @@ DATA covariance `Sigma_data` (per "propagate the data noise of γ"). `se_T_alpha
 - `T_precision_vs_gamma.png`     : scatter of T precision (|t|=|T̂|/se_T) vs the
   DOMESTIC γ share γ̃=γ^F/domestic_share (Σ_r=1); + `T_precision_vs_gamma.npz`
   (γ̃, γ^F, T̂, se_T{,_alpha,_gamma}, t) for external re-plotting.
-- `inference_T_delta.txt`        : human-readable summary + channel decomposition
+- `inference_delta.txt`          : the α / T / N_s report (first column `parameters`)
+- `t_stats_T_delta_alpha.npy`, `ci_95_T_delta_alpha.npy` : t and CI from the α channel alone
 """
 function compute_profiled_T_inference(theta_hat::Vector{Float64},
                                       gb_param_idx::Vector{Int},
@@ -2478,7 +2894,20 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
                                       output_folder::String = ".",
                                       industry::String = "",
                                       step_rel::Float64 = 1e-2,
-                                      target::AbstractMatrix = emp_gamma_ls)
+                                      target::AbstractMatrix = EMP_GAMMA_T,
+                                      # α section of the report — the stats already in
+                                      # inference_summary.txt, reproduced verbatim.
+                                      alpha_labels::Vector{String} = String[],
+                                      alpha_values::Vector{Float64} = Float64[],
+                                      alpha_se_eff::Vector{Float64} = Float64[],
+                                      alpha_se_sw::Vector{Float64} = Float64[],
+                                      # N_s section. `se_N_naive` is the mechanical
+                                      # (G_N'W G_N)^{-1}; the STRUCTURAL SE is built here
+                                      # from q̂ and the free-parameter Jacobian.
+                                      N_hat::Union{Nothing,Vector{Int}} = nothing,
+                                      se_N_naive::Union{Nothing,Vector{Float64}} = nothing,
+                                      q_hat::Union{Nothing,Vector{Float64}} = nothing,
+                                      J_free_gb::Union{Nothing,AbstractMatrix} = nothing)
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
@@ -2500,7 +2929,7 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         "MOMENT_MASK/BLOCK_RANGES[5] misalignment.")
 
     # ── f_γ = ∂T*/∂γ_target by central LOG-step FD on invert_T_ge (pmap over γ) ──
-    # Perturb one empirical γ target entry at a time (emp_gamma_ls[r,s]), re-solve the
+    # Perturb one empirical γ target entry at a time (EMP_GAMMA_T[c,s]), re-solve the
     # Sinkhorn inversion, chain-rule back to raw γ units by 1/γ. Only the target
     # PROFILE matters (per-sector scale is gauge), so a single-entry bump is a genuine
     # profile perturbation; the reference-region entry is gauge and left untouched.
@@ -2623,36 +3052,225 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
     mean_share_a = mean([se_T[i] > 0 ? (se_T_alpha[i] / se_T[i])^2 : NaN for i in 1:n_T])
     mean_share_g = mean([se_T[i] > 0 ? (se_T_gamma[i] / se_T[i])^2 : NaN for i in 1:n_T])
 
-    open(joinpath(inf_dir, "inference_T_delta.txt"), "w") do io
-        println(io, "="^84)
-        println(io, "CORRELATED DELTA-METHOD T INFERENCE (profiled estimator)")
-        println(io, "  V_T = f_α Var(α̂) f_α' + f_γ Σ_γγ f_γ' + f_α Cov(α̂,γ̂) f_γ' + (·)'")
+    # ── STRUCTURAL N̂_s variance (the same idea as T's delta method) ─────────────
+    # N̂_s is not estimated as a free parameter: it is CALIBRATED, solving
+    #
+    #     Ḡ_s(n; q̂) = Ĝ_s,        Ḡ_s(n; q̂) = mean_{l∈L_s} (1 − q̂_ls)^n,
+    #
+    # where Ĝ_s is the empirical count target (its bootstrap noise is the G block of
+    # Sigma_data) and q̂ = q̂(α̂, T*(α̂, γ̂)) — free of N_s by Lemma 2. So N̂_s inherits
+    # noise from THREE correlated sources, and the implicit function theorem gives
+    #
+    #     dN_s = [ dĜ_s − a_s dα̂ − b_s dγ̂ ] / D_s,
+    #     D_s = ∂Ḡ_s/∂n = mean_l (1−q̂_ls)^{N̂_s} ln(1−q̂_ls)  < 0,
+    #     a_s = ∂Ḡ_s/∂α  (TOTAL, along the profiled manifold) = G_alpha[G0 row s, :],
+    #     b_s = ∂Ḡ_s/∂γ  = (∂Ḡ_s/∂T)·f_γ, the block-6 row of the FREE-parameter
+    #           Jacobian times ∂T*/∂γ — no new simulation needed.
+    #
+    # Var(N̂) = L·JointCov(Ĝ, α̂, γ̂)·L' with L = [D^{-1}, −D^{-1}A, −D^{-1}B]. PSD by
+    # construction (a linear image of the data/simulation noise), like V_T.
+    #
+    # NOTE the direction of causation: T̂ = T*(α̂, γ̂) does NOT depend on N_s at all
+    # (invert_T_ge is the continuum inversion, and q̂ is N_s-free by Lemma 2), so the
+    # system is TRIANGULAR — α̂ → T̂ → q̂ → N̂_s. N_s noise does not feed back into T.
+    se_N_delta   = nothing
+    se_N_target  = nothing   # Ĝ channel only
+    se_N_alpha   = nothing   # α channel only
+    se_N_gamma   = nothing   # γ channel only
+    D_analytic   = nothing
+    D_firstdiff  = nothing
+    if GRANULAR && q_hat !== nothing && N_hat !== nothing &&
+       length(gb_block_ranges) >= 3 && J_free_gb !== nothing
+        G0_rng = gb_block_ranges[3]
+        nS     = length(G0_rng)
+        if nS == S && size(J_free_gb, 2) == length(param_labels_gb)
+            # D_s: exact ∂Ḡ_s/∂n, plus the unit first difference for comparison
+            # (they agree to O(q̂); the first difference is the integer-step scale).
+            D_analytic  = zeros(S)
+            D_firstdiff = zeros(S)
+            for s in 1:S
+                cells = CELLS_OF_SECTOR[s]
+                isempty(cells) && continue
+                acc_d = 0.0; acc_f = 0.0
+                for g in cells
+                    q  = q_hat[g]
+                    pw = (1.0 - q)^N_hat[s]
+                    acc_d += pw * log(max(1.0 - q, 1e-300))
+                    acc_f += -q * pw                       # Ḡ(n+1) − Ḡ(n)
+                end
+                D_analytic[s]  = acc_d / length(cells)
+                D_firstdiff[s] = acc_f / length(cells)
+            end
+
+            A_mat = Matrix{Float64}(G_alpha[G0_rng, :])                      # S × N_TAU
+            B_mat = Matrix{Float64}(J_free_gb[G0_rng, T_pos]) * f_gamma      # S × n_gam
+            Sig_GG = Sigma_data[G0_rng, G0_rng]                              # S × S
+            Cov_aG = P * Sigma_data[:, G0_rng]                               # N_TAU × S
+            Sig_gG = Sigma_data[gam_rng, G0_rng]                             # n_gam × S
+
+            Dinv = Diagonal([abs(D_analytic[s]) > 1e-14 ? 1.0 / D_analytic[s] : 0.0
+                             for s in 1:S])
+            L = hcat(Matrix(Dinv), -(Dinv * A_mat), -(Dinv * B_mat))         # S × (S+N_TAU+n_gam)
+            Joint = [ Sig_GG        Cov_aG'          Sig_gG';
+                      Cov_aG        Var_alpha_sw     Cov_ag;
+                      Sig_gG        Cov_ag'          Sig_gg ]
+            V_N = L * Joint * L';  V_N = (V_N .+ V_N') ./ 2
+            se_N_delta = sqrt.(max.(diag(V_N), 0.0))
+
+            # Marginal channels (same loadings, one covariance block at a time).
+            se_N_target = sqrt.(max.(diag(Dinv * Sig_GG * Dinv'), 0.0))
+            Va = (Dinv * A_mat) * Var_alpha_sw * (Dinv * A_mat)'
+            se_N_alpha  = sqrt.(max.(diag(Va), 0.0))
+            Vg = (Dinv * B_mat) * Sig_gg * (Dinv * B_mat)'
+            se_N_gamma  = sqrt.(max.(diag(Vg), 0.0))
+
+            NPZ.npzwrite(joinpath(inf_dir, "var_theta_N_s_delta.npy"), V_N)
+            NPZ.npzwrite(joinpath(inf_dir, "se_theta_N_s_delta.npy"),  se_N_delta)
+            NPZ.npzwrite(joinpath(inf_dir, "jacobian_N_s_wrt_alpha.npy"), A_mat)
+            NPZ.npzwrite(joinpath(inf_dir, "jacobian_N_s_wrt_gamma.npy"), B_mat)
+            NPZ.npzwrite(joinpath(inf_dir, "dGbar_dn.npy"), D_analytic)
+        end
+    end
+
+    # α-only t and CI for T: the interval T̂ would carry if γ̂ were known exactly, i.e.
+    # T's precision attributable to the estimation error of α̂ alone.
+    t_T_alpha  = [se_T_alpha[i] > 0 ? T_hat_active[i] / se_T_alpha[i] : NaN for i in 1:n_T]
+    ci_T_alpha = hcat(T_hat_active .- 1.96 .* se_T_alpha, T_hat_active .+ 1.96 .* se_T_alpha)
+    NPZ.npzwrite(joinpath(inf_dir, "t_stats_T_delta_alpha.npy"), t_T_alpha)
+    NPZ.npzwrite(joinpath(inf_dir, "ci_95_T_delta_alpha.npy"),   ci_T_alpha)
+
+    open(joinpath(inf_dir, "inference_delta.txt"), "w") do io
+        println(io, "="^108)
+        println(io, "PROFILED-ESTIMATOR INFERENCE — α, T, N_s")
         println(io, "  Industry   : $(isempty(industry) ? "(not specified)" : industry)")
-        println(io, "  n_T        : $n_T   n_α (N_TAU) : $n_alpha   n_γ : $n_gam")
-        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS UTC"))")
-        println(io, "="^84)
-        println(io, "\nT = T*(α̂, γ̂) is the deterministic GE-Sinkhorn image (invert_T_ge). Its CI")
-        println(io, "propagates TWO sources of uncertainty, WITH their correlation:")
-        println(io, "  (α) the estimation error of α̂ — reduced-Jacobian profiled Var(α̂), and")
-        println(io, "  (γ) the DATA (bootstrap) noise of the γ_ls Sinkhorn target — Σ_γγ from")
-        println(io, "      Sigma_data. Cov(α̂,γ̂)=P·Σ_data[:,γ] with P=dα̂/dm=(G'WG)^{-1}G'W.\n")
+        println(io, "  n_α (N_TAU): $n_alpha   n_T : $n_T   n_γ : $n_gam" *
+                    (N_hat === nothing ? "" : "   n_N_s : $(length(N_hat))"))
+        println(io, "  Date       : $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))")
+        println(io, "="^108)
+        println(io, "\nThree parameter groups, each with the variance that matches how it is estimated:")
+        println(io, "  α    — estimated on the moment conditions. Stats reproduced from inference_summary.txt.")
+        println(io, "  T    — NOT estimated: the deterministic GE-Sinkhorn image T*(α̂, γ̂). Correlated")
+        println(io, "         delta method over (α̂, γ̂), see below.")
+        println(io, "  N_s  — profiled by bisection on Ḡ_s(0), but it is NOT calibrated inside the model")
+        println(io, "         the way T is, so it takes the efficient matrix like α: (G_N' W G_N)^{-1}")
+        println(io, "         with G_N = ∂m/∂N_s from the unit first difference m(N_s+1) − m(N_s).")
+
+        # ── α ────────────────────────────────────────────────────────────────────
+        println(io, "\n" * "-"^108)
+        println(io, "--- parameters: α  (from inference_summary.txt) ---")
+        if isempty(alpha_labels)
+            println(io, "  (α stats not supplied to this report — see inference_summary.txt)")
+        else
+            ah = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-8s  %-12s  %-12s",
+                          "parameters", "estimate", "se_eff", "se_sw", "t", "CI_lo", "CI_hi")
+            println(io, ah)
+            println(io, "  " * "-"^(length(ah)-2))
+            for i in eachindex(alpha_labels)
+                se_i = i <= length(alpha_se_sw) ? alpha_se_sw[i] : NaN
+                ti   = (isfinite(se_i) && se_i > 0) ? alpha_values[i] / se_i : NaN
+                @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-8.4f  %-12.6f  %-12.6f\n",
+                        alpha_labels[i], alpha_values[i],
+                        i <= length(alpha_se_eff) ? alpha_se_eff[i] : NaN, se_i,
+                        isnan(ti) ? -999.0 : ti,
+                        alpha_values[i] - 1.96 * se_i, alpha_values[i] + 1.96 * se_i)
+            end
+            println(io, "  (t and CI use se_sw, the reported sandwich SE.)")
+        end
+
+        # ── T ────────────────────────────────────────────────────────────────────
+        println(io, "\n" * "-"^108)
+        println(io, "--- parameters: T  (correlated delta method) ---")
+        println(io, "  V_T = f_α Var(α̂) f_α' + f_γ Σ_γγ f_γ' + f_α Cov(α̂,γ̂) f_γ' + (·)'")
+        println(io, "  T = T*(α̂, γ̂) is the deterministic GE-Sinkhorn image (invert_T_ge). Its CI")
+        println(io, "  propagates TWO sources of uncertainty, WITH their correlation:")
+        println(io, "    (α) the estimation error of α̂ — reduced-Jacobian profiled Var(α̂), and")
+        println(io, "    (γ) the DATA (bootstrap) noise of the γ_ls Sinkhorn target — Σ_γγ from")
+        println(io, "        Sigma_data. Cov(α̂,γ̂)=P·Σ_data[:,γ] with P=dα̂/dm=(G'WG)^{-1}G'W.")
         println(io, "  se_T        : √diag(V_T) — headline correlated SE (sandwich α)")
         println(io, "  se_T_alpha  : α-channel only  √diag(f_α Var(α̂) f_α')")
         println(io, "  se_T_gamma  : γ-channel only  √diag(f_γ Σ_γγ f_γ')")
         println(io, "  se_T_reg    : α-channel using reg_coef-only Var(α̂) (Ω_β)")
-        println(io, "  t, CI       : t = T̂/se_T and 95% CI = T̂ ± 1.96·se_T\n")
-        hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-12s  %-12s",
-                       "T[sector-region]", "T̂", "se_T", "se_T_alpha",
-                       "se_T_gamma", "se_T_reg", "t", "CI_lo", "CI_hi")
+        println(io, "  t, CI       : t = T̂/se_T and 95% CI = T̂ ± 1.96·se_T")
+        println(io, "  t_α, CI_α   : the SAME statistics from the α CHANNEL ALONE (se_T_alpha) —")
+        println(io, "                T's precision if the γ target were known exactly.")
+        hdr = @sprintf("  %-24s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-12s  %-12s  %-8s  %-12s  %-12s",
+                       "parameters", "estimate", "se_T", "se_T_alpha",
+                       "se_T_gamma", "se_T_reg", "t", "CI_lo", "CI_hi",
+                       "t_α", "CI_lo_α", "CI_hi_α")
         println(io, hdr)
         println(io, "  " * "-"^(length(hdr)-2))
         for i in 1:n_T
-            @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-12.6f  %-12.6f\n",
+            @printf(io, "  %-24s  %-12.6f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-12.6f  %-12.6f  %-8.4f  %-12.6f  %-12.6f\n",
                     T_labels[i], T_hat_active[i], se_T[i], se_T_alpha[i],
                     se_T_gamma[i], se_T_reg[i],
-                    isnan(t_T[i]) ? -999.0 : t_T[i], ci_T[i, 1], ci_T[i, 2])
+                    isnan(t_T[i]) ? -999.0 : t_T[i], ci_T[i, 1], ci_T[i, 2],
+                    isnan(t_T_alpha[i]) ? -999.0 : t_T_alpha[i],
+                    ci_T_alpha[i, 1], ci_T_alpha[i, 2])
         end
-        println(io, "\n--- Channel decomposition (mean variance share over T) ---")
+
+        # ── N_s ──────────────────────────────────────────────────────────────────
+        println(io, "\n" * "-"^108)
+        println(io, "--- parameters: N_s  (calibrated — structural delta method) ---")
+        if N_hat === nothing
+            println(io, "  (not applicable — N_s exists only under GRANULAR)")
+        elseif se_N_delta === nothing
+            println(io, "  (structural SE unavailable — needs q̂ and the free-parameter Jacobian;")
+            println(io, "   only the naive SE below is reported)")
+            if se_N_naive !== nothing
+                for s in eachindex(se_N_naive)
+                    @printf(io, "  %-24s  N̂=%-8.0f  se_naive=%-12.6e\n",
+                            "N_s[sector $s]", Float64(N_hat[s]), se_N_naive[s])
+                end
+            end
+        else
+            println(io, "  N̂_s is NOT a free parameter: it is CALIBRATED, solving Ḡ_s(n; q̂) = Ĝ_s")
+            println(io, "  with Ḡ_s(n; q̂) = mean_l (1−q̂_ls)^n. So — exactly as for T — its noise is")
+            println(io, "  inherited, here from THREE correlated sources, via the implicit function")
+            println(io, "  theorem:")
+            println(io, "      dN_s = [ dĜ_s − a_s dα̂ − b_s dγ̂ ] / D_s")
+            println(io, "    D_s = ∂Ḡ_s/∂n = mean_l (1−q̂)^{N̂} ln(1−q̂)   (< 0: Ḡ decreasing in n)")
+            println(io, "    a_s = ∂Ḡ_s/∂α  — the TOTAL derivative along the profiled manifold")
+            println(io, "    b_s = ∂Ḡ_s/∂γ  = (∂Ḡ_s/∂T)·f_γ")
+            println(io, "  Var(N̂) = L·JointCov(Ĝ, α̂, γ̂)·L', L = [D⁻¹, −D⁻¹A, −D⁻¹B]. PSD by")
+            println(io, "  construction. Units: VARIETIES.")
+            println(io, "  se_N_target : Ĝ-channel only — the bootstrap noise of the count target")
+            println(io, "                (the G block of Sigma_data). Usually dominant.")
+            println(io, "  se_N_alpha  : α-channel only.   se_N_gamma : γ-channel only.")
+            println(io, "  se_N_naive  : the NAIVE sandwich SE printed by inference_summary.txt")
+            println(io, "                (N_s as a free parameter, jointly with α and T), shown for")
+            println(io, "                contrast — it has no notion of the calibration above.")
+            nh = @sprintf("  %-18s  %-10s  %-12s  %-12s  %-12s  %-12s  %-12s  %-8s  %-12s  %-12s",
+                          "parameters", "estimate", "se_N", "se_N_target",
+                          "se_N_alpha", "se_N_gamma", "se_N_naive", "t", "CI_lo", "CI_hi")
+            println(io, nh)
+            println(io, "  " * "-"^(length(nh)-2))
+            for s in eachindex(se_N_delta)
+                v = Float64(N_hat[s]); sd = se_N_delta[s]
+                ts = (isfinite(sd) && sd > 0) ? v / sd : NaN
+                @printf(io, "  %-18s  %-10.0f  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-12.6e  %-8.4f  %-12.4f  %-12.4f\n",
+                        "N_s[sector $s]", v, sd, se_N_target[s], se_N_alpha[s],
+                        se_N_gamma[s],
+                        se_N_naive === nothing ? NaN : se_N_naive[s],
+                        isnan(ts) ? -999.0 : ts, v - 1.96 * sd, v + 1.96 * sd)
+            end
+            println(io, "\n  ∂Ḡ_s/∂n — the denominator that converts count-moment error into")
+            println(io, "  varieties. A small |D_s| means the count moment barely moves with one")
+            println(io, "  more variety there, so N̂_s is weakly identified in that sector.")
+            @printf(io, "  %-18s  %-16s  %-16s  %-10s\n",
+                    "sector", "D_s (exact)", "Ḡ(n+1)−Ḡ(n)", "gap")
+            for s in 1:S
+                gap = abs(D_analytic[s]) > 1e-14 ?
+                      abs(D_firstdiff[s] - D_analytic[s]) / abs(D_analytic[s]) : NaN
+                @printf(io, "  %-18d  %-16.6e  %-16.6e  %-10.4f\n",
+                        s, D_analytic[s], D_firstdiff[s], isnan(gap) ? -999.0 : gap)
+            end
+            println(io, "  (the two agree to O(q̂); the first difference is the integer-step scale,")
+            println(io, "   the exact derivative is the implicit-function object used above.)")
+            println(io, "\n  N.B. the CI is continuous; N_s is an integer, so read it as the set of")
+            println(io, "  integer counts the count moment cannot distinguish at 95%.")
+        end
+
+        println(io, "\n--- Channel decomposition, T (mean variance share) ---")
         @printf(io, "  α-channel share: %.4f   γ-channel share: %.4f   (cross ⇒ shares need not sum to 1)\n",
                 mean_share_a, mean_share_g)
         @printf(io, "  mean se_T: %.4e   mean se_T_alpha: %.4e   mean se_T_gamma: %.4e\n",
@@ -2663,13 +3281,24 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         println(io, "  * The α channel uses the reported (sandwich) Var(α̂); the γ channel and the")
         println(io, "    cross term use the DATA covariance Sigma_data (γ target noise). The joint")
         println(io, "    (α̂,γ̂) covariance is PSD by construction, so V_T is a proper covariance.")
-        println(io, "  * f_γ perturbs emp_gamma_ls[r,s]; Σ_γγ must be the covariance of the SAME")
+        println(io, "  * f_γ perturbs EMP_GAMMA_T[c,s]; Σ_γγ must be the covariance of the SAME")
         println(io, "    (thresholded/renormalized) γ moments — regenerate Sigma_beta_gamma if the")
         println(io, "    active set was gamma-thresholded (see reconcile_sigma_data caveat).")
-        println(io, "\n" * "="^84)
+        if se_N_delta !== nothing
+            println(io, "  * The system is TRIANGULAR: α̂ → T̂ = T*(α̂,γ̂) → q̂ → N̂_s. T does NOT")
+            println(io, "    depend on N_s — invert_T_ge is the continuum inversion and q̂ is")
+            println(io, "    N_s-free (Lemma 2) — so N_s noise does not feed back into V_T. The")
+            println(io, "    arrow runs the other way, and that transmission IS in Var(N̂) above.")
+            println(io, "  * Var(N̂) holds α̂'s own variance at its reported value; it is not a")
+            println(io, "    joint (α, N_s) re-estimation, so the α block above is unchanged.")
+            println(io, "  * It also does not carry the Monte-Carlo dispersion of N̂_s across draw")
+            println(io, "    sets (compute_jacobian reports that separately) — that is simulation")
+            println(io, "    noise in q̂, removable by raising N_RHO_INFERENCE, not sampling error.")
+        end
+        println(io, "\n" * "="^108)
     end
 
-    println("Correlated T inference saved to: $(joinpath(inf_dir, "inference_T_delta.txt"))")
+    println("Profiled α/T/N_s inference saved to: $(joinpath(inf_dir, "inference_delta.txt"))")
     @printf("  mean se_T=%.4e (α-share=%.3f, γ-share=%.3f) over %d T params\n",
             mean(se_T), mean_share_a, mean_share_g, n_T)
 
@@ -2684,6 +3313,8 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
         "se_T_delta_reg" => se_T_reg,
         "t_T_delta"      => t_T,
         "ci_T_delta"     => ci_T,
+        "t_T_delta_alpha"  => t_T_alpha,
+        "ci_T_delta_alpha" => ci_T_alpha,
     )
 end
 
@@ -2724,7 +3355,16 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                                 head_labels = String[],
                                 head_values = Float64[],
                                 step_rel::Float64 = 1e-2,
-                                target::AbstractMatrix = emp_gamma_ls)
+                                target::AbstractMatrix = EMP_GAMMA_T,
+                                # The FREE-parameter first-difference Jacobian on the same
+                                # β+γ(+G) rows and α+T columns. Supplied, T gets an SE in
+                                # inference_summary.txt from (G'WG)^{-1} — the SE it would
+                                # carry as a free parameter, alongside its delta-method SE.
+                                J_free_gb::Union{Nothing,AbstractMatrix} = nothing,
+                                # N_s first-difference Jacobian settings (GRANULAR only).
+                                N_s_K::Int = 10,
+                                N_s_base_seed::Int = 7_000_000,
+                                draw_method::Symbol = DRAW_METHOD)
     # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
     dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
                          step_rel=step_rel, target=target)
@@ -2743,9 +3383,55 @@ function run_profiled_inference(theta_hat::Vector{Float64},
     G_alpha = G_alpha_full[gb_indices, :]                    # β+γ rows × N_TAU
     alpha_param_idx = gb_param_idx[alpha_pos]
 
-    # ── Profiled α inference (reduced Jacobian) — T shown value-only in report ──
+    # ── The NAIVE block: one Jacobian holding α, T and N_s as FREE parameters, so
+    #    inference_summary.txt reports a single method throughout (the mechanical
+    #    sandwich). The structural treatment — T as the Sinkhorn image, N_s as the
+    #    calibrated solution of Ḡ_s(n)=Ĝ_s — is inference_delta.txt's job.
+    #    T   : columns of the free-parameter FD Jacobian.
+    #    N_s : the unit first difference m(N_s+1) − m(N_s); N_s is an integer, so one
+    #          variety IS the step and the SE comes out in varieties.
     T_disp_labels = param_labels_gb[T_pos]
     T_disp_values = theta_hat[gb_param_idx[T_pos]]
+
+    J_free_ok = J_free_gb !== nothing && size(J_free_gb, 2) == length(param_labels_gb)
+    if J_free_gb !== nothing && !J_free_ok
+        @warn "run_profiled_inference: J_free_gb has $(size(J_free_gb,2)) columns but " *
+              "$(length(param_labels_gb)) gb params — skipping the naive T block."
+    end
+
+    N_hat_v, se_N_naive, q_hat_v = nothing, nothing, nothing
+    G_N_gb = nothing
+    if GRANULAR
+        gr = granular_report(profiled_theta(theta_hat);
+                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+        q_hat_v = gr.q_hat
+        G_N, G_N_sd, N_hat_v, _ = compute_N_s_jacobian(
+            theta_hat; N_hat=gr.N_hat, K=N_s_K, base_seed=N_s_base_seed,
+            draw_method=draw_method, profile_T=true)
+        G_N_gb = G_N[gb_indices, :]
+        NPZ.npzwrite(joinpath(output_folder, "inference", "jacobian_N_s.npy"),    G_N_gb)
+        NPZ.npzwrite(joinpath(output_folder, "inference", "jacobian_N_s_sd.npy"), G_N_sd[gb_indices, :])
+        V_N, floored_N = _gtwg_inv(G_N_gb, W)
+        floored_N && @warn "N_s (G_N'W G_N) was not PD; eigenvalue floor applied. A sector " *
+                           "whose ∂Ḡ_s(0)/∂N_s ≈ 0 has no local information on N_s."
+        se_N_naive = sqrt.(max.(diag(V_N), 0.0))
+        NPZ.npzwrite(joinpath(output_folder, "inference", "se_theta_N_s.npy"), se_N_naive)
+    end
+
+    fd_labels = String[]; fd_values = Float64[]; fd_blocks = Matrix{Float64}[]
+    if J_free_ok
+        append!(fd_labels, vcat(param_labels_gb[alpha_pos], T_disp_labels))
+        append!(fd_values, vcat(theta_hat[alpha_param_idx], T_disp_values))
+        push!(fd_blocks, Matrix{Float64}(J_free_gb[:, vcat(alpha_pos, T_pos)]))
+    end
+    if G_N_gb !== nothing
+        append!(fd_labels, ["N_s[sector $s]" for s in 1:size(G_N_gb, 2)])
+        append!(fd_values, Float64.(N_hat_v))
+        push!(fd_blocks, Matrix{Float64}(G_N_gb))
+    end
+    fd_G = isempty(fd_blocks) ? nothing : reduce(hcat, fd_blocks)
+
+    # ── Profiled α inference (reduced Jacobian) — T shown value-only in report ──
     inf_alpha = compute_smm_inference(
         theta_hat, G_alpha, W, Omega;
         param_indices         = alpha_param_idx,
@@ -2760,7 +3446,10 @@ function run_profiled_inference(theta_hat::Vector{Float64},
         param_labels          = param_labels_gb[alpha_pos],
         moment_labels         = moment_labels_gb,
         display_labels        = vcat(collect(head_labels), collect(T_disp_labels)),
-        display_values        = vcat(collect(head_values), collect(T_disp_values)))
+        display_values        = vcat(collect(head_values), collect(T_disp_values)),
+        fd_G                  = fd_G,
+        fd_labels             = fd_G === nothing ? nothing : fd_labels,
+        fd_values             = fd_G === nothing ? nothing : fd_values)
 
     # ── Correlated T inference (α error + γ data noise + covariance) ────────────
     inf_T = compute_profiled_T_inference(
@@ -2776,7 +3465,21 @@ function run_profiled_inference(theta_hat::Vector{Float64},
         output_folder = output_folder,
         industry      = industry,
         step_rel      = step_rel,
-        target        = target)
+        target        = target,
+        alpha_labels  = collect(param_labels_gb[alpha_pos]),
+        alpha_values  = collect(theta_hat[alpha_param_idx]),
+        alpha_se_eff  = collect(inf_alpha["se_eff"]),
+        alpha_se_sw   = collect(inf_alpha["se_sw"]),
+        N_hat         = N_hat_v,
+        # Prefer the JOINT naive SE that inference_summary.txt actually prints (last
+        # S entries of its naive block); fall back to the marginal (G_N'W G_N)^{-1}.
+        se_N_naive    = begin
+            sfd = get(inf_alpha, "se_fd_sw", nothing)
+            (sfd !== nothing && N_hat_v !== nothing && length(sfd) >= length(N_hat_v)) ?
+                collect(sfd[end-length(N_hat_v)+1:end]) : se_N_naive
+        end,
+        q_hat         = q_hat_v,
+        J_free_gb     = J_free_ok ? J_free_gb : nothing)
 
     return inf_alpha, inf_T
 end
