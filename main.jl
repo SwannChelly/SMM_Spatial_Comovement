@@ -65,7 +65,7 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 20
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
 run_step3 = true
 run_step4 = true
@@ -74,7 +74,7 @@ run_step4 = true
 # K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
 # Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
 # present, else fall back to computing. Set false to always recompute.
-load_jacobian = true
+load_jacobian = false
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is

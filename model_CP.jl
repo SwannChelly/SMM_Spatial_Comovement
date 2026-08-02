@@ -348,31 +348,7 @@ function aggregate_gamma_to_T(gamma_ze::AbstractMatrix)
 end
 
 
-"""
-    concentrate_N_s(k_counts, m) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
 
-Profile the variety count `N_s` out of the loss by a **monotone integer bisection**
-on the count moment (plan D5; `finite_sample2.tex` §4.2).
-
-`k_counts[g]` is the number of the `m` simulated varieties that cell `g` wins
-SOMEWHERE in the downstream industry (the column sum of `linkages_flat`). By Lemma 2
-(`q ⊥ N_s`) the underlying win probability does not depend on the variety count, so
-
-    Ḡ_s(n) = mean over cells l of sector s of (1 − q_ls)^n
-
-is closed form and decreasing in `n`; matching it to `G_TARGET[s]` needs no
-re-simulation. It is evaluated by `gbar_sector`/`gbar_cell`, the UNBIASED
-combinatorial estimator — see `gbar_cell` for why the earlier plug-in
-`(1 − q̂)^n` with `q̂` floored at `0.5/m` capped the reachable `N̂_s` and biased
-`Ḡ` upward. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
-implied by the observed distinct-supplier count, so `N̂_s` is an integer at every
-evaluation — never relaxed, never rounded — and the outer optimiser never sees it.
-
-`clamped[s] ∈ (:none, :lo, :hi)` records a bound that bound. Clamping is
-INFORMATIVE, not benign: `:hi` means the model cannot generate enough sparsity even
-when every variety is sourced from a single origin — a rejection signal for the
-mechanism, which is why it is reported per sector rather than silently absorbed.
-"""
 """
     gbar_logfact_table(m) -> Vector{Float64}
 
@@ -454,6 +430,32 @@ function gbar_sector(cells, k_counts::AbstractVector{<:Integer}, m::Integer,
     return acc / length(cells)
 end
 
+
+"""
+    concentrate_N_s(k_counts, m) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
+
+Profile the variety count `N_s` out of the loss by a **monotone integer bisection**
+on the count moment (plan D5; `finite_sample2.tex` §4.2).
+
+`k_counts[g]` is the number of the `m` simulated varieties that cell `g` wins
+SOMEWHERE in the downstream industry (the column sum of `linkages_flat`). By Lemma 2
+(`q ⊥ N_s`) the underlying win probability does not depend on the variety count, so
+
+    Ḡ_s(n) = mean over cells l of sector s of (1 − q_ls)^n
+
+is closed form and decreasing in `n`; matching it to `G_TARGET[s]` needs no
+re-simulation. It is evaluated by `gbar_sector`/`gbar_cell`, the UNBIASED
+combinatorial estimator — see `gbar_cell` for why the earlier plug-in
+`(1 − q̂)^n` with `q̂` floored at `0.5/m` capped the reachable `N̂_s` and biased
+`Ḡ` upward. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
+implied by the observed distinct-supplier count, so `N̂_s` is an integer at every
+evaluation — never relaxed, never rounded — and the outer optimiser never sees it.
+
+`clamped[s] ∈ (:none, :lo, :hi)` records a bound that bound. Clamping is
+INFORMATIVE, not benign: `:hi` means the model cannot generate enough sparsity even
+when every variety is sourced from a single origin — a rejection signal for the
+mechanism, which is why it is reported per sector rather than silently absorbed.
+"""
 function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer)
     N_hat   = zeros(Int, S)
     clamped = fill(:none, S)
