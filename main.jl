@@ -51,11 +51,12 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
-# Draw method for the Fréchet inverse-CDF transform: :qmc (default, unbiased for
-# the min-coupled moments), :mc, or :is. Picked up by load_parameters.jl and
-# forwarded to every draw-generation site (U_DRAWS, Σ_sim, Jacobian replications).
+# Draw method for the Fréchet inverse-CDF transform, used for the OPTIMISATION
+# draws (U_DRAWS): :sobol (default) or :mc. Both carry flat weights, so both are
+# unbiased for the min-coupled moments. Inference (Σ_sim + Jacobian) resamples with
+# INFERENCE_DRAW_METHOD instead — see load_parameters.jl.
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
-@assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
+@assert draw_method in (:mc, :sobol) "draw method must be sobol|mc, got :$draw_method"
 # Optimizer backend: :pso (default, legacy staged pattern), :cmaes (one joint
 # CMA-ES per SMM step), or :tiktak (multistart Sobol + Nelder-Mead, one joint run
 # per step). Read by load_parameters.jl into OPTIMIZER_BACKEND.
@@ -64,7 +65,7 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 20
 
-run_step1 = false#true
+run_step1 = true#true
 run_step2 = true
 run_step3 = true
 run_step4 = true
@@ -73,7 +74,7 @@ run_step4 = true
 # K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
 # Step-4 (step3/jacobian_all_step3.npy) calls load J + companions from disk if
 # present, else fall back to computing. Set false to always recompute.
-load_jacobian = true
+load_jacobian = false
 
 # ── T-profiling (Design A, profiling.jl) ─────────────────────────────────────
 # When true, T is NOT searched by the PSO: each particle's (Ω^L, Ω^s, A, α) head is
@@ -201,7 +202,13 @@ end
 
 ############## Load θ̂_1 ##############
 #output_folder = "./reporting_gmm_$industry"
-step1_last = find_last_stage_folder(joinpath(output_folder, "step1"))
+step1_dir = joinpath(output_folder, "step1")
+isdir(step1_dir) || error(
+    "θ̂_1 cannot be loaded: $(step1_dir) does not exist. run_step1 = $(run_step1); " *
+    "a fresh output tree (a new --granular/--ca_level/--optimizer combination writes " *
+    "to its own folder, here $(output_folder)) has no Step-1 artefacts to resume from. " *
+    "Set run_step1 = true for the first run in this tree.")
+step1_last = find_last_stage_folder(step1_dir)
 theta_hat_1 = NPZ.npzread(joinpath(step1_last, "best_params.npy"))
 
 if ndims(theta_hat_1) > 1

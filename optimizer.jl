@@ -511,7 +511,14 @@ function run_optimization(;
     warm_start_params::Union{Nothing, Vector{Float64}} = nothing,
     output_subfolder::String = "step1",
     max_loop::Int = 50,
-    n_particles::Int = 100,
+    # Population size. `pmap` hands out one particle per free worker, so a swarm that
+    # is not a MULTIPLE of nworkers() pays for a final wave that runs almost empty:
+    # 100 particles on 49 workers is 49 + 49 + 2, i.e. three full evaluation rounds
+    # for 100 evaluations (68% utilisation). 98 = 2 × 49 costs two rounds — a third
+    # off the wall-clock per iteration for a two-particle change in the swarm.
+    # Re-tune this if the worker count changes: it should stay a multiple of
+    # nworkers() (= addprocs argument), not a round decimal number.
+    n_particles::Int = 98,
     max_iter_initial::Int = 200,
     max_iter_stage::Int = 50,
     alpha_search_method::String = "lhs",
@@ -526,7 +533,14 @@ function run_optimization(;
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
 
-    moment_blocks = moments_loss_gamma_beta ? [4, 5] : nothing   # reg_coef + gamma_ls (β+γ)
+    # reg_coef + gamma_ls (β+γ), plus the count block Ḡ_s(0) under GRANULAR. This MUST
+    # enumerate the same moments as `inference_moment_indices()`, because Step 3 is
+    # handed the `W_step3` built over exactly those: `loss_function` uses a W whose
+    # size already matches `moment_indices` as-is, and subsets it otherwise. Leaving
+    # this at [4,5] under GRANULAR made the two disagree by S, so the restricted
+    # W_step3 was indexed with GLOBAL masked positions → BoundsError on the first
+    # Step-3 evaluation (or, if a try/catch absorbed it, a constant objective).
+    moment_blocks = moments_loss_gamma_beta ? (GRANULAR ? [4, 5, 6] : [4, 5]) : nothing
 
     best_params = nothing
     best_fitness = Inf

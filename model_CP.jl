@@ -77,170 +77,6 @@ function vdc(n::Int)::Float64
     return r
 end
 
-"""
-    generate_is_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG,
-                      a=0.5, verbose=false)
-        -> (U, W)
-
-Per-column importance-sampling draws on (0, 1) for the Fréchet inverse-CDF
-transform in `solve_network`. Returns:
-  - `U::Matrix{Float64}` of shape (N_rho, n_good) — quantiles in (0, 1)
-  - `W::Matrix{Float64}` of shape (N_rho, n_good) — IS weights, normalised
-    PER COLUMN (`sum(W[:, g]) = 1` for every good pair g)
-
-NOTE (defect): the IS tilt is BIASED for the min-coupled consumer moments
-(`c_tilde`, `gamma_ls`, `industry`, `pi_r`). `solve_network`'s CES price index
-applies only the WINNING column's weight `W[rho, winner_good_idx[rho,s]]` to each
-row, dropping the density ratios of the *losing* columns; with a non-flat tilt
-those ratios do not cancel, so the realised per-row weight is not the correct
-importance weight for the joint (min over regions) functional. The "bounded
-weights ⇒ no degeneracy" property only makes this estimator UNBIASED for
-single-column functionals (the `reg_coef` quadrature rows), where there is no
-min-coupling. For the default production path use `:qmc` (flat weights → the
-winner-weight shortcut is exact). `:is` is retained only for the `reg_coef`
-tail-resolution use case; it is NOT the default. See `generate_qmc_draws`.
-
-This replaces the previous comonotonic stratified-QMC design (which returned a
-length-N_rho weight VECTOR shared across columns). The shared bin grid made
-every region's productivity a near-deterministic function of one latent per
-row, collapsing Ricardian selection — the winner of `min_r c_r` became fixed by
-T/tau/w rather than by independent Fréchet draws. Here each good pair g gets an
-INDEPENDENT proposal stream, so `u[rho, g1]` and `u[rho, g2]` are independent.
-
-# Importance sampling in uniform space
-
-The downstream transform (unchanged) is `z = scale·(-log(1-u))^(-1/theta)`, so
-the selection-relevant large-z mass sits at `u → 0`. The proposal must therefore
-oversample `u` near 0. Proposal `q(u) = a·u^(a-1)`, a Beta(a, 1) with a ∈ (0, 1):
-mass piles up at 0, inverse-CDF is `u = v^(1/a)`. The target is Uniform (p ≡ 1),
-so the IS weight is `w ∝ 1/q(u) = u^(1-a)/a` — BOUNDED on [0, 1] (→ 0 at u → 0,
-→ 1/a at u → 1): no weight degeneracy (unlike a Fréchet-scale tilt, whose weights
-blow up in the body).
-
-The proposal uniform `v` is stratified (one point per equal-prob stratum) with an
-INDEPENDENT permutation per column → columns decorrelated AND low-variance.
-
-# Two modes
-
-`randomise=false` (default — used during optimisation):
-    `MersenneTwister(g)` + within-stratum midpoint (0.5) → deterministic
-    (PSO-safe; freezes Monte-Carlo noise so the SMM criterion is a
-    deterministic function of theta).
-
-`randomise=true` (used for Σ_sim estimation):
-    permutation + jitter drawn from the supplied `rng` → independent per
-    replication. Pass `MersenneTwister(k)` for replication k.
-
-# Arguments
-
-- `N_rho::Int`            : draws per good pair (production: 1000).
-- `n_good::Int`           : number of active (sector, region) pairs.
-- `randomise::Bool=false` : false → MersenneTwister(g) + midpoint (base);
-                            true  → rng permutation + jitter (Σ_sim).
-- `rng::AbstractRNG`      : source of randomness when `randomise=true`.
-- `a::Float64=0.5`        : IS tilt, a ∈ (0, 1); smaller a ⇒ heavier tail
-                            oversampling, lower ESS.
-- `verbose::Bool=false`   : print `min_g ESS_g` (effective sample size of the
-                            weakest column) as a degeneracy health check.
-"""
-function generate_is_draws(N_rho::Int, n_good::Int;
-                           randomise::Bool=false,
-                           rng::AbstractRNG=Random.GLOBAL_RNG,
-                           a::Float64=0.5,
-                           verbose::Bool=false)
-    @assert 0.0 < a < 1.0 "IS tilt a ∈ (0,1); smaller a ⇒ heavier tail oversampling, lower ESS."
-
-    U     = Matrix{Float64}(undef, N_rho, n_good)
-    W     = Matrix{Float64}(undef, N_rho, n_good)
-    inv_N = 1.0 / N_rho
-    lo, hi = eps(), 1.0 - eps()
-
-    @inbounds for g in 1:n_good
-        col_rng = randomise ? rng : MersenneTwister(g)
-        perm    = randperm(col_rng, N_rho)
-        wsum    = 0.0
-        for rho in 1:N_rho
-            xi = randomise ? rand(rng) : 0.5         # within-stratum position
-            v  = (perm[rho] - xi) * inv_N            # stratified proposal uniform
-            u  = clamp(v^(1.0 / a), lo, hi)          # power-law tilt toward u→0
-            w  = u^(1.0 - a) / a                     # ∝ 1/q(u), bounded
-            U[rho, g] = u
-            W[rho, g] = w
-            wsum     += w
-        end
-        @views W[:, g] ./= wsum                      # per-column SNIS: Σ_rho W = 1
-    end
-
-    if verbose
-        # ESS_g = 1 / Σ_rho W[rho,g]^2 (columns sum to 1) → count in [1, N_rho].
-        min_ess = Inf
-        @inbounds for g in 1:n_good
-            s2 = 0.0
-            for rho in 1:N_rho
-                s2 += W[rho, g]^2
-            end
-            min_ess = min(min_ess, 1.0 / s2)
-        end
-        @printf("  generate_is_draws: min_g ESS_g = %.1f / %d  (frac %.3f, a=%.2f)\n",
-                min_ess, N_rho, min_ess / N_rho, a)
-    end
-
-    return U, W
-end
-
-
-"""
-    generate_qmc_draws(N_rho, n_good; randomise=false, rng=Random.GLOBAL_RNG)
-        -> (U, W)
-
-**Default production sampler.** Per-column STRATIFIED uniform draws on (0, 1) for
-the Fréchet inverse-CDF transform in `solve_network`, with FLAT weights. Returns:
-  - `U::Matrix{Float64}` (N_rho × n_good) — stratified quantiles in (0, 1)
-  - `W::Matrix{Float64}` (N_rho × n_good) — uniform weights `1/N_rho` (matrix, so
-    `[rho, g]` consumers are untouched; columns sum to 1)
-
-Each good pair `g` gets an INDEPENDENT permutation, so `u[rho, g1] ⊥ u[rho, g2]`
-(decorrelated — required to keep Ricardian `min_r c_r` selection alive) while one
-point per equal-probability stratum gives the variance reduction of LHS. Unlike
-`generate_is_draws`, there is NO importance tilt: the weight is uniform, which
-makes `solve_network`'s winner-weight shortcut (it applies only the winning
-column's weight per row) EXACT for the min-coupled moments — the source of the IS
-sampler's bias. Stratification weakly beats plain i.i.d. MC on every block.
-
-Two modes mirror `generate_is_draws`:
-  - `randomise=false` (default; optimisation): `MersenneTwister(g)` + midpoint
-    (0.5) within each stratum → deterministic per column (PSO-safe).
-  - `randomise=true` (Σ_sim estimation): permutation + jitter from the supplied
-    `rng`. NOTE: in this mode ALL columns of one call share the single `rng`
-    stream (they are drawn sequentially, not from independent `MersenneTwister(g)`
-    streams as in the base mode). This is intentional for Σ_sim, which wants
-    independent DESIGNS across replications k (pass `MersenneTwister(k)`); within a
-    replication the columns remain decorrelated via distinct random permutations.
-"""
-function generate_qmc_draws(N_rho::Int, n_good::Int;
-                            randomise::Bool=false,
-                            rng::AbstractRNG=Random.GLOBAL_RNG)
-    U     = Matrix{Float64}(undef, N_rho, n_good)
-    inv_N = 1.0 / N_rho
-    lo, hi = eps(), 1.0 - eps()
-
-    @inbounds for g in 1:n_good
-        col_rng = randomise ? rng : MersenneTwister(g)
-        perm    = randperm(col_rng, N_rho)
-        for rho in 1:N_rho
-            xi = randomise ? rand(rng) : 0.5      # within-stratum position
-            u  = clamp((perm[rho] - xi) * inv_N, lo, hi)   # stratified uniform, NO tilt
-            U[rho, g] = u
-        end
-    end
-
-    # Flat weight MATRIX (N_rho × n_good): the winner-weight shortcut in
-    # solve_network is exact iff weights are flat, so this is unbiased for the
-    # min-coupled moments.
-    W = fill(inv_N, N_rho, n_good)
-    return U, W
-end
-
 
 function generate_mc_draws(N_rho::Int, n_good::Int, rng::AbstractRNG)
     U = rand(rng, N_rho, n_good)
@@ -291,7 +127,7 @@ end
                          seed=42) -> (U, W)
 
 Sobol-based draws on (0, 1) for the Fréchet inverse-CDF transform, with FLAT
-weights (like `:qmc`). Each SECTOR's active (sector, region) columns form one
+FLAT weights. Each SECTOR's active (sector, region) columns form one
 Sobol net of dimension `d = length(SECTOR_GOOD_INDICES[s])`, scrambled by a
 per-sector digital shift consumed from the master rng. Building one net per
 sector (rather than a single global `n_good`-dim net) keeps the dimension low
@@ -301,7 +137,7 @@ distinct sectors draw distinct shifts and are therefore decorrelated.
 
 Returns `U::Matrix (N_rho × n_good)` and the flat weight `W = fill(1/N_rho, …)`.
 The flat weight makes `solve_network`'s winner-weight shortcut EXACT, so this is
-unbiased for the min-coupled moments (same property as `:qmc`).
+unbiased for the min-coupled moments (the same property `:mc` has).
 
   - `randomise=false` (optimisation): master = `MersenneTwister(seed)` (frozen) →
     deterministic per call (PSO-safe). NOTE: this is a Sobol net at a FROZEN
@@ -338,20 +174,30 @@ end
 
 """
     generate_draws(N_rho, n_good, method::Symbol; randomise=false,
-                   rng=Random.GLOBAL_RNG, a=0.5, verbose=false) -> (U, W::Matrix)
+                   rng=Random.GLOBAL_RNG, verbose=false) -> (U, W::Matrix)
 
-Unified draw dispatcher. `method ∈ (:qmc, :mc, :is, :sobol)`:
-  - `:qmc` (default everywhere) — stratified uniform, flat weights, decorrelated
-    columns. Unbiased for the min-coupled moments; weakly beats `:mc`.
-  - `:mc`  — i.i.d. uniform, flat weights. `randomise=false` ⇒ deterministic
-    (`MersenneTwister(0)`) for PSO; `randomise=true` ⇒ supplied `rng`.
-  - `:is`  — per-column importance sampling (tilt `a`). BIASED for min-coupled
-    moments; retain only for `reg_coef` tail resolution. `a`/`verbose` apply only
-    here (ignored for the other methods).
-  - `:sobol` — per-sector digitally-shifted Sobol net, flat weights. Same
-    unbiasedness as `:qmc` (flat weights ⇒ winner-weight shortcut exact); aims for
-    lower Σ_sim variance on thick (multi-region) sectors. `randomise=false` ⇒
-    frozen scramble seed (PSO-safe); `randomise=true` ⇒ supplied `rng`.
+Unified draw dispatcher. `method ∈ (:sobol, :mc)` — both carry FLAT weights, which
+is what makes `solve_network`'s winner-weight shortcut exact and hence both
+unbiased for the min-coupled moments (`c_tilde`, `gamma_ls`, `industry`, `pi_r`):
+
+  - `:sobol` — per-sector digitally-shifted Sobol net. The OPTIMISATION default:
+    `randomise=false` gives a frozen scramble seed, so the SMM criterion is a
+    deterministic function of θ (PSO-safe), and the net's equidistribution buys
+    variance reduction on thick (multi-region) sectors.
+  - `:mc` — i.i.d. uniform. The INFERENCE default (`INFERENCE_DRAW_METHOD`):
+    Σ_sim and the Jacobian want genuinely independent designs per replication,
+    and i.i.d. draws avoid the cross-sector coupling of the per-sector Sobol nets
+    (two sectors sharing a Sobol dimension index differ only by a digital shift,
+    so their columns are a deterministic XOR of one another — invisible to a
+    correlation gate, but it distorts the cross-sector CES price aggregation).
+    `randomise=false` ⇒ deterministic (`MersenneTwister(0)`); `randomise=true` ⇒
+    supplied `rng`.
+
+The `:is` (importance-sampling) and `:qmc` (stratified-uniform) samplers were
+REMOVED. `:is` was biased for every min-coupled moment — `solve_network` applies
+only the winning column's weight per row and drops the losing columns' density
+ratios, which do not cancel under a non-flat tilt — and `:qmc` was strictly
+dominated by `:sobol` at the same cost.
 
 W is always an `(N_rho × n_good)` matrix, so every `[rho, g]` consumer is
 untouched regardless of method — the invariant that confines the method switch to
@@ -360,33 +206,17 @@ the generation sites.
 function generate_draws(N_rho::Int, n_good::Int, method::Symbol;
                         randomise::Bool=false,
                         rng::AbstractRNG=Random.GLOBAL_RNG,
-                        a::Float64=0.5,
                         verbose::Bool=false)
-    if method === :qmc
-        return generate_qmc_draws(N_rho, n_good; randomise=randomise, rng=rng)
+    if method === :sobol
+        return generate_sobol_draws(N_rho, n_good; randomise=randomise, rng=rng,
+                                    seed=42)
     elseif method === :mc
         mc_rng = randomise ? rng : MersenneTwister(0)
         return generate_mc_draws(N_rho, n_good, mc_rng)
-    elseif method === :is
-        return generate_is_draws(N_rho, n_good; randomise=randomise, rng=rng,
-                                 a=a, verbose=verbose)
-    elseif method === :sobol
-        return generate_sobol_draws(N_rho, n_good; randomise=randomise, rng=rng,
-                                    seed=42)
     else
-        error("Unknown draw method :$method (choose :qmc, :mc, :is, or :sobol)")
+        error("Unknown draw method :$method (choose :sobol or :mc)")
     end
 end
-
-
-# Backward-compatible alias: existing call sites that have not been threaded with
-# an explicit method keep compiling and resolve to the new DEFAULT (:qmc). The
-# `a`/`verbose` kwargs are accepted for signature parity but ignored by :qmc.
-generate_stratified_draws(N_rho::Int, n_good::Int; randomise::Bool=false,
-                          rng::AbstractRNG=Random.GLOBAL_RNG,
-                          a::Float64=0.5, verbose::Bool=false) =
-    generate_draws(N_rho, n_good, :qmc; randomise=randomise, rng=rng,
-                   a=a, verbose=verbose)
 
 
 ##################### Helper Functions ###################
@@ -518,20 +348,106 @@ function aggregate_gamma_to_T(gamma_ze::AbstractMatrix)
 end
 
 
+
 """
-    concentrate_N_s(q_hat) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
+    gbar_logfact_table(m) -> Vector{Float64}
+
+`lg[i+1] = log(i!)` for `i = 0:m`. Built by cumulative sum (no SpecialFunctions
+dependency); `m + 1` entries, rebuilt per call — negligible beside one moment
+evaluation.
+"""
+function gbar_logfact_table(m::Integer)
+    lg = Vector{Float64}(undef, m + 1)
+    lg[1] = 0.0
+    @inbounds for i in 1:m
+        lg[i+1] = lg[i] + log(i)
+    end
+    return lg
+end
+
+"""
+    gbar_cell(k, m, n, lg) -> Float64
+
+UNBIASED estimator of `(1 − q_l)^n`, the probability that cell `l` hosts no
+supplier among `n` varieties, from `k` observed wins out of `m` draws.
+
+    E[ C(m−k, n) / C(m, n) ] = (1 − q)^n      for every n ≤ m
+
+Read it as: draw `n` of the `m` simulated varieties without replacement and ask
+whether all of them lost. Marginalising over the draws, each is a win with
+probability `q` independently, so the expectation is exactly `(1 − q)^n` — no
+approximation, no tuning constant.
+
+This REPLACES the plug-in `(1 − q̂)^n` with its `q̂` floored at `0.5/m`. Two
+defects of that construction are removed at once:
+
+  * **The floor capped identification.** `q̂ ≥ 0.5/m` forced
+    `Ḡ_s(0) ≤ (1 − 0.5/m)^n` for every θ, so no `N̂_s` above
+    `ln(Ḡ_target)/ln(1 − 0.5/m)` was reachable — roughly 11–53 at `m = 100`
+    against variety-count bounds `N_HI` of 24–291. The upper half of the
+    bisection range was unreachable, so a `:hi` clamp could never occur and the
+    over-identification check was silently one-sided. The estimator below has no
+    such ceiling: it spans the whole `[N_LO, N_HI]` range.
+  * **Jensen bias.** `(1 − q)^n` is convex in `q`, so the plug-in is biased
+    upward by roughly `n(n−1)q / (2m(1−q))` — several percent of `Ḡ` at
+    production draw counts, enough to move `N̂_s` by tens of percent.
+
+Evaluated in logs off a shared log-factorial table, so it costs `O(1)` per
+(cell, n) rather than `O(n)`:
+
+    log Ḡ = log(m−k)! − log(m−k−n)! − log m! + log(m−n)!
+
+`n > m − k` ⇒ 0 (a cell winning `k` of `m` draws cannot leave `n` varieties
+unserved once `n` exceeds the losing draws). `n ≤ 0` ⇒ 1.
+
+**Caveat.** Unbiasedness assumes the `m` draws are i.i.d. within a cell. The
+optimisation draws are `:sobol`, which is equidistributed rather than
+independent — that makes the win count LESS dispersed than Binomial, so the
+residual bias is smaller than the plug-in's, not larger, but it is not exactly
+zero. Inference draws (`:mc`) do satisfy the assumption.
+"""
+@inline function gbar_cell(k::Integer, m::Integer, n::Integer, lg::Vector{Float64})
+    n <= 0 && return 1.0
+    n > m - k && return 0.0
+    return exp(lg[m-k+1] - lg[m-k-n+1] - lg[m+1] + lg[m-n+1])
+end
+
+"""
+    gbar_sector(cells, k_counts, m, n, lg) -> Float64
+
+`Ḡ_s(n) = mean over cells l of (1 − q_l)^n`, via the unbiased `gbar_cell`. This
+is the ONE definition of the count moment: `concentrate_N_s` bisects on it and
+block 6 reports it at `N̂_s`, so the moment being matched and the moment being
+reported cannot drift apart.
+"""
+function gbar_sector(cells, k_counts::AbstractVector{<:Integer}, m::Integer,
+                     n::Integer, lg::Vector{Float64})
+    isempty(cells) && return 1.0
+    acc = 0.0
+    @inbounds for g in cells
+        acc += gbar_cell(k_counts[g], m, n, lg)
+    end
+    return acc / length(cells)
+end
+
+
+"""
+    concentrate_N_s(k_counts, m) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
 
 Profile the variety count `N_s` out of the loss by a **monotone integer bisection**
 on the count moment (plan D5; `finite_sample2.tex` §4.2).
 
-`q_hat[g]` is the probability that cell `g` wins a given variety SOMEWHERE in the
-downstream industry, estimated as the column mean of `linkages_flat` over the whole
-draw pool. By Lemma 2 (`q ⊥ N_s`) it does not depend on the variety count, so
+`k_counts[g]` is the number of the `m` simulated varieties that cell `g` wins
+SOMEWHERE in the downstream industry (the column sum of `linkages_flat`). By Lemma 2
+(`q ⊥ N_s`) the underlying win probability does not depend on the variety count, so
 
-    Ḡ_s(n) = mean over cells l of sector s of (1 − q̂_ls)^n
+    Ḡ_s(n) = mean over cells l of sector s of (1 − q_ls)^n
 
-is closed form and strictly decreasing in `n`; matching it to `G_TARGET[s]` needs no
-re-simulation. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
+is closed form and decreasing in `n`; matching it to `G_TARGET[s]` needs no
+re-simulation. It is evaluated by `gbar_sector`/`gbar_cell`, the UNBIASED
+combinatorial estimator — see `gbar_cell` for why the earlier plug-in
+`(1 − q̂)^n` with `q̂` floored at `0.5/m` capped the reachable `N̂_s` and biased
+`Ḡ` upward. The search is over the integers of `[N_LO[s], N_HI[s]]`, the bounds
 implied by the observed distinct-supplier count, so `N̂_s` is an integer at every
 evaluation — never relaxed, never rounded — and the outer optimiser never sees it.
 
@@ -540,9 +456,10 @@ INFORMATIVE, not benign: `:hi` means the model cannot generate enough sparsity e
 when every variety is sourced from a single origin — a rejection signal for the
 mechanism, which is why it is reported per sector rather than silently absorbed.
 """
-function concentrate_N_s(q_hat::AbstractVector{<:Real})
+function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer)
     N_hat   = zeros(Int, S)
     clamped = fill(:none, S)
+    lg      = gbar_logfact_table(m)
     @inbounds for s in 1:S
         cells = CELLS_OF_SECTOR[s]
         lo0, hi0 = N_LO[s], N_HI[s]
@@ -550,13 +467,7 @@ function concentrate_N_s(q_hat::AbstractVector{<:Real})
             N_hat[s] = lo0
             continue
         end
-        Gs = n -> begin
-            acc = 0.0
-            for g in cells
-                acc += (1.0 - q_hat[g])^n
-            end
-            acc / length(cells)
-        end
+        Gs = n -> gbar_sector(cells, k_counts, m, n, lg)
         tgt = G_TARGET[s]
         if Gs(lo0) <= tgt
             N_hat[s], clamped[s] = lo0, :lo
@@ -813,17 +724,39 @@ function solve_network(params; return_firm_level=false,
             if isempty(g_indices); continue; end
             regions_s = SECTOR_GOOD_REGIONS[s]
 
-            # Prices only for active upstream (s,r') pairs
-            tau_sr = reshape(tau[regions_s, r_d], 1, :)      # (1, n_active_in_s); tau is R × R_downstream
-            w_sr = reshape(W_RS_FLAT[g_indices], 1, :)       # (1, n_active_in_s)
-            prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr  # (N_rho_eff, n_active_in_s)
-
-            # Ricardian selection: lowest-cost supplier wins each variety
-            min_local = argmin(prices_s, dims=2)  # (N_rho_eff, 1)
-            for rho in 1:N_rho_eff
-                local_idx = min_local[rho][2]
-                winner_good_idx[rho, s] = g_indices[local_idx]
-                p_rho_s[rho, s] = prices_s[rho, local_idx]
+            # Ricardian selection: lowest-cost supplier wins each variety.
+            #
+            # Fused min-and-argmin. The previous form materialised
+            #   prices_s = z_inv_flat[:, g_indices] .* tau_sr .* w_sr
+            # and then reduced it with argmin(...; dims=2), allocating an
+            # (N_rho × n_active_in_s) matrix plus a CartesianIndex array for EVERY
+            # (downstream region, sector) pair — of the order of 60 MB per
+            # solve_network call at production sizes, purely to be reduced away.
+            #
+            # The arithmetic is unchanged: `z * t * w` associates left-to-right
+            # exactly as the broadcast `z .* tau .* w` did, so the products are
+            # bit-identical. Ties keep the FIRST minimiser and a NaN wins outright,
+            # both matching `argmin`.
+            tv = tau[regions_s, r_d]           # (n_active_in_s,) — tau is R × R_downstream
+            wv = W_RS_FLAT[g_indices]          # (n_active_in_s,)
+            n_act = length(g_indices)
+            @inbounds for rho in 1:N_rho_eff
+                g1   = g_indices[1]
+                best = z_inv_flat[rho, g1] * tv[1] * wv[1]
+                bidx = 1
+                if !isnan(best)
+                    for li in 2:n_act
+                        gl = g_indices[li]
+                        p  = z_inv_flat[rho, gl] * tv[li] * wv[li]
+                        if isnan(p)
+                            best = p; bidx = li; break
+                        elseif p < best
+                            best = p; bidx = li
+                        end
+                    end
+                end
+                winner_good_idx[rho, s] = g_indices[bidx]
+                p_rho_s[rho, s] = best
             end
         end
 
@@ -1124,114 +1057,56 @@ end
 ##################### Fast cloglog (IRLS over the FWL kernel) ###################
 
 """
-    _cloglog_irls(y, X, w, fe_group; max_iter=50, tol=1e-9, eta_clamp=30.0) -> β
+    CloglogDesign
 
-Fit a complementary-log-log GLM  `P(y=1) = 1 − exp(−exp(η))`, `η = Xβ + a_{fe}`,
-by IRLS. The single categorical fixed effect `fe_group` is absorbed via **weighted
-within-group demeaning** each iteration (Frisch–Waugh–Lovell — exact for ONE FE
-dimension), so no dummy matrix is built. This is the nonlinear analogue of the
-`fast_weighted_regression` kernel: each IRLS step is a weighted LS on the demeaned
-design. `w` are analytic (observation) weights. Returns the coefficient vector `β`
-(length `size(X,2)`); the fixed effects are profiled out.
+Per-process cache of the part of the extensive-margin regression design that does
+NOT move with θ: the distance columns of `X`, the observation weights `w`, the
+fixed-effect labels `fe_group`, and the group → row index derived from them. Only
+the not-supply indicator `y` and the log-z size column are refreshed per call, via
+the `row_g`/`row_rho` maps.
 
-The IRLS quantities for cloglog: with `μ = 1 − exp(−exp(η))`,
-`dμ/dη = e^{η}(1−μ)`, working response `z = η + (y−μ)/(dμ/dη)`, and IRLS weight
-`W = w·(dμ/dη)² / (μ(1−μ))`.
+Validity is checked on two things: the design SHAPE (`key`) and the IDENTITY of the
+weight matrix the design was built from (`weights_ref`, compared with `===`). The
+second is what makes it safe under the Jacobian and Σ_sim replications, which pass
+their own draws: a different weight matrix object is a cache miss, not a silent
+reuse. Holding the reference also pins the matrix, which is intended.
+
+Julia's `Distributed` gives every worker its own copy of module state and no
+threads are used anywhere in this codebase, so this global is not shared.
 """
-function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
-                       w::AbstractVector{<:Real}, fe_group::AbstractVector{<:Integer};
-                       max_iter::Int=50, tol::Float64=1e-9, eta_clamp::Float64=30.0)
-    n, k = size(X)
-    yf = Float64.(y); Xf = Float64.(X); wf = Float64.(w)
-
-    # Precompute group → row indices once (weighted within-transform is one pass/FE).
-    groups  = unique(fe_group)
-    rows_of = Dict(g => findall(==(g), fe_group) for g in groups)
-
-    # Init: μ shrunk toward 0.5 (avoids η = ±∞ at all-0 / all-1 starts), η = cloglog link.
-    μ = (yf .+ 0.5) ./ 2
-    η = clamp.(log.(.-log.(1 .- μ)), -eta_clamp, eta_clamp)
-
-    β = zeros(k)
-    for _ in 1:max_iter
-        μ    = clamp.(1 .- exp.(.-exp.(η)), 1e-12, 1 - 1e-12)
-        dμdη = exp.(η) .* (1 .- μ)                       # e^{η}·e^{−e^{η}}
-        zwork = η .+ (yf .- μ) ./ dμdη                   # working response
-        W    = wf .* (dμdη .^ 2) ./ (μ .* (1 .- μ))      # IRLS × analytic weights
-
-        # Weighted within-group demeaning (FWL) of zwork and each X column.
-        zt = copy(zwork); Xt = copy(Xf)
-        for g in groups
-            r  = rows_of[g]
-            sw = sum(@view W[r])
-            sw < 1e-300 && continue
-            zt[r] .-= sum(W[r] .* zwork[r]) / sw
-            @inbounds for j in 1:k
-                Xt[r, j] .-= sum(W[r] .* Xf[r, j]) / sw
-            end
-        end
-
-        # Weighted LS on the demeaned system: (Xt' W Xt) β = Xt' W zt.
-        WXt   = W .* Xt
-        β_new = (Xt' * WXt) \ (Xt' * (W .* zt))
-
-        # Rebuild η = Xβ + a_fe, with a_g = weighted group mean of (zwork − Xβ).
-        resid = zwork .- Xf * β_new
-        η_new = Xf * β_new
-        for g in groups
-            r  = rows_of[g]
-            sw = sum(@view W[r])
-            sw < 1e-300 && continue
-            η_new[r] .+= sum(W[r] .* resid[r]) / sw
-        end
-        η_new = clamp.(η_new, -eta_clamp, eta_clamp)
-
-        Δ = maximum(abs.(β_new .- β))
-        β = β_new; η = η_new
-        Δ < tol && break
-    end
-    return β
+mutable struct CloglogDesign
+    key          :: NTuple{6, Int}
+    weights_ref  :: Matrix{Float64}
+    X            :: Matrix{Float64}
+    w            :: Vector{Float64}
+    fe_group     :: Vector{Int}
+    group_rows   :: Vector{Vector{Int}}
+    y            :: Vector{Float64}
+    row_g        :: Vector{Int}
+    row_rho      :: Vector{Int}
+    n_rows_goods :: Int
 end
 
+const _CLOGLOG_DESIGN = Ref{Union{Nothing, CloglogDesign}}(nothing)
+
 """
-    fast_cloglog_regression(linkages_flat, z_flat, sample_weights; kwargs...) -> Vector (N_REG)
+    reset_cloglog_design!()
 
-Complementary-log-log extensive-margin regression, fit by IRLS over the weighted-FWL
-kernel (`_cloglog_irls`). Drop-in sibling of `fast_weighted_regression` (same design:
-distance-bin regressors + optional log-z size control + optional control-group rows,
-same `(sector × nearest-downstream)` FE), but the correct nonlinear link instead of a
-linear probability model.
-
-The outcome is `not_supply = 1 − supplier`, so with `P(not_supply)=1−exp(−exp(η))` the
-distance coefficient equals **αθ** (the empirical `reg_coef_cloglog` convention — note the
-SIGN/OUTCOME differ from `fast_weighted_regression`, which returns the LPM slope of
-`P(supplier)`). Under this specification the coefficients are, in the single-destination
-limit, `β_distance = θα` and `β_logz = −θ`, so conditioning on size (`include_size_control`)
-purges the T-through-productivity confound and loads the distance slope on α.
-Returns the `N_REG` distance coefficients.
+Drop the cached design. Only needed by tests that want to force a rebuild; the
+identity check on the weight matrix handles every production path.
 """
-function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
-                                 include_control::Bool=true,
-                                 include_size_control::Bool=!include_control,
-                                 rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
-                                 obs_weight::Union{Nothing, Vector{Float64}}=nothing,
-                                 return_size_coef::Bool=false,
-                                 max_iter::Int=50, tol::Float64=1e-9)
-    @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
-        "size control needs firm productivity; control firms have z ≡ −∞ under :ze")
-    n_size       = include_size_control ? 1 : 0
-    n_regressors = N_REG + n_size
-    size_col     = N_REG + 1
-    N_rho_eff    = size(sample_weights, 1)
-    rows_of      = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
-    n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
-    n_ctrl_eff   = include_control ? N_CONTROL : 0
-    N_valid      = n_rows_goods + n_ctrl_eff * N_rho_eff
+reset_cloglog_design!() = (_CLOGLOG_DESIGN[] = nothing)
 
+function _build_cloglog_design(sample_weights::Matrix{Float64}, key, include_control::Bool,
+                               include_size_control::Bool, rows_of, obs_weight,
+                               N_rho_eff::Int, n_ctrl_eff::Int, N_valid::Int,
+                               n_regressors::Int, n_rows_goods::Int, size_col::Int)
     y        = Vector{Float64}(undef, N_valid)
     X        = zeros(N_valid, n_regressors)
     w        = Vector{Float64}(undef, N_valid)
     fe_group = Vector{Int}(undef, N_valid)
+    row_g    = Vector{Int}(undef, n_rows_goods)
+    row_rho  = Vector{Int}(undef, n_rows_goods)
 
     idx = 0
     for g in 1:n_good
@@ -1246,17 +1121,16 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{F
         end
         for rho in rows_of(g)
             idx += 1
-            y[idx] = linkages_flat[rho, g] > 0 ? 0.0 : 1.0   # not_supply
+            y[idx] = 0.0                                  # overwritten per call
             w[idx] = obs_weight === nothing ? sample_weights[rho, g] : obs_weight[g]
             fe_group[idx] = group_id
+            row_g[idx] = g; row_rho[idx] = rho
             if N_REG == 1
                 X[idx, 1] = log_dist
             else
                 (b > 0 && b <= N_REG) && (X[idx, b] = 1.0)
             end
-            if include_size_control
-                X[idx, size_col] = log(z_flat[rho, g])
-            end
+            # X[idx, size_col] is written per call when include_size_control.
         end
     end
 
@@ -1285,8 +1159,231 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{F
             end
         end
     end
+    @assert idx == N_valid "cloglog design built $idx rows, expected $N_valid"
 
-    β = _cloglog_irls(y, X, w, fe_group; max_iter=max_iter, tol=tol)
+    return CloglogDesign(key, sample_weights, X, w, fe_group,
+                         build_fe_group_rows(fe_group), y, row_g, row_rho, n_rows_goods)
+end
+
+"""
+    build_fe_group_rows(fe_group) -> Vector{Vector{Int}}
+
+Row indices of each non-empty fixed-effect group, in one O(n) counting pass.
+
+Replaces `Dict(g => findall(==(g), fe_group) for g in unique(fe_group))`, which
+costs one full scan of `fe_group` PER GROUP — with `S × R_downstream` groups over
+`n_good × N_rho` rows that is tens of millions of comparisons on every call, for a
+result that is identical every time (`fe_group` is pure geography). The FE loops that
+consume this are per-group and operate on disjoint row sets, so group ORDER does not
+affect any result; this returns them in group-id order rather than first-appearance
+order.
+"""
+function build_fe_group_rows(fe_group::AbstractVector{<:Integer})
+    isempty(fe_group) && return Vector{Int}[]
+    gmax   = maximum(fe_group)
+    counts = zeros(Int, gmax)
+    @inbounds for g in fe_group
+        counts[g] += 1
+    end
+    out = Vector{Vector{Int}}()
+    slot = zeros(Int, gmax)          # slot[g] = position of group g in `out`, 0 if empty
+    for g in 1:gmax
+        if counts[g] > 0
+            push!(out, Vector{Int}(undef, counts[g]))
+            slot[g] = length(out)
+        end
+    end
+    fill_at = zeros(Int, length(out))
+    @inbounds for i in eachindex(fe_group)
+        p = slot[fe_group[i]]
+        fill_at[p] += 1
+        out[p][fill_at[p]] = i
+    end
+    return out
+end
+
+"""
+    _cloglog_irls(y, X, w, fe_group; max_iter=50, tol=1e-9, eta_clamp=30.0) -> β
+
+Fit a complementary-log-log GLM  `P(y=1) = 1 − exp(−exp(η))`, `η = Xβ + a_{fe}`,
+by IRLS. The single categorical fixed effect `fe_group` is absorbed via **weighted
+within-group demeaning** each iteration (Frisch–Waugh–Lovell — exact for ONE FE
+dimension), so no dummy matrix is built. This is the nonlinear analogue of the
+`fast_weighted_regression` kernel: each IRLS step is a weighted LS on the demeaned
+design. `w` are analytic (observation) weights. Returns the coefficient vector `β`
+(length `size(X,2)`); the fixed effects are profiled out.
+
+The IRLS quantities for cloglog: with `μ = 1 − exp(−exp(η))`,
+`dμ/dη = e^{η}(1−μ)`, working response `z = η + (y−μ)/(dμ/dη)`, and IRLS weight
+`W = w·(dμ/dη)² / (μ(1−μ))`.
+
+Pass `group_rows` (from `build_fe_group_rows`) to skip rebuilding the FE index, and
+`iters_out` to read back how many IRLS iterations were actually used.
+"""
+function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
+                       w::AbstractVector{<:Real}, fe_group::AbstractVector{<:Integer};
+                       group_rows::Union{Nothing,Vector{Vector{Int}}}=nothing,
+                       max_iter::Int=50, tol::Float64=1e-9, eta_clamp::Float64=30.0,
+                       iters_out::Union{Nothing,Base.RefValue{Int}}=nothing)
+    n, k = size(X)
+    yf = y isa Vector{Float64} ? y : Float64.(y)
+    Xf = X isa Matrix{Float64} ? X : Float64.(X)
+    wf = w isa Vector{Float64} ? w : Float64.(w)
+
+    # Group → row indices. Supplied by the caller when the design is cached (the
+    # common case); otherwise built in one pass.
+    grows = group_rows === nothing ? build_fe_group_rows(fe_group) : group_rows
+
+    # Init: μ shrunk toward 0.5 (avoids η = ±∞ at all-0 / all-1 starts), η = cloglog link.
+    μ = (yf .+ 0.5) ./ 2
+    η = clamp.(log.(.-log.(1 .- μ)), -eta_clamp, eta_clamp)
+
+    # ── Buffers, allocated ONCE rather than once per IRLS iteration ────────────
+    # The loop below used to `copy(Xf)` every pass; at production sizes that is
+    # ~17 MB of churn per iteration and up to 50 iterations per evaluation.
+    dμdη  = Vector{Float64}(undef, n)
+    zwork = Vector{Float64}(undef, n)
+    W     = Vector{Float64}(undef, n)
+    zt    = Vector{Float64}(undef, n)
+    Xt    = Matrix{Float64}(undef, n, k)
+    Xb    = Vector{Float64}(undef, n)
+    η_new = Vector{Float64}(undef, n)
+    sw_g  = Vector{Float64}(undef, length(grows))
+
+    β = zeros(k)
+    n_it = 0
+    for _ in 1:max_iter
+        n_it += 1
+        @inbounds for i in 1:n
+            μi      = clamp(1 - exp(-exp(η[i])), 1e-12, 1 - 1e-12)
+            di      = exp(η[i]) * (1 - μi)               # e^{η}·e^{−e^{η}}
+            dμdη[i] = di
+            zwork[i] = η[i] + (yf[i] - μi) / di          # working response
+            W[i]     = wf[i] * (di^2) / (μi * (1 - μi))  # IRLS × analytic weights
+            zt[i]    = zwork[i]
+        end
+        copyto!(Xt, Xf)
+
+        # Weighted within-group demeaning (FWL) of zwork and each X column.
+        @inbounds for (p, r) in enumerate(grows)
+            sw = sum(@view W[r])
+            sw_g[p] = sw
+            sw < 1e-300 && continue
+            cz = sum(i -> W[i] * zwork[i], r) / sw
+            for i in r
+                zt[i] -= cz
+            end
+            for j in 1:k
+                cx = sum(i -> W[i] * Xf[i, j], r) / sw
+                for i in r
+                    Xt[i, j] -= cx
+                end
+            end
+        end
+
+        # Weighted LS on the demeaned system: (Xt' W Xt) β = Xt' W zt.
+        WXt   = W .* Xt
+        β_new = (Xt' * WXt) \ (Xt' * (W .* zt))
+
+        # Rebuild η = Xβ + a_fe, with a_g = weighted group mean of (zwork − Xβ).
+        # Xf*β is formed ONCE (it was computed twice: for `resid` and for `η_new`).
+        mul!(Xb, Xf, β_new)
+        @inbounds for i in 1:n
+            η_new[i] = Xb[i]
+        end
+        @inbounds for (p, r) in enumerate(grows)
+            sw = sw_g[p]
+            sw < 1e-300 && continue
+            cr = sum(i -> W[i] * (zwork[i] - Xb[i]), r) / sw
+            for i in r
+                η_new[i] += cr
+            end
+        end
+        @inbounds for i in 1:n
+            η_new[i] = clamp(η_new[i], -eta_clamp, eta_clamp)
+        end
+
+        Δ = maximum(abs.(β_new .- β))
+        β = β_new
+        copyto!(η, η_new)
+        Δ < tol && break
+    end
+    iters_out === nothing || (iters_out[] = n_it)
+    return β
+end
+
+"""
+    fast_cloglog_regression(linkages_flat, z_flat, sample_weights; kwargs...) -> Vector (N_REG)
+
+Complementary-log-log extensive-margin regression, fit by IRLS over the weighted-FWL
+kernel (`_cloglog_irls`). Drop-in sibling of `fast_weighted_regression` (same design:
+distance-bin regressors + optional log-z size control + optional control-group rows,
+same `(sector × nearest-downstream)` FE), but the correct nonlinear link instead of a
+linear probability model.
+
+The outcome is `not_supply = 1 − supplier`, so with `P(not_supply)=1−exp(−exp(η))` the
+distance coefficient equals **αθ** (the empirical `reg_coef_cloglog` convention — note the
+SIGN/OUTCOME differ from `fast_weighted_regression`, which returns the LPM slope of
+`P(supplier)`). Under this specification the coefficients are, in the single-destination
+limit, `β_distance = θα` and `β_logz = −θ`, so conditioning on size (`include_size_control`)
+purges the T-through-productivity confound and loads the distance slope on α.
+Returns the `N_REG` distance coefficients.
+"""
+function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Matrix{Float64};
+                                 include_control::Bool=true,
+                                 include_size_control::Bool=!include_control,
+                                 rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
+                                 obs_weight::Union{Nothing, Vector{Float64}}=nothing,
+                                 return_size_coef::Bool=false,
+                                 max_iter::Int=50, tol::Float64=1e-9,
+                                 iters_out::Union{Nothing,Base.RefValue{Int}}=nothing)
+    @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
+        "size control needs firm productivity; control firms have z ≡ −∞ under :ze")
+    n_size       = include_size_control ? 1 : 0
+    n_regressors = N_REG + n_size
+    size_col     = N_REG + 1
+    N_rho_eff    = size(sample_weights, 1)
+    rows_of      = g -> rho_range === nothing ? (1:N_rho_eff) : rho_range[g]
+    n_rows_goods = rho_range === nothing ? n_good * N_rho_eff : sum(length, rho_range)
+    n_ctrl_eff   = include_control ? N_CONTROL : 0
+    N_valid      = n_rows_goods + n_ctrl_eff * N_rho_eff
+
+    # ── Reuse the θ-invariant design ──────────────────────────────────────────
+    # Only `y` (the not-supply indicator) and the log-z size column move with θ.
+    # The distance columns are pure geography, `w` is a function of the frozen
+    # draws, `fe_group` is geography, and the group → rows index derived from it is
+    # the same on every call. Rebuilding all of that per evaluation dominated the
+    # cost of the moment. The cache is keyed on the design SHAPE and on the IDENTITY
+    # of the weight matrix (`===`), so a different draw set — the Jacobian and Σ_sim
+    # replications pass their own — forces a rebuild rather than silently reusing a
+    # stale design. Bypassed entirely for the non-production `rho_range`/`obs_weight`
+    # variants.
+    use_cache = rho_range === nothing && obs_weight === nothing
+    key = (N_rho_eff, n_good, n_ctrl_eff, N_REG, n_size, N_valid)
+    D   = use_cache ? _CLOGLOG_DESIGN[] : nothing
+    if D === nothing || D.key != key || D.weights_ref !== sample_weights
+        D = _build_cloglog_design(sample_weights, key, include_control,
+                                  include_size_control, rows_of, obs_weight,
+                                  N_rho_eff, n_ctrl_eff, N_valid, n_regressors,
+                                  n_rows_goods, size_col)
+        use_cache && (_CLOGLOG_DESIGN[] = D)
+    end
+
+    y = D.y; X = D.X
+    @inbounds for i in 1:D.n_rows_goods
+        g = D.row_g[i]; rho = D.row_rho[i]
+        y[i] = linkages_flat[rho, g] > 0 ? 0.0 : 1.0     # not_supply
+    end
+    if include_size_control
+        @inbounds for i in 1:D.n_rows_goods
+            X[i, size_col] = log(z_flat[D.row_rho[i], D.row_g[i]])
+        end
+    end
+    # Control rows keep y = 1 and a zero size column from the build: control firms
+    # never supply and have no productivity draw.
+
+    β = _cloglog_irls(y, X, D.w, D.fe_group; group_rows=D.group_rows,
+                      max_iter=max_iter, tol=tol, iters_out=iters_out)
     # Under the firm-level reduced form (finite_sample2.tex Prop. 1) the log-z
     # coefficient equals −θ exactly: a free over-identifying test, returned on
     # request. The historical N_REG-long return is unchanged by default.
@@ -1428,15 +1525,21 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
 
     if GRANULAR
         n_draw = size(linkages_flat, 1)
-        q_hat  = Vector{Float64}(undef, n_good)
+        # Win COUNTS, not a floored share: the count moment is now evaluated with the
+        # unbiased `gbar_cell` (see its docstring), which needs k and m rather than q̂.
+        # `q_hat` is kept as the raw diagnostic — unclamped, since nothing downstream
+        # raises it to a power any more.
+        k_counts = Vector{Int}(undef, n_good)
+        q_hat    = Vector{Float64}(undef, n_good)
         @inbounds for g in 1:n_good
-            acc = 0.0
+            acc = 0
             for rho in 1:n_draw
-                acc += linkages_flat[rho, g]
+                acc += linkages_flat[rho, g] != 0
             end
-            q_hat[g] = clamp(acc / n_draw, 0.5 / n_draw, 1.0 - 1e-12)
+            k_counts[g] = acc
+            q_hat[g]    = acc / n_draw
         end
-        N_hat_free, clamped = concentrate_N_s(q_hat)
+        N_hat_free, clamped = concentrate_N_s(k_counts, n_draw)
         # Finite-difference / counterfactual mode: the caller pins N̂_s (it is a STEP
         # function of θ, so a central FD could otherwise straddle a jump). The free
         # bisection value is returned as a diagnostic (`N_hat_free`) rather than warned
@@ -1449,15 +1552,14 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
 
         # Block 6: Ḡ_s(0) over the cells inside active attraction areas — empty cells
         # included, since those ARE the K = 0 mass (finite_sample2.tex §3.2).
+        # Same estimator the bisection matched on, so the moment reported to the loss
+        # and the moment N̂_s was chosen against cannot drift apart.
+        lg_G0 = gbar_logfact_table(n_draw)
         G0 = zeros(S)
         @inbounds for s in 1:S
             cells = CELLS_OF_SECTOR[s]
             isempty(cells) && continue
-            acc = 0.0
-            for g in cells
-                acc += (1.0 - q_hat[g])^N_hat[s]
-            end
-            G0[s] = acc / length(cells)
+            G0[s] = gbar_sector(cells, k_counts, n_draw, N_hat[s], lg_G0)
         end
     end
 
@@ -1654,6 +1756,14 @@ function loss_function(simulated_moments, emp, W;
         # size == length(moment_indices)), use it as-is — err is subset to the same
         # moments in the same (β-then-γ) order. Otherwise subset a full-size W.
         if size(W, 1) != length(moment_indices)
+            # A W that is neither already-restricted nor full-size means the caller's
+            # moment_blocks and the moment set W was built over have drifted apart;
+            # subsetting here would index a restricted W with global positions.
+            size(W, 1) >= maximum(moment_indices) || error(
+                "loss_function: W is $(size(W,1))×$(size(W,1)) but moment_indices has " *
+                "$(length(moment_indices)) entries reaching index $(maximum(moment_indices)). " *
+                "W is restricted to a DIFFERENT moment set than the one requested — check " *
+                "that moment_blocks matches inference_moment_indices() (β → γ → G).")
             W = W[moment_indices, moment_indices]
         end
     end

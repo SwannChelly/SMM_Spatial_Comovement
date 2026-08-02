@@ -203,9 +203,21 @@ end
 # ── N_rho: draws per (sector, cell) ─────────────────────────────────────────
 # The number of Monte-Carlo/QMC draws integrating over the variety continuum, in
 # BOTH modes. Under GRANULAR it additionally sets the precision of `q̂` and hence of
-# the profiled `N̂_s`; it is NOT tied to N_HI, because no prefix of the draws is ever
-# taken (see SECTION 9b).
-n_rho_local = granular_local ? 100 : 1000
+# the profiled `N̂_s`, and it must COVER the largest candidate variety count:
+# `concentrate_N_s` (model_CP.jl) asserts `N̂_s ≤ N_rho`, while `N̂_s` ranges over
+# `[N_LO[s], N_HI[s]]`. Setting `N_rho ≥ maximum(N_HI)` turns that assert into a
+# true invariant instead of an abort that fires precisely on the `:hi` clamp — the
+# case its own docstring calls a rejection signal for the mechanism, i.e. a result
+# to report, not a crash. (The earlier comment here claimed N_rho was NOT tied to
+# N_HI because no prefix of the draws is taken. The premise is right — `N̂_s` only
+# ever enters the closed form `(1-q̂)^N̂` — but the assert says otherwise, and this
+# is the resolution that keeps the guard meaningful.)
+#
+# Base value 100, raised to `maximum(N_HI)` whenever some sector's variety count
+# can exceed it. Note the `q̂` floor `0.5/N_rho` (model_CP.jl) caps the attainable
+# `N̂_s` at ≈ ln(Ḡ_target)/ln(1-0.5/N_rho), so a sector whose N_HI is far above
+# N_rho is still truncated from above even though the assert no longer fires.
+n_rho_local = granular_local ? max(100, maximum(N_HI_local)) : 1000
 @everywhere const N_rho = $(n_rho_local)
 println("\n N_rho = $n_rho_local — Entreprise par secteur x region")
 
@@ -721,12 +733,25 @@ Weight_matrix_custom_local = Diagonal(w_vec)
 # evaluations. Held constant for the whole estimation.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Draw method for the Fréchet inverse-CDF transform. The entry point (main.jl /
-# main_gmm.jl) may define `draw_method`; default to :qmc (stratified uniform, flat
-# weights — unbiased for the min-coupled moments). :mc and :is are alternatives.
+# Draw method for the Fréchet inverse-CDF transform, for the OPTIMISATION draws
+# (U_DRAWS). The entry point (main.jl / main_gmm.jl) may define `draw_method`;
+# default :sobol — flat weights (unbiased for the min-coupled moments) plus a frozen
+# scramble seed, so the SMM criterion stays a deterministic function of θ (PSO-safe).
 draw_method_local = (@isdefined(draw_method)) ? draw_method : :sobol
-@assert draw_method_local in (:qmc, :mc, :is, :sobol) "draw_method must be :qmc, :mc, :is or :sobol, got :$draw_method_local"
+@assert draw_method_local in (:mc, :sobol) "draw_method must be :sobol or :mc, got :$draw_method_local"
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
+
+# Draw method for INFERENCE (Σ_sim in `build_step3_weight_matrix`, and the Jacobian
+# replications in `compute_jacobian`). Deliberately :mc rather than DRAW_METHOD:
+# those routines want genuinely INDEPENDENT designs across replications, and the
+# per-sector Sobol nets are not independent across sectors — two sectors sharing a
+# Sobol dimension index get the SAME base column and differ only by a digital shift,
+# so one column is a deterministic XOR of the other. That is invisible to a
+# correlation gate (Pearson ≈ 0) but it couples the cross-sector CES aggregation
+# `P_r = (Σ_s Ω^s P_sr^{1-ν})^{1/(1-ν)}`, which is exactly what Σ_sim must measure.
+inference_draw_method_local = (@isdefined(inference_draw_method)) ? inference_draw_method : :mc
+@assert inference_draw_method_local in (:mc, :sobol) "inference_draw_method must be :sobol or :mc, got :$inference_draw_method_local"
+@everywhere const INFERENCE_DRAW_METHOD = $(QuoteNode(inference_draw_method_local))
 
 # Optimizer backend. The entry point may define `optimizer_backend`; default :pso
 # (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step; :tiktak runs

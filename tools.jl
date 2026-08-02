@@ -1336,7 +1336,7 @@ end
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
                                    output_folder::String=".",
-                                   draw_method::Symbol=DRAW_METHOD)
+                                   draw_method::Symbol=INFERENCE_DRAW_METHOD)
     N_moments = length(empirical_moments)
 
     # ── Estimated-moment indices in the masked vector: β, γ, and (under
@@ -1421,7 +1421,7 @@ Central finite differences of the masked moment vector w.r.t. selected parameter
 averaged across `K` independent stratified-draw replications.
 
 For each replication k = 1..K:
-  - Generate fresh stratified draws via `generate_stratified_draws(...; randomise=true,
+  - Generate fresh draws via `generate_draws(..., draw_method; randomise=true,
     rng=MersenneTwister(base_seed + k))`.
   - Compute J_k = ∂m(θ; u_k)/∂θ by central FD using a *single* draw configuration
     (so the difference is smooth at fixed u_k — same logic as the deterministic loss
@@ -1500,7 +1500,7 @@ function compute_jacobian(theta::Vector{Float64};
                           load_existing::Bool = false,
                           profile_T::Bool = false,
                           hold_N_s::Bool = GRANULAR,
-                          draw_method::Symbol = DRAW_METHOD)
+                          draw_method::Symbol = INFERENCE_DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
 
@@ -2764,7 +2764,7 @@ end
 
 """
     compute_N_s_jacobian(theta; N_hat=nothing, K=10, base_seed=7_000_000,
-                         draw_method=DRAW_METHOD, profile_T=false)
+                         draw_method=INFERENCE_DRAW_METHOD, profile_T=false)
         -> (G_N::Matrix, G_N_sd::Matrix, N_hat::Vector{Int}, diff::Vector{Float64})
 
 `∂m/∂N_s` — the moment Jacobian w.r.t. the profiled variety counts — by a **unit
@@ -2787,7 +2787,7 @@ function compute_N_s_jacobian(theta::Vector{Float64};
                               N_hat::Union{Nothing,Vector{Int}} = nothing,
                               K::Int = 10,
                               base_seed::Int = 7_000_000,
-                              draw_method::Symbol = DRAW_METHOD,
+                              draw_method::Symbol = INFERENCE_DRAW_METHOD,
                               profile_T::Bool = false)
     @assert GRANULAR "compute_N_s_jacobian is only defined under GRANULAR=true " *
         "(N_s exists only in the granular model)."
@@ -3364,7 +3364,7 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                                 # N_s first-difference Jacobian settings (GRANULAR only).
                                 N_s_K::Int = 10,
                                 N_s_base_seed::Int = 7_000_000,
-                                draw_method::Symbol = DRAW_METHOD)
+                                draw_method::Symbol = INFERENCE_DRAW_METHOD)
     # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
     dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
                          step_rel=step_rel, target=target)
@@ -3402,6 +3402,10 @@ function run_profiled_inference(theta_hat::Vector{Float64},
     N_hat_v, se_N_naive, q_hat_v = nothing, nothing, nothing
     G_N_gb = nothing
     if GRANULAR
+        # The GRANULAR block below writes into <output_folder>/inference/ BEFORE
+        # compute_smm_inference (the only other creator of that directory) runs, so
+        # create it here or the first granular run loses the Jacobian it just paid for.
+        mkpath(joinpath(output_folder, "inference"))
         gr = granular_report(profiled_theta(theta_hat);
                              u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
         q_hat_v = gr.q_hat
@@ -4017,27 +4021,50 @@ function screen_T_identification(params;
              (1-Ω_L)*mu*Y_r[dr] for dr in 1:R_downstream]
         ω = w ./ sum(w)
 
-        # bilateral shares g[l,dr] = T_l (w_l τ_{l,dr})^{-θ} / Φ_{s,dr}
-        G = Matrix{Float64}(undef, nL, R_downstream)
+        # bilateral shares at the CELL level: g[l,dr] = T_l (w_l τ_{l,dr})^{-θ} / Φ_{s,dr}
+        G_cell = Matrix{Float64}(undef, nL, R_downstream)
         for (li,l) in enumerate(regs), dr in 1:R_downstream
             g = SR_TO_GOOD[s,l]
-            G[li,dr] = T_mat[s,l]*(W_RS_FLAT[g]*τ[l,dr])^(-theta)/Φ[s,dr]
+            G_cell[li,dr] = T_mat[s,l]*(W_RS_FLAT[g]*τ[l,dr])^(-theta)/Φ[s,dr]
         end
 
-        M = zeros(nL,nL)
+        # Collapse cells onto the T-PARAMETER column space before forming M^s. The
+        # estimated block is T_par[s, ·] of width T_COL_DIM — ZE under :ze (where
+        # T_GATHER is the identity and this loop reproduces the cell-level matrix
+        # exactly), attraction areas under :aa, where several ZE share ONE parameter.
+        # M^s is the Hessian of a multinomial log-likelihood in log T, and that
+        # structure survives grouping precisely because T is constant within an area,
+        # so the aggregated shares g_a = Σ_{l∈a} g_l give the right block. Building it
+        # in ZE space under :aa measured the identification of a parameter vector that
+        # is not the one being estimated — and `ref` below is a T column, so the
+        # reference row was not being dropped either.
+        cols    = SECTOR_T_COLS[s]; isempty(cols) && continue
+        col_pos = Dict(c => i for (i, c) in enumerate(cols))
+        nC = length(cols)
+        G = zeros(nC, R_downstream)
+        for (li, l) in enumerate(regs)
+            c = T_GATHER[l]
+            haskey(col_pos, c) || continue
+            @views G[col_pos[c], :] .+= G_cell[li, :]
+        end
+
+        M = zeros(nC,nC)
         for dr in 1:R_downstream
             gd = @view G[:,dr]; M .+= ω[dr] .* (Diagonal(gd) .- gd*gd')
         end
         γ_marg = G*ω; curv = diag(M)
 
-        ref  = T_REF_REGION[s]
-        free = findall(!=(ref), regs); isempty(free) && continue
+        ref      = T_REF_REGION[s]
+        free_pos = findall(c -> c != ref, cols); isempty(free_pos) && continue
+        free     = free_pos
         F = eigen(Symmetric(M[free,free]))
-        push!(out, (sector=s, regions=regs[free],
+        push!(out, (sector=s, regions=cols[free],
                     gamma_marg=γ_marg[free], curvature=curv[free],
                     eval_min=F.values[1], eval_max=F.values[end],
                     evec_min=F.vectors[:,1]))
-        @printf("%ssector %d: M λ_min/λ_max = %.4e\n", pfx, s, F.values[1]/F.values[end])
+        @printf("%ssector %d: M λ_min/λ_max = %.4e  (%d free %s of %d cells)\n",
+                pfx, s, F.values[1]/F.values[end], length(free),
+                CA_LEVEL === :aa ? "attraction areas" : "ZE", nL)
     end
 
     # ── (2) Cross-check: global v_min support vs each sector's M^s ratio ─────────
