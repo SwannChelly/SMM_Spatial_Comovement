@@ -51,11 +51,12 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : 1
 K_sim    = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 10000
-# Draw method for the Fréchet inverse-CDF transform: :qmc (default, unbiased for
-# the min-coupled moments), :mc, or :is. Picked up by load_parameters.jl and
-# forwarded to every draw-generation site (U_DRAWS, Σ_sim, Jacobian replications).
+# Draw method for the Fréchet inverse-CDF transform, used for the OPTIMISATION
+# draws (U_DRAWS): :sobol (default) or :mc. Both carry flat weights, so both are
+# unbiased for the min-coupled moments. Inference (Σ_sim + Jacobian) resamples with
+# INFERENCE_DRAW_METHOD instead — see load_parameters.jl.
 draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
-@assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
+@assert draw_method in (:mc, :sobol) "draw method must be sobol|mc, got :$draw_method"
 # Optimizer backend: :pso (default, legacy staged pattern), :cmaes (one joint
 # CMA-ES per SMM step), or :tiktak (multistart Sobol + Nelder-Mead, one joint run
 # per step). Read by load_parameters.jl into OPTIMIZER_BACKEND.

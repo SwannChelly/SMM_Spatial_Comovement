@@ -107,7 +107,7 @@ const RUN_EXP2 = true     # α+T coverage Monte Carlo
 
 # Draw seeds. The truth m(θ₀) is generated with `randomise=true` draws seeded
 # DIFFERENTLY from the production U_DRAWS (which are deterministic,
-# MersenneTwister(g), see generate_stratified_draws). This guarantees the
+# MersenneTwister(g), see generate_draws). This guarantees the
 # estimator never sees the exact draws that produced its target.
 const TRUTH_DRAW_SEED = 999_000
 
@@ -262,7 +262,7 @@ NPZ.npzwrite(joinpath(IV_ROOT, "theta_0.npy"), theta0)
 println("θ₀ built: length $(length(theta0)), α₀ = $(round.(alpha0, digits=4))")
 
 # Truth draws — independent of production U_DRAWS.
-truth_U, truth_W = generate_stratified_draws(N_rho, n_good;
+truth_U, truth_W = generate_draws(N_rho, n_good, DRAW_METHOD;
                                              randomise = true,
                                              rng = MersenneTwister(TRUTH_DRAW_SEED),
                                              verbose = true)

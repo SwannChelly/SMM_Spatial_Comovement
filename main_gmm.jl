@@ -56,10 +56,10 @@ industry = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 n_quad   = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? parse(Int, ARGS[4]) : 200
-# Draw method for the simulated price solver (:qmc default, :mc, :is). Forwarded
+# Draw method for the simulated price solver (:sobol default, :mc). Forwarded
 # to load_parameters.jl (U_DRAWS) and every draw-generation site.
-draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :qmc
-@assert draw_method in (:qmc, :mc, :is, :sobol) "draw method must be qmc|mc|is|sobol, got :$draw_method"
+draw_method = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :sobol
+@assert draw_method in (:mc, :sobol) "draw method must be sobol|mc, got :$draw_method"
 K = 10   # PSO loops
 
 run_step1 = true
@@ -444,22 +444,17 @@ function test_price_alignment(params; N_list = [2048, 8192, 32768], n_quad::Int 
     @printf("%-9s %-11s %10s %10s %10s %10s %10s %10s\n",
             "N_rho","draws","c_tilde","labor","industry","pi_r","reg_coef","gamma_ls")
 
-    a_is = 0.5   # IS tilt (only used by the :is arm)
     for N in N_list
-        uq, wq = generate_draws(N, n_good, :qmc;   randomise = false)
         um, wm = generate_draws(N, n_good, :mc;    randomise = false)
         us, ws = generate_draws(N, n_good, :sobol; randomise = false)
-        ui, wi = generate_draws(N, n_good, :is;    randomise = false, a = a_is)
 
-        # Decorrelation / ESS diagnostics for the stratified arms.
-        #   • qmc/sobol have FLAT weights ⇒ ESS == N by construction (no degeneracy).
-        #   • is  has bounded but non-flat weights ⇒ min ESS reported as a health signal.
-        #   • columns should be decorrelated: max off-diagonal |cor(U)| ≈ 1/√N.
-        ess_is = minimum(1.0 ./ vec(sum(wi .^ 2, dims = 1)))     # wi columns sum to 1
-        Cq = cor(uq); Cq[diagind(Cq)] .= 0.0
-        @printf("  N=%-8d qmc ESS = %.0f / %d (frac %.2f)   is ESS = %.0f / %d (frac %.2f)   max|cor(U_qmc)−I| = %.3f (≈ 1/√N = %.3f)\n",
-                N, N, N, 1.0, ess_is, N, ess_is / N,
-                maximum(abs.(Cq)), 1.0 / sqrt(N))
+        # Decorrelation diagnostic. Both surviving samplers have FLAT weights, so
+        # ESS == N by construction and there is no degeneracy to report; what can
+        # still go wrong is column correlation, which is what collapses the
+        # Ricardian argmin. Expected ≈ 1/√N.
+        Cs = cor(us); Cs[diagind(Cs)] .= 0.0
+        @printf("  N=%-8d max|cor(U_sobol)−I| = %.3f (≈ 1/√N = %.3f)\n",
+                N, maximum(abs.(Cs)), 1.0 / sqrt(N))
 
         # INTRA-sector decorrelation gate (the only check that catches a broken
         # scramble). The global max|cor(U)−I| above can look healthy while a thick
@@ -493,25 +488,21 @@ function test_price_alignment(params; N_list = [2048, 8192, 32768], n_quad::Int 
         println("-"^100)
     end
     println("""
-    Decision rule (default sampler is :qmc):
-      • 'qmc'/'sobol' ≤ 'mc' on c_tilde/industry/pi_r/gamma_ls : flat weights make the winner-weight
-                                            shortcut exact and stratification/equidistribution add
-                                            variance reduction. This is the expected, correct behaviour.
-      • 'sobol' aligns like 'qmc' on ALL blocks (≠ 'is') : confirms flat weights ⇒ exact shortcut ⇒
-                                            unbiased, independent of the placement engine. The qmc-vs-sobol
-                                            CHOICE is decided by Σ_sim variance (see test_sobol_variance).
-      • 'is' biased (does NOT → 0 with N) on the min-coupled blocks : the IS tilt drops the losing
-                                            columns' density ratios in solve_network's CES sum; this is a
-                                            real defect, which is why :is is not the default.
-      • reg_coef ~1e2 for ALL of them      : FKG/quadrature bias in the regression moment, NOT a
-                                            sampling artefact (unaffected by the draw method). :is is
-                                            valid here (single-column functional, no min-coupling).
+    Decision rule (optimisation sampler is :sobol, inference sampler is :mc):
+      • 'sobol' ≤ 'mc' on c_tilde/industry/pi_r/gamma_ls : flat weights make the winner-weight
+                                            shortcut exact and equidistribution adds variance
+                                            reduction. This is the expected, correct behaviour.
+      • BOTH → 0 with N on every block     : flat weights ⇒ exact shortcut ⇒ unbiased, independent
+                                            of the placement engine. A block that does NOT shrink
+                                            with N is a bias, not noise.
+      • reg_coef ~1e2 for BOTH             : FKG/quadrature bias in the regression moment, NOT a
+                                            sampling artefact (unaffected by the draw method).
       • all stall together on a block      : structural mismatch between solve_network and
                                             compute_moments_analytical (not a sampling issue).""")
 end
 
 # ============================================================================
-# DIAGNOSTIC: Σ_sim variance, :qmc vs :sobol on the γ block (the DECISION gate)
+# DIAGNOSTIC: Σ_sim variance, :mc vs :sobol on the γ block (the DECISION gate)
 # test_price_alignment validates non-bias (randomise=false, deterministic) but
 # NOT the variance gain — the reason to adopt Sobol. This runs K randomise=true
 # replications and compares the variance of the gamma_ls block.
@@ -533,12 +524,12 @@ function test_sobol_variance(params; K::Int = 64, N::Int = 8192)
         end)'
         vec(var(M; dims = 1))
     end
-    vq, vs = var_block(:qmc), var_block(:sobol)
+    vq, vs = var_block(:mc), var_block(:sobol)
 
     println("\n" * "="^100)
     println("Σ_sim VARIANCE TEST — γ-block per-moment variance over $K replications (N=$N)")
     println("="^100)
-    @printf("γ-block mean Var: qmc = %.3e   sobol = %.3e   ratio = %.2f  (≤ 1 expected on thick sectors)\n",
+    @printf("γ-block mean Var: mc = %.3e   sobol = %.3e   ratio = %.2f  (≤ 1 expected on thick sectors)\n",
             mean(vq), mean(vs), mean(vs) / mean(vq))
     println("""
     Interpretation:

@@ -1336,7 +1336,7 @@ end
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
                                    output_folder::String=".",
-                                   draw_method::Symbol=DRAW_METHOD)
+                                   draw_method::Symbol=INFERENCE_DRAW_METHOD)
     N_moments = length(empirical_moments)
 
     # ── Estimated-moment indices in the masked vector: β, γ, and (under
@@ -1421,7 +1421,7 @@ Central finite differences of the masked moment vector w.r.t. selected parameter
 averaged across `K` independent stratified-draw replications.
 
 For each replication k = 1..K:
-  - Generate fresh stratified draws via `generate_stratified_draws(...; randomise=true,
+  - Generate fresh draws via `generate_draws(..., draw_method; randomise=true,
     rng=MersenneTwister(base_seed + k))`.
   - Compute J_k = ∂m(θ; u_k)/∂θ by central FD using a *single* draw configuration
     (so the difference is smooth at fixed u_k — same logic as the deterministic loss
@@ -1500,7 +1500,7 @@ function compute_jacobian(theta::Vector{Float64};
                           load_existing::Bool = false,
                           profile_T::Bool = false,
                           hold_N_s::Bool = GRANULAR,
-                          draw_method::Symbol = DRAW_METHOD)
+                          draw_method::Symbol = INFERENCE_DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
 
@@ -2764,7 +2764,7 @@ end
 
 """
     compute_N_s_jacobian(theta; N_hat=nothing, K=10, base_seed=7_000_000,
-                         draw_method=DRAW_METHOD, profile_T=false)
+                         draw_method=INFERENCE_DRAW_METHOD, profile_T=false)
         -> (G_N::Matrix, G_N_sd::Matrix, N_hat::Vector{Int}, diff::Vector{Float64})
 
 `∂m/∂N_s` — the moment Jacobian w.r.t. the profiled variety counts — by a **unit
@@ -2787,7 +2787,7 @@ function compute_N_s_jacobian(theta::Vector{Float64};
                               N_hat::Union{Nothing,Vector{Int}} = nothing,
                               K::Int = 10,
                               base_seed::Int = 7_000_000,
-                              draw_method::Symbol = DRAW_METHOD,
+                              draw_method::Symbol = INFERENCE_DRAW_METHOD,
                               profile_T::Bool = false)
     @assert GRANULAR "compute_N_s_jacobian is only defined under GRANULAR=true " *
         "(N_s exists only in the granular model)."
@@ -3364,7 +3364,7 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                                 # N_s first-difference Jacobian settings (GRANULAR only).
                                 N_s_K::Int = 10,
                                 N_s_base_seed::Int = 7_000_000,
-                                draw_method::Symbol = DRAW_METHOD)
+                                draw_method::Symbol = INFERENCE_DRAW_METHOD)
     # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
     dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
                          step_rel=step_rel, target=target)

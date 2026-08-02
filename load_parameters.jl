@@ -213,12 +213,11 @@ end
 # ever enters the closed form `(1-q̂)^N̂` — but the assert says otherwise, and this
 # is the resolution that keeps the guard meaningful.)
 #
-# Rounded UP to a power of two: the Sobol (t,m,s)-net equidistribution is sharp
-# only at N = 2^m, and away from it the per-sector net leaves measurable
-# cross-cell correlation, which biases the Ricardian min-over-cells and hence
-# q̂, γ_ls and the count moment. It also lowers the `q̂` floor `0.5/N_rho`
-# (model_CP.jl), which caps the attainable `N̂_s` at ≈ ln(Ḡ_target)/ln(1-0.5/N_rho).
-n_rho_local = granular_local ? max(128, Int(nextpow(2, maximum(N_HI_local)))) : 1000
+# Base value 100, raised to `maximum(N_HI)` whenever some sector's variety count
+# can exceed it. Note the `q̂` floor `0.5/N_rho` (model_CP.jl) caps the attainable
+# `N̂_s` at ≈ ln(Ḡ_target)/ln(1-0.5/N_rho), so a sector whose N_HI is far above
+# N_rho is still truncated from above even though the assert no longer fires.
+n_rho_local = granular_local ? max(100, maximum(N_HI_local)) : 1000
 @everywhere const N_rho = $(n_rho_local)
 println("\n N_rho = $n_rho_local — Entreprise par secteur x region")
 
@@ -734,12 +733,25 @@ Weight_matrix_custom_local = Diagonal(w_vec)
 # evaluations. Held constant for the whole estimation.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Draw method for the Fréchet inverse-CDF transform. The entry point (main.jl /
-# main_gmm.jl) may define `draw_method`; default to :qmc (stratified uniform, flat
-# weights — unbiased for the min-coupled moments). :mc and :is are alternatives.
+# Draw method for the Fréchet inverse-CDF transform, for the OPTIMISATION draws
+# (U_DRAWS). The entry point (main.jl / main_gmm.jl) may define `draw_method`;
+# default :sobol — flat weights (unbiased for the min-coupled moments) plus a frozen
+# scramble seed, so the SMM criterion stays a deterministic function of θ (PSO-safe).
 draw_method_local = (@isdefined(draw_method)) ? draw_method : :sobol
-@assert draw_method_local in (:qmc, :mc, :is, :sobol) "draw_method must be :qmc, :mc, :is or :sobol, got :$draw_method_local"
+@assert draw_method_local in (:mc, :sobol) "draw_method must be :sobol or :mc, got :$draw_method_local"
 @everywhere const DRAW_METHOD = $(QuoteNode(draw_method_local))
+
+# Draw method for INFERENCE (Σ_sim in `build_step3_weight_matrix`, and the Jacobian
+# replications in `compute_jacobian`). Deliberately :mc rather than DRAW_METHOD:
+# those routines want genuinely INDEPENDENT designs across replications, and the
+# per-sector Sobol nets are not independent across sectors — two sectors sharing a
+# Sobol dimension index get the SAME base column and differ only by a digital shift,
+# so one column is a deterministic XOR of the other. That is invisible to a
+# correlation gate (Pearson ≈ 0) but it couples the cross-sector CES aggregation
+# `P_r = (Σ_s Ω^s P_sr^{1-ν})^{1/(1-ν)}`, which is exactly what Σ_sim must measure.
+inference_draw_method_local = (@isdefined(inference_draw_method)) ? inference_draw_method : :mc
+@assert inference_draw_method_local in (:mc, :sobol) "inference_draw_method must be :sobol or :mc, got :$inference_draw_method_local"
+@everywhere const INFERENCE_DRAW_METHOD = $(QuoteNode(inference_draw_method_local))
 
 # Optimizer backend. The entry point may define `optimizer_backend`; default :pso
 # (legacy staged pattern). :cmaes runs one joint CMA-ES per SMM step; :tiktak runs
