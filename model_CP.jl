@@ -702,6 +702,7 @@ function solve_network(params; return_firm_level=false,
     # branch, where there is no `u` to decompose and the dense regression path is used.
     logz_const = fill(NaN, n_good)
 
+    z_flat = nothing
     if u_draws === nothing
         # Backward compatibility: random Fréchet draws with uniform weights
         Random.seed!(50)
@@ -717,21 +718,47 @@ function solve_network(params; return_firm_level=false,
             # Uniform weight matrix so downstream [rho, g] indexing is consistent.
             sample_weights = FlatWeights(1.0/N_rho_eff, N_rho_eff, n_good)
         end
+        z_inv_flat = z_flat .^ (-1)
     else
         # CdGM-style: Fréchet inverse CDF from stratified uniform draws
         # u_draws is a Matrix{Float64} (N_rho_eff × n_good) with per-pair quantiles
         # F⁻¹(u) = σ · (-ln(1-u))^(-1/θ) where σ = T_{sr}^{1/θ}
-        z_flat = zeros(N_rho_eff, n_good)
-        for g in 1:n_good
-            T_sr = T[GOOD_S[g], GOOD_R[g]]
-            scale = max(T_sr, eps(Float64))^(1/theta)
-            logz_const[g] = log(scale)
-            for rho in 1:N_rho_eff
-                z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
+        #
+        # Only `z_inv_flat` is needed inside this function (the Ricardian argmin). When
+        # the caller does not want `z_flat` back either — the streaming regression
+        # rebuilds log z from `u_draws` + `logz_const`, so nothing downstream reads it —
+        # z is formed one COLUMN at a time into a length-N_rho scratch buffer instead of
+        # a second full-size matrix. Same operations on the same values, in the same
+        # order, so `z_inv_flat` is BIT-IDENTICAL either way; that matters because it
+        # drives the argmin, where a last-ulp difference could flip a winner.
+        # The two branches are spelled out rather than sharing a `zcol` that is either a
+        # column view or the scratch buffer: that would make the destination a Union
+        # inside the hot per-variety loop, costing a dynamic dispatch per element.
+        z_inv_flat = Matrix{Float64}(undef, N_rho_eff, n_good)
+        if return_z
+            z_flat = zeros(N_rho_eff, n_good)
+            for g in 1:n_good
+                T_sr = T[GOOD_S[g], GOOD_R[g]]
+                scale = max(T_sr, eps(Float64))^(1/theta)
+                logz_const[g] = log(scale)
+                for rho in 1:N_rho_eff
+                    z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
+                end
+                @views z_inv_flat[:, g] .= z_flat[:, g] .^ (-1)
+            end
+        else
+            zbuf = Vector{Float64}(undef, N_rho_eff)
+            for g in 1:n_good
+                T_sr = T[GOOD_S[g], GOOD_R[g]]
+                scale = max(T_sr, eps(Float64))^(1/theta)
+                logz_const[g] = log(scale)
+                for rho in 1:N_rho_eff
+                    zbuf[rho] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
+                end
+                @views z_inv_flat[:, g] .= zbuf .^ (-1)
             end
         end
     end
-    z_inv_flat = z_flat .^ (-1)
 
     # NOTE: weights are now per-(rho, good-pair) — `sample_weights[rho, g]`.
     # The CES price index weights each (rho, s) variety by the weight of the
@@ -987,7 +1014,10 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Abstrac
                                   include_size_control::Bool=!include_control,
                                   rho_range::Union{Nothing, Vector{UnitRange{Int}}}=nothing,
                                   obs_weight::Union{Nothing, Vector{Float64}}=nothing,
-                                  return_size_coef::Bool=false)
+                                  return_size_coef::Bool=false,
+                                  u_draws::Union{Nothing, Matrix{Float64}}=nothing,
+                                  logz_const::Union{Nothing, Vector{Float64}}=nothing,
+                                  inv_theta::Union{Nothing, Float64}=nothing)
 
     # Regressors: N_REG distance-bin dummies, plus (optionally) a log-z size control.
     # The size control and the control group are MUTUALLY EXCLUSIVE by construction:
@@ -998,8 +1028,9 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Abstrac
     #   • include_control=false (diagnostic): supplier pairs only, log-z size control ADDED
     #     — conditioning on productivity purges the T-through-z omitted-variable confound,
     #       so the distance slope loads on the trade-cost/α channel (see identification note).
-    # z_flat is always built by solve_network for the Ricardian selection; it is regressed
-    # on only when include_size_control is true.
+    # The log-z regressor is taken from `z_flat` on the dense path and rebuilt from
+    # `u_draws` + `logz_const` on the streaming one; `z_flat` is only materialised by
+    # `solve_network` when some caller actually needs it (see `SMM`'s `need_z`).
     @assert CA_LEVEL === :aa || !(include_control && include_size_control) (
         "size control needs firm productivity; the control group has z ≡ −∞ under " *
         ":ze, so include_control and include_size_control cannot both be true")
@@ -1024,6 +1055,28 @@ function fast_weighted_regression(linkages_flat, z_flat, sample_weights::Abstrac
     # the production path under :aa (control cells are ordinary goods there).
     n_ctrl_eff = include_control ? N_CONTROL : 0
     N_valid = n_rows_goods + n_ctrl_eff * N_rho_eff
+
+    # ── Streaming (cell-level) path — the production path ─────────────────────
+    # Same fit, one pass, nothing of order N_valid allocated. Gated by exactly the
+    # predicate the cloglog sibling uses, so the two links agree on when `z_flat` is
+    # needed at all (see `SMM`).
+    if reg_streaming_ok(include_size_control, rho_range, obs_weight, u_draws, logz_const)
+        cells = _build_reg_cells(include_control, include_size_control,
+                                 N_rho_eff, logz_const)
+        lzr = include_size_control ?
+              logz_resid(u_draws, inv_theta === nothing ? 1.0 / theta : inv_theta) :
+              nothing
+        coefs = _wls_cells(cells, linkages_flat, sample_weights, lzr,
+                           n_regressors, size_col)
+        return return_size_coef ?
+            vcat(coefs[1:N_REG], include_size_control ? coefs[size_col] : NaN) :
+            coefs[1:N_REG]
+    end
+
+    @assert z_flat !== nothing (
+        "the dense LPM path needs z_flat, but solve_network was called with " *
+        "return_z=false. Either pass u_draws/logz_const so the streaming path applies, " *
+        "or solve with return_z=true.")
 
     y = Vector{Float64}(undef, N_valid)
     X = zeros(N_valid, n_regressors)
@@ -1385,7 +1438,7 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
     return β
 end
 
-##################### Streaming (cell-level) cloglog design ###################
+##################### Streaming (cell-level) regression design ###################
 
 """
     logz_resid(u_draws) -> Matrix (N_rho × n_good)
@@ -1430,38 +1483,43 @@ function logz_resid(u_draws::Matrix{Float64}, inv_theta::Float64)
 end
 
 """
-    CLOGLOG_STREAMING
+    REG_STREAMING
 
-Escape hatch: set `CLOGLOG_STREAMING[] = false` to route `fast_cloglog_regression`
-back through the dense `_cloglog_irls` kernel (materialised `N_valid × k` design).
-Kept so the two implementations can be diffed at any point — see
-`test/test_cloglog_streaming.jl`. A `Ref`, not a `const Bool`, so it can be flipped at
-runtime; under `Distributed` each worker has its own copy, so flipping it on the master
-does NOT propagate (use `@everywhere` if you mean to change every worker).
+Master switch for the streaming (cell-level) extensive-margin regression, ON by
+default — it is the production path for BOTH links, `:cloglog` and `:lpm`.
+
+Set `REG_STREAMING[] = false` to route `fast_cloglog_regression` and
+`fast_weighted_regression` back through their dense kernels, which materialise the
+`N_valid × k` design and are retained verbatim as the reference implementations. Kept
+so the two can be diffed at any point — see `test/test_cloglog_streaming.jl`.
+
+A `Ref`, not a `const Bool`, so it can be flipped at runtime; under `Distributed` each
+worker has its own copy, so flipping it on the master does NOT propagate (use
+`@everywhere` if you mean to change every worker).
 """
-const CLOGLOG_STREAMING = Ref(true)
+const REG_STREAMING = Ref(true)
 
 """
-    cloglog_streaming_ok(include_size_control, rho_range, obs_weight, u_draws, logz_const)
+    reg_streaming_ok(include_size_control, rho_range, obs_weight, u_draws, logz_const)
 
-Whether `fast_cloglog_regression` can take the streaming path. It cannot when the
-switch is off, when a non-production row layout is requested (`rho_range` /
+Whether the extensive-margin regression can take the streaming path (both links). It
+cannot when the switch is off, when a non-production row layout is requested (`rho_range` /
 `obs_weight`), or when the size control is on but the `log z` decomposition is
 unavailable — which happens exactly on the legacy random-Fréchet branch of
 `solve_network`, where there is no `u` and `logz_const` is left NaN.
 
 This is also what decides whether `z_flat` must be materialised at all: see `SMM`.
 """
-function cloglog_streaming_ok(include_size_control::Bool, rho_range, obs_weight,
-                              u_draws, logz_const)
-    CLOGLOG_STREAMING[] || return false
+function reg_streaming_ok(include_size_control::Bool, rho_range, obs_weight,
+                          u_draws, logz_const)
+    REG_STREAMING[] || return false
     (rho_range === nothing && obs_weight === nothing) || return false
     include_size_control || return true
     return u_draws !== nothing && logz_const !== nothing && all(isfinite, logz_const)
 end
 
 """
-    CloglogCells
+    RegCells
 
 The extensive-margin design at CELL resolution — one entry per (sector, region) cell
 rather than one per (cell, variety) row.
@@ -1482,10 +1540,14 @@ over. This holds each of them ONCE:
   - `lzc[c]` — `logz_const[g]`, the θ-dependent part of `log z`.
 
 Cells `1:n_good` are the goods; `n_good+1 : n_good+n_ctrl` are the control-only pairs
-(outcome `not_supply ≡ 1`, flat weight `1/N_rho`). Total storage is `O(n_cell)`, i.e.
-kilobytes against the 74 MB (408 MB at `N_RHO_INFERENCE`) of `CloglogDesign`.
+(no supplier, flat weight `1/N_rho`). Total storage is `O(n_cell)`, i.e. kilobytes
+against the 74 MB (408 MB at `N_RHO_INFERENCE`) of `CloglogDesign`.
+
+Shared by BOTH links: `_cloglog_irls_cells` fits the cloglog GLM from it and
+`_wls_cells` the linear-probability model. The design is identical between them — only
+the outcome convention (`not_supply` vs `supplier`) and the fitting differ.
 """
-struct CloglogCells
+struct RegCells
     n_good_c :: Int
     n_ctrl_c :: Int
     n_rho    :: Int
@@ -1497,7 +1559,7 @@ struct CloglogCells
     lzc      :: Vector{Float64}
 end
 
-function _build_cloglog_cells(include_control::Bool, include_size_control::Bool,
+function _build_reg_cells(include_control::Bool, include_size_control::Bool,
                               N_rho_eff::Int, logz_const)
     n_ctrl_c = include_control ? N_CONTROL : 0
     n_cell   = n_good + n_ctrl_c
@@ -1549,13 +1611,13 @@ function _build_cloglog_cells(include_control::Bool, include_size_control::Bool,
         grp[c] = slot[rg]
     end
 
-    return CloglogCells(n_good, n_ctrl_c, N_rho_eff, gcol, gval, grp, n_grp, has_z, lzc)
+    return RegCells(n_good, n_ctrl_c, N_rho_eff, gcol, gval, grp, n_grp, has_z, lzc)
 end
 
 """
     _cloglog_irls_cells(D, linkages, sample_weights, lzr, k, size_col; …) -> β
 
-Cloglog IRLS over a `CloglogCells` design, allocating NOTHING of order
+Cloglog IRLS over a `RegCells` design, allocating NOTHING of order
 `n_cell × N_rho`. Mathematically identical to `_cloglog_irls` on the equivalent dense
 design; it just never forms that design.
 
@@ -1593,7 +1655,7 @@ outcome, so `η` there is one of two values keyed on `y` — computed on the fly
 `lzr` may be `nothing` when no size control is requested. `sample_weights` is indexed
 per row only when it is not flat; a `FlatWeights` is hoisted to a scalar.
 """
-function _cloglog_irls_cells(D::CloglogCells, linkages, sample_weights::AbstractMatrix{Float64},
+function _cloglog_irls_cells(D::RegCells, linkages, sample_weights::AbstractMatrix{Float64},
                              lzr::Union{Nothing, AbstractMatrix{Float64}},
                              k::Int, size_col::Int;
                              max_iter::Int=50, tol::Float64=1e-9, eta_clamp::Float64=30.0,
@@ -1736,6 +1798,113 @@ end
 
 
 """
+    _wls_cells(D, linkages, sample_weights, lzr, k, size_col) -> β
+
+Weighted least squares with one absorbed fixed effect, over a `RegCells` design — the
+LPM (`:lpm`) counterpart of `_cloglog_irls_cells`, and the streaming replacement for
+`fast_weighted_regression`'s materialised design.
+
+Same closed form for the weighted-within (FWL) transform:
+
+    X̃' W X̃ = Σ_i W_i X_i X_i'  −  Σ_p S^X_p (S^X_p)' / S^W_p
+    X̃' W ỹ = Σ_i W_i X_i y_i   −  Σ_p S^X_p  S^y_p    / S^W_p
+
+so the `k × k` normal equations are accumulated in ONE pass and nothing of order
+`n_cell × N_rho` is ever allocated. There is no iteration here (the LPM is linear), so
+this is a single sweep — strictly cheaper than the cloglog path.
+
+The outcome is `supplier = 1{linkage}` — the LPM convention, and the OPPOSITE of the
+cloglog kernel's `not_supply`; control-only cells contribute `y = 0`. Kept exactly as
+`fast_weighted_regression` builds it so the two are comparable coefficient by
+coefficient.
+
+Note this solves the NORMAL equations where the dense sibling forms `sqrt(w) .* X` and
+takes a pivoted-QR least squares. The two are algebraically identical and differ only
+in conditioning: squaring the design squares its condition number, so on a
+badly-scaled design the streaming path loses roughly twice as many digits. With 0/1
+bin dummies and a log-z column that is not a live concern (the design is well scaled by
+construction), but it IS the reason to keep the dense kernel as the reference and the
+reason `REG_STREAMING[] = false` exists.
+"""
+function _wls_cells(D::RegCells, linkages, sample_weights::AbstractMatrix{Float64},
+                    lzr::Union{Nothing, AbstractMatrix{Float64}},
+                    k::Int, size_col::Int)
+    n_cell   = D.n_good_c + D.n_ctrl_c
+    n_rho    = D.n_rho
+    n_grp    = D.n_grp
+    has_size = lzr !== nothing
+    wflat    = flat_weight(sample_weights)
+    w_ctrl   = 1.0 / n_rho
+
+    Axx = zeros(k, k)
+    bxy = zeros(k)
+    SX  = zeros(k, n_grp)
+    SW  = zeros(n_grp)
+    Sy  = zeros(n_grp)
+
+    @inbounds for c in 1:n_cell
+        is_good = c <= D.n_good_c
+        hz  = has_size && D.has_z[c]
+        p   = D.grp[c]
+        gc  = D.gcol[c]
+        gv  = D.gval[c]
+        lc  = D.lzc[c]
+
+        sw = 0.0; swy = 0.0; swl = 0.0; swll = 0.0; swly = 0.0
+
+        for rho in 1:n_rho
+            # Outcome: supplier (the LPM convention). Control cells never supply.
+            yi = is_good ? (linkages[rho, c] > 0 ? 1.0 : 0.0) : 0.0
+            lz = hz ? lc + lzr[rho, c] : 0.0
+            Wi = is_good ? (wflat === nothing ? sample_weights[rho, c] : wflat) : w_ctrl
+
+            sw  += Wi
+            swy += Wi * yi
+            if hz
+                swl  += Wi * lz
+                swll += Wi * lz * lz
+                swly += Wi * lz * yi
+            end
+        end
+
+        if gc > 0
+            Axx[gc, gc] += sw * gv * gv
+            bxy[gc]     += gv * swy
+            SX[gc, p]   += gv * sw
+            hz && (Axx[gc, size_col] += gv * swl)
+        end
+        if hz
+            Axx[size_col, size_col] += swll
+            bxy[size_col]           += swly
+            SX[size_col, p]         += swl
+        end
+        SW[p] += sw
+        Sy[p] += swy
+    end
+
+    A = zeros(k, k)
+    @inbounds for i in 1:k, j in 1:k
+        A[i, j] = j >= i ? Axx[i, j] : Axx[j, i]
+    end
+    rhs = copy(bxy)
+    @inbounds for p in 1:n_grp
+        SW[p] < 1e-300 && continue          # matches the dense kernel: no demeaning
+        inv_sw = 1.0 / SW[p]
+        for i in 1:k
+            sxi = SX[i, p]
+            sxi == 0.0 && continue
+            for j in 1:k
+                A[i, j] -= sxi * SX[j, p] * inv_sw
+            end
+            rhs[i] -= sxi * Sy[p] * inv_sw
+        end
+    end
+
+    return A \ rhs
+end
+
+
+"""
     fast_cloglog_regression(linkages_flat, z_flat, sample_weights; kwargs...) -> Vector (N_REG)
 
 Complementary-log-log extensive-margin regression, fit by IRLS over the weighted-FWL
@@ -1779,9 +1948,9 @@ function fast_cloglog_regression(linkages_flat, z_flat, sample_weights::Abstract
     # log-z decomposition (`u_draws` + `logz_const` from solve_network) when the size
     # control is on, and the plain per-cell row layout — the non-production
     # `rho_range`/`obs_weight` variants keep the dense kernel.
-    if cloglog_streaming_ok(include_size_control, rho_range, obs_weight,
+    if reg_streaming_ok(include_size_control, rho_range, obs_weight,
                             u_draws, logz_const)
-        cells = _build_cloglog_cells(include_control, include_size_control,
+        cells = _build_reg_cells(include_control, include_size_control,
                                      N_rho_eff, logz_const)
         lzr = include_size_control ?
               logz_resid(u_draws, inv_theta === nothing ? 1.0 / theta : inv_theta) :
@@ -1945,22 +2114,19 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     # ─────────────────────────────────────────────────────────────────────────
     sw = network.sample_weights
 
-    # `u_draws`/`logz_const` let the cloglog fit rebuild the log-z regressor from the
-    # θ-invariant decomposition instead of reading a materialised z (see `logz_resid`),
-    # which is what allows the streaming kernel and lets `z_flat` be dropped upstream.
-    # The LPM sibling takes no such kwargs and still reads `z_flat` directly.
-    reg_all = REG_METHOD == :cloglog ?
-        fast_cloglog_regression(linkages_flat, z_flat, sw;
-                                include_control      = REG_INCLUDE_CONTROL,
-                                include_size_control = REG_INCLUDE_SIZE,
-                                return_size_coef     = REG_INCLUDE_SIZE,
-                                u_draws              = network.u_draws,
-                                logz_const           = network.logz_const,
-                                inv_theta            = 1.0 / theta) :
-        fast_weighted_regression(linkages_flat, z_flat, sw;
-                                 include_control      = REG_INCLUDE_CONTROL,
-                                 include_size_control = REG_INCLUDE_SIZE,
-                                 return_size_coef     = REG_INCLUDE_SIZE)
+    # `u_draws`/`logz_const` let the fit rebuild the log-z regressor from the θ-invariant
+    # decomposition instead of reading a materialised z (see `logz_resid`), which is what
+    # allows the streaming kernel and lets `z_flat` be dropped upstream. Both links take
+    # them, so both get the streaming path.
+    reg_fun = REG_METHOD == :cloglog ? fast_cloglog_regression : fast_weighted_regression
+
+    reg_all = reg_fun(linkages_flat, z_flat, sw;
+                      include_control      = REG_INCLUDE_CONTROL,
+                      include_size_control = REG_INCLUDE_SIZE,
+                      return_size_coef     = REG_INCLUDE_SIZE,
+                      u_draws              = network.u_draws,
+                      logz_const           = network.logz_const,
+                      inv_theta            = 1.0 / theta)
     reg_coef = reg_all[1:N_REG]
     # The log-z coefficient is a free over-identifying test (Prop. 1(c): it equals −θ).
     b_logz   = REG_INCLUDE_SIZE ? reg_all[N_REG + 1] : NaN
@@ -2076,13 +2242,15 @@ function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Fl
 
     # The full-size `z_flat` (6.7 MB at N_rho = 723, n_good = 1161; 37 MB at
     # N_RHO_INFERENCE) is only needed by the DENSE regression path. Under the streaming
-    # cloglog it is never read, so it is not returned — and is therefore collectable
-    # before the regression runs, which is the peak of the evaluation. The condition is
-    # the same predicate the regression itself uses, so the two cannot disagree; the
-    # `u_draws === nothing` case is the legacy random-Fréchet branch, which has no log-z
-    # decomposition and always needs the dense path.
-    need_z = REG_METHOD === :lpm || !CLOGLOG_STREAMING[] ||
-             (REG_INCLUDE_SIZE && u_draws === nothing)
+    # path — either link — it is never read, so it is neither returned NOR materialised;
+    # `solve_network` then fills `z_inv_flat` column by column through a length-N_rho
+    # scratch buffer, which is the same arithmetic on the same values. That removes two
+    # full-size matrices from the peak of the evaluation, which is the regression.
+    #
+    # The predicate is the one the regressions themselves use, so the two cannot
+    # disagree; the `u_draws === nothing` case is the legacy random-Fréchet branch, which
+    # has no log-z decomposition and always needs the dense path.
+    need_z = !REG_STREAMING[] || (REG_INCLUDE_SIZE && u_draws === nothing)
 
     # Solve network
     network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau,

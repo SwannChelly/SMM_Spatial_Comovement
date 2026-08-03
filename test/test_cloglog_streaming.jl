@@ -1,8 +1,11 @@
 ##### test_cloglog_streaming.jl #####
-# Correctness gate for the STREAMING cloglog kernel `_cloglog_irls_cells` (model_CP.jl),
-# the memory-light replacement for the dense `_cloglog_irls` on the production path.
+# Correctness gate for the STREAMING extensive-margin kernels (model_CP.jl), the
+# memory-light replacements that are now the production path for BOTH links:
+#   `_cloglog_irls_cells`  replaces the dense `_cloglog_irls`   (REG_METHOD = :cloglog)
+#   `_wls_cells`           replaces the dense FWL/QR kernel     (REG_METHOD = :lpm)
+# Neither ever materialises the n_cell × N_rho design.
 #
-# Three-way comparison on every case:
+# Section 1 (cloglog) is a three-way comparison on every case:
 #
 #   streaming  — `_cloglog_irls_cells`, which never materialises the n_cell × N_rho
 #                design and never stores a per-row vector;
@@ -16,6 +19,9 @@
 # uniform (1/N_rho on every row, goods and control cells alike), so an unweighted GLM
 # fit is the same MLE and no row expansion is needed here — unlike Case C of
 # test_cloglog_verify.jl, which exercises non-uniform frequency weights.
+#
+# Section 1b does the same for the LPM sibling, against the dense FWL kernel and an
+# independent explicit-dummy OLS.
 #
 #     julia test/test_cloglog_streaming.jl
 #
@@ -67,8 +73,10 @@ function report(label, b_stream, b_dense, b_glm;
     end
     @printf("  max|stream−dense| = %.3e  (tol %.0e)  %s\n",
             d_sd, tol_dense, d_sd < tol_dense ? "PASS ✓" : "FAIL ✗")
-    @printf("  max|stream−GLM|   = %.3e  (tol %.0e, rel %.1e — GLM's own convergence " *
-            "floor)  %s\n", d_sg, tol_glm, d_sg / scale, d_sg < tol_glm ? "PASS ✓" : "FAIL ✗")
+    # NB: @printf needs a LITERAL format string — a `"..." * "..."` concatenation is an
+    # expression and does not compile. Keep this on one line.
+    @printf("  max|stream−GLM|   = %.3e  (tol %.0e, rel %.1e — GLM's convergence floor)  %s\n",
+            d_sg, tol_glm, d_sg / scale, d_sg < tol_glm ? "PASS ✓" : "FAIL ✗")
     push!(RESULTS, (label, d_sd, d_sg))
     @assert d_sd < tol_dense (
         "streaming disagrees with the dense kernel (max|Δ|=$d_sd ≥ $tol_dense) for " *
@@ -117,7 +125,7 @@ function build_case(; seed, n_good_c, n_ctrl_c, n_rho, n_reg, n_grp,
     k        = k_geo + (size_control ? 1 : 0)
     size_col = k_geo + 1
 
-    cells = CloglogCells(n_good_c, n_ctrl_c, n_rho, gcol, gval, grp, n_grp, has_z, lzc)
+    cells = RegCells(n_good_c, n_ctrl_c, n_rho, gcol, gval, grp, n_grp, has_z, lzc)
 
     # Dense equivalent.
     N = n_cell * n_rho
@@ -190,6 +198,65 @@ for (label, kw) in CASES
     report(label, b_stream, b_dense, b_glm)
 end
 
+# ── Section 1b: the LPM sibling (`_wls_cells` vs the dense FWL kernel) ────────
+# `fast_weighted_regression` (REG_METHOD = :lpm) got the same treatment, so it needs
+# the same gate. Three routes to the same weighted LS with one absorbed FE:
+#   streaming  — `_wls_cells`, closed-form within transform, one pass, no design;
+#   dense-FWL  — the previous kernel verbatim: demean in place, then sqrt(w)-weighted
+#                pivoted-QR least squares;
+#   dummy-OLS  — explicit FE dummies, no absorption at all — an independent route that
+#                shares no code with either.
+#
+# The LPM outcome is `supplier`, the complement of the cloglog kernel's `not_supply`,
+# so the design built above is reused with y flipped.
+function dense_wls(y, X, w, fe)
+    y = copy(y); X = copy(X)
+    for g in unique(fe)
+        mask = fe .== g
+        w_g = w[mask]; tw = sum(w_g)
+        tw < 1e-15 && continue
+        y[mask] .-= sum(w_g .* y[mask]) / tw
+        for j in 1:size(X, 2)
+            X[mask, j] .-= sum(w_g .* X[mask, j]) / tw
+        end
+    end
+    sq = sqrt.(w)
+    return (sq .* X) \ (sq .* y)
+end
+
+function dummy_wls(y, X, w, fe)
+    lev = unique(fe)
+    D = Float64[fe[i] == g for i in eachindex(fe), g in lev]
+    sq = sqrt.(w)
+    return ((sq .* hcat(X, D)) \ (sq .* y))[1:size(X, 2)]
+end
+
+# Streaming solves the NORMAL equations where the dense kernel takes a QR of the
+# sqrt-weighted design; squaring the design squares its condition number, so this is
+# looser than the cloglog gate by design. It is still far tighter than anything the
+# estimator can notice.
+const TOL_LPM = 1e-9
+
+for (label, kw) in CASES
+    C = build_case(; kw...)
+    y_lpm = 1.0 .- C.y                       # supplier = 1 − not_supply
+    b_stream = _wls_cells(C.cells, C.links, C.sw, C.lzr, C.k, C.size_col)
+    b_dense  = dense_wls(y_lpm, C.X, C.w, C.fe)
+    b_dummy  = dummy_wls(y_lpm, C.X, C.w, C.fe)
+    d_sd = maximum(abs.(b_stream .- b_dense))
+    d_su = maximum(abs.(b_stream .- b_dummy))
+    @printf("\n[LPM — %s]\n", label)
+    @printf("  %-6s %18s %18s %18s\n", "coef", "streaming", "dense FWL", "dummy OLS")
+    for i in eachindex(b_stream)
+        @printf("  %-6d %18.12f %18.12f %18.12f\n", i, b_stream[i], b_dense[i], b_dummy[i])
+    end
+    @printf("  max|stream−dense| = %.3e   max|stream−dummy| = %.3e  (tol %.0e)  %s\n",
+            d_sd, d_su, TOL_LPM, max(d_sd, d_su) < TOL_LPM ? "PASS ✓" : "FAIL ✗")
+    push!(RESULTS, ("LPM — $label", d_sd, d_su))
+    @assert d_sd < TOL_LPM "LPM streaming disagrees with the dense FWL kernel ($d_sd)"
+    @assert d_su < TOL_LPM "LPM streaming disagrees with explicit-dummy OLS ($d_su)"
+end
+
 # ── Section 2: a degenerate group (all its weight on one bin) ────────────────
 # The streaming kernel forms the within-group sum of squares as
 # `Σ W X X' − Σ_p S_p S_p' / S_p^W`, a difference of two large quantities where the
@@ -203,7 +270,7 @@ let
     for c in 1:length(gcol)
         C.cells.grp[c] == 1 && (gcol[c] = 2)        # group 1 becomes bin-homogeneous
     end
-    cells2 = CloglogCells(C.cells.n_good_c, C.cells.n_ctrl_c, C.cells.n_rho,
+    cells2 = RegCells(C.cells.n_good_c, C.cells.n_ctrl_c, C.cells.n_rho,
                           gcol, C.cells.gval, C.cells.grp, C.cells.n_grp,
                           C.cells.has_z, C.cells.lzc)
     X2 = copy(C.X)
@@ -221,7 +288,7 @@ let
 end
 
 # ── Section 3: the full fast_cloglog_regression, streaming vs dense ─────────────
-# Exercises `_build_cloglog_cells` (the geography → cell mapping) and the log-z
+# Exercises `_build_reg_cells` (the geography → cell mapping) and the log-z
 # decomposition `log z = logz_const + logz_resid` against the dense path's `log(z_flat)`.
 # The globals below are the ones the two design builders read; they are ordinary
 # (non-const) globals so the block is self-contained without load_parameters.jl.
@@ -260,41 +327,47 @@ let
             for rho in 1:N_rho_t, g in 1:n_good]
     links = rand(rng, N_rho_t, n_good) .< 0.4
 
-    for (lbl, inc_ctrl, inc_size) in (("controls=false, size control on", false, true),
-                                      ("controls=true,  size control off", true, false))
-        reset_cloglog_design!()
-        reset_logz_resid!()
+    for reg_fun in (fast_cloglog_regression, fast_weighted_regression)
+        fname = reg_fun === fast_cloglog_regression ? "cloglog" : "lpm"
+        for (lbl, inc_ctrl, inc_size) in (("controls=false, size control on", false, true),
+                                          ("controls=true,  size control off", true, false))
+            reset_cloglog_design!()
+            reset_logz_resid!()
+            # The cloglog kernel takes IRLS controls; the LPM is a single solve.
+            kw = reg_fun === fast_cloglog_regression ? IRLSKW : NamedTuple()
 
-        CLOGLOG_STREAMING[] = true
-        b_stream = fast_cloglog_regression(links, z, swm;
-                                           include_control      = inc_ctrl,
-                                           include_size_control = inc_size,
-                                           return_size_coef     = inc_size,
-                                           u_draws    = u,
-                                           logz_const = lzc,
-                                           inv_theta  = 1 / theta,
-                                           IRLSKW...)
-        CLOGLOG_STREAMING[] = false
-        b_dense = fast_cloglog_regression(links, z, swm;
-                                          include_control      = inc_ctrl,
-                                          include_size_control = inc_size,
-                                          return_size_coef     = inc_size,
-                                          IRLSKW...)
-        CLOGLOG_STREAMING[] = true
+            REG_STREAMING[] = true
+            b_stream = reg_fun(links, z, swm;
+                               include_control      = inc_ctrl,
+                               include_size_control = inc_size,
+                               return_size_coef     = inc_size,
+                               u_draws    = u,
+                               logz_const = lzc,
+                               inv_theta  = 1 / theta,
+                               kw...)
+            REG_STREAMING[] = false
+            b_dense = reg_fun(links, z, swm;
+                              include_control      = inc_ctrl,
+                              include_size_control = inc_size,
+                              return_size_coef     = inc_size,
+                              kw...)
+            REG_STREAMING[] = true
 
-        d = maximum(abs.(b_stream .- b_dense))
-        @printf("\n[full path — %s]\n", lbl)
-        @printf("  %-6s %18s %18s\n", "coef", "streaming", "dense")
-        for i in eachindex(b_stream)
-            @printf("  %-6d %18.12f %18.12f\n", i, b_stream[i], b_dense[i])
+            d = maximum(abs.(b_stream .- b_dense))
+            @printf("\n[full path — %s — %s]\n", fname, lbl)
+            @printf("  %-6s %18s %18s\n", "coef", "streaming", "dense")
+            for i in eachindex(b_stream)
+                @printf("  %-6d %18.12f %18.12f\n", i, b_stream[i], b_dense[i])
+            end
+            # Looser than the kernel gate by design, for two reasons: the streaming path
+            # reconstructs the size regressor as `logz_const + logz_resid` where the
+            # dense path takes `log(z_flat)` (equal to the last ulp, ≈9e-16, not
+            # bitwise), and the LPM streaming path solves the normal equations where the
+            # dense one takes a QR. Measured gaps are ~1e-15; 1e-9 is a wide margin.
+            @printf("  max|Δ| = %.3e   %s\n", d, d < 1e-9 ? "PASS ✓" : "FAIL ✗")
+            push!(RESULTS, ("full path — $fname — $lbl", d, NaN))
+            @assert d < 1e-9 "streaming and dense $fname regression disagree ($d)"
         end
-        # Looser than the kernel gate by design: the streaming path reconstructs the
-        # size regressor as `logz_const + logz_resid` while the dense path takes
-        # `log(z_flat)`. Those agree to the last ulp (≈9e-16 absolute), not bitwise —
-        # measured coefficient gap ≈2e-16, so 1e-9 leaves a very wide margin.
-        @printf("  max|Δ| = %.3e   %s\n", d, d < 1e-9 ? "PASS ✓" : "FAIL ✗")
-        push!(RESULTS, ("full path — $lbl", d, NaN))
-        @assert d < 1e-9 "streaming and dense fast_cloglog_regression disagree ($d)"
     end
 end
 
