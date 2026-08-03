@@ -186,12 +186,20 @@ ric_iters = N_rho * n_good * R_downstream
         working_set, mb(r_net.alloc) / working_set)
 @printf("    Ricardian comparisons:          %11.2f M   → %.0f bytes, %.1f ns each\n",
         ric_iters / 1e6, r_net.alloc / ric_iters, 1e9 * r_net.tmin / ric_iters)
-if r_net.alloc / (working_set * 1024^2) > 3
-    println("    ⚠ allocating >3× the working set: the hot loop is boxing. Check that")
-    println("      `tau` and `z_inv_flat` are still bound to concrete Matrix{Float64}")
-    println("      locals before the r_d loop (model_CP.jl) — `build_tau` returns")
-    println("      `ones(eltype(alpha), …)` with `alpha` from an untyped `params`, so")
-    println("      without the re-binding both infer as `Any`.")
+# The boxing test is BYTES PER COMPARISON, not the working-set ratio. A boxed Float64
+# is ≥16 bytes, and the inner loop produces two or three of them per comparison when it
+# is dynamically dispatched, so anything at or above ~16 B/comparison is boxing and
+# anything near 0 is not. The working-set ratio alone is a bad test: a few MB of
+# legitimate per-good temporaries put a clean run at 3–4× without any boxing at all.
+if r_net.alloc / ric_iters > 16
+    println("    ⚠ ≥16 bytes per comparison: the hot loop is BOXING. Check that `tau`")
+    println("      and `z_inv_flat` are still re-bound to concrete Matrix{Float64} locals")
+    println("      (`tau_c` / `z_inv_c`) above the r_d loop in model_CP.jl — `build_tau`")
+    println("      returns `ones(eltype(alpha), …)` with `alpha` from an untyped `params`,")
+    println("      so without the re-binding both infer as `Any` and every read of them")
+    println("      in the 15 M-iteration comparison allocates. Measured cost of that")
+    println("      regression when it was live: 78 B and 73 ns per comparison, i.e.")
+    println("      1178 MB and 1.39 s per solve_network against 25 MB and 94 ms fixed.")
 end
 @printf("    (phase sum vs full_SMM: %+.1f%% time, %+.1f%% alloc — the gap is measurement\n",
         100 * (tot_t - r_full.tmin) / r_full.tmin, 100 * (tot_a - mb(r_full.alloc)) / mb(r_full.alloc))
