@@ -49,17 +49,17 @@ shift
 
 # Defaults
 N_COEF="4"
-N_TAU=""       # empty = default to n_coef inside Julia
+N_TAU="1"       # empty = default to n_coef inside Julia
 MODE="smm"
 N_QUAD="200"
 DRAWS="sobol"    # Fréchet draw method for the optimisation draws: sobol (default) or mc
 OPTIMIZER="pso"  # optimizer backend: pso (default) or cmaes
-PROFILE_T="false"  # SMM only: profile T out of the PSO via invert_T_ge
-N_RHO_INF="4000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
+PROFILE_T="true"  # SMM only: profile T out of the PSO via invert_T_ge
+N_RHO_INF="1000"  # draw count for inference (Jacobian + Σ_sim), decoupled from N_rho
 REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (default) or lpm
 CONTROLS="false"  # SMM only: include the no-supplier control group in the reg
-GRANULAR="false"  # SMM only: finite N_s varieties + the count moment (block 6)
-CA_LEVEL="ze"     # SMM only: comparative advantage at the ZE (:ze) or attraction-area (:aa) level
+GRANULAR="true"  # SMM only: finite N_s varieties + the count moment (block 6)
+CA_LEVEL="aa"     # SMM only: comparative advantage at the ZE (:ze) or attraction-area (:aa) level
 
 for arg in "$@"; do
     case "$arg" in
