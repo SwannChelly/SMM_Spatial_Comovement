@@ -37,20 +37,47 @@ glm_slope(m, name) = coef(m)[findfirst(==(name), coefnames(m))]
 
 const RESULTS = Tuple{String, Float64, Float64}[]
 
-function report(label, b_stream, b_dense, b_glm; tol = 1e-7)
+# The two comparisons deserve VERY different tolerances, and the asymmetry is the
+# point rather than a fudge.
+#
+#   streaming vs dense — both kernels are driven to the same fixed point by the same
+#     stopping rule (max|Δβ| < 1e-13), so the only thing between them is the order the
+#     sums are accumulated in. Expect floating-point noise, ~1e-16. TOL_DENSE is the
+#     gate that would actually catch a mistake in the streaming algebra.
+#
+#   streaming vs GLM.jl — GLM stops on the DEVIANCE, not on β. Deviance is quadratic
+#     in β at the optimum, so a relative deviance tolerance of δ pins β only to about
+#     √δ: at GLM's floor (δ = 1e-12, already the tightest it accepts) that is ~1e-6.
+#     GLM therefore halts measurably short of the MLE, and the residual gap is GLM's,
+#     not ours — the sibling gate test/test_cloglog_verify.jl sees the same ~3e-8 for
+#     the DENSE kernel and passes it at 1e-6. This comparison is an independent check
+#     that we are fitting the right MODEL; it cannot resolve the last few digits.
+const TOL_DENSE = 1e-10
+const TOL_GLM   = 1e-5
+
+function report(label, b_stream, b_dense, b_glm;
+                tol_dense = TOL_DENSE, tol_glm = TOL_GLM)
     d_sd = maximum(abs.(b_stream .- b_dense))
     d_sg = maximum(abs.(b_stream .- b_glm))
+    scale = max(maximum(abs.(b_stream)), 1e-12)
     @printf("\n[%s]\n", label)
     @printf("  %-6s %18s %18s %18s\n", "coef", "streaming", "dense", "GLM.jl")
     for i in eachindex(b_stream)
         @printf("  %-6d %18.12f %18.12f %18.12f\n", i, b_stream[i], b_dense[i], b_glm[i])
     end
-    ok = max(d_sd, d_sg) < tol
-    @printf("  max|stream−dense| = %.3e   max|stream−GLM| = %.3e   %s\n",
-            d_sd, d_sg, ok ? "PASS ✓" : "FAIL ✗")
+    @printf("  max|stream−dense| = %.3e  (tol %.0e)  %s\n",
+            d_sd, tol_dense, d_sd < tol_dense ? "PASS ✓" : "FAIL ✗")
+    @printf("  max|stream−GLM|   = %.3e  (tol %.0e, rel %.1e — GLM's own convergence " *
+            "floor)  %s\n", d_sg, tol_glm, d_sg / scale, d_sg < tol_glm ? "PASS ✓" : "FAIL ✗")
     push!(RESULTS, (label, d_sd, d_sg))
-    @assert d_sd < tol "streaming disagrees with the dense kernel (max|Δ|=$d_sd) for $label"
-    @assert d_sg < tol "streaming disagrees with GLM.jl (max|Δ|=$d_sg) for $label"
+    @assert d_sd < tol_dense (
+        "streaming disagrees with the dense kernel (max|Δ|=$d_sd ≥ $tol_dense) for " *
+        "$label — this is the gate that matters; the two kernels must agree to " *
+        "floating-point noise.")
+    @assert d_sg < tol_glm (
+        "streaming disagrees with GLM.jl (max|Δ|=$d_sg ≥ $tol_glm) for $label — a gap " *
+        "this large is beyond GLM's deviance-stopping floor and indicates a genuinely " *
+        "different model, not a convergence difference.")
     return nothing
 end
 
@@ -308,10 +335,17 @@ let
 end
 
 println("\n" * "="^78)
-@printf("%-62s %10s %10s\n", "case", "|Δ| dense", "|Δ| GLM")
+@printf("%-56s %11s %11s\n", "case", "|Δ| dense", "|Δ| GLM")
 for (lbl, d1, d2) in RESULTS
-    @printf("%-62s %10.2e %10s\n", first(lbl, 62), d1,
+    @printf("%-56s %11.2e %11s\n", first(lbl, 56), d1,
             isnan(d2) ? "-" : @sprintf("%.2e", d2))
 end
+@printf("\n%-56s %11.0e %11.0e\n", "tolerance", TOL_DENSE, TOL_GLM)
+println("""
+The dense column is the gate that matters — same fixed point, same stopping rule,
+different summation order, so it must come out at floating-point noise. The GLM column
+is an independent check on the MODEL, bounded below by GLM's deviance-based stopping
+rule (~1e-6 on β even at its tightest setting); the same ~3e-8 shows up for the DENSE
+kernel in test/test_cloglog_verify.jl.""")
 println("\nALL CASES PASS ✓ — the streaming kernel reproduces the dense kernel and GLM.jl.")
 println("="^78)

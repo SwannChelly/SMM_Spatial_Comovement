@@ -31,6 +31,22 @@ granular   = length(ARGS) >= 4 ? (lowercase(ARGS[4]) in ("true","1","yes")) : tr
 ca_level   = length(ARGS) >= 5 ? Symbol(ARGS[5]) : :aa
 draw_method = :sobol
 
+# load_parameters.jl reads its inputs from `input_folder` and expects `output_folder`
+# to exist, exactly as main.jl defines them. Both are relative, so this must be run
+# from the REPOSITORY ROOT: `julia test/test_speed_refactor.jl auto 4 1 true aa`.
+input_folder  = "./baseline_$industry"
+output_folder = "./reporting_$industry" * (ca_level == :aa ? "_aa" : "") *
+                (granular ? "_granular" : "")
+isdir(input_folder) || error(
+    "input_folder $(input_folder) not found — run this from the repository root " *
+    "(cd into SMM_Spatial_Comovement first), or pass the right <industry>.")
+mkpath(output_folder)
+# `reg_method` is deliberately left undefined (load_parameters defaults it to :lpm, which
+# needs no cloglog target file on disk). It does not affect what is tested here: the
+# cloglog sections call `fast_cloglog_regression` directly, and the design flags they
+# read — REG_INCLUDE_CONTROL / REG_INCLUDE_SIZE — are set by `ca_level`, not by
+# `reg_method`.
+
 include("../model_CP.jl")
 include("../tools.jl")
 include("../model_analytical.jl")
