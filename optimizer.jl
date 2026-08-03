@@ -104,52 +104,30 @@ end
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Worker-resident stage payloads (serialization avoidance)
+# Note on what the objective closure may capture (serialization cost)
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # `pmap` serializes the objective CLOSURE, in full, once per task — with the default
 # `batch_size = 1` that is once per particle, on every iteration. Anything the closure
 # captures is therefore re-sent and re-allocated ~n_particles × max_iter times per
-# stage: at 98 particles × 200 iterations that is 19_600 copies of every captured
-# array, each of which becomes garbage on the worker the moment the evaluation ends.
+# stage: at 98 particles × 200 iterations that is 19_600 copies of every captured array,
+# each of which becomes garbage on the worker the moment the evaluation ends.
 #
-# Three of the captured objects are large and CONSTANT for the whole stage:
+# Only one captured object was ever big enough to matter: `U_DRAWS`, the
+# (N_rho × n_good) draw matrix — 6.4 MB, so 125 GB of allocate-and-discard over a
+# 200-iteration stage. It never needed sending at all, because it is already
+# `@everywhere const` and every worker bound it at load time. `train_stage` therefore
+# passes a `:resident` sentinel in its place and the objective reads the global on
+# whichever process runs it. `SAMPLE_WEIGHTS` gets the same treatment for symmetry
+# (it is a three-word `FlatWeights`, so the saving there is nil).
 #
-#   U_DRAWS         (N_rho × n_good Float64)          — already `@everywhere const`
-#   SAMPLE_WEIGHTS  (FlatWeights, 3 words)            — already `@everywhere const`
-#   weight_matrix   ((N_REG + n_γ + S)² Float64)      — Step 3's W_step3, master-only
-#
-# The first two never needed sending at all: every worker has bound them at load time,
-# so the closure only has to NOT capture them and let the global resolve on whichever
-# process runs it. The third is genuinely master-built, so it is broadcast ONCE per
-# stage into the Ref below (nworkers() sends) instead of once per task.
-#
-# `train_stage` sets these before handing the objective to `optimize_stage` and the
-# objective reads them back. Stages run strictly sequentially, so a single slot is
-# enough; a value that is NOT the corresponding global is still passed through the
-# closure, so callers supplying their own draws (tests, replication drivers) keep the
-# exact behaviour they had.
-const STAGE_WEIGHT_MATRIX = Ref{Any}(nothing)
-
-"""
-    broadcast_stage_weight_matrix!(W)
-
-Publish the stage's weight matrix to every worker's `STAGE_WEIGHT_MATRIX`, so the
-objective closure can carry `nothing` in its place. Returns `true` when the broadcast
-happened (the objective should then read the Ref), `false` for `W === nothing` (there
-is nothing to send and `W_override = nothing` is the meaningful value).
-"""
-function broadcast_stage_weight_matrix!(W)
-    if W === nothing
-        # Clear any stale payload so a later stage cannot read the previous one.
-        STAGE_WEIGHT_MATRIX[] = nothing
-        @everywhere STAGE_WEIGHT_MATRIX[] = nothing
-        return false
-    end
-    STAGE_WEIGHT_MATRIX[] = W
-    @everywhere STAGE_WEIGHT_MATRIX[] = $W
-    return true
-end
+# The stage weight matrix is NOT worth the same treatment, and an earlier attempt to
+# broadcast it into a worker-resident `Ref` was reverted: `W_step3` is (N_REG + n_γ + S)²
+# = 76² at the aero shape, i.e. 46 KB — four orders of magnitude below `U_DRAWS`, and
+# Step 1 passes `nothing` anyway. The Ref also cost a `Distributed` "Cannot transfer
+# global variable" warning from every worker on the first serialization, and carried a
+# real hazard the payload size did not justify (one slot shared by sequential stages).
+# It stays in the closure.
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -478,15 +456,14 @@ function train_stage(
     end
 
     # ── Keep the stage's bulk payload OUT of the objective closure ───────────
-    # See the STAGE_WEIGHT_MATRIX note at the top of this file. `:resident` means "read
-    # the worker's own global"; anything else is a caller-supplied value that still
-    # travels with the closure, so non-production callers are unaffected.
-    # The sentinel is `:resident`, NOT `nothing`: `u_draws = nothing` is a meaningful
-    # value (it selects solve_network's legacy random-Fréchet branch), so it must keep
-    # travelling as itself.
+    # See the note at the top of this file. `:resident` means "read the worker's own
+    # global"; anything else is a caller-supplied value that still travels with the
+    # closure, so non-production callers are unaffected. The sentinel is `:resident`,
+    # NOT `nothing`: `u_draws = nothing` is a meaningful value (it selects
+    # solve_network's legacy random-Fréchet branch), so it must keep travelling as
+    # itself.
     closure_u_draws = (u_draws === U_DRAWS) ? :resident : u_draws
     closure_weights = (sample_weights === SAMPLE_WEIGHTS) ? :resident : sample_weights
-    stage_W_resident = broadcast_stage_weight_matrix!(weight_matrix)
 
     # Define objective function
     function objective(x_stage)
@@ -499,12 +476,11 @@ function train_stage(
         # from that worker's own module state instead of being deserialized per task.
         ud = closure_u_draws === :resident ? U_DRAWS        : closure_u_draws
         sw = closure_weights === :resident ? SAMPLE_WEIGHTS : closure_weights
-        W  = stage_W_resident ? STAGE_WEIGHT_MATRIX[] : nothing
 
         # Evaluate SMM (or analytical GMM)
         result = parallel_SMM_safe(x_full, false, second_stage, false;
                                    precomputed_tau=cached_tau, u_draws=ud, sample_weights=sw,
-                                   W_override=W, moment_blocks=moment_blocks,
+                                   W_override=weight_matrix, moment_blocks=moment_blocks,
                                    analytical=analytical, n_quad=n_quad)
 
         if isnothing(result)
