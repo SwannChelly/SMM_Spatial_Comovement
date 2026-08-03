@@ -283,11 +283,7 @@ function parallel_pso_smm(
             # T from the GE-Sinkhorn inversion. Probed over the current swarm (same
             # positions just evaluated); `nothing` when not profiling.
             if t_conv_probe !== nothing
-                conv = pmap(p -> t_conv_probe(_fwd(p)), particles)
-                n_tot = length(conv)
-                n_bad = count(c -> !(c === true), conv)
-                println("  T non-converged:  $n_bad/$n_tot particles " *
-                        "($(round(100 * n_bad / max(n_tot, 1), digits=1))%)")
+                report_t_convergence(pmap(p -> t_conv_probe(_fwd(p)), particles))
             end
 
             # Keep existing improvement logging below...
@@ -305,6 +301,76 @@ function parallel_pso_smm(
     end
     
     return _fwd(g_best), g_best_fitness, history
+end
+
+
+"""
+    report_t_convergence(probes; n_bins=5)
+
+Print the swarm's T-inversion health for one PSO report line. `probes` is whatever the
+`t_conv_probe` returned per particle — either the rich NamedTuple from
+`profiled_theta_probe` (`converged`, `alpha`, `iters`, `resid`) or a bare `Bool`, in
+which case only the pooled rate is printed.
+
+With the rich form it also breaks the rate down BY α, because the pooled number cannot
+distinguish the two explanations for it. If the failures concentrate in the top α bins,
+the α box is reaching into a region where `invert_T_ge` has to push remote-origin T
+arbitrarily hard to hold γ_ls fixed, and the lever is `ALPHA_MAX` / `BOUND_HI`. If the
+rate is flat across α, the α box is not the cause and the failures live elsewhere in
+the head (Ω^L, Ω^s, A) — see `test/test_T_convergence_map.jl`, which maps the whole box
+offline rather than only the swarm's current footprint.
+
+`iters` and the median terminal residual of the failures separate "needed more
+iterations" (residual just above `tol`, `iters` at the cap) from "not contracting"
+(residual orders of magnitude above `tol`).
+"""
+function report_t_convergence(probes; n_bins::Int = 5)
+    n_tot = length(probes)
+    n_tot == 0 && return
+
+    rich = all(p -> p isa NamedTuple && haskey(p, :converged), probes)
+    if !rich
+        n_bad = count(c -> !(c === true), probes)
+        println("  T non-converged:  $n_bad/$n_tot particles " *
+                "($(round(100 * n_bad / n_tot, digits=1))%)")
+        return
+    end
+
+    bad   = [!p.converged for p in probes]
+    n_bad = count(bad)
+    println("  T non-converged:  $n_bad/$n_tot particles " *
+            "($(round(100 * n_bad / n_tot, digits=1))%)")
+    n_bad == 0 && return
+
+    # Terminal residual of the failures: how far from `tol` they stopped.
+    res_bad = sort([p.resid for p in probes if !p.converged])
+    med_res = res_bad[cld(length(res_bad), 2)]
+    it_bad  = [p.iters for p in probes if !p.converged]
+    @printf("    failure resid: median %.2e  max %.2e   iters: median %d\n",
+            med_res, res_bad[end], sort(it_bad)[cld(length(it_bad), 2)])
+
+    # Rate by α. With N_TAU > 1 there is no single α to bin on, so use the largest
+    # component — the long-distance elasticity, which is what drives the τ spread the
+    # inversion has to undo.
+    alphas = [isempty(p.alpha) ? NaN : maximum(p.alpha) for p in probes]
+    ok = findall(isfinite, alphas)
+    length(ok) < 2 && return
+    lo, hi = minimum(alphas[ok]), maximum(alphas[ok])
+    if !(hi > lo)
+        @printf("    all particles at α = %.4g\n", lo)
+        return
+    end
+    println("    by α (swarm range $(round(lo, digits=4)) … $(round(hi, digits=4))):")
+    w = (hi - lo) / n_bins
+    for b in 1:n_bins
+        blo = lo + (b - 1) * w
+        bhi = b == n_bins ? hi : lo + b * w
+        idx = [i for i in ok if (alphas[i] >= blo && (alphas[i] < bhi || b == n_bins))]
+        isempty(idx) && continue
+        nb = count(i -> bad[i], idx)
+        @printf("      [%.4g, %.4g)  %3d/%3d  %5.1f%%\n",
+                blo, bhi, nb, length(idx), 100 * nb / length(idx))
+    end
 end
 
 

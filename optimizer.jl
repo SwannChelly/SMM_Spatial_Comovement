@@ -104,6 +104,55 @@ end
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Worker-resident stage payloads (serialization avoidance)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `pmap` serializes the objective CLOSURE, in full, once per task — with the default
+# `batch_size = 1` that is once per particle, on every iteration. Anything the closure
+# captures is therefore re-sent and re-allocated ~n_particles × max_iter times per
+# stage: at 98 particles × 200 iterations that is 19_600 copies of every captured
+# array, each of which becomes garbage on the worker the moment the evaluation ends.
+#
+# Three of the captured objects are large and CONSTANT for the whole stage:
+#
+#   U_DRAWS         (N_rho × n_good Float64)          — already `@everywhere const`
+#   SAMPLE_WEIGHTS  (FlatWeights, 3 words)            — already `@everywhere const`
+#   weight_matrix   ((N_REG + n_γ + S)² Float64)      — Step 3's W_step3, master-only
+#
+# The first two never needed sending at all: every worker has bound them at load time,
+# so the closure only has to NOT capture them and let the global resolve on whichever
+# process runs it. The third is genuinely master-built, so it is broadcast ONCE per
+# stage into the Ref below (nworkers() sends) instead of once per task.
+#
+# `train_stage` sets these before handing the objective to `optimize_stage` and the
+# objective reads them back. Stages run strictly sequentially, so a single slot is
+# enough; a value that is NOT the corresponding global is still passed through the
+# closure, so callers supplying their own draws (tests, replication drivers) keep the
+# exact behaviour they had.
+const STAGE_WEIGHT_MATRIX = Ref{Any}(nothing)
+
+"""
+    broadcast_stage_weight_matrix!(W)
+
+Publish the stage's weight matrix to every worker's `STAGE_WEIGHT_MATRIX`, so the
+objective closure can carry `nothing` in its place. Returns `true` when the broadcast
+happened (the objective should then read the Ref), `false` for `W === nothing` (there
+is nothing to send and `W_override = nothing` is the meaningful value).
+"""
+function broadcast_stage_weight_matrix!(W)
+    if W === nothing
+        # Clear any stale payload so a later stage cannot read the previous one.
+        STAGE_WEIGHT_MATRIX[] = nothing
+        @everywhere STAGE_WEIGHT_MATRIX[] = nothing
+        return false
+    end
+    STAGE_WEIGHT_MATRIX[] = W
+    @everywhere STAGE_WEIGHT_MATRIX[] = $W
+    return true
+end
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Flat-layout helpers
 # Layout: [Ω^L(1), Ω^s(S), A(R_downstream), alpha(N_TAU), T(sum(T_MASK))]
 # ═══════════════════════════════════════════════════════════════════════════
@@ -428,6 +477,17 @@ function train_stage(
         end
     end
 
+    # ── Keep the stage's bulk payload OUT of the objective closure ───────────
+    # See the STAGE_WEIGHT_MATRIX note at the top of this file. `:resident` means "read
+    # the worker's own global"; anything else is a caller-supplied value that still
+    # travels with the closure, so non-production callers are unaffected.
+    # The sentinel is `:resident`, NOT `nothing`: `u_draws = nothing` is a meaningful
+    # value (it selects solve_network's legacy random-Fréchet branch), so it must keep
+    # travelling as itself.
+    closure_u_draws = (u_draws === U_DRAWS) ? :resident : u_draws
+    closure_weights = (sample_weights === SAMPLE_WEIGHTS) ? :resident : sample_weights
+    stage_W_resident = broadcast_stage_weight_matrix!(weight_matrix)
+
     # Define objective function
     function objective(x_stage)
         x_full = build_x_full(x_stage)
@@ -435,10 +495,16 @@ function train_stage(
         # T-profiling: replace the (searched-or-stale) T block with T*(α,Ω,A).
         profile_T && (x_full = profiled_theta(x_full))
 
+        # Resolved on the process that RUNS the evaluation, so the arrays are read
+        # from that worker's own module state instead of being deserialized per task.
+        ud = closure_u_draws === :resident ? U_DRAWS        : closure_u_draws
+        sw = closure_weights === :resident ? SAMPLE_WEIGHTS : closure_weights
+        W  = stage_W_resident ? STAGE_WEIGHT_MATRIX[] : nothing
+
         # Evaluate SMM (or analytical GMM)
         result = parallel_SMM_safe(x_full, false, second_stage, false;
-                                   precomputed_tau=cached_tau, u_draws=u_draws, sample_weights=sample_weights,
-                                   W_override=weight_matrix, moment_blocks=moment_blocks,
+                                   precomputed_tau=cached_tau, u_draws=ud, sample_weights=sw,
+                                   W_override=W, moment_blocks=moment_blocks,
                                    analytical=analytical, n_quad=n_quad)
 
         if isnothing(result)
@@ -465,7 +531,7 @@ function train_stage(
     # particle to whether its GE-Sinkhorn T inversion converged. The backend runs
     # it over the whole swarm at each periodic report so the log shows how many
     # particles carry a non-converged (fallback) T. `nothing` when not profiling.
-    t_conv_probe = profile_T ? (x_stage -> profiled_theta_converged(build_x_full(x_stage))) : nothing
+    t_conv_probe = profile_T ? (x_stage -> profiled_theta_probe(build_x_full(x_stage))) : nothing
 
     best_params, best_fitness, history = optimize_stage(
         objective,

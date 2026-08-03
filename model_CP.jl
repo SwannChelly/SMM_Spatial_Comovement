@@ -784,6 +784,24 @@ function solve_network(params; return_firm_level=false,
     # through `> 0` / `!= 0` / `sum` / `count`, which are unchanged on a BitMatrix.
     linkages_flat = falses(N_rho_eff, n_good)
 
+    # Per-downstream-region scratch, hoisted OUT of the `for r_d` loop below.
+    # These four are (N_rho_eff × S) and used to be allocated afresh on every one of
+    # the R_downstream passes — of the order of R_downstream × 4 × N_rho × S × 8 bytes
+    # of pure churn per solve_network call, allocated only to be overwritten on the
+    # next pass. Nothing survives an iteration, so one buffer set serves all of them.
+    #
+    # Reuse is BIT-IDENTICAL, not merely equivalent, on one condition each:
+    #   * `winner_good_idx` / `p_rho_s` — the sector loop `continue`s on an EMPTY
+    #     sector, leaving those columns untouched. Sector emptiness does not depend on
+    #     r_d, so a column skipped on one pass is skipped on every pass and keeps the
+    #     zeros it was allocated with — exactly what `zeros(...)` per pass gave.
+    #   * `w_rho_s` / `ces_buf` — written for every (rho, s) on every pass, so there is
+    #     no stale state to inherit.
+    p_rho_s         = zeros(N_rho_eff, S)
+    winner_good_idx = zeros(Int, N_rho_eff, S)
+    w_rho_s         = Matrix{Float64}(undef, N_rho_eff, S)
+    ces_buf         = Matrix{Float64}(undef, N_rho_eff, S)
+
     if return_firm_level
         # Sparse COO storage: one entry per (rho, downstream_r) winning pair
         firm_exp_rho = Int[]
@@ -806,9 +824,9 @@ function solve_network(params; return_firm_level=false,
         # For each sector, find cheapest supplier among active upstream regions
         # p_{ρsr'→r} = w_{r's} · τ_{r'r} / z_{ρsr'}
         # ─────────────────────────────────────────────────────────────────────
-        p_rho_s = zeros(N_rho_eff, S)
-        winner_good_idx = zeros(Int, N_rho_eff, S)
-
+        # p_rho_s / winner_good_idx are the hoisted buffers (see above): every
+        # non-empty sector overwrites its column in full below, and empty sectors keep
+        # the zeros they were allocated with.
         for s in 1:S
             g_indices = SECTOR_GOOD_INDICES[s]
             if isempty(g_indices); continue; end
@@ -858,14 +876,21 @@ function solve_network(params; return_firm_level=false,
         # c_r   = [Ω^L w_r^{1-λ} + (1-Ω^L) P_r^{1-λ}]^{1/(1-λ)} (unit cost)
         # ─────────────────────────────────────────────────────────────────────
         # Per-(rho, s) weight = weight of the good pair that won this variety.
-        w_rho_s = Matrix{Float64}(undef, N_rho_eff, S)
         for s in 1:S
+            nu_s_s = nu_s[s]
             for rho in 1:N_rho_eff
                 g_w = winner_good_idx[rho, s]
                 w_rho_s[rho, s] = g_w == 0 ? 0.0 : sample_weights[rho, g_w]
+                # Fused into the same pass, into a hoisted buffer. The broadcast
+                # `w_rho_s .* p_rho_s.^(1 .- nu_s_mat)` materialised TWO further
+                # (N_rho × S) temporaries per downstream region — the power and the
+                # product — purely to be reduced away by the `sum` on the next line.
+                # Same operands in the same order, and the reduction is still the same
+                # `sum(...; dims=1)` (pairwise), so P_sr is bit-identical.
+                ces_buf[rho, s] = w_rho_s[rho, s] * p_rho_s[rho, s]^(1 - nu_s_s)
             end
         end
-        P_sr = sum(w_rho_s .* p_rho_s.^(1 .- nu_s_mat), dims=1).^(1 ./ (1 .- nu_s_mat))
+        P_sr = sum(ces_buf, dims=1).^(1 ./ (1 .- nu_s_mat))
         P_r = sum(P_sr.^(1 - nu) .* Omega_s)^(1 / (1 - nu))
         c_r = (Omega_L * regional_wages[r]^(1-lambda) +
                (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))

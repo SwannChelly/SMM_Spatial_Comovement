@@ -222,14 +222,40 @@ the cheap probe the PSO report runs over the whole swarm. Any error in the inver
 (non-finite head, etc.) is treated as non-converged.
 """
 function profiled_theta_converged(x_levels::AbstractVector)::Bool
+    return profiled_theta_probe(x_levels).converged
+end
+
+
+"""
+    profiled_theta_probe(x_levels) -> (converged::Bool, alpha, iters::Int, resid::Float64)
+
+The T-inversion health of one head particle, with the covariates needed to attribute
+a failure. Same computation as `profiled_theta_converged` (the T-block scatter is
+skipped — only the diagnostic is wanted), but it also returns the particle's α, the
+iteration count and the terminal residual, so the caller can report the non-convergence
+rate BY α rather than as one pooled number.
+
+That distinction is the whole point: a rate that rises monotonically in α says the α
+box is too wide; a rate that is flat in α but nonzero says the failures live somewhere
+else in the head (Ω^L, Ω^s, A) and narrowing α will not fix them. `resid` separates the
+two failure modes further — a residual just above `tol` is a particle that needed more
+iterations, one many orders above it is a particle the map is not contracting for.
+
+Any error in the inversion (non-finite head, an underflowed T column) counts as
+non-converged, with `resid = Inf`; α is still reported when it can be read.
+"""
+function profiled_theta_probe(x_levels::AbstractVector)
+    α_fallback = fill(NaN, N_TAU)
     try
         ΩL = x_levels[1]
         Ωs = x_levels[2:(1 + S)];                      Ωs = Ωs ./ sum(Ωs)
         A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
-        α  = x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)]
-        return invert_T_ge(α, ΩL, Ωs, A).converged
+        α  = collect(Float64, x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)])
+        α_fallback = α
+        res = invert_T_ge(α, ΩL, Ωs, A)
+        return (converged = res.converged, alpha = α, iters = res.iters, resid = res.resid)
     catch
-        return false
+        return (converged = false, alpha = α_fallback, iters = -1, resid = Inf)
     end
 end
 
