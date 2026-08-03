@@ -298,7 +298,10 @@ println("-"^78)
 
 let
     rng = MersenneTwister(777)
-    S_, R_, Rd_ = 3, 14, 5
+    # 30 regions over 5 downstream regions ⇒ 6 regions share each nearest-downstream
+    # region, which is what gives the distance bin room to VARY WITHIN a fixed-effect
+    # group. See the DistBin comment below.
+    S_, R_, Rd_ = 3, 30, 5
     goods = [(s, r) for s in 1:S_ for r in 1:R_ if (s + r) % 3 != 0]
     ctrls = [(s, r) for s in 1:S_ for r in 1:R_ if (s + r) % 3 == 0]
 
@@ -313,7 +316,20 @@ let
     global CONTROL_S  = [c[1] for c in ctrls]
     global CONTROL_R  = [c[2] for c in ctrls]
     global CLOSEST_DOWNSTREAM_REGION = [1 + (r - 1) % Rd_ for r in 1:R_]
-    global DistBin    = [1 + (r + dr) % N_REG for r in 1:R_, dr in 1:Rd_]
+    # The synthetic bin map has to satisfy TWO conditions the real one does, or the
+    # design is not estimable — for either kernel, not just the streaming one:
+    #
+    #  (a) the BASE category (bin 0) must be non-empty. `distance_bin` (tools.jl) returns
+    #      0 below its first cutoff for exactly this reason: if every cell carried a
+    #      dummy, the N_REG columns would sum to the constant, which the fixed effect has
+    #      already absorbed, so (1,…,1,0) would be an exact null vector.
+    #  (b) the bin must VARY WITHIN a fixed-effect group. The group is
+    #      (sector × nearest-downstream region), so a bin that is a function of the
+    #      nearest-downstream region alone is absorbed by the FE and demeans to zero.
+    #
+    # Indexing on ((r-1) ÷ Rd_) gives each group's six regions the bins 0,1,2,3,4,0 —
+    # every bin represented inside every group, base category occupied.
+    global DistBin    = [((r - 1) ÷ Rd_) % (N_REG + 1) for r in 1:R_, dr in 1:Rd_]
     global LOG_CLOSEST_DIST = log.(5.0 .+ collect(1:R_))
 
     N_rho_t = 60

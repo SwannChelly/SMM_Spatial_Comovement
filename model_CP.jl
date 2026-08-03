@@ -734,8 +734,9 @@ function solve_network(params; return_firm_level=false,
         # The two branches are spelled out rather than sharing a `zcol` that is either a
         # column view or the scratch buffer: that would make the destination a Union
         # inside the hot per-variety loop, costing a dynamic dispatch per element.
-        z_inv_flat = Matrix{Float64}(undef, N_rho_eff, n_good)
         if return_z
+            # Unchanged from before the memory work: build z in full, invert in one
+            # whole-matrix broadcast.
             z_flat = zeros(N_rho_eff, n_good)
             for g in 1:n_good
                 T_sr = T[GOOD_S[g], GOOD_R[g]]
@@ -744,9 +745,10 @@ function solve_network(params; return_firm_level=false,
                 for rho in 1:N_rho_eff
                     z_flat[rho, g] = scale * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
                 end
-                @views z_inv_flat[:, g] .= z_flat[:, g] .^ (-1)
             end
+            z_inv_flat = z_flat .^ (-1)
         else
+            z_inv_flat = Matrix{Float64}(undef, N_rho_eff, n_good)
             zbuf = Vector{Float64}(undef, N_rho_eff)
             for g in 1:n_good
                 T_sr = T[GOOD_S[g], GOOD_R[g]]
@@ -1519,6 +1521,43 @@ function reg_streaming_ok(include_size_control::Bool, rho_range, obs_weight,
 end
 
 """
+    _solve_within_normal_eq(A, rhs, ctx) -> β
+
+`A \\ rhs` on the `k × k` within-group normal equations, replacing the bare
+`SingularException(k)` with the diagnosis.
+
+`A = X̃'WX̃` is singular exactly when the demeaned design is rank-deficient, and there is
+one overwhelmingly likely cause: if EVERY row carries a distance dummy, the `N_REG`
+dummy columns sum to the constant — which the fixed effect has already absorbed — so
+`(1,1,…,1,0)` is an exact null vector no matter how much within-group variation the bins
+have. `distance_bin` returns 0 below its first cutoff precisely to leave that base
+category empty; a bin scheme with no such cells is not estimable.
+
+The dense cloglog kernel fails the same way (it also solves a `k × k` system), but the
+dense LPM kernel does a TALL QR, which can quietly return a solution for a
+rank-deficient design. Erroring here is deliberate: an unidentified coefficient vector
+that depends on the solver is worse than a stop.
+"""
+function _solve_within_normal_eq(A::Matrix{Float64}, rhs::Vector{Float64}, ctx::String)
+    try
+        return A \ rhs
+    catch e
+        e isa LinearAlgebra.SingularException || rethrow()
+        error("""
+        $ctx: the within-group normal equations are singular (rank-deficient design).
+
+        The usual cause is that no cell falls in the BASE distance category, so the
+        $(size(A,1) > 1 ? "N_REG" : "single") dummy columns sum to the constant that the
+        (sector × nearest-downstream) fixed effect already absorbs. Check that
+        `distance_bin` returns 0 for at least some (r, dr) pairs — it does so below its
+        first cutoff (d ≤ 20 for N_REG = 5, d ≤ 50 for N_REG = 4).
+
+        Other possibilities: a bin that no cell occupies, or a log-z column that is
+        constant within every fixed-effect group.""")
+    end
+end
+
+"""
     RegCells
 
 The extensive-margin design at CELL resolution — one entry per (sector, region) cell
@@ -1763,7 +1802,7 @@ function _cloglog_irls_cells(D::RegCells, linkages, sample_weights::AbstractMatr
             end
         end
 
-        β_new = A \ rhs
+        β_new = _solve_within_normal_eq(A, rhs, "cloglog IRLS (streaming)")
 
         # Fixed effects: weighted group mean of (z − Xβ) — the dense kernel's `cr`.
         @inbounds for p in 1:n_grp
@@ -1900,7 +1939,7 @@ function _wls_cells(D::RegCells, linkages, sample_weights::AbstractMatrix{Float6
         end
     end
 
-    return A \ rhs
+    return _solve_within_normal_eq(A, rhs, "LPM weighted LS (streaming)")
 end
 
 
