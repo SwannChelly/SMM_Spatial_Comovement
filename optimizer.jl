@@ -201,9 +201,24 @@ function train_stage(
     # this box in continue stages. Falls back to the stage's starting value when no
     # prior anchor is available (TAU_PRIOR === nothing ⇒ box around init_alpha).
     # BOUND_LO/BOUND_HI are the shared globals from load_parameters.jl.
+    #
+    # α additionally carries an ABSOLUTE ceiling `ALPHA_MAX` in levels, so its upper
+    # bound is min(BOUND_HI × anchor, ALPHA_MAX) rather than the multiplicative bound
+    # alone. T is unaffected.
     phi_anchor = t_levels_to_free_phi(vec(permutedims(T_rs_init))[T_MASK])  # φ of T_rs_init (N_T_FREE)
     T_phi_lo   = phi_anchor .+ log(BOUND_LO)
     T_phi_hi   = phi_anchor .+ log(BOUND_HI)
+
+    # The α box, as levels, given an anchor. Used by the fresh-start bounds and as the
+    # outer clamp on the annealed per-stage radius in continue stages. The floor is
+    # additionally held below half the ceiling so the box can never degenerate to a
+    # point, which the multiplicative floor alone would allow for an anchor above
+    # ALPHA_MAX / BOUND_LO.
+    function alpha_box(anchor)
+        hi = min.(anchor .* BOUND_HI, ALPHA_MAX)
+        lo = min.(anchor .* BOUND_LO, 0.5 .* hi)
+        return (lo, hi)
+    end
 
     # Build bounds based on previous stage or initialization
     if last_stage_folder === nothing
@@ -216,8 +231,10 @@ function train_stage(
         # T block is searched as free log-space φ (ref entries dropped). The box is
         # φ_init + [log(BOUND_LO), log(BOUND_HI)] ⇒ T ∈ [×BOUND_LO, ×BOUND_HI] × T_rs_init,
         # centred on the γ-inversion init (T_init is no longer ≡1, so the box must track it).
-        # α is boxed to [×BOUND_LO, ×BOUND_HI] × the α prior (TAU_PRIOR), else × init_alpha.
+        # α is boxed to [×BOUND_LO, ×BOUND_HI] × the α prior (TAU_PRIOR), else × init_alpha,
+        # with the upper end additionally capped at ALPHA_MAX in levels.
         alpha_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha
+        alpha_lo, alpha_hi = alpha_box(alpha_anchor)
         # profile_T ⇒ the T (φ) block is dropped from the search space entirely.
         T_lb_block = profile_T ? Float64[] : T_phi_lo
         T_ub_block = profile_T ? Float64[] : T_phi_hi
@@ -225,7 +242,7 @@ function train_stage(
             0.8*agg_labor_share,
             0.8 .* agg_industry_share,
             0.8.* A,
-            alpha_anchor .* BOUND_LO,
+            alpha_lo,
             T_lb_block
         )
 
@@ -233,7 +250,7 @@ function train_stage(
             1.2*agg_labor_share,
             1.2 .* agg_industry_share,
             A .* 1.2,
-            alpha_anchor .* BOUND_HI,
+            alpha_hi,
             T_ub_block
         )
 
@@ -292,11 +309,23 @@ function train_stage(
                 lb_v = max.(val .+ log(radius), T_phi_lo)
                 ub_v = min.(val .- log(radius), T_phi_hi)
             elseif v == "alpha"
-                # Per-stage radius around the incumbent, clamped to [×BOUND_LO, ×BOUND_HI] ×
-                # the α prior (TAU_PRIOR); falls back to × the incumbent when no prior.
+                # Per-stage radius around the incumbent, clamped to the init-anchored box
+                # [×BOUND_LO, min(×BOUND_HI, ALPHA_MAX)] around the α prior (TAU_PRIOR);
+                # falls back to the incumbent as anchor when there is no prior.
                 anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : val
-                lb_v = max.(val .* (1 - radius), anchor .* BOUND_LO)
-                ub_v = min.(val .* (1 + radius), anchor .* BOUND_HI)
+                box_lo, box_hi = alpha_box(anchor)
+                lb_v = max.(val .* (1 - radius), box_lo)
+                ub_v = min.(val .* (1 + radius), box_hi)
+                # An incumbent sitting ABOVE the cap — possible when resuming a run whose
+                # artefacts predate ALPHA_MAX — would otherwise give lb > ub and an
+                # infeasible box. Fall back to the full capped box for those entries.
+                infeasible = lb_v .>= ub_v
+                if any(infeasible)
+                    @warn "α incumbent above ALPHA_MAX=$(ALPHA_MAX); resetting its search " *
+                          "box to the capped bounds" alpha_incumbent = val[infeasible]
+                    lb_v = ifelse.(infeasible, box_lo, lb_v)
+                    ub_v = ifelse.(infeasible, box_hi, ub_v)
+                end
             else
                 # Standard multiplicative bounds
                 lb_v = val .* radius
@@ -552,12 +581,12 @@ function run_optimization(;
         println("[$output_subfolder] STAGE 0: Finding good initial alpha values")
         println("="^70)
 
-        # Anchor the coarse α search to [×BOUND_LO, ×BOUND_HI] × the α prior (N_TAU==1)
-        # so the selected init_alpha lands inside the prior-anchored Stage-1 box; else the
-        # historical [0.5, 1.5] range.
+        # Anchor the coarse α search to the same box Stage 1 will use — [×BOUND_LO,
+        # min(×BOUND_HI, ALPHA_MAX)] × the α prior (N_TAU==1) — so the selected init_alpha
+        # always lands inside it; else the historical [0.5, 1.5] range.
         if N_TAU == 1 && TAU_PRIOR !== nothing
-            alpha_min = TAU_PRIOR[1] * BOUND_LO
-            alpha_max = TAU_PRIOR[1] * BOUND_HI
+            alpha_max = min(TAU_PRIOR[1] * BOUND_HI, ALPHA_MAX)
+            alpha_min = min(TAU_PRIOR[1] * BOUND_LO, 0.5 * alpha_max)
         else
             alpha_min = 0.5
             alpha_max = 1.5

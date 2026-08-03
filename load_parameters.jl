@@ -975,6 +975,13 @@ end
 # train_stage). Single source of truth so the optimizer bounds and the
 # T_best_vs_initial window lines (tools.jl plot_T_vs_initial) never drift apart.
 @everywhere const BOUND_LO = 0.1
+# Absolute ceiling on α, in LEVELS, applied on top of the multiplicative box: the α
+# upper bound is min(BOUND_HI × anchor, ALPHA_MAX). With a prior of ~0.2–0.4 the
+# multiplicative bound alone would reach 2–4, which is far outside the economically
+# meaningful range for a distance elasticity. `BOUND_LO` is left multiplicative — there
+# is no comparable floor to impose, and α → 0 is a live outcome under profiling.
+# T is NOT affected: it keeps the full [BOUND_LO, BOUND_HI] × T_rs_init box.
+@everywhere const ALPHA_MAX = 2.0
 @everywhere const BOUND_HI = 10
 
 # ── Diagnostic: gravity vs γ-inversion T starting values (ref-normalized) ────

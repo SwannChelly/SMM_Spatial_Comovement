@@ -177,10 +177,14 @@ first_bad, lossval = walk(θ_warm; label="1. WARM START")
 # problem. Sample the PSO box the same way train_stage builds it.
 println("\n── 2. THE SEARCH BOX (50 random particles) ──────────────────────────")
 alpha_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : [P_alpha]
-@printf("  alpha box  = [%.4g, %.4g]   (BOUND_LO=%.3g, BOUND_HI=%.3g)\n",
-        alpha_anchor[1]*BOUND_LO, alpha_anchor[1]*BOUND_HI, BOUND_LO, BOUND_HI)
-lo = vcat(0.8*agg_labor_share, 0.8 .* agg_industry_share, 0.8 .* A_init, alpha_anchor .* BOUND_LO)
-hi = vcat(1.2*agg_labor_share, 1.2 .* agg_industry_share, 1.2 .* A_init, alpha_anchor .* BOUND_HI)
+# Mirrors train_stage's `alpha_box`: the multiplicative box, with the upper end capped
+# at ALPHA_MAX in levels (the floor kept below half the ceiling so it cannot degenerate).
+alpha_hi = min.(alpha_anchor .* BOUND_HI, ALPHA_MAX)
+alpha_lo = min.(alpha_anchor .* BOUND_LO, 0.5 .* alpha_hi)
+@printf("  alpha box  = [%.4g, %.4g]   (BOUND_LO=%.3g, BOUND_HI=%.3g, ALPHA_MAX=%.3g)\n",
+        alpha_lo[1], alpha_hi[1], BOUND_LO, BOUND_HI, ALPHA_MAX)
+lo = vcat(0.8*agg_labor_share, 0.8 .* agg_industry_share, 0.8 .* A_init, alpha_lo)
+hi = vcat(1.2*agg_labor_share, 1.2 .* agg_industry_share, 1.2 .* A_init, alpha_hi)
 Random.seed!(20250101)
 tally = Dict{Symbol,Int}()
 first_exc = nothing
@@ -221,7 +225,7 @@ println("""
                       T⁺ = exp(log T + δ·log(γ_target/γ_model)); if a T column
                       underflows, log T = −Inf, and if γ_model also underflows the
                       ratio → +Inf, so the sum is NaN. Widen nothing — narrow the α
-                      box (BOUND_LO/BOUND_HI in load_parameters.jl) or lower the
+                      box (BOUND_LO/BOUND_HI/ALPHA_MAX in load_parameters.jl) or lower the
                       invert_T_ge damping.
 
    z_flat / log z     z = T^{1/θ}·(−log(1−u))^{−1/θ}. Under :aa the log-z SIZE
@@ -241,7 +245,8 @@ println("""
                       0/0 = NaN.
 
   If stage 2 shows :ok at the warm start but mostly non-finite over the box, it is
-  the BOUNDS, not the model: the α box is [×BOUND_LO, ×BOUND_HI] of the prior, and
+  the BOUNDS, not the model: the α box is [×BOUND_LO, min(×BOUND_HI, ALPHA_MAX)] of
+  the prior, and
   τ = d^α with α at the top of that box spans many orders of magnitude.
 
   AND NOTE: in the optimiser a thrown exception is INVISIBLE. optimizer.jl calls
