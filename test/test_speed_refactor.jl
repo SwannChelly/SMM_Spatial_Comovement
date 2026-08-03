@@ -89,7 +89,7 @@ function _cloglog_irls_ref(y, X, w, fe_group; max_iter::Int=50, tol::Float64=1e-
 end
 
 """Pre-refactor cloglog: rebuilds the whole design, then calls the reference IRLS."""
-function fast_cloglog_regression_ref(linkages_flat, z_flat, sample_weights::Matrix{Float64};
+function fast_cloglog_regression_ref(linkages_flat, z_flat, sample_weights::AbstractMatrix{Float64};
                                      include_control::Bool=true,
                                      include_size_control::Bool=!include_control,
                                      return_size_coef::Bool=false,
@@ -237,7 +237,12 @@ let
 end
 
 # ── S2/S3: cloglog regression ────────────────────────────────────────────────
-println("\n── S2/S3  cached design + allocation-free IRLS ──")
+# NOTE: these sections exercise the DENSE path — `fast_cloglog_regression` is called
+# without `u_draws`/`logz_const`, so the streaming kernel is not eligible whenever the
+# size control is on, and the dense design cache is what is under test. The dense
+# kernel is retained as the reference implementation; the streaming kernel that
+# replaced it on the production path is gated by test/test_cloglog_streaming.jl.
+println("\n── S2/S3  cached design + allocation-free IRLS (dense path) ──")
 inc_ctrl = REG_INCLUDE_CONTROL; inc_size = REG_INCLUDE_SIZE
 println("  design flags: include_control=$inc_ctrl  include_size_control=$inc_size")
 let

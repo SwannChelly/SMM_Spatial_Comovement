@@ -10,8 +10,22 @@ using Distributed
 using Dates
 
 available = 50
-println("Using $available workers")
-addprocs(max(available - 1, 0))
+
+# Per-worker heap target. Distributed workers are separate OS processes with no shared
+# memory, so peak RAM is n_workers × per-worker working set — and each worker sizes its
+# GC threshold against TOTAL system memory, with no knowledge of its 48 siblings doing
+# the same. The result is collective overcommit: every worker sits on its garbage at
+# once. This run is churn-dominated (the IRLS kernel used to abandon tens of MB per
+# iteration), so capping the heap makes each worker collect promptly instead of hoarding.
+#
+# Rule of thumb: ~70% of usable RAM divided by the worker count, and never below ~3× the
+# live working set or the GC thrashes. Set WORKER_HEAP_HINT="" to disable.
+worker_heap_hint = get(ENV, "WORKER_HEAP_HINT", "2G")
+println("Using $available workers" *
+        (isempty(worker_heap_hint) ? "" : " (heap-size-hint=$worker_heap_hint each)"))
+addprocs(max(available - 1, 0);
+         exeflags = isempty(worker_heap_hint) ? `` :
+                    `--heap-size-hint=$worker_heap_hint`)
 using Random
 seed = 1234
 Random.seed!(seed)

@@ -93,7 +93,7 @@ end
 function parallel_SMM(params, simulation, second_stage;
                       precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                       u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                      sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+                      sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
                       W_override::Union{Nothing, AbstractMatrix}=nothing,
                       moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                       analytical::Bool=false,
@@ -108,7 +108,7 @@ end
 function parallel_SMM_safe(params, simulation = false, second_stage = false, show_err = true;
                            precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                            u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                           sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+                           sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
                            W_override::Union{Nothing, AbstractMatrix}=nothing,
                            moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                            analytical::Bool=false,
@@ -168,7 +168,7 @@ end
 
 function train_stage_one(n, init_alpha, params_list = nothing, second_stage = false;
                         u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                        sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+                        sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
                         analytical::Bool=false,
                         n_quad::Int=200)
     t1 = time()
@@ -503,7 +503,7 @@ end
 
 function generate_report(loop_folder, stage, n, variable=nothing, best_params=nothing, alpha="";
                          u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                         sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+                         sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
                          analytical::Bool=false,
                          n_quad::Int=200)
 
@@ -782,7 +782,7 @@ Compute scores by dynamically finding all stage folders.
 """
 function compute_scores_modular(output_folder::String, second_stage::Bool, max_loop::Union{Int, Nothing}=nothing;
                                 u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                                sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+                                sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
                                 analytical::Bool=false,
                                 n_quad::Int=200)
     top_score = Float64[]
@@ -866,7 +866,7 @@ Run full reporting: compute scores, create plots, save results.
 function run_reporting(output_folder::String, max_loop::Union{Int, Nothing}=nothing;
                        save_plots::Bool=true,
                        u_draws::Union{Nothing, Matrix{Float64}}=nothing,
-                       sample_weights::Union{Nothing, Matrix{Float64}}=nothing,
+                       sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
                        analytical::Bool=false,
                        n_quad::Int=200)
 

@@ -15,8 +15,14 @@ using Distributed
 using Dates
 
 available = 50
-println("Using $available workers")
-addprocs(max(available - 1, 0))
+# See main.jl for why the heap hint matters: N workers are N processes, each sizing its
+# GC threshold against total system memory. Set WORKER_HEAP_HINT="" to disable.
+worker_heap_hint = get(ENV, "WORKER_HEAP_HINT", "2G")
+println("Using $available workers" *
+        (isempty(worker_heap_hint) ? "" : " (heap-size-hint=$worker_heap_hint each)"))
+addprocs(max(available - 1, 0);
+         exeflags = isempty(worker_heap_hint) ? `` :
+                    `--heap-size-hint=$worker_heap_hint`)
 using Random
 seed = 1234
 Random.seed!(seed)

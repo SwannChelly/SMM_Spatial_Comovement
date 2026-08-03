@@ -1,0 +1,317 @@
+##### test_cloglog_streaming.jl #####
+# Correctness gate for the STREAMING cloglog kernel `_cloglog_irls_cells` (model_CP.jl),
+# the memory-light replacement for the dense `_cloglog_irls` on the production path.
+#
+# Three-way comparison on every case:
+#
+#   streaming  — `_cloglog_irls_cells`, which never materialises the n_cell × N_rho
+#                design and never stores a per-row vector;
+#   dense      — `_cloglog_irls`, the previous production kernel, on the equivalent
+#                materialised design (itself gated against GLM.jl by
+#                test/test_cloglog_verify.jl);
+#   GLM.jl     — `glm(..., Binomial(), CloglogLink())` with the fixed effect as
+#                explicit dummies, the external reference.
+#
+# All three must return the SAME coefficients. The weights on the production design are
+# uniform (1/N_rho on every row, goods and control cells alike), so an unweighted GLM
+# fit is the same MLE and no row expansion is needed here — unlike Case C of
+# test_cloglog_verify.jl, which exercises non-uniform frequency weights.
+#
+#     julia test/test_cloglog_streaming.jl
+#
+# Standalone: includes only ../model_CP.jl and defines the handful of geography globals
+# the design builders read, so no load_parameters / data / worker pool is needed.
+
+using Random, LinearAlgebra, Printf
+using DataFrames, CategoricalArrays
+using GLM
+
+include("../model_CP.jl")
+
+# Both fits must reach the SAME optimum, so tolerances are tightened well past the
+# production settings — this is an MLE-vs-MLE comparison, not a convergence-noise one.
+const GLMKW  = (maxiter = 500, atol = 1e-12, rtol = 1e-12)
+const IRLSKW = (max_iter = 300, tol = 1e-13)
+
+glm_slope(m, name) = coef(m)[findfirst(==(name), coefnames(m))]
+
+const RESULTS = Tuple{String, Float64, Float64}[]
+
+function report(label, b_stream, b_dense, b_glm; tol = 1e-7)
+    d_sd = maximum(abs.(b_stream .- b_dense))
+    d_sg = maximum(abs.(b_stream .- b_glm))
+    @printf("\n[%s]\n", label)
+    @printf("  %-6s %18s %18s %18s\n", "coef", "streaming", "dense", "GLM.jl")
+    for i in eachindex(b_stream)
+        @printf("  %-6d %18.12f %18.12f %18.12f\n", i, b_stream[i], b_dense[i], b_glm[i])
+    end
+    ok = max(d_sd, d_sg) < tol
+    @printf("  max|stream−dense| = %.3e   max|stream−GLM| = %.3e   %s\n",
+            d_sd, d_sg, ok ? "PASS ✓" : "FAIL ✗")
+    push!(RESULTS, (label, d_sd, d_sg))
+    @assert d_sd < tol "streaming disagrees with the dense kernel (max|Δ|=$d_sd) for $label"
+    @assert d_sg < tol "streaming disagrees with GLM.jl (max|Δ|=$d_sg) for $label"
+    return nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build a cell-structured design and its DENSE equivalent, in the same row order
+# the dense builder produces: cells 1:n_good_c are goods, then the control cells,
+# each contributing n_rho consecutive rows.
+#
+# `continuous_geo` mirrors the N_REG == 1 branch (one CONTINUOUS log-distance
+# regressor, cell-constant) as opposed to the N_REG > 1 bin-dummy branch.
+# ─────────────────────────────────────────────────────────────────────────────
+function build_case(; seed, n_good_c, n_ctrl_c, n_rho, n_reg, n_grp,
+                      size_control, continuous_geo = false)
+    rng = MersenneTwister(seed)
+    n_cell = n_good_c + n_ctrl_c
+
+    if continuous_geo
+        gcol = ones(Int, n_cell)
+        gval = randn(rng, n_cell)
+        k_geo = 1
+    else
+        gcol = rand(rng, 0:n_reg, n_cell)          # 0 = base category (all-zero row)
+        gval = [gcol[c] > 0 ? 1.0 : 0.0 for c in 1:n_cell]
+        k_geo = n_reg
+    end
+
+    grp = rand(rng, 1:n_grp, n_cell)
+    grp[1:n_grp] .= 1:n_grp                        # guarantee every group is non-empty
+
+    has_z = [size_control && c <= n_good_c for c in 1:n_cell]
+    lzc   = [has_z[c] ? 0.5 * randn(rng) - 1.0 : 0.0 for c in 1:n_cell]
+    lzr   = size_control ? 0.8 .* randn(rng, n_rho, n_good_c) : nothing
+    links = rand(rng, n_rho, n_good_c) .< 0.35     # BitMatrix, as solve_network returns
+    wflat = 1.0 / n_rho
+    sw    = FlatWeights(wflat, n_rho, n_good_c)
+
+    k        = k_geo + (size_control ? 1 : 0)
+    size_col = k_geo + 1
+
+    cells = CloglogCells(n_good_c, n_ctrl_c, n_rho, gcol, gval, grp, n_grp, has_z, lzc)
+
+    # Dense equivalent.
+    N = n_cell * n_rho
+    X  = zeros(N, k)
+    y  = zeros(N)
+    w  = zeros(N)
+    fe = zeros(Int, N)
+    i = 0
+    for c in 1:n_cell
+        is_good = c <= n_good_c
+        for rho in 1:n_rho
+            i += 1
+            y[i]  = is_good ? (links[rho, c] > 0 ? 0.0 : 1.0) : 1.0
+            w[i]  = wflat
+            fe[i] = grp[c]
+            gcol[c] > 0 && (X[i, gcol[c]] = gval[c])
+            has_z[c] && (X[i, size_col] = lzc[c] + lzr[rho, c])
+        end
+    end
+    @assert i == N
+
+    return (cells = cells, links = links, sw = sw, lzr = lzr, k = k, size_col = size_col,
+            X = X, y = y, w = w, fe = fe)
+end
+
+function glm_fit(C)
+    df = DataFrame(y = C.y, fe = categorical(C.fe))
+    names = String[]
+    for j in 1:C.k
+        nm = "x$j"
+        df[!, nm] = C.X[:, j]
+        push!(names, nm)
+    end
+    # Programmatic formula (StatsModels' documented idiom) — the number of regressors
+    # varies by case, so @formula cannot be used here.
+    f = term(:y) ~ sum(term.(Symbol.(names))) + term(:fe)
+    m = glm(f, df, Binomial(), CloglogLink(); GLMKW...)
+    return [glm_slope(m, nm) for nm in names]
+end
+
+println("="^78)
+println("streaming cloglog  vs  dense IRLS  vs  GLM.jl — correctness gate")
+println("="^78)
+
+# ── Section 1: the kernel, across every design shape the production code can hit ──
+const CASES = [
+    ("bin dummies + size control, no control cells  (:aa, --controls=false)",
+     (seed = 11, n_good_c = 60, n_ctrl_c = 0,  n_rho = 40, n_reg = 4, n_grp = 8,
+      size_control = true)),
+    ("bin dummies + control cells, no size control  (:ze, --controls=true)",
+     (seed = 22, n_good_c = 50, n_ctrl_c = 25, n_rho = 30, n_reg = 4, n_grp = 6,
+      size_control = false)),
+    ("bin dummies + size control + control cells    (mixed)",
+     (seed = 33, n_good_c = 40, n_ctrl_c = 20, n_rho = 35, n_reg = 3, n_grp = 5,
+      size_control = true)),
+    ("continuous log-distance (N_REG == 1) + size control",
+     (seed = 44, n_good_c = 55, n_ctrl_c = 0,  n_rho = 45, n_reg = 1, n_grp = 7,
+      size_control = true, continuous_geo = true)),
+    ("continuous log-distance (N_REG == 1), no size control",
+     (seed = 55, n_good_c = 45, n_ctrl_c = 15, n_rho = 25, n_reg = 1, n_grp = 6,
+      size_control = false, continuous_geo = true)),
+]
+
+for (label, kw) in CASES
+    C = build_case(; kw...)
+    b_stream = _cloglog_irls_cells(C.cells, C.links, C.sw, C.lzr, C.k, C.size_col;
+                                   IRLSKW...)
+    b_dense  = _cloglog_irls(C.y, C.X, C.w, C.fe; IRLSKW...)
+    b_glm    = glm_fit(C)
+    report(label, b_stream, b_dense, b_glm)
+end
+
+# ── Section 2: a degenerate group (all its weight on one bin) ────────────────
+# The streaming kernel forms the within-group sum of squares as
+# `Σ W X X' − Σ_p S_p S_p' / S_p^W`, a difference of two large quantities where the
+# dense kernel demeans row by row. A group whose cells all share one bin is where that
+# cancellation is worst — the dummy contributes NO within variation there, so the two
+# terms nearly cancel exactly. This checks the two kernels still agree.
+let
+    C = build_case(seed = 66, n_good_c = 48, n_ctrl_c = 0, n_rho = 30,
+                   n_reg = 4, n_grp = 6, size_control = true)
+    gcol = copy(C.cells.gcol)
+    for c in 1:length(gcol)
+        C.cells.grp[c] == 1 && (gcol[c] = 2)        # group 1 becomes bin-homogeneous
+    end
+    cells2 = CloglogCells(C.cells.n_good_c, C.cells.n_ctrl_c, C.cells.n_rho,
+                          gcol, C.cells.gval, C.cells.grp, C.cells.n_grp,
+                          C.cells.has_z, C.cells.lzc)
+    X2 = copy(C.X)
+    i = 0
+    for c in 1:length(gcol), rho in 1:C.cells.n_rho
+        i += 1
+        X2[i, 1:(C.size_col - 1)] .= 0.0
+        gcol[c] > 0 && (X2[i, gcol[c]] = C.cells.gval[c])
+    end
+    b_stream = _cloglog_irls_cells(cells2, C.links, C.sw, C.lzr, C.k, C.size_col; IRLSKW...)
+    b_dense  = _cloglog_irls(C.y, X2, C.w, C.fe; IRLSKW...)
+    b_glm    = glm_fit((y = C.y, X = X2, fe = C.fe, k = C.k))
+    report("bin-homogeneous fixed-effect group (worst-case cancellation)",
+           b_stream, b_dense, b_glm)
+end
+
+# ── Section 3: the full fast_cloglog_regression, streaming vs dense ─────────────
+# Exercises `_build_cloglog_cells` (the geography → cell mapping) and the log-z
+# decomposition `log z = logz_const + logz_resid` against the dense path's `log(z_flat)`.
+# The globals below are the ones the two design builders read; they are ordinary
+# (non-const) globals so the block is self-contained without load_parameters.jl.
+println("\n" * "-"^78)
+println("Section 3: fast_cloglog_regression — streaming path vs dense path")
+println("-"^78)
+
+let
+    rng = MersenneTwister(777)
+    S_, R_, Rd_ = 3, 14, 5
+    goods = [(s, r) for s in 1:S_ for r in 1:R_ if (s + r) % 3 != 0]
+    ctrls = [(s, r) for s in 1:S_ for r in 1:R_ if (s + r) % 3 == 0]
+
+    global CA_LEVEL   = :aa
+    global theta      = 1.3
+    global N_REG      = 4
+    global R_downstream = Rd_
+    global n_good     = length(goods)
+    global GOOD_S     = [g[1] for g in goods]
+    global GOOD_R     = [g[2] for g in goods]
+    global N_CONTROL  = length(ctrls)
+    global CONTROL_S  = [c[1] for c in ctrls]
+    global CONTROL_R  = [c[2] for c in ctrls]
+    global CLOSEST_DOWNSTREAM_REGION = [1 + (r - 1) % Rd_ for r in 1:R_]
+    global DistBin    = [1 + (r + dr) % N_REG for r in 1:R_, dr in 1:Rd_]
+    global LOG_CLOSEST_DIST = log.(5.0 .+ collect(1:R_))
+
+    N_rho_t = 60
+    u = rand(rng, N_rho_t, n_good) .* 0.998 .+ 0.001
+    swm = FlatWeights(1.0 / N_rho_t, N_rho_t, n_good)
+
+    # z built exactly as solve_network builds it, with the matching logz_const.
+    T_g  = 0.05 .+ 1.5 .* rand(rng, n_good)
+    lzc  = [log(max(T_g[g], eps(Float64))^(1 / theta)) for g in 1:n_good]
+    z    = [max(T_g[g], eps(Float64))^(1 / theta) * (-log(1.0 - u[rho, g]))^(-1 / theta)
+            for rho in 1:N_rho_t, g in 1:n_good]
+    links = rand(rng, N_rho_t, n_good) .< 0.4
+
+    for (lbl, inc_ctrl, inc_size) in (("controls=false, size control on", false, true),
+                                      ("controls=true,  size control off", true, false))
+        reset_cloglog_design!()
+        reset_logz_resid!()
+
+        CLOGLOG_STREAMING[] = true
+        b_stream = fast_cloglog_regression(links, z, swm;
+                                           include_control      = inc_ctrl,
+                                           include_size_control = inc_size,
+                                           return_size_coef     = inc_size,
+                                           u_draws    = u,
+                                           logz_const = lzc,
+                                           inv_theta  = 1 / theta,
+                                           IRLSKW...)
+        CLOGLOG_STREAMING[] = false
+        b_dense = fast_cloglog_regression(links, z, swm;
+                                          include_control      = inc_ctrl,
+                                          include_size_control = inc_size,
+                                          return_size_coef     = inc_size,
+                                          IRLSKW...)
+        CLOGLOG_STREAMING[] = true
+
+        d = maximum(abs.(b_stream .- b_dense))
+        @printf("\n[full path — %s]\n", lbl)
+        @printf("  %-6s %18s %18s\n", "coef", "streaming", "dense")
+        for i in eachindex(b_stream)
+            @printf("  %-6d %18.12f %18.12f\n", i, b_stream[i], b_dense[i])
+        end
+        # Looser than the kernel gate by design: the streaming path reconstructs the
+        # size regressor as `logz_const + logz_resid` while the dense path takes
+        # `log(z_flat)`. Those agree to the last ulp (≈9e-16 absolute), not bitwise —
+        # measured coefficient gap ≈2e-16, so 1e-9 leaves a very wide margin.
+        @printf("  max|Δ| = %.3e   %s\n", d, d < 1e-9 ? "PASS ✓" : "FAIL ✗")
+        push!(RESULTS, ("full path — $lbl", d, NaN))
+        @assert d < 1e-9 "streaming and dense fast_cloglog_regression disagree ($d)"
+    end
+end
+
+# ── Section 4: what the rewrite was for — allocations and time ────────────────
+println("\n" * "-"^78)
+println("Section 4: allocation / timing, production-shaped design")
+println("-"^78)
+
+let
+    C = build_case(seed = 99, n_good_c = 1161, n_ctrl_c = 0, n_rho = 723,
+                   n_reg = 4, n_grp = 30, size_control = true)
+    KW = (max_iter = 8, tol = 1e-13)      # same iteration budget on both sides
+
+    _cloglog_irls_cells(C.cells, C.links, C.sw, C.lzr, C.k, C.size_col; KW...)
+    _cloglog_irls(C.y, C.X, C.w, C.fe; KW...)      # warm up both
+
+    a_s = @allocated _cloglog_irls_cells(C.cells, C.links, C.sw, C.lzr, C.k, C.size_col; KW...)
+    t_s = @elapsed  _cloglog_irls_cells(C.cells, C.links, C.sw, C.lzr, C.k, C.size_col; KW...)
+    a_d = @allocated _cloglog_irls(C.y, C.X, C.w, C.fe; KW...)
+    t_d = @elapsed  _cloglog_irls(C.y, C.X, C.w, C.fe; KW...)
+
+    design_dense = (sizeof(C.X) + sizeof(C.y) + sizeof(C.w) + sizeof(C.fe)) / 2^20
+    design_cells = (sizeof(C.cells.gcol) + sizeof(C.cells.gval) + sizeof(C.cells.grp) +
+                    sizeof(C.cells.has_z) + sizeof(C.cells.lzc)) / 2^20
+    lzr_mb = sizeof(C.lzr) / 2^20
+
+    @printf("\n  n_good = %d, N_rho = %d  ⇒  %d dense rows, %d columns\n",
+            1161, 723, length(C.y), C.k)
+    @printf("  %-34s %12s %12s\n", "", "streaming", "dense")
+    @printf("  %-34s %12.1f %12.1f\n", "design storage (MB)", design_cells, design_dense)
+    @printf("  %-34s %12.1f %12.1f\n", "  + logz_resid, per draw set (MB)", lzr_mb, 0.0)
+    @printf("  %-34s %12.1f %12.1f\n", "kernel allocations, 8 iters (MB)",
+            a_s / 2^20, a_d / 2^20)
+    @printf("  %-34s %12.3f %12.3f\n", "kernel time, 8 iters (s)", t_s, t_d)
+    @printf("\n  design + allocations: %.1f MB → %.1f MB  (%.1f× smaller)\n",
+            design_dense + a_d / 2^20, design_cells + lzr_mb + a_s / 2^20,
+            (design_dense + a_d / 2^20) / (design_cells + lzr_mb + a_s / 2^20))
+end
+
+println("\n" * "="^78)
+@printf("%-62s %10s %10s\n", "case", "|Δ| dense", "|Δ| GLM")
+for (lbl, d1, d2) in RESULTS
+    @printf("%-62s %10.2e %10s\n", first(lbl, 62), d1,
+            isnan(d2) ? "-" : @sprintf("%.2e", d2))
+end
+println("\nALL CASES PASS ✓ — the streaming kernel reproduces the dense kernel and GLM.jl.")
+println("="^78)
