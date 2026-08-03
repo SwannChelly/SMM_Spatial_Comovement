@@ -235,17 +235,37 @@ else
       is marginal there for reasons no single block explains (read section 4).""")
 end
 
-# One-at-a-time corners: α pinned at the prior, one block pushed to each end.
-println("\n  corner probes (α at the prior, one block at a time pushed to its bound):")
+# One-at-a-time extremes, α pinned at the prior.
+#
+# Ω^s and A are SCALE-INVARIANT — `profiled_theta_probe` normalises Ω^s by its sum and
+# A by A[1] before the inversion — so pushing every coordinate of one of those blocks
+# to `lo` (×0.8) or to `hi` (×1.2) is a pure rescale that the normalisation undoes, and
+# the probe returns the warm-start answer. (That is exactly what a uniform push
+# produced: identical iteration counts and residuals for lo and hi.) The informative
+# perturbation is a TILT — half the coordinates to their lower bound, half to their
+# upper — which changes the block's SHAPE and survives normalisation. Ω^L is a scalar
+# and is not normalised, so it takes the plain push.
+println("\n  extreme probes (α at the prior, one block at a time):")
 corner_rows = Tuple{String,String,Bool,Int,Float64}[]
 for (name, rng) in BLK
     name == "alpha" && continue
-    for (tag, tgt) in (("lo", head_lo), ("hi", head_hi))
-        h = copy(θ_warm[1:n_head]); h[rng] = tgt[rng]
+    scale_free = name != "Omega_L"
+    variants = scale_free ?
+        (("tilt+", :tilt_up), ("tilt−", :tilt_down)) : (("lo", :lo), ("hi", :hi))
+    for (tag, kind) in variants
+        h = copy(θ_warm[1:n_head])
+        for (k, j) in enumerate(rng)
+            h[j] = if kind === :lo || (kind === :tilt_up   && isodd(k)) ||
+                      (kind === :tilt_down && iseven(k))
+                head_lo[j]
+            else
+                head_hi[j]
+            end
+        end
         h[(S + R_downstream + 2):n_head] = alpha_anchor
         p = probe_head(h)
         push!(corner_rows, (name, tag, p.converged, p.iters, p.resid))
-        @printf("    %-10s %-3s  %-5s  iters=%4d  resid=%.3e\n",
+        @printf("    %-10s %-6s  %-5s  iters=%4d  resid=%.3e\n",
                 name, tag, p.converged ? "conv" : "FAIL", p.iters, p.resid)
     end
 end
@@ -309,6 +329,9 @@ else
         @printf("   %3d   %.3e     %.3e %-4s   %.3e %-4s   %.3e %-4s\n", k, box[i].resid,
                 r.long[1], r.long[2] ? "conv" : "", r.d5[1], r.d5[2] ? "conv" : "",
                 r.d3[1], r.d3[2] ? "conv" : "")
+        # `for` at top level opens a soft scope, so these must be declared global or
+        # they are treated as new locals and the counters below are undefined.
+        global n_fixed_budget, n_fixed_damping, n_stuck
         r.long[2] && (n_fixed_budget += 1)
         (!r.long[2] && (r.d5[2] || r.d3[2])) && (n_fixed_damping += 1)
         (!r.long[2] && !r.d5[2] && !r.d3[2]) && (n_stuck += 1)

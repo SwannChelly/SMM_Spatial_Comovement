@@ -802,6 +802,25 @@ function solve_network(params; return_firm_level=false,
     w_rho_s         = Matrix{Float64}(undef, N_rho_eff, S)
     ces_buf         = Matrix{Float64}(undef, N_rho_eff, S)
 
+    # ── Concrete re-binding for the hot loop ─────────────────────────────────
+    # `tau` and `z_inv_flat` are both inferred as `Any` here, and both are read in the
+    # innermost Ricardian comparison — which runs N_rho × Σ_s n_active_s × R_downstream
+    # times (15.1 M at the aero shape). Every read was therefore a dynamic dispatch
+    # returning a BOXED Float64, so the loop paid ~78 bytes and tens of ns per
+    # comparison where a concrete `z * t * w` pays zero bytes and ~2 ns.
+    #
+    # Why they are `Any`: `build_tau` returns `ones(eltype(alpha), ...)` and `alpha`
+    # comes out of `unpack_params(params)` with `params` untyped, so the element type is
+    # not inferable; and `z_flat` is initialised to `nothing` before the branch that
+    # fills it, which widens `z_inv_flat` the same way.
+    #
+    # The assertions are safe because `solve_network` is Float64-ONLY: it contains the
+    # Ricardian argmin, which is why the AD path goes through `compute_moments_analytical`
+    # instead (see model_analytical.jl). A Dual ever reaching here would be a bug, and
+    # these lines turn it into a loud TypeError rather than a silent slow path.
+    tau_c::Matrix{Float64}        = tau
+    z_inv_c::Matrix{Float64}      = z_inv_flat
+
     if return_firm_level
         # Sparse COO storage: one entry per (rho, downstream_r) winning pair
         firm_exp_rho = Int[]
@@ -845,17 +864,17 @@ function solve_network(params; return_firm_level=false,
             # exactly as the broadcast `z .* tau .* w` did, so the products are
             # bit-identical. Ties keep the FIRST minimiser and a NaN wins outright,
             # both matching `argmin`.
-            tv = tau[regions_s, r_d]           # (n_active_in_s,) — tau is R × R_downstream
-            wv = W_RS_FLAT[g_indices]          # (n_active_in_s,)
+            tv::Vector{Float64} = tau_c[regions_s, r_d]   # (n_active_in_s,) — tau is R × R_downstream
+            wv::Vector{Float64} = W_RS_FLAT[g_indices]    # (n_active_in_s,)
             n_act = length(g_indices)
             @inbounds for rho in 1:N_rho_eff
                 g1   = g_indices[1]
-                best = z_inv_flat[rho, g1] * tv[1] * wv[1]
+                best = z_inv_c[rho, g1] * tv[1] * wv[1]
                 bidx = 1
                 if !isnan(best)
                     for li in 2:n_act
                         gl = g_indices[li]
-                        p  = z_inv_flat[rho, gl] * tv[li] * wv[li]
+                        p  = z_inv_c[rho, gl] * tv[li] * wv[li]
                         if isnan(p)
                             best = p; bidx = li; break
                         elseif p < best

@@ -105,7 +105,9 @@ alpha0 = TAU_PRIOR !== nothing ? TAU_PRIOR : fill(P_alpha, N_TAU)
 for cand in ("step3/theta_hat_2.npy", "step1/theta_hat_1.npy")
     p = joinpath(output_folder, cand)
     if isfile(p)
-        v = NPZ.npzread(p); θ = ndims(v) > 1 ? v[:, 1] : v
+        # `global`: a top-level `for` opens a soft scope, so a bare assignment would
+        # create a local and silently leave θ at the warm start.
+        v = NPZ.npzread(p); global θ = ndims(v) > 1 ? v[:, 1] : v
         println("\n  evaluating at $cand"); break
     end
 end
@@ -168,6 +170,29 @@ tot_t = sum(r[2] for r in top); tot_a = sum(r[3] for r in top)
 table(ROWS, tot_t, tot_a; title = "phases of one evaluation")
 @printf("\n    full_SMM end to end:            %9.2f ms   %11.1f MB\n",
         1e3 * r_full.tmin, mb(r_full.alloc))
+
+# Allocation sanity: solve_network's live working set is a handful of full-size arrays.
+# Allocating a large multiple of that means the hot loop is churning — and by far the
+# commonest cause is type instability, because a dynamically-dispatched arithmetic
+# result is a BOXED Float64 allocated on the heap. The innermost Ricardian comparison
+# runs N_rho × Σ_s n_active_s × R_downstream times, so a few boxed values there dominate
+# everything else in the evaluation.
+working_set = mb(8 * N_rho * n_good      +   # z_inv_flat
+                 N_rho * n_good / 8      +   # linkages_flat (BitMatrix)
+                 8 * 4 * N_rho * S       +   # the four hoisted per-region buffers
+                 8 * n_good * R_downstream)  # X_shares_by_r
+ric_iters = N_rho * n_good * R_downstream
+@printf("\n    solve_network working set:      %11.1f MB   (allocated %.1f× that)\n",
+        working_set, mb(r_net.alloc) / working_set)
+@printf("    Ricardian comparisons:          %11.2f M   → %.0f bytes, %.1f ns each\n",
+        ric_iters / 1e6, r_net.alloc / ric_iters, 1e9 * r_net.tmin / ric_iters)
+if r_net.alloc / (working_set * 1024^2) > 3
+    println("    ⚠ allocating >3× the working set: the hot loop is boxing. Check that")
+    println("      `tau` and `z_inv_flat` are still bound to concrete Matrix{Float64}")
+    println("      locals before the r_d loop (model_CP.jl) — `build_tau` returns")
+    println("      `ones(eltype(alpha), …)` with `alpha` from an untyped `params`, so")
+    println("      without the re-binding both infer as `Any`.")
+end
 @printf("    (phase sum vs full_SMM: %+.1f%% time, %+.1f%% alloc — the gap is measurement\n",
         100 * (tot_t - r_full.tmin) / r_full.tmin, 100 * (tot_a - mb(r_full.alloc)) / mb(r_full.alloc))
 println("     overhead from holding `network` live across the phase boundary)")
