@@ -65,7 +65,7 @@ REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (defau
 CONTROLS="false"  # SMM only: include the no-supplier control group in the reg
 GRANULAR="true"  # SMM only: finite N_s varieties + the count moment (block 6)
 CA_LEVEL="aa"     # SMM only: comparative advantage at the ZE (:ze) or attraction-area (:aa) level
-RELAX_N_LO="false"  # SMM+granular only: DIAGNOSTIC — force N_LO to 1 (drops the model's lower bound)
+RELAX_N_LO="true"  # SMM+granular only: DIAGNOSTIC — force N_LO to 1 (drops the model's lower bound)
 
 for arg in "$@"; do
     case "$arg" in
