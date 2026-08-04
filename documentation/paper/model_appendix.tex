@@ -791,11 +791,39 @@ given by the variance--covariance matrix obtained from the corresponding regress
 % Sigma file block-diagonally to match this text, or restore the "single joint bootstrap"
 % wording of the previous draft. Flagged rather than silently resolved.
 
-Some sector--region cells host few suppliers, and therefore the variance of the regional sourcing
-share may be very large when a single supplier accounts for a disproportionate share of activity.
-To avoid attributing spuriously large comparative advantages to such regions, we restrict the
-sample to cells with more than five suppliers. This restriction reduces total sales of suppliers
-to downstream industries by approximately $25\%$.
+The bootstrap uses $15{,}000$ replications. Because some sector--region cells contain few
+suppliers, a single firm may generate extreme sourcing shares and inflate the estimated variance
+of the corresponding moments. We therefore restrict the bootstrap sample to cells with more than
+three suppliers. This restriction removes cells for which the empirical share is dominated by a
+single observation and reduces total supplier sales covered by approximately \textbf{X}\%.
+
+We impose a second restriction on the same target, on economic size rather than on the number of
+firms: we retain only sector--region cells accounting for more than $1\%$ of total sales in their
+sector, which removes a further \textbf{Y}\% of covered supplier sales. This one is not a
+variance argument but an identification argument.\footnote{The map from comparative advantage to
+sourcing shares is multinomial-logit, so its gradient is a product of the share and one minus the
+share, and vanishes with the share itself. Holding trade costs and expenditure fixed,
+\eqref{eq:app-share} gives $\partial\ln\gamma_{ars}/\partial\ln T_{as}=1-\gamma_{ars}$ and
+$\partial\ln\gamma_{ars}/\partial\ln T_{a's}=-\gamma_{a'rs}$ for $a'\neq a$, hence in levels
+$\partial\gamma_{ars}/\partial\ln T_{as}=\gamma_{ars}(1-\gamma_{ars})$. Aggregating to the area
+target with the expenditure weights $\omega_{rs}$,
+$\partial\tilde\gamma_{as}/\partial\ln T_{as}=\sum_{r}\omega_{rs}\gamma_{ars}(1-\gamma_{ars})
+=\tilde\gamma_{as}(1-\tilde\gamma_{as})-\mathrm{Var}_{\omega}(\gamma_{ars})$. As
+$\tilde\gamma_{as}\to0$ that response vanishes at rate $\tilde\gamma_{as}$: a nearly empty cell
+carries almost no information about its own comparative advantage. The elasticity, however, does
+not vanish --- inverting the same expression,
+$\partial\ln T_{as}/\partial\ln\tilde\gamma_{as}
+=\tilde\gamma_{as}/[\tilde\gamma_{as}(1-\tilde\gamma_{as})-\mathrm{Var}_{\omega}(\gamma_{ars})]\to1$
+--- so the \emph{relative} error in a small target passes into $\ln T_{as}$ one for one, and for a
+cell resting on a handful of firms that relative error is itself of order one. Small cells are
+therefore uninformative and maximally noisy at the same time. The weighting matrix offers no
+protection here, because $T$ is calibrated rather than fitted: the inversion
+\eqref{eq:app-sinkhorn} reproduces every retained share exactly, whatever variance $W$ attaches
+to it. Nor does the damage stay local, since the calibrated $T^{*}(\alpha)$ enters $\Phi_{rs}$ in
+\eqref{eq:app-Phi} and hence the extensive-margin moment through which $\alpha$ is identified: a
+few wildly mismeasured comparative advantages recovered from near-empty cells blur the very
+direction the outer search has to resolve. Excluding those cells from the target is the cleaner
+remedy.}
 
 \paragraph{Standard errors.} Let $G=\partial\tilde M/\partial\mu$ be evaluated at $\hat\mu_{2}$
 by finite differences on common random numbers, and $\Omega=\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}}$.
