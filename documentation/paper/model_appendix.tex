@@ -13,7 +13,9 @@
 %   \DeclareMathOperator*{\argmin}{arg\,min}
 %
 % Labels used by core_model.tex: app:model-derivation, app:model-foreign,
-% app:model-calibration, app:model-prop, app:model-zeros, app:model-bounds.
+% app:model-calibration, app:model-prop, app:model-zeros, app:model-bounds,
+% app:model-price (the love-of-variety discussion, which lives inside the
+% Derivation subsection next to the price indices -- keep the label there).
 % =====================================================================
 
 \section{Details on the Structural Model}
@@ -72,9 +74,9 @@ elasticity of substitution across sectors and $\nu_{s}$ that across varieties wi
 
 The only change relative to the continuum formulation is the inner aggregator: the integral over
 $j\in[0,1]$ is replaced by an average over the $N_{s}$ varieties. Writing it as an
-\emph{average} rather than a sum is a normalization of the love-of-variety level, discussed and
-justified in Appendix~\ref{app:model-price}; it leaves every sourcing share, and hence the
-entire extensive margin, unchanged.
+\emph{average} rather than a sum is a normalization of the love-of-variety level, discussed
+below around \eqref{eq:app-loveofvariety}; it leaves every sourcing share, and hence the entire
+extensive margin, unchanged.
 
 Given the nested CES structure, the nominal demand for intermediate products is
 \begin{equation}
@@ -166,9 +168,43 @@ p_{rs}=\Big[\Gamma\Big(\frac{\theta+1-\nu_{s}}{\theta}\Big)\Big]^{\frac{1}{1-\nu
 \qquad
 p_{r}=\Big[\sum_{s}\Omega_{s}p_{rs}^{1-\nu}\Big]^{\frac{1}{1-\nu}},
 \qquad
-c_{r}=\Big[\Omega_{L}w_{r}^{1-\lambda}+(1-\Omega_{L})p_{r}^{1-\lambda}\Big]^{\frac{1}{1-\lambda}},
+c_{r}=\Big[\Omega_{L}w_{r}^{1-\lambda}+(1-\Omega_{L})p_{r}^{1-\lambda}\Big]^{\frac{1}{1-\lambda}} .
 \end{equation}
-where the first expression is the certainty-equivalent index of Appendix~\ref{app:model-price}.
+The first of these deserves a word, since it is the one place where granularity meets the value
+block. Origin $r'$'s champion cost for variety $\rho$ in market $(r,s)$ satisfies
+$\Pr(c_{r'\rho s}(r)>x)=\exp(-T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}x^{\theta})$, so by
+independence across origins the minimum is Weibull, $\Pr(c^{*}_{\rho}>x)=\exp(-\Phi_{rs}x^{\theta})$,
+and $\mathbb{E}[(c^{*}_{\rho})^{k}]=\Phi_{rs}^{-k/\theta}\Gamma(1+k/\theta)$ for $k>-\theta$. With
+$N_{s}$ varieties the within-sector index is a \emph{finite} CES aggregate, and we evaluate it at
+its certainty-equivalent value $\widetilde P_{rs}=(\mathbb{E}[P_{rs}^{1-\nu_{s}}])^{1/(1-\nu_{s})}$,
+which is $p_{rs}$ up to the variety count:
+\begin{equation}
+\widetilde P_{rs}=N_{s}^{\frac{1}{1-\nu_{s}}}\times
+\underbrace{\Gamma\Big(\frac{\theta+1-\nu_{s}}{\theta}\Big)^{\frac{1}{1-\nu_{s}}}\Phi_{rs}^{-1/\theta}}_{N_{s}\text{-free}} .
+\label{eq:app-loveofvariety}
+\end{equation}
+Since $1-\nu_{s}<0$ the leading factor decreases in $N_{s}$: more varieties, a lower sector price
+index. Writing the aggregator in \eqref{eq:app-ces} as an \emph{average} rather than a sum sets
+that factor to one --- equivalently, rescaling $T_{as}$ by $N_{s}^{\theta/(1-\nu_{s})}$ absorbs
+it. This is legitimate because it acts on a gauge the sourcing shares do not see: the share
+\eqref{eq:app-share} is a ratio of $T$'s within a sector, so the extensive margin, the count
+moment and the within-area contrast are all unchanged, and it is the same gauge the estimator
+fixes by normalizing one reference area per sector.
+
+\label{app:model-price}%
+Two caveats. First, $P_{rs}$ is a \emph{convex} transform of the average in \eqref{eq:app-ces},
+so the realized index exceeds its certainty-equivalent value by Jensen's inequality --- by about
+$6\%$ at $N_{s}\approx10^{2}$, falling to $1\%$ at $N_{s}\approx10^{3}$ at our calibration, where
+the regularity condition $\theta>2(\nu_{s}-1)$ holds with little slack. We follow
+\citet{lmm2023} in having downstream firms optimize against the expected index; most of that gap
+is in any case not identifying variation, since a price-level shift is observationally
+equivalent to a technology shift and, by Lemma~\ref{lem:qfree} below, none of it touches
+$q_{r's}$ or the extensive margin. Second, the assumption must not survive into counterfactuals:
+$\partial\ln\widetilde P_{rs}/\partial\ln N_{s}=1/(1-\nu_{s})<0$ is a genuine gain from variety
+and a live propagation channel --- a shock that removes suppliers raises $P_{rs}$ downstream
+through exactly this elasticity --- so any counterfactual that moves the variety set must map
+back to the physical $T$ and use the realized index.
+
 Bilateral flows are
 \begin{equation}
 X_{r'rs}=\gamma_{r'rs}\,x_{rs}
@@ -497,57 +533,47 @@ within-model values give the same estimate.
 
 We describe first how an economy is simulated at a given $\mu$, then the search over $\mu$.
 
-\paragraph{Simulation algorithm.} Given the calibrated elasticities and a candidate $\mu$:
+\paragraph{Simulation algorithm.} Every evaluation of the criterion is solved in the same order.
+Given the calibrated elasticities and a candidate parameter vector, we calibrate comparative
+advantage, simulate the Ricardian competition to obtain the win-anywhere probabilities, calibrate
+the variety count, and assemble the moments:
+\begin{equation}
+\mu=\big\{\Omega_{L},\;\{\Omega_{s}\},\;\alpha,\;\{A_{r}\}\big\}
+\;\longrightarrow\;\{T_{as}\}
+\;\longrightarrow\;\{q_{r's}\}
+\;\longrightarrow\;\{N_{s}\}
+\;\longrightarrow\;\tilde M(\mu) .
+\label{eq:app-recursion}
+\end{equation}
+The arrows run one way only. Comparative advantage is calibrated without knowing the variety
+count, and the variety count does not revise comparative advantage, so there is no fixed point
+between $T$ and $N$ to solve --- a recursion, not a simultaneous system. We take the steps in
+turn.
 
-\begin{enumerate}[topsep=3pt,itemsep=5pt,label=\arabic*.]
-
-\item \textbf{Calibrate comparative advantage.} We recover the area-level comparative advantage
+\paragraph{Step 1: comparative advantage.} We recover the area-level comparative advantage
 $T^{*}_{as}(\mu)$ that reproduces the observed area sourcing shares \eqref{eq:app-gamma-area}
 exactly. Trade costs are known at this point --- they are $\tau_{r'rs}=d_{r'r}^{\alpha}$ at the
-candidate $\alpha$ --- so this is the inversion of a matrix-scaling problem, solved by the damped
-multiplicative iteration
+candidate $\alpha$ --- so this is the inversion of a matrix-scaling problem, which we solve by
+the damped multiplicative iteration
 \begin{equation}
 T^{+}_{as}=T_{as}\left(\frac{\hat{\tilde\gamma}_{as}}{\tilde\gamma_{as}(T)}\right)^{\varsigma},
 \qquad \varsigma\in(0,1],
 \label{eq:app-sinkhorn}
 \end{equation}
 renormalizing to the reference area of each sector after every pass, and recomputing at every
-pass the general-equilibrium expenditure weights that enter \eqref{eq:app-gamma-area}. The
-iteration is described, and its convergence established, below.
+pass the general-equilibrium expenditure weights that enter \eqref{eq:app-gamma-area}.
 
-\item \textbf{Draw varieties and calibrate the variety count.} We simulate $m$ varieties per
-sector, draw one Fr\'echet champion per (region, variety) pair as in
-Assumption~\ref{as:granular}, and run the Ricardian competition \eqref{eq:app-champion} for every
-buyer, which yields for each region the number $k_{r's}$ of simulated varieties it wins somewhere
-and hence the win-anywhere probability $q_{r's}$. The variety count is then the integer that best
-matches the count moment,
-\begin{equation}
-\widehat N_{s}=\argmin_{N\in[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
-\;\big(\tilde G_{s}(N)-\hat G_{s}(0)\big)^{2},
-\label{eq:app-profile}
-\end{equation}
-over the bounds \eqref{eq:app-bounds}, where $\hat G_{s}(0)$ is the empirical count moment
-\eqref{eq:app-count} and $\tilde G_{s}(\cdot)$ its simulated counterpart, given in closed form
-below. Crucially $m$ is not $N_{s}$: the simulated varieties are
-used to estimate $q_{r's}$, not to realize an economy of the model's size. Why that is legitimate
---- and why \eqref{eq:app-profile} needs no re-simulation at each candidate $N$ --- is the
-content of Lemma~\ref{lem:qfree} below.
+Those weights are evaluated at the certainty-equivalent price system
+\eqref{eq:app-loveofvariety}, that is, without reference to the variety count. This is exact
+rather than approximate: $N_{s}$ enters $\widetilde P_{rs}$ only through a sector-level factor,
+and the price index enters the equilibrium only through the combination
+$\Omega_{s}p_{rs}^{1-\nu}$, so restoring the variety count here would be the reparametrization
+$\Omega_{s}\mapsto\Omega_{s}N_{s}^{(1-\nu)/(1-\nu_{s})}$ --- absorbed by a parameter that is
+itself estimated and normalized --- and would leave $T^{*}(\mu)$ numerically unchanged. That is
+what makes \eqref{eq:app-recursion} a recursion rather than a simultaneous system.
 
-\item \textbf{Build the moments.} All six blocks of Section~\ref{app:model-moments} are computed
-from that \emph{single} Ricardian solve on one set of draws: the value blocks 1--3 and 5 from the
-realized trade flows, block 4 from the cloglog regression run on the simulated firm population,
-and block 6 in closed form from $\{k_{r's}\}$ and $\widehat N_{s}$.
-
-\end{enumerate}
-
-The three steps form a recursion, not a fixed point:
-$\alpha\to T^{*}\to q_{r's}\to\widehat N_{s}$, with no arrow running backwards. Step 1 does not
-need to know the variety count and step 2 does not revise comparative advantage. The two
-paragraphs that follow establish each half of that claim.
-
-\paragraph{Step 1: uniqueness, and the general-equilibrium feedback.} It is useful to separate
-the two things iteration \eqref{eq:app-sinkhorn} does, because only the first is covered by a
-standard argument.
+It is useful to separate the two things iteration \eqref{eq:app-sinkhorn} does, because only the
+first is covered by a standard argument.
 
 \emph{The scaling problem at fixed expenditure.} Hold the expenditure weights
 $\omega_{rs}=x_{rs}/\sum_{r}x_{rs}$ of \eqref{eq:app-gamma-area} fixed. Then
@@ -594,42 +620,21 @@ $\approx0.012$, and convergence to $10^{-9}$ takes a handful of iterations.%
 % refresh them before circulating, since the earlier measurement was taken on the
 % region-level continuum configuration.
 \ We further confirm that the inversion recovers a known $T$ from its own implied shares to
-machine precision, and that ten dispersed starting values converge to the same fixed point.
+machine precision, and that ten dispersed starting values converge to the same fixed point. This
+is a local, numerically verified statement at the estimated parameters, not a global theorem:
+\eqref{eq:app-contraction} is sufficient, not necessary, and we do not characterize the region of
+the parameter space over which it holds. Should it fail at some candidate $\mu$, the iteration is
+not used blindly --- non-convergence is detected and the candidate retains its warm-start $T$, so
+the outer optimizer sees a well-defined objective throughout.
 
-This is a local, numerically verified statement at the estimated parameters, not a global
-theorem: \eqref{eq:app-contraction} is sufficient, not necessary, and we do not characterize the
-region of the parameter space over which it holds. Should it fail at some candidate $\mu$, the
-iteration is not used blindly --- non-convergence is detected and the candidate retains its
-warm-start $T$, so the outer optimizer sees a well-defined objective throughout.
+\paragraph{Step 2: win probabilities.} We simulate $m$ varieties per sector, draw one Fr\'echet
+champion per (region, variety) pair as in Assumption~\ref{as:granular}, and run the Ricardian
+competition \eqref{eq:app-champion} for every buyer. This yields, for each region, the number
+$k_{r's}$ of simulated varieties it wins somewhere, and hence an estimate of the win-anywhere
+probability $q_{r's}$.
 
-\paragraph{Which price system step 1 uses.} The expenditure weights recomputed inside
-\eqref{eq:app-sinkhorn} come from the certainty-equivalent price system
-\eqref{eq:app-loveofvariety} --- the continuum index --- and not from a price index realized on
-$N_{s}$ varieties. This is not an approximation whose error must be assessed, because the
-variety count enters $\widetilde P_{rs}$ only through the factor $N_{s}^{1/(1-\nu_{s})}$, which
-is common to all origins $a$ and all buyers $r$ within a sector, and because the price index
-enters the equilibrium only through the combination $\Omega_{s}p_{rs}^{1-\nu}$ --- in the
-aggregator $p_{r}$ and in expenditure $x_{rs}$ alike. Scaling $p_{\cdot s}$ by a sector constant
-$\kappa_{s}$ is therefore \emph{exactly} the reparametrization
-$\Omega_{s}\mapsto\Omega_{s}\kappa_{s}^{1-\nu}$, absorbed by a parameter that is itself estimated
-and normalized. Restoring the variety count in step 1 would leave $T^{*}(\mu)$ numerically
-unchanged. The same argument covers the Jensen gap of Appendix~\ref{app:model-price}: the ratio
-of the realized index to its certainty-equivalent value is scale-free, depending on
-$(N_{s},\theta,\nu_{s})$ alone, hence again a sector-level factor.
-
-Two remarks. First, step 1 and step 3 use the same price system: the CES aggregate in the
-simulation is taken as an average over the simulated varieties, as in \eqref{eq:app-ces}, which
-is the certainty-equivalent object. There is no inconsistency between the price system used to
-calibrate $T$ and the one used to evaluate the value moments. Second, this is what makes the
-recursion of the previous paragraph triangular rather than simultaneous. Were the price system
-used in step 1 to depend on $N_{s}$ in a way that was \emph{not} a sector-level scale, $T$ and
-$N$ would have to be solved jointly. As Appendix~\ref{app:model-price} insists, that is exactly
-the situation in counterfactuals that move the variety set, which must use the realized index;
-it is not the situation at estimation.
-
-\paragraph{Step 2: why no economy of size $N_{s}$ is ever drawn.} The variety count never enters
-the simulation. It is confined to two objects, both closed form, and that confinement is the
-content of Proposition~\ref{prop:firm} together with:
+Crucially $m$ is not $N_{s}$: the simulated varieties estimate $q_{r's}$, they do not realize an
+economy of the model's size. What licenses that is:
 
 \begin{lemma}[$q_{r's}$ is free of $N_{s}$]
 \label{lem:qfree}
@@ -642,13 +647,13 @@ index, downstream costs and expenditures do not appear.
 The economics is that winning is a statement about \emph{relative costs}, whereas $N_{s}$ and
 $p_{rs}$ are aggregators built after the winners are known: expenditure allocates value across
 winners, it does not choose them. The one condition that would break the lemma is endogenous
-upstream wages, since $w$ enters the comparison directly; wages are taken as data.
+upstream wages, since $w$ enters the comparison directly; wages are taken as data. Any $m$ large
+enough to estimate $q_{r's}$ precisely will therefore do, whatever the model's own $N_{s}$.
 
-Together the two results say that $N_{s}$ reaches the moment vector only through
-$\bar G_{s}(0)$ and through $\widehat N_{s}$ itself, and that both are functions of $q_{r's}$
-alone. Any $m$ large enough to estimate $q_{r's}$ precisely will do, whatever the model's own
-$N_{s}$. Writing $k_{r's}$ for the number of the $m$ simulated varieties won somewhere by region
-$r'$, the simulated count moment is evaluated by the unbiased combinatorial estimator
+\paragraph{Step 3: the variety count.} Together with Proposition~\ref{prop:firm},
+Lemma~\ref{lem:qfree} says that $N_{s}$ reaches the moment vector only through the count moment
+and through $\widehat N_{s}$ itself, and that both are functions of $q_{r's}$ alone. The
+simulated count moment is then available in closed form, by the unbiased combinatorial estimator
 \begin{equation}
 \tilde G_{s}(n)=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}
 \frac{\binom{m-k_{r's}}{n}}{\binom{m}{n}},
@@ -656,20 +661,31 @@ $r'$, the simulated count moment is evaluated by the unbiased combinatorial esti
 \mathbb{E}\left[\frac{\binom{m-k}{n}}{\binom{m}{n}}\right]=(1-q)^{n}\ \ \text{for } n\le m,
 \label{eq:app-Gclosed}
 \end{equation}
-which is the probability that $n$ varieties drawn without replacement from the $m$ simulated ones
-were all lost. We use \eqref{eq:app-Gclosed} rather than the plug-in $(1-\hat q_{r's})^{n}$
-because the latter is convex in $\hat q$ and therefore biased upward. Cross-cell dependence ---
-two regions in a sector face the same variety draws --- does not affect either expression, since
-an expectation of an average is the average of expectations whatever the dependence. So
-\eqref{eq:app-Gclosed} carries no simulation noise of its own beyond that already in $\hat q$, no
-economy of size $N_{s}$ is ever drawn, and no replication is needed.
+the probability that $n$ varieties drawn without replacement from the $m$ simulated ones were all
+lost. We use \eqref{eq:app-Gclosed} rather than the plug-in $(1-\hat q_{r's})^{n}$ because the
+latter is convex in $\hat q$ and therefore biased upward. Cross-cell dependence --- two regions
+in a sector face the same variety draws --- does not affect either expression, since an
+expectation of an average is the average of expectations whatever the dependence.
 
-Two consequences for \eqref{eq:app-profile}. It requires no re-simulation as $N$ varies, and
-since $\tilde G_{s}(n)$ is decreasing in $n$ it reduces to a monotone integer bisection, so
-$\widehat N_{s}$ is an integer at every evaluation --- integrality is never relaxed and never
-rounded. Clamping at either bound is informative rather than benign: the upper bound binding
-means the model cannot generate enough sparsity even when every variety is sourced from a single
-origin, which is a rejection signal for the mechanism rather than a numerical nuisance.
+The variety count is the integer that best matches the empirical count moment
+$\hat G_{s}(0)$ of \eqref{eq:app-count},
+\begin{equation}
+\widehat N_{s}=\argmin_{N\in[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
+\;\big(\tilde G_{s}(N)-\hat G_{s}(0)\big)^{2},
+\label{eq:app-profile}
+\end{equation}
+over the bounds \eqref{eq:app-bounds}. Because \eqref{eq:app-Gclosed} is closed form, no
+re-simulation is needed as $N$ varies, and since $\tilde G_{s}(n)$ is decreasing in $n$ the
+search reduces to a monotone integer bisection: $\widehat N_{s}$ is an integer at every
+evaluation, so integrality is never relaxed and never rounded. Clamping at either bound is
+informative rather than benign: the upper bound binding means the model cannot generate enough
+sparsity even when every variety is sourced from a single origin, which is a rejection signal for
+the mechanism rather than a numerical nuisance.
+
+\paragraph{Step 4: the moments.} All six blocks of Section~\ref{app:model-moments} are computed
+from the \emph{single} Ricardian solve of step 2: the value blocks 1--3 and 5 from the realized
+trade flows, block 4 from the cloglog regression run on the simulated firm population, and block
+6 from \eqref{eq:app-Gclosed} evaluated at $\widehat N_{s}$.
 
 \begin{remark}[What is given up]
 \label{rem:binding}
@@ -680,17 +696,16 @@ economies of size $N_{s}$ would have cancelled against the same bias in the data
 not differenced out. It is a measurable quantity, of the order of $2$--$4\%$ of $\beta$ at
 data-consistent group sizes, and we report it alongside $\hat\alpha$. The alternative is not
 free: it would treat simulation noise on one block by replication while every other block relies
-on the accuracy of the draw design, and it would sit oddly beside
-Appendix~\ref{app:model-price}, where the value block is already evaluated at the
-certainty-equivalent index rather than on a realized economy.
+on the accuracy of the draw design, and it would sit oddly beside the value block, which is
+already evaluated at the certainty-equivalent index rather than on a realized economy.
 \end{remark}
 
 Substituting the within-model values into the criterion collapses the outer search from several
 hundred parameters to a handful, and makes the sourcing-share block just-identified along the
-resulting manifold, so that the extensive-margin coefficient is fit by
-$(\alpha,\Omega_{L},\{\Omega_{s}\},\{A_{r}\})$ alone. Note that just-identification here is at
-the \emph{area} level: within an area, the split of sourcing across regions remains
-over-identified by the distance profile, which is the content of Assumption~\ref{as:geo}.
+resulting manifold, so that the extensive-margin coefficient is fit by $\mu$ alone. Note that
+just-identification here is at the \emph{area} level: within an area, the split of sourcing
+across regions remains over-identified by the distance profile, which is the content of
+Assumption~\ref{as:geo}.
 
 \paragraph{Estimation algorithm.} The SMM estimator is defined as
 \begin{equation}
@@ -806,58 +821,6 @@ itself with the transmission of $\hat\alpha$ and $\hat{\tilde\gamma}$ through $q
 denominator is negative and available in closed form from \eqref{eq:app-Gclosed}. The share
 channel dominates in our estimates, so an interval that ignored it would be more than twice too
 narrow. The interval is continuous while $N_{s}$ is an integer, and we report it as such.
-
-\subsection{The price index, love of variety, and the normalization}
-\label{app:model-price}
-
-The one place where granularity meets the value block requires an explicit assumption. For
-variety $\rho$ in market $(r,s)$, origin $r'$'s champion cost satisfies
-$\Pr(c_{r'\rho s}(r)>x)=\exp(-T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}x^{\theta})$, so by
-independence across origins the minimum $c^{*}_{\rho}$ is Weibull:
-\begin{equation}
-\Pr\big(c^{*}_{\rho}>x\big)=\exp\big(-\Phi_{rs}x^{\theta}\big),
-\qquad
-\mathbb{E}\big[(c^{*}_{\rho})^{k}\big]=\Phi_{rs}^{-k/\theta}\,\Gamma\Big(1+\tfrac{k}{\theta}\Big),
-\quad k>-\theta .
-\end{equation}
-With the CES aggregate taken as a sum,
-$\mathbb{E}[P_{rs}^{1-\nu_{s}}]=N_{s}\Gamma(1+\tfrac{1-\nu_{s}}{\theta})\Phi_{rs}^{-\frac{1-\nu_{s}}{\theta}}$
-up to a constant, so the certainty-equivalent index
-$\widetilde P_{rs}=(\mathbb{E}[P_{rs}^{1-\nu_{s}}])^{1/(1-\nu_{s})}$ satisfies
-\begin{equation}
-\widetilde P_{rs}=N_{s}^{\frac{1}{1-\nu_{s}}}\times
-\underbrace{\Gamma\Big(1+\tfrac{1-\nu_{s}}{\theta}\Big)^{\frac{1}{1-\nu_{s}}}\Phi_{rs}^{-1/\theta}}_{N_{s}\text{-free}} .
-\label{eq:app-loveofvariety}
-\end{equation}
-Since $1-\nu_{s}<0$ the factor is decreasing in $N_{s}$: more varieties lower the sector price
-index. Rescaling $\widetilde T_{as}=T_{as}N_{s}^{\kappa}$ with $\kappa=\theta/(1-\nu_{s})$ maps
-$\Phi_{rs}\mapsto N_{s}^{\kappa}\Phi_{rs}$ and cancels the two powers exactly, leaving
-$\widetilde P_{rs}$ invariant to $N_{s}$. Equivalently, taking the CES aggregate as an
-\emph{average} rather than a sum --- as in \eqref{eq:app-ces} --- implements the same
-normalization. It is consistent because it acts on a gauge the sourcing shares do not see: the
-share \eqref{eq:app-share} is a ratio of $T$'s within a sector, so the extensive margin, the
-count moment and the within-area contrast are all unchanged. It is also a gauge the estimator
-already fixes, by normalizing one reference area per sector.
-
-Two caveats. First, $P_{rs}$ is a \emph{convex} transform of the average in \eqref{eq:app-ces},
-so the realized index exceeds its certainty-equivalent value by Jensen's inequality, and the gap
-closes only as fast as the average concentrates. At the calibration the regularity condition
-$\theta>2(\nu_{s}-1)$ holds with little slack, and the gap is of the order of $6\%$ at
-$N_{s}\approx10^{2}$, falling to $1\%$ at $N_{s}\approx10^{3}$. The estimator adopts the
-certainty-equivalent reading --- downstream firms optimize against
-$\mathbb{E}[P^{1-\nu_{s}}]^{1/(1-\nu_{s})}$, neglecting granular price randomness, the
-general-equilibrium embedding of \citet{lmm2023}. Most of that $6\%$ would not have been
-identifying variation in any case: a price-level shift is observationally equivalent to a
-technology shift, so the sector technology terms absorb it and only the cross-sector pattern of
-$N_{s}$ survives as signal. And by Lemma~\ref{lem:qfree} none of it touches $q_{r's}$ or the
-extensive margin, so the identification of $\alpha$ and $N_{s}$ is unaffected either way.
-
-Second, the assumption must not survive into counterfactuals. The elasticity
-$\partial\ln\widetilde P_{rs}/\partial\ln N_{s}=1/(1-\nu_{s})<0$ is a genuine gain from variety
-and a live propagation channel: a shock that removes suppliers in one region raises $P_{rs}$
-downstream through exactly this elasticity, and that channel is absent from the continuum model.
-Any counterfactual that moves the variety set must map back to the physical $T$ and use the
-realized index.
 
 \subsection{Proofs}
 \label{app:model-proofs}
