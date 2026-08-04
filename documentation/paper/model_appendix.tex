@@ -629,7 +629,32 @@ the outer optimizer sees a well-defined objective throughout.
 
 \paragraph{Step 2: win probabilities.} We simulate $m$ varieties per sector, draw one Fr\'echet
 champion per (region, variety) pair as in Assumption~\ref{as:granular}, and run the Ricardian
-competition \eqref{eq:app-champion} for every buyer. This yields, for each region, the number
+competition \eqref{eq:app-champion} for every buyer.\footnote{The uniform draws feeding the
+inverse-CDF transform $\varphi_{r'\rho s}=T_{a(r')s}^{1/\theta}(-\log u_{r'\rho s})^{-1/\theta}$
+implied by \eqref{eq:app-champion} are taken from a scrambled Sobol sequence rather than from
+i.i.d.\ pseudo-random numbers, as a variance-reduction device: every simulated moment is an
+average over the $m$ varieties, and a low-discrepancy net makes those averages converge faster
+than $1/\sqrt{m}$. The draws carry flat weights $1/m$, which keeps the simulated moments
+unbiased for the minimum-coupled objects. Two design choices matter. \emph{Within a sector},
+regions are the \emph{dimensions} of the net and varieties its points: we build one net per
+sector, of dimension the number of active regions in that sector, and randomize it by an
+independent base-2 digital shift in each dimension. The shift makes each region's coordinate
+marginally uniform and dissolves the deterministic origin of the sequence while preserving its
+equidistribution; the largest pairwise correlation across regions within a sector is of order
+$1/\sqrt{m}$, so the draws behave as independent exactly where independence is needed --- the
+Ricardian comparison is a minimum across regions of the same sector, and a spurious correlation
+there would distort which origin wins. Building one low-dimensional net per sector rather than a
+single net over all (sector, region) pairs is also what preserves the net's advantage, since
+discrepancy deteriorates with dimension. \emph{Across sectors}, the same underlying sequence is
+reused, sectors differing only by their own digital shift. This is innocuous here because no
+comparison in the model ever puts a draw from one sector against a draw from another: the
+competition that determines every win --- hence $q_{r's}$, the count moment, the extensive
+margin and the sourcing shares --- runs within a sector. Sectors meet only in the value blocks,
+through $p_{r}$, and there they meet through the sector index $p_{rs}$, which is itself an
+average over the $m$ varieties, so what is aggregated across sectors are $m$-averaged quantities
+rather than individual draws. We nonetheless revert to i.i.d.\ draws when estimating the
+simulation variance $\Sigma_{\mathrm{sim}}$ and the Jacobian, where genuinely independent
+designs across replications are what is wanted.} This yields, for each region, the number
 $k_{r's}$ of simulated varieties it wins somewhere, and hence an estimate of the win-anywhere
 probability $q_{r's}$.
 
