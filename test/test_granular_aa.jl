@@ -54,12 +54,18 @@ n_coef   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau    = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 granular = length(ARGS) >= 4 ? (lowercase(strip(ARGS[4])) in ("true","1","yes")) : true
 ca_level = length(ARGS) >= 5 && !isempty(strip(ARGS[5])) ? Symbol(strip(ARGS[5])) : :aa
+# 6th arg: RELAX_N_LO — force the variety-count lower bound to 1 instead of the model's
+# ⌈N^obs_s / R_downstream⌉. Must be defined BEFORE the include (load_parameters.jl reads
+# it with @isdefined and silently defaults to false otherwise). The gates below are
+# stated over [N_LO, N_HI] whatever N_LO is, so they hold in both settings.
+relax_n_lo = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ?
+    (lowercase(strip(ARGS[6])) in ("true","1","yes")) : false
 K_sim    = 10000   # unused here; load_parameters.jl may reference it
 reg_method = :cloglog
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$industry" * (ca_level == :aa ? "_aa" : "") *
-                (granular ? "_gran" : "")
+                (granular ? "_gran" : "") * (relax_n_lo && granular ? "_nlo1" : "")
 mkpath(output_folder)
 
 include("../load_parameters.jl")

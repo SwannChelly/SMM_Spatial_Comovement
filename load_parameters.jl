@@ -107,7 +107,13 @@ end
 
 granular_local = (@isdefined(granular)) ? Bool(granular) : false
 ca_level_local = (@isdefined(ca_level)) ? Symbol(ca_level) : :ze
+# Diagnostic override of the variety-count lower bound (see RELAX_N_LO below).
+relax_n_lo_local = (@isdefined(relax_n_lo)) ? Bool(relax_n_lo) : false
 @assert ca_level_local in (:ze, :aa) "ca_level must be :ze or :aa, got :$ca_level_local"
+if relax_n_lo_local && !granular_local
+    @warn "relax_n_lo=true has no effect with granular=false: the variety-count bounds " *
+          "[N_LO, N_HI] only exist under GRANULAR (there is no N_s to profile)."
+end
 if granular_local && ca_level_local != :aa
     error("granular=true requires ca_level=:aa (got :$ca_level_local). Under ZE-level " *
           "comparative advantage only the supplier cells are estimated, so no cell can " *
@@ -124,7 +130,29 @@ if !granular_local && ca_level_local == :aa
 end
 @everywhere const GRANULAR = $(granular_local)
 @everywhere const CA_LEVEL = $(QuoteNode(ca_level_local))
-println("\nGRANULAR = $granular_local ; CA_LEVEL = :$ca_level_local")
+
+# ── RELAX_N_LO: drop the variety-count lower bound to 1 ─────────────────────
+# The default N_LO[s] = ⌈N_supplier_s / R_downstream⌉ is a THEOREM, not a data
+# convention (finite_sample2.tex, "Bounds on the variety count"): every variety
+# generates one distinct supplying firm per winning origin, so
+# N^obs_s = Σ_ρ #{origins winning ρ somewhere} ∈ [N_s, N_s·N_d], and the lower
+# bound is attained when each of the N_d buyers sources every variety from a
+# different origin. Relaxing it to 1 therefore ABANDONS that restriction — the
+# fit is no longer the model of finite_sample2.tex §3.3.
+#
+# It exists because the bound BINDS: when N̂_s is clamped at N_LO the count
+# moment Ḡ_s(0) = mean_l (1−q̂_ls)^{N_LO} cannot reach its target, and the
+# residual it cannot absorb through N_s is loaded onto whatever else moves it —
+# under `profile_T` that is α alone, which is how α ends up on its box floor.
+# With RELAX_N_LO the bisection is free over [1, N_HI], so the count moment is
+# satisfiable in every sector and block 6 stops voting on α. Use it as a
+# DIAGNOSTIC — to measure how much of α̂ is the clamp — not as the headline
+# specification. `granular_report` reports the clamp status either way, so the
+# two runs are directly comparable sector by sector.
+@everywhere const RELAX_N_LO = $(relax_n_lo_local)
+println("\nGRANULAR = $granular_local ; CA_LEVEL = :$ca_level_local" *
+        (relax_n_lo_local ? " ; RELAX_N_LO = true (N_LO forced to 1 — the model's " *
+                            "lower bound N^obs_s/R_downstream is NOT imposed)" : ""))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 2c — GEOGRAPHY LOCALS (hoisted from SECTION 10)
@@ -189,11 +217,19 @@ if granular_local
         k0 === nothing && error("G_K.csv has no K=0 row for A129=$a129 — Ḡ_s(0) is the targeted moment.")
         G_target_local[s] = Float64(gk_df[rows[k0], c_G])
         N_HI_local[s]     = n_obs
-        N_LO_local[s]     = max(1, cld(n_obs, R_down_))
+        # The model bound is ⌈N^obs_s / N_d⌉ (finite_sample2.tex §3.3). RELAX_N_LO
+        # replaces it by the trivial 1, freeing the bisection over the whole range —
+        # a diagnostic for how much of the fit the clamp is driving, not the model.
+        N_LO_local[s]     = relax_n_lo_local ? 1 : max(1, cld(n_obs, R_down_))
     end
     @assert all(0 .<= G_target_local .<= 1) "G_K.csv: G(0) must be a share in [0,1], got $G_target_local"
     println("\nCount moment Ḡ_s(0) target: ", round.(G_target_local, digits=4))
-    println("Variety-count bounds  N_LO = $N_LO_local   N_HI = $N_HI_local")
+    if relax_n_lo_local
+        println("Variety-count bounds  N_LO = $N_LO_local   N_HI = $N_HI_local" *
+                "   [RELAX_N_LO: model bound would be $(max.(1, cld.(N_HI_local, R_down_)))]")
+    else
+        println("Variety-count bounds  N_LO = $N_LO_local   N_HI = $N_HI_local")
+    end
 end
 @everywhere const G_TARGET = $G_target_local
 @everywhere const N_LO     = $N_LO_local

@@ -3,7 +3,7 @@
 # run.sh - Launch three-step SMM or analytical GMM calibration
 #
 # Usage (SMM):
-#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=sobol|mc] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa]
+#   ./run.sh <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=sobol|mc] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa] [--relax_n_lo=true|false]
 #
 # Examples:
 #   ./run.sh aero
@@ -19,12 +19,13 @@
 #   ./run.sh aero --n_coef=4 --controls=false             # drop the no-supplier control group (adds the size control)
 #   ./run.sh aero --n_coef=4 --granular=false --ca_level=ze  # the legacy model (V0 reference)
 #   ./run.sh aero --n_coef=4 --n_tau=1 --granular=true --ca_level=aa
+#   ./run.sh aero --n_coef=4 --n_tau=1 --granular=true --ca_level=aa --relax_n_lo=true  # diagnostic: free N_s over [1, N_HI]
 #   ./run.sh both --n_coef=4 --mode=smm
 
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=sobol|mc] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--mode=smm|gmm] [--n_quad=N] [--draws=sobol|mc] [--optimizer=pso|cmaes|tiktak] [--profile_T=true|false] [--n_rho_inf=N] [--reg=cloglog|lpm] [--controls=true|false] [--granular=true|false] [--ca_level=ze|aa] [--relax_n_lo=true|false]"
     echo "  industry   : aero, auto, car, both"
     echo "  --n_coef   : number of regression moments: 1, 4, or 5 (default: 4)"
     echo "  --n_tau    : number of trade-cost parameters: 1, 4, or 5 (default: n_coef)"
@@ -38,9 +39,13 @@ if [ -z "$1" ]; then
     echo "  --controls : include the no-supplier control group — true  or false (default) (⇒ supplier pairs only, WITH the size control); SMM only"
     echo "  --granular : true|false (default false) — finite N_s varieties per sector + the count moment G_s(0); SMM only. REQUIRES --ca_level=aa"
     echo "  --ca_level : ze (default) or aa — comparative advantage (and the gamma block) at the ZE or attraction-area level; SMM only"
+    echo "  --relax_n_lo: true|false (default false) — DIAGNOSTIC: force the variety-count lower bound N_LO to 1"
+    echo "               instead of the model's ceil(N_supplier_s / R_downstream); granular only, outputs -> ..._nlo1_<opt>/"
     echo ""
     echo "  NOTE: --granular=false --ca_level=ze is the continuum ZE-level model exactly as it stood."
     echo "        --granular=true is only valid with --ca_level=aa."
+    echo "        --relax_n_lo=true ABANDONS the model's variety-count lower bound (finite_sample2.tex 3.3);"
+    echo "        use it to measure how much of alpha-hat a binding N_LO is driving, not as the headline spec."
     exit 1
 fi
 
@@ -60,6 +65,7 @@ REG="cloglog"    # SMM only: extensive-margin regression link — cloglog (defau
 CONTROLS="false"  # SMM only: include the no-supplier control group in the reg
 GRANULAR="true"  # SMM only: finite N_s varieties + the count moment (block 6)
 CA_LEVEL="aa"     # SMM only: comparative advantage at the ZE (:ze) or attraction-area (:aa) level
+RELAX_N_LO="false"  # SMM+granular only: DIAGNOSTIC — force N_LO to 1 (drops the model's lower bound)
 
 for arg in "$@"; do
     case "$arg" in
@@ -75,6 +81,7 @@ for arg in "$@"; do
         --controls=*) CONTROLS="${arg#--controls=}" ;;
         --granular=*) GRANULAR="${arg#--granular=}" ;;
         --ca_level=*) CA_LEVEL="${arg#--ca_level=}" ;;
+        --relax_n_lo=*) RELAX_N_LO="${arg#--relax_n_lo=}" ;;
         *) echo "Warning: unknown argument '$arg' ignored" ;;
     esac
 done
@@ -125,6 +132,22 @@ if [ "$CA_LEVEL" != "ze" ] && [ "$CA_LEVEL" != "aa" ]; then
     exit 1
 fi
 
+if [ "$RELAX_N_LO" != "true" ] && [ "$RELAX_N_LO" != "false" ]; then
+    echo "Error: --relax_n_lo must be true or false (got: $RELAX_N_LO)"
+    exit 1
+fi
+
+# --relax_n_lo only means anything under --granular=true: the variety-count bounds
+# [N_LO, N_HI] exist only there. It also ABANDONS a model restriction, so say so loudly.
+if [ "$RELAX_N_LO" = "true" ] && [ "$GRANULAR" != "true" ]; then
+    echo "Warning: --relax_n_lo has no effect with --granular=false (there is no N_s to profile)."
+fi
+if [ "$RELAX_N_LO" = "true" ] && [ "$GRANULAR" = "true" ]; then
+    echo "Warning: --relax_n_lo=true forces N_LO=1, dropping the model's variety-count lower"
+    echo "         bound ceil(N_supplier_s / R_downstream) (finite_sample2.tex 3.3). This is a"
+    echo "         DIAGNOSTIC run: it measures how much of the fit a binding N_LO is driving."
+fi
+
 # --granular=true REQUIRES --ca_level=aa. Under ZE-level comparative advantage only
 # the supplier cells are estimated, so no cell can come out empty: the count moment
 # has no content, and the estimator would be fitting T > 0 for regions whose observed
@@ -149,6 +172,7 @@ if [ "$MODE" = "gmm" ] && { [ "$GRANULAR" = "true" ] || [ "$CA_LEVEL" = "aa" ]; 
     echo "Warning: --granular/--ca_level are ignored in GMM mode (SMM-only); proceeding with (false, ze)."
     GRANULAR="false"
     CA_LEVEL="ze"
+    RELAX_N_LO="false"
 fi
 
 # T-profiling is an SMM-only feature (Design A: the loss's reg_coef must stay
@@ -182,11 +206,12 @@ run_industry() {
     if [ "$MODE" = "gmm" ]; then
         local reporting_folder="reporting_gmm_${ind}"
     else
-        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran]_<optimizer>
+        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran][_nlo1]_<optimizer>
         local reporting_folder="reporting_${ind}"
         [ "$PROFILE_T" = "true" ] && reporting_folder="${reporting_folder}_profiled"
         [ "$CA_LEVEL" = "aa" ]    && reporting_folder="${reporting_folder}_aa"
         [ "$GRANULAR" = "true" ]  && reporting_folder="${reporting_folder}_gran"
+        [ "$GRANULAR" = "true" ] && [ "$RELAX_N_LO" = "true" ] && reporting_folder="${reporting_folder}_nlo1"
         reporting_folder="${reporting_folder}_${OPTIMIZER}"
     fi
     local log_file="${reporting_folder}/logs.log"
@@ -200,14 +225,14 @@ run_industry() {
     mkdir -p "$reporting_folder"
 
     # Build Julia argument string
-    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf reg controls granular ca_level
+    # main.jl    : industry n_coef n_tau K_sim draws optimizer profile_T n_rho_inf reg controls granular ca_level relax_n_lo
     # main_gmm.jl: industry n_coef n_tau n_quad draws
     if [ "$MODE" = "gmm" ]; then
         local args="$ind $N_COEF $N_TAU $N_QUAD $DRAWS"
         echo "Starting GMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_quad=$N_QUAD, draws=$DRAWS)"
     else
-        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF $REG $CONTROLS $GRANULAR $CA_LEVEL"
-        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF, reg=$REG, controls=$CONTROLS, granular=$GRANULAR, ca_level=$CA_LEVEL)"
+        local args="$ind $N_COEF $N_TAU 10000 $DRAWS $OPTIMIZER $PROFILE_T $N_RHO_INF $REG $CONTROLS $GRANULAR $CA_LEVEL $RELAX_N_LO"
+        echo "Starting SMM for industry: $ind (n_coef=$N_COEF, n_tau=$N_TAU, draws=$DRAWS, optimizer=$OPTIMIZER, profile_T=$PROFILE_T, n_rho_inf=$N_RHO_INF, reg=$REG, controls=$CONTROLS, granular=$GRANULAR, ca_level=$CA_LEVEL, relax_n_lo=$RELAX_N_LO)"
     fi
     echo "Logs: $log_file"
 
@@ -236,11 +261,12 @@ else
     if [ "$MODE" = "gmm" ]; then
         echo "Monitor: tail -f reporting_gmm_${INDUSTRY}/logs.log"
     else
-        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran]_<optimizer>
+        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran][_nlo1]_<optimizer>
         monitor_folder="reporting_${INDUSTRY}"
         [ "$PROFILE_T" = "true" ] && monitor_folder="${monitor_folder}_profiled"
         [ "$CA_LEVEL" = "aa" ]    && monitor_folder="${monitor_folder}_aa"
         [ "$GRANULAR" = "true" ]  && monitor_folder="${monitor_folder}_gran"
+        [ "$GRANULAR" = "true" ] && [ "$RELAX_N_LO" = "true" ] && monitor_folder="${monitor_folder}_nlo1"
         monitor_folder="${monitor_folder}_${OPTIMIZER}"
         echo "Monitor: tail -f ${monitor_folder}/logs.log"
     fi

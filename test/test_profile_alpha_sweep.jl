@@ -4,17 +4,20 @@
 #     julia test/test_profile_alpha_sweep.jl aero 4 1
 #     julia test/test_profile_alpha_sweep.jl auto 1
 #  Args: industry [n_coef] [n_tau] [run_folder] [reg_method] [include_control]
-#        [granular] [ca_level]
+#        [granular] [ca_level] [relax_n_lo]
 #     julia test/test_profile_alpha_sweep.jl auto 4 1 ./reporting_auto_profiled_pso cloglog false
 #         → cloglog link, NO control group (supplier pairs + size control), on the profiled run
 #     julia test/test_profile_alpha_sweep.jl aero 4 1 \
 #           ./reporting_aero_profiled_aa_gran_pso cloglog false true aa
 #         → the GRANULAR / attraction-area configuration (block 6 = Ḡ_s(0) in the loss)
+#     julia test/test_profile_alpha_sweep.jl aero 4 1 \
+#           ./reporting_aero_profiled_aa_gran_nlo1_pso cloglog false true aa true
+#         → the same, with the variety-count lower bound relaxed to N_LO = 1
 #
 # ⚠ THE CONFIG ARGS ARE NOT OPTIONAL DECORATION. `load_parameters.jl` reads the
 # modelling flags as `granular_local = (@isdefined(granular)) ? … : false` and
-# `ca_level_local = (@isdefined(ca_level)) ? … : :ze`. If this script does not define
-# `granular` / `ca_level` BEFORE the include, it silently loads the LEGACY continuum
+# `ca_level_local = (@isdefined(ca_level)) ? … : :ze` (and `relax_n_lo` the same way).
+# If this script does not define them BEFORE the include, it silently loads the LEGACY continuum
 # model (granular=false, ca_level=:ze) — no error — and then, because `gb_indices`
 # no longer matches the on-disk W_step3, silently falls back to identity weighting
 # too. The sweep would then diagnose a different model under a different metric than
@@ -109,14 +112,20 @@ granular = length(ARGS) >= 7 && !isempty(strip(ARGS[7])) ?
     (lowercase(strip(ARGS[7])) in ("true", "1", "yes")) : false
 ca_level = length(ARGS) >= 8 && !isempty(strip(ARGS[8])) ? Symbol(strip(ARGS[8])) : :ze
 @assert ca_level in (:ze, :aa) "ca_level must be ze|aa, got :$ca_level"
+# 9th arg: DIAGNOSTIC — force the variety-count lower bound N_LO to 1 instead of the
+# model's ⌈N^obs_s / R_downstream⌉. Same @isdefined-before-include rule as above. Set
+# it to the value the run being explained used, or to true to sweep α with the clamp
+# removed and see how much of the α gradient it was carrying.
+relax_n_lo = length(ARGS) >= 9 && !isempty(strip(ARGS[9])) ?
+    (lowercase(strip(ARGS[9])) in ("true", "1", "yes")) : false
 
 input_folder  = "./baseline_$industry"
 output_folder = length(ARGS) >= 4 && !isempty(strip(ARGS[4])) ? String(ARGS[4]) :
                 "./reporting_$(industry)_$(optimizer_backend)"
 mkpath(output_folder)
 @printf("Anchoring θ̂ / W_step3 on: %s\n", output_folder)
-@printf("Config: reg_method=:%s  include_control(group)=%s  granular=%s  ca_level=:%s\n",
-        reg_method, include_control, granular, ca_level)
+@printf("Config: reg_method=:%s  include_control(group)=%s  granular=%s  ca_level=:%s  relax_n_lo=%s\n",
+        reg_method, include_control, granular, ca_level, relax_n_lo)
 
 include("../load_parameters.jl")
 include("../profiling.jl")
@@ -127,8 +136,8 @@ println("\n" * "="^72)
 println("PROFILING α-SWEEP: why does invert_T_ge push α → 0 ?")
 @printf("  industry=%s  N_REG=%d  N_TAU=%d  |  ν=%.3g  λ=%.3g  θ=%.3g\n",
         industry, N_REG, N_TAU, nu, lambda, theta)
-@printf("  GRANULAR=%s  CA_LEVEL=:%s  |  T_COL_DIM=%d  n_good=%d  n_T=%d\n",
-        GRANULAR, CA_LEVEL, T_COL_DIM, n_good, count(T_MASK))
+@printf("  GRANULAR=%s  CA_LEVEL=:%s  RELAX_N_LO=%s  |  T_COL_DIM=%d  n_good=%d  n_T=%d\n",
+        GRANULAR, CA_LEVEL, RELAX_N_LO, T_COL_DIM, n_good, count(T_MASK))
 println("="^72)
 
 # ── θ̂: prefer a saved estimate (same config), else a documented default ───────
@@ -270,7 +279,16 @@ end
 
 # ── Header helpers (the granular columns only exist under GRANULAR) ───────────
 blk_hdr  = join([@sprintf("%-11s", "wL:" * n) for n in gb_names], "")
-gran_hdr = GRANULAR ? @sprintf("  %-6s %-6s %-9s", "clamp", "medN̂", "G0err") : ""
+# medΣq is the MECHANISM column. Σ_l q̂_ls = E[#distinct origins winning a variety
+# somewhere] ∈ [1, min(N_d, R)] (finite_sample2.tex §3.3). At α = 0, τ ≡ 1 makes Φ_dr
+# common across destinations, so the SAME cell wins a variety for every buyer and the
+# union collapses: Σ_l q̂ = 1 exactly. Raising α decorrelates the winner across buyers
+# and pushes Σ_l q̂ up. Since Ḡ_s(n) = mean_l (1−q̂_l)^n is decreasing in the q̂'s in
+# LEVEL, that channel drives G0 DOWN with α at fixed n — the opposite of the
+# within-area concentration (convexity) channel, which pushes it up. Whichever wins is
+# read off here: if medΣq climbs with α while medN̂ falls and G0err grows, the union
+# channel dominates and block 6 is what votes α to its floor.
+gran_hdr = GRANULAR ? @sprintf("  %-6s %-6s %-9s %-7s", "clamp", "medN̂", "G0err", "medΣq") : ""
 
 println("\n" * "-"^(96 + length(blk_hdr)))
 println("(A) PROFILED regime  —  T = invert_T_ge(α)  (γ_ls pinned to data ∀α)")
@@ -294,9 +312,12 @@ for a in α_grid
     gran_str = ""
     if GRANULAR
         g = granular_report(θa)
-        gran_str = @sprintf("  %-6d %-6.1f %-9.3e",
+        sum_q = [isempty(CELLS_OF_SECTOR[s]) ? NaN : sum(g.q_hat[c] for c in CELLS_OF_SECTOR[s])
+                 for s in 1:S]
+        gran_str = @sprintf("  %-6d %-6.1f %-9.3e %-7.3f",
                             count(!=(:none), g.clamped), median(g.N_hat),
-                            sum(abs2, g.G0 .- g.G_target))
+                            sum(abs2, g.G0 .- g.G_target),
+                            median(filter(isfinite, sum_q)))
     end
     @printf("  %-7.4f %-3s %-4d  %-10.3e %-10.3e %-10.3e %s%-10.3e%s  %-16s\n",
             a, res.converged ? "y" : "N", res.iters, rl_wc, rl_wo, gbl,
@@ -391,5 +412,19 @@ if GRANULAR
     println("  residual through N_s, so that residual is absorbed by whatever else is free —")
     println("  here, α. Check the clamp column: if it is non-zero across the grid, α̂ is partly")
     println("  a patch for a binding N_LO/N_HI, not a trade elasticity.")
+    println("  Re-run with the 9th arg = true (RELAX_N_LO, N_LO forced to 1) to measure how")
+    println("  much of the α gradient the clamp carries: with the bound gone the bisection can")
+    println("  satisfy the count moment in every sector, so G0's own α* should stop being the")
+    println("  grid floor. That run ABANDONS the model's lower bound — it is a decomposition,")
+    println("  not a specification.")
+    println("  Read medΣq alongside it: Σ_l q̂ = E[#origins winning a variety somewhere] is 1")
+    println("  at α = 0 by construction (τ ≡ 1 ⇒ one winner for every buyer) and rises as α")
+    println("  decorrelates winners across buyers. Rising medΣq with FALLING medN̂ is the")
+    println("  union channel: higher q̂ in LEVEL pushes Ḡ_s(n) = mean_l (1−q̂_l)^n down, so a")
+    println("  sector pinned at N_LO drifts FURTHER below its target as α rises.")
+    if RELAX_N_LO
+        println("\n  ⚠ RELAX_N_LO is ON: N_LO = 1 in every sector. The model bound")
+        println("    ⌈N^obs_s / R_downstream⌉ (finite_sample2.tex §3.3) is NOT imposed here.")
+    end
 end
 println("="^72)

@@ -133,6 +133,15 @@ granular = length(ARGS) >= 11 && !isempty(strip(ARGS[11])) ?
 ca_level = length(ARGS) >= 12 && !isempty(strip(ARGS[12])) ? Symbol(strip(ARGS[12])) : :ze
 @assert ca_level in (:ze, :aa) "ca_level must be ze|aa, got :$ca_level"
 
+# ── Diagnostic: relax the variety-count lower bound to 1 ────────────────────
+# 13th positional arg (run.sh --relax_n_lo=true|false), default FALSE. The model's
+# bound N_LO[s] = ⌈N^obs_s / N_d⌉ is a theorem (finite_sample2.tex §3.3), and when it
+# BINDS the count moment cannot be satisfied through N̂_s — under profile_T the residual
+# is loaded onto α. Setting this true frees the bisection over [1, N_HI] to measure how
+# much of α̂ that clamp is driving. Not the headline specification. See load_parameters.jl.
+relax_n_lo = length(ARGS) >= 13 && !isempty(strip(ARGS[13])) ?
+    (lowercase(strip(ARGS[13])) in ("true", "1", "yes")) : false
+
 # Optional 2×2 noise-decomposition diagnostic (test-only). When false, behavior
 # is byte-identical to today: nothing extra is computed or written.
 run_2x2_test = true
@@ -158,7 +167,7 @@ if !(n_tau in [1, 4, 5])
     error("n_tau must be 1, 4 or 5, got: $n_tau")
 end
 
-println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control | granular: $granular | ca_level: :$ca_level")
+println("Industry: $industry | n_coef (N_REG): $n_coef | n_tau (N_TAU): $n_tau | K_sim: $K_sim | draws: :$draw_method | optimizer: :$optimizer_backend | reg: :$reg_method | controls: $include_control | granular: $granular | ca_level: :$ca_level | relax_n_lo: $relax_n_lo")
 
 input_folder  = "./baseline_$industry"
 # profile_T ⇒ isolate all step1..4 artifacts under a distinct tree (plan §6), so the
@@ -167,6 +176,7 @@ input_folder  = "./baseline_$industry"
 # side by side (the V0 gate compares the two).
 output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "") *
                 (ca_level == :aa ? "_aa" : "") * (granular ? "_gran" : "") *
+                (relax_n_lo && granular ? "_nlo1" : "") *
                 "_$optimizer_backend"
 mkpath(output_folder)
 
