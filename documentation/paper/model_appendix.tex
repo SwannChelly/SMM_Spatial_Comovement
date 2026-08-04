@@ -479,114 +479,93 @@ coefficient on log own productivity in moment 4 should equal $-\theta$, and we r
 \subsection{Estimation}
 \label{app:model-estimation}
 
-\paragraph{Simulation algorithm.} Given the calibrated elasticities and a candidate parameter
-vector, we simulate the productivity champions of every (region, variety) pair, solve for all
-bilateral trade flows --- from each potential supplier to each downstream region --- and
-construct the simulated moments. All six blocks are computed from a \emph{single} Ricardian
-solve on one set of draws. The SMM estimator is
+The model's parameters are
 \begin{equation}
-\hat\mu=\argmin_{\mu}\;\big(\tilde M(\mu)-\hat M\big)'W\big(\tilde M(\mu)-\hat M\big),
-\label{eq:app-smm}
+\underbrace{\big\{\Omega_{L},\;\{\Omega_{s}\},\;\alpha,\;\{A_{r}\}\big\}}_{\text{searched over}}
+\;\cup\;
+\underbrace{\big\{\{T_{as}\},\;\{N_{s}\}\big\}}_{\text{calibrated within the model}},
+\label{eq:app-param-split}
 \end{equation}
-where $\tilde M$ (resp.\ $\hat M$) denotes the vector of theoretical (resp.\ empirical) moments
-and $W$ is a weighting matrix. Optimal weights assign lower importance to imprecisely estimated
-moments.
+but only the first group is searched over. Comparative advantage and the variety count are
+\emph{calibrated within the model}: given any candidate value of
+$\mu=(\Omega_{L},\{\Omega_{s}\},\alpha,\{A_{r}\})$, each is pinned by the model itself rather
+than left free. They are not fixed ahead of the estimation at some external target, and they are
+not searched over either --- they are recovered, inside the simulation of the economy that $\mu$
+implies, from the moments they exhaust. This is exact rather than approximate: minimizing the
+criterion jointly over all parameters and minimizing it over $\mu$ with $T$ and $N$ set to their
+within-model values give the same estimate.
 
-The variety count never enters the simulation. It is confined to two objects, both closed form,
-and that confinement is the content of Proposition~\ref{prop:firm} together with:
+We describe first how an economy is simulated at a given $\mu$, then the search over $\mu$.
 
-\begin{lemma}[$q_{r's}$ is free of $N_{s}$]
-\label{lem:qfree}
-Winning a variety is the comparison
-$w_{r's}\tau_{r'rs}/\varphi_{r'\rho s}<\min_{r''\neq r'}w_{r''s}\tau_{r''rs}/\varphi_{r''\rho s}$,
-so $q_{r's}=q_{r's}(T_{\cdot s},w,\tau,\theta)$ and nothing else. The variety count, the price
-index, downstream costs and expenditures do not appear.
-\end{lemma}
+\paragraph{Simulation algorithm.} Given the calibrated elasticities and a candidate $\mu$:
 
-The economics is that winning is a statement about \emph{relative costs}, whereas $N_{s}$ and
-$P_{rs}$ are aggregators built after the winners are known: expenditure allocates value across
-winners, it does not choose them. The one condition that would break the lemma is endogenous
-upstream wages, since $w$ enters the comparison directly; wages are taken as data.
+\begin{enumerate}[topsep=3pt,itemsep=5pt,label=\arabic*.]
 
-Together the two results say that $N_{s}$ reaches the moment vector only through
-$\bar G_{s}(0)$ and through $\widehat N_{s}$ itself, and that both are functions of $q_{r's}$
-alone. Writing $k_{r's}$ for the number of the $m$ simulated varieties won somewhere by region
-$r'$ --- by Lemma~\ref{lem:qfree} an estimate of $q_{r's}$ valid whatever the variety count ---
-the count moment is evaluated by the unbiased combinatorial estimator
-\begin{equation}
-\bar G_{s}(n)=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}
-\frac{\binom{m-k_{r's}}{n}}{\binom{m}{n}},
-\qquad
-\mathbb{E}\left[\frac{\binom{m-k}{n}}{\binom{m}{n}}\right]=(1-q)^{n}\ \ \text{for } n\le m,
-\label{eq:app-Gclosed}
-\end{equation}
-which is the probability that $n$ varieties drawn without replacement from the $m$ simulated
-ones were all lost. We use \eqref{eq:app-Gclosed} rather than the plug-in $(1-\hat q_{r's})^{n}$
-because the latter is convex in $\hat q$ and therefore biased upward. Cross-cell dependence ---
-two regions in a sector face the same variety draws --- does not affect either expression, since
-an expectation of an average is the average of expectations whatever the dependence. No economy
-of size $N_{s}$ is ever drawn and no replication is needed.
-
-\begin{remark}[What is given up]
-\label{rem:binding}
-Moment 4 is then the coefficient of a regression run on the full simulated sample, i.e.\ the
-continuum limit $\beta(\mathbb{E}[y])$ rather than $\mathbb{E}[\hat\beta(N_{s})]$. The finite-sample bias of the
-auxiliary cloglog --- which an average of $\hat\beta$ over realized economies of size $N_{s}$
-would have cancelled against the same bias in the data --- is therefore not differenced out. It
-is a measurable quantity, of the order of $2$--$4\%$ of $\beta$ at data-consistent group sizes,
-and we report it alongside $\hat\alpha$. The alternative is not free: it would treat simulation
-noise on one block by replication while every other block relies on the accuracy of the draw
-design, and it would sit oddly beside Appendix~\ref{app:model-price}, where the value block is
-already evaluated at the certainty-equivalent index rather than on a realized economy.
-\end{remark}
-
-\paragraph{Concentrating out the variety count.} $N_{s}$ is estimated by the same weighted
-objective as every other parameter, concentrated rather than searched jointly:
-\begin{equation}
-\widehat N(\mu_{-N})=\argmin_{N\in\prod_{s}[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
-\;r(\mu_{-N},N)'W\,r(\mu_{-N},N),
-\label{eq:app-profile}
-\end{equation}
-with the bounds of \eqref{eq:app-bounds}. This is a profiled extremum estimator: $\widehat N_{s}$
-is an integer at every evaluation, so integrality is never relaxed and never rounded, and by
-Lemma~\ref{lem:qfree} the inner minimization needs no re-simulation. Since $\bar G_{s}(0;n)$ is
-closed form and decreasing in $n$, \eqref{eq:app-profile} reduces to a monotone integer
-bisection. Clamping at either bound is informative rather than benign: the upper bound binding
-means the model cannot generate enough sparsity even when every variety is sourced from a single
-origin, which is a rejection signal for the mechanism rather than a numerical nuisance.
-
-\paragraph{Concentrating out comparative advantage.} Given
-$(\alpha,\Omega_{L},\{\Omega_{s}\},\{A_{r}\})$, the area-level comparative advantage that
-reproduces the observed sourcing shares \eqref{eq:app-gamma-area} is the solution of a
-matrix-scaling problem. We solve it by the damped multiplicative iteration
+\item \textbf{Calibrate comparative advantage.} We recover the area-level comparative advantage
+$T^{*}_{as}(\mu)$ that reproduces the observed area sourcing shares \eqref{eq:app-gamma-area}
+exactly. Trade costs are known at this point --- they are $\tau_{r'rs}=d_{r'r}^{\alpha}$ at the
+candidate $\alpha$ --- so this is the inversion of a matrix-scaling problem, solved by the damped
+multiplicative iteration
 \begin{equation}
 T^{+}_{as}=T_{as}\left(\frac{\hat{\tilde\gamma}_{as}}{\tilde\gamma_{as}(T)}\right)^{\varsigma},
 \qquad \varsigma\in(0,1],
 \label{eq:app-sinkhorn}
 \end{equation}
-renormalizing to the reference area of each sector after every pass, and recomputing the
-general-equilibrium expenditure weights that enter \eqref{eq:app-gamma-area}.
+renormalizing to the reference area of each sector after every pass, and recomputing at every
+pass the general-equilibrium expenditure weights that enter \eqref{eq:app-gamma-area}. The
+iteration is described, and its convergence established, below.
 
-It is useful to separate the two things this iteration does, because only the first is covered
-by a standard argument.
+\item \textbf{Draw varieties and calibrate the variety count.} We simulate $m$ varieties per
+sector, draw one Fr\'echet champion per (region, variety) pair as in
+Assumption~\ref{as:granular}, and run the Ricardian competition \eqref{eq:app-champion} for every
+buyer, which yields for each region the number $k_{r's}$ of simulated varieties it wins somewhere
+and hence the win-anywhere probability $q_{r's}$. The variety count is then the integer that best
+matches the count moment,
+\begin{equation}
+\widehat N_{s}=\argmin_{N\in[N^{\mathrm{lo}}_{s},N^{\mathrm{hi}}_{s}]\cap\mathbb{N}}
+\;\big(\tilde G_{s}(N)-\hat G_{s}(0)\big)^{2},
+\label{eq:app-profile}
+\end{equation}
+over the bounds \eqref{eq:app-bounds}, where $\hat G_{s}(0)$ is the empirical count moment
+\eqref{eq:app-count} and $\tilde G_{s}(\cdot)$ its simulated counterpart, given in closed form
+below. Crucially $m$ is not $N_{s}$: the simulated varieties are
+used to estimate $q_{r's}$, not to realize an economy of the model's size. Why that is legitimate
+--- and why \eqref{eq:app-profile} needs no re-simulation at each candidate $N$ --- is the
+content of Lemma~\ref{lem:qfree} below.
 
-\emph{Step one: the scaling problem at fixed expenditure.} Hold the expenditure weights
-$\omega_{rs}=X_{rs}/\sum_{r}X_{rs}$ of \eqref{eq:app-gamma-area} fixed. Then
+\item \textbf{Build the moments.} All six blocks of Section~\ref{app:model-moments} are computed
+from that \emph{single} Ricardian solve on one set of draws: the value blocks 1--3 and 5 from the
+realized trade flows, block 4 from the cloglog regression run on the simulated firm population,
+and block 6 in closed form from $\{k_{r's}\}$ and $\widehat N_{s}$.
+
+\end{enumerate}
+
+The three steps form a recursion, not a fixed point:
+$\alpha\to T^{*}\to q_{r's}\to\widehat N_{s}$, with no arrow running backwards. Step 1 does not
+need to know the variety count and step 2 does not revise comparative advantage. The two
+paragraphs that follow establish each half of that claim.
+
+\paragraph{Step 1: uniqueness, and the general-equilibrium feedback.} It is useful to separate
+the two things iteration \eqref{eq:app-sinkhorn} does, because only the first is covered by a
+standard argument.
+
+\emph{The scaling problem at fixed expenditure.} Hold the expenditure weights
+$\omega_{rs}=x_{rs}/\sum_{r}x_{rs}$ of \eqref{eq:app-gamma-area} fixed. Then
 $\tilde\gamma_{as}(T)$ is a ratio of positive linear forms in $T$: writing
 $B_{ar}=\sum_{r'\in\mathcal{R}_{a}}(w_{r's}\tau_{r'rs})^{-\theta}$ for the (strictly positive)
 bilateral access matrix, $\tilde\gamma_{as}(T)=\sum_{r}\omega_{rs}T_{as}B_{ar}/\sum_{a'}T_{a's}B_{a'r}$.
-Recovering $T$ from target shares is then the classical matrix-scaling (Sinkhorn--Knopp)
-problem, and \eqref{eq:app-sinkhorn} with $\varsigma=1$ is its standard iteration. Because
-$B$ has full support --- every area can serve every buyer at finite cost --- the associated
-positive linear map contracts the Hilbert projective metric with a modulus
-$\kappa_{S}=\tanh(\Delta/4)<1$, where $\Delta$ is the projective diameter of the image cone
-(Birkhoff--Hopf). Two consequences: the iteration converges geometrically from any strictly
-positive start, and \textbf{the fixed point is unique up to the per-sector scale}, which is
-exactly the gauge the reference normalization fixes. Given trade costs and expenditures, there
-is one and only one vector of comparative advantages consistent with the observed area shares.
+Recovering $T$ from target shares is then the classical matrix-scaling (Sinkhorn--Knopp) problem,
+and \eqref{eq:app-sinkhorn} with $\varsigma=1$ is its standard iteration. Because $B$ has full
+support --- every area can serve every buyer at finite cost --- the associated positive linear
+map contracts the Hilbert projective metric with a modulus $\kappa_{S}=\tanh(\Delta/4)<1$, where
+$\Delta$ is the projective diameter of the image cone (Birkhoff--Hopf). Two consequences: the
+iteration converges geometrically from any strictly positive start, and \textbf{the fixed point
+is unique up to the per-sector scale}, which is exactly the gauge the reference normalization
+fixes. Given trade costs and expenditures, there is one and only one vector of comparative
+advantages consistent with the observed area shares.
 
-\emph{Step two: the general-equilibrium feedback.} Expenditure is not fixed. A change in $T$
-moves the price indices $p_{rs}$, hence $c_{r}$, hence downstream sales $y_{r}$ and the weights
+\emph{The general-equilibrium feedback.} Expenditure is not fixed. A change in $T$ moves the
+price indices $p_{rs}$, hence $c_{r}$, hence downstream sales $y_{r}$ and the weights
 $\omega_{rs}$. The map actually iterated is the composition $\Psi=\mathcal{S}\circ\omega$, whose
 Jacobian decomposes as
 \begin{equation}
@@ -607,76 +586,226 @@ expenditure weights are invariant to $T$ when $\lambda=\nu=1$, so $\|J_{\mathrm{
 with $|1-\lambda|$ and $|1-\nu|$. Our calibration is not close to Cobb--Douglas, so
 \eqref{eq:app-contraction} is an empirical question rather than an assumption, and we verify it
 numerically at the estimated parameters by finite differences on the one-step map. We find
-$\kappa_{S}\approx0.005$ and $\|J_{\mathrm{GE}}\|\approx0.015$, so the sufficient condition
-\eqref{eq:app-contraction} holds with a wide margin ($\approx0.02\ll1$); the measured spectral
-radius of the full map is $\approx0.012$, and convergence to $10^{-9}$ takes a handful of
-iterations.%
+$\kappa_{S}\approx0.005$ and $\|J_{\mathrm{GE}}\|\approx0.015$, so the sufficient condition holds
+with a wide margin ($\approx0.02\ll1$); the measured spectral radius of the full map is
+$\approx0.012$, and convergence to $10^{-9}$ takes a handful of iterations.%
 % NOTE: these three numbers were measured by the Phase-0 inversion gate
 % (test/test_ge_inversion.jl). Re-run it under --granular=true --ca_level=aa to
 % refresh them before circulating, since the earlier measurement was taken on the
-% ZE-level continuum configuration.
-\ We further confirm that the inversion recovers a known $T$ from its own implied
-shares to machine precision, and that ten dispersed starting values converge to the same fixed
-point.
+% region-level continuum configuration.
+\ We further confirm that the inversion recovers a known $T$ from its own implied shares to
+machine precision, and that ten dispersed starting values converge to the same fixed point.
 
 This is a local, numerically verified statement at the estimated parameters, not a global
 theorem: \eqref{eq:app-contraction} is sufficient, not necessary, and we do not characterize the
-region of the parameter space over which it holds. Should it fail at some candidate parameter
-vector, the iteration is not used blindly --- non-convergence is detected and the candidate
-retains its warm-start $T$, so the outer optimizer sees a well-defined objective throughout.
+region of the parameter space over which it holds. Should it fail at some candidate $\mu$, the
+iteration is not used blindly --- non-convergence is detected and the candidate retains its
+warm-start $T$, so the outer optimizer sees a well-defined objective throughout.
 
-Substituting $T^{*}(\alpha,\Omega,A)$ into \eqref{eq:app-smm} collapses the outer search from
-several hundred parameters to a handful and makes the sourcing-share block just-identified along
-the profiled manifold, so that the extensive-margin coefficient is fit by $(\alpha,\Omega,A)$
-alone. Note that just-identification here is at the \emph{area} level: within an area, the split
-of sourcing across regions remains over-identified by the distance profile, which is the content
-of Assumption~\ref{as:geo}.
+\paragraph{Which price system step 1 uses.} The expenditure weights recomputed inside
+\eqref{eq:app-sinkhorn} come from the certainty-equivalent price system
+\eqref{eq:app-loveofvariety} --- the continuum index --- and not from a price index realized on
+$N_{s}$ varieties. This is not an approximation whose error must be assessed, because the
+variety count enters $\widetilde P_{rs}$ only through the factor $N_{s}^{1/(1-\nu_{s})}$, which
+is common to all origins $a$ and all buyers $r$ within a sector, and because the price index
+enters the equilibrium only through the combination $\Omega_{s}p_{rs}^{1-\nu}$ --- in the
+aggregator $p_{r}$ and in expenditure $x_{rs}$ alike. Scaling $p_{\cdot s}$ by a sector constant
+$\kappa_{s}$ is therefore \emph{exactly} the reparametrization
+$\Omega_{s}\mapsto\Omega_{s}\kappa_{s}^{1-\nu}$, absorbed by a parameter that is itself estimated
+and normalized. Restoring the variety count in step 1 would leave $T^{*}(\mu)$ numerically
+unchanged. The same argument covers the Jensen gap of Appendix~\ref{app:model-price}: the ratio
+of the realized index to its certainty-equivalent value is scale-free, depending on
+$(N_{s},\theta,\nu_{s})$ alone, hence again a sector-level factor.
 
-\paragraph{Weighting matrix.} In the SMM framework noise arises from two sources: sampling
-variability in the data and simulation error. We distinguish between moments for which
-bootstrapping is feasible (sourcing shares, extensive-margin coefficients and count moments) and
-those for which it is not (input--output coefficients and the downstream sales distribution). We
-therefore approximate the variance--covariance matrix of the data moments, $\Sigma_{\mathrm{data}}$,
-with a block matrix that accounts for within-group interactions; the block corresponding to
-non-bootstrappable moments is set to zero. Because the same firms generate the sourcing shares,
-the extensive-margin coefficients and the counts, these three blocks are estimated by a
-\emph{single joint} bootstrap, which is what delivers the cross-covariance blocks the efficient
-weight matrix requires. The resampling unit is the supplier firm, pooled over the geography of
-active areas, with the denominator of $\bar G_{s}(0)$ held fixed --- so that a region with one
-or two firms can draw zero and flip into the empty set, which is precisely the variance the
-count moment needs.
+Two remarks. First, step 1 and step 3 use the same price system: the CES aggregate in the
+simulation is taken as an average over the simulated varieties, as in \eqref{eq:app-ces}, which
+is the certainty-equivalent object. There is no inconsistency between the price system used to
+calibrate $T$ and the one used to evaluate the value moments. Second, this is what makes the
+recursion of the previous paragraph triangular rather than simultaneous. Were the price system
+used in step 1 to depend on $N_{s}$ in a way that was \emph{not} a sector-level scale, $T$ and
+$N$ would have to be solved jointly. As Appendix~\ref{app:model-price} insists, that is exactly
+the situation in counterfactuals that move the variety set, which must use the realized index;
+it is not the situation at estimation.
 
-\paragraph{Optimization procedure.} The estimator is computed using Particle Swarm Optimization
+\paragraph{Step 2: why no economy of size $N_{s}$ is ever drawn.} The variety count never enters
+the simulation. It is confined to two objects, both closed form, and that confinement is the
+content of Proposition~\ref{prop:firm} together with:
+
+\begin{lemma}[$q_{r's}$ is free of $N_{s}$]
+\label{lem:qfree}
+Winning a variety is the comparison
+$w_{r's}\tau_{r'rs}/\varphi_{r'\rho s}<\min_{r''\neq r'}w_{r''s}\tau_{r''rs}/\varphi_{r''\rho s}$,
+so $q_{r's}=q_{r's}(T_{\cdot s},w,\tau,\theta)$ and nothing else. The variety count, the price
+index, downstream costs and expenditures do not appear.
+\end{lemma}
+
+The economics is that winning is a statement about \emph{relative costs}, whereas $N_{s}$ and
+$p_{rs}$ are aggregators built after the winners are known: expenditure allocates value across
+winners, it does not choose them. The one condition that would break the lemma is endogenous
+upstream wages, since $w$ enters the comparison directly; wages are taken as data.
+
+Together the two results say that $N_{s}$ reaches the moment vector only through
+$\bar G_{s}(0)$ and through $\widehat N_{s}$ itself, and that both are functions of $q_{r's}$
+alone. Any $m$ large enough to estimate $q_{r's}$ precisely will do, whatever the model's own
+$N_{s}$. Writing $k_{r's}$ for the number of the $m$ simulated varieties won somewhere by region
+$r'$, the simulated count moment is evaluated by the unbiased combinatorial estimator
+\begin{equation}
+\tilde G_{s}(n)=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}
+\frac{\binom{m-k_{r's}}{n}}{\binom{m}{n}},
+\qquad
+\mathbb{E}\left[\frac{\binom{m-k}{n}}{\binom{m}{n}}\right]=(1-q)^{n}\ \ \text{for } n\le m,
+\label{eq:app-Gclosed}
+\end{equation}
+which is the probability that $n$ varieties drawn without replacement from the $m$ simulated ones
+were all lost. We use \eqref{eq:app-Gclosed} rather than the plug-in $(1-\hat q_{r's})^{n}$
+because the latter is convex in $\hat q$ and therefore biased upward. Cross-cell dependence ---
+two regions in a sector face the same variety draws --- does not affect either expression, since
+an expectation of an average is the average of expectations whatever the dependence. So
+\eqref{eq:app-Gclosed} carries no simulation noise of its own beyond that already in $\hat q$, no
+economy of size $N_{s}$ is ever drawn, and no replication is needed.
+
+Two consequences for \eqref{eq:app-profile}. It requires no re-simulation as $N$ varies, and
+since $\tilde G_{s}(n)$ is decreasing in $n$ it reduces to a monotone integer bisection, so
+$\widehat N_{s}$ is an integer at every evaluation --- integrality is never relaxed and never
+rounded. Clamping at either bound is informative rather than benign: the upper bound binding
+means the model cannot generate enough sparsity even when every variety is sourced from a single
+origin, which is a rejection signal for the mechanism rather than a numerical nuisance.
+
+\begin{remark}[What is given up]
+\label{rem:binding}
+Moment 4 is then the coefficient of a regression run on the full simulated sample, i.e.\ the
+continuum limit $\beta(\mathbb{E}[y])$ rather than $\mathbb{E}[\hat\beta(N_{s})]$. The
+finite-sample bias of the auxiliary cloglog --- which an average of $\hat\beta$ over realized
+economies of size $N_{s}$ would have cancelled against the same bias in the data --- is therefore
+not differenced out. It is a measurable quantity, of the order of $2$--$4\%$ of $\beta$ at
+data-consistent group sizes, and we report it alongside $\hat\alpha$. The alternative is not
+free: it would treat simulation noise on one block by replication while every other block relies
+on the accuracy of the draw design, and it would sit oddly beside
+Appendix~\ref{app:model-price}, where the value block is already evaluated at the
+certainty-equivalent index rather than on a realized economy.
+\end{remark}
+
+Substituting the within-model values into the criterion collapses the outer search from several
+hundred parameters to a handful, and makes the sourcing-share block just-identified along the
+resulting manifold, so that the extensive-margin coefficient is fit by
+$(\alpha,\Omega_{L},\{\Omega_{s}\},\{A_{r}\})$ alone. Note that just-identification here is at
+the \emph{area} level: within an area, the split of sourcing across regions remains
+over-identified by the distance profile, which is the content of Assumption~\ref{as:geo}.
+
+\paragraph{Estimation algorithm.} The SMM estimator is defined as
+\begin{equation}
+\hat\mu=\argmin_{\mu}\;\big(\tilde M(\mu)-\hat M\big)'W\big(\tilde M(\mu)-\hat M\big),
+\label{eq:app-smm}
+\end{equation}
+where $\tilde M$ (resp.\ $\hat M$) denotes the vector of theoretical (resp.\ empirical) moments,
+and $W$ is a weighting matrix. Optimal weights assign lower importance to imprecisely estimated
+moments; we construct them below. The minimization is carried out by Particle Swarm Optimization
 \citep{kennedy1995}, which explores the parameter space through parallel evaluation, with
 adaptive inertia weights declining from $0.9$ to $0.4$ over iterations and cognitive and social
-parameters set to $1.5$ and $2.5$. The estimation proceeds in three steps.
+parameters set to $1.5$ and $2.5$. The estimation proceeds in four steps.
 
 \begin{enumerate}[topsep=3pt,itemsep=3pt,label=\arabic*.]
-\item Starting values are set as follows: $\Omega_{L}$ and $\{\Omega_{s}\}$ at their empirical
-counterparts from input--output tables; $\{A_{r}\}$ proportional to $\pi_{r}^{1/\varepsilon}$;
-$\alpha$ at the extensive-margin regression estimate divided by $\theta$; and $\{T_{as}\}$ at the
-matrix-scaling solution \eqref{eq:app-sinkhorn} evaluated at that $\alpha$. We then run the
-optimizer over the profiled parameter vector using the identity weighting matrix, refining with
-an alternating block scheme in which each iteration sequentially optimizes $\{\Omega_{L},\Omega_{s}\}$,
-then $\alpha$, then $\{A_{r}\}$, with a search radius progressively reduced across iterations.
-This yields $\hat\mu_{1}$.
-\item Using $\hat\mu_{1}$ we estimate the variance--covariance matrix of the simulated moments,
-$\Sigma_{\mathrm{sim}}$, from repeated re-simulation with independent draws, and construct
-$W=(\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}})^{-1}$.
-\item We re-estimate the model with the updated weighting matrix, initializing at $\hat\mu_{1}$,
-to obtain $\hat\mu_{2}$.
+
+\item \textbf{A first fit under equal weights.} Starting values are set as follows: $\Omega_{L}$
+and $\{\Omega_{s}\}$ at their empirical counterparts from input--output tables; $\{A_{r}\}$
+proportional to $\pi_{r}^{1/\varepsilon}$; and $\alpha$ at the extensive-margin regression
+estimate divided by $\theta$. We run the optimizer over $\mu$ with $W$ set to the identity,
+refining with an alternating block scheme in which each iteration sequentially optimizes
+$\{\Omega_{L},\Omega_{s}\}$, then $\alpha$, then $\{A_{r}\}$, with a search radius progressively
+reduced across iterations. This yields $\hat\mu_{1}$.
+
+\item \textbf{The weighting matrix.} At $\hat\mu_{1}$ we estimate the variance--covariance matrix
+of the \emph{simulated} moments, $\Sigma_{\mathrm{sim}}$, by repeated re-simulation with
+independent draws, and combine it with the variance--covariance matrix of the \emph{data}
+moments, $\Sigma_{\mathrm{data}}$, described in the next paragraph:
+\begin{equation}
+W=\big(\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}}\big)^{-1}.
+\label{eq:app-W}
+\end{equation}
+
+\item \textbf{The efficient fit.} We re-estimate the model with the updated weighting matrix,
+initializing at $\hat\mu_{1}$, to obtain $\hat\mu_{2}$.
+
+\item \textbf{Inference.} At $\hat\mu_{2}$ we compute the Jacobian of the moments, the standard
+errors described below, and the over-identification test.
+
 \end{enumerate}
 
-\paragraph{Standard errors.} Let $G=\partial\tilde M/\partial\mu$ evaluated at $\hat\mu_{2}$ by
-finite differences on common random numbers, and $\Omega=\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}}$.
-We report the efficient variance $(G'WG)^{-1}$ alongside the sandwich form
-$(G'WG)^{-1}G'W\Omega WG(G'WG)^{-1}$, which coincide when $W=\Omega^{-1}$; the ratio is a
-diagnostic on the weighting matrix. Because $T$ is concentrated out through
-\eqref{eq:app-sinkhorn} rather than searched, the Jacobian is taken along the profiled manifold
---- perturbing $\alpha$ and letting $T^{*}(\alpha)$ follow --- so the reported standard error on
-$\alpha$ is a total derivative, and confidence intervals for $T$ are obtained by the delta
-method, propagating both the uncertainty in $\hat\alpha$ and the sampling uncertainty in the
-sourcing-share targets that \eqref{eq:app-sinkhorn} inverts.
+\paragraph{The variance--covariance matrix of the data moments.} In the SMM framework, noise
+arises from two sources: sampling variability in the data and simulation error. Ideally, to
+assess the contribution of sampling variability, one would estimate the variance--covariance
+matrix of the empirical moments using bootstrap methods. In our setting, we distinguish between
+two types of moments: those for which bootstrapping is feasible (regional sourcing shares, count
+moments and extensive-margin parameters) and those for which it is not (input--output
+coefficients and the downstream sales share distribution). We therefore approximate
+$\Sigma_{\mathrm{data}}$ with a block-diagonal matrix that only accounts for within-group
+interactions. The block corresponding to non-bootstrappable moments is set to zero. The block
+associated with regional sourcing shares and count moments is estimated via bootstrap, resampling
+supplier firms over the geography of active areas with the denominator of $\bar G_{s}(0)$ held
+fixed --- so that a region with one or two firms can draw zero and flip into the empty set, which
+is precisely the variance the count moment needs. The block for extensive-margin parameters is
+given by the variance--covariance matrix obtained from the corresponding regression estimates.
+% NOTE (implementation): the code loads a SINGLE joint bootstrap covariance over the three
+% blocks beta -> gamma -> G (sigma_beta_gamma_filename in tools.jl), i.e. it does carry the
+% cross-covariance blocks that the text here describes as set to zero. Either regenerate the
+% Sigma file block-diagonally to match this text, or restore the "single joint bootstrap"
+% wording of the previous draft. Flagged rather than silently resolved.
+
+Some sector--region cells host few suppliers, and therefore the variance of the regional sourcing
+share may be very large when a single supplier accounts for a disproportionate share of activity.
+To avoid attributing spuriously large comparative advantages to such regions, we restrict the
+sample to cells with more than five suppliers. This restriction reduces total sales of suppliers
+to downstream industries by approximately $25\%$.
+
+\paragraph{Standard errors.} Let $G=\partial\tilde M/\partial\mu$ be evaluated at $\hat\mu_{2}$
+by finite differences on common random numbers, and $\Omega=\Sigma_{\mathrm{data}}+\Sigma_{\mathrm{sim}}$.
+For the searched parameters we report the efficient variance $(G'WG)^{-1}$ alongside the sandwich
+form $(G'WG)^{-1}G'W\Omega WG(G'WG)^{-1}$, which coincide when $W=\Omega^{-1}$; the ratio is a
+diagnostic on the weighting matrix.
+
+Because $T$ and $N$ are calibrated within the model rather than searched, $G$ is taken
+\emph{along the manifold they trace}: we perturb $\alpha$ and let $T^{*}(\alpha)$ follow through
+\eqref{eq:app-sinkhorn}, so the reported standard error on $\alpha$ is a total derivative. We
+deliberately never form the derivative of the moments with respect to $T$ as a free parameter.
+The reason is that $T$ reaches the value moments through the Ricardian minimum: the identity of
+the winning origin is a step function of $T$ at the level of an individual variety, so a
+finite-difference column differences a handful of flipped winners and divides by the step. With
+common random numbers the resulting column has a signal-to-noise ratio an order of magnitude
+worse than the profiled one, and it does not improve with the number of draws at any usable step
+size. Every statement about $T$ and $N$ below therefore travels through the delta method applied
+to the calibration maps, which are deterministic and smooth, and never through that column.
+
+For comparative advantage, $T^{*}$ is a function of the estimated $\hat\alpha$ and of the
+observed area shares $\hat{\tilde\gamma}$ that \eqref{eq:app-sinkhorn} inverts. Writing
+$f_{\alpha}=\partial T^{*}/\partial\alpha$ and $f_{\gamma}=\partial T^{*}/\partial\tilde\gamma$
+--- both obtained by finite differences on the inversion itself, which carries no simulation
+noise --- the delta method gives
+\begin{equation}
+\mathrm{Var}(\hat T)=f_{\alpha}\mathrm{Var}(\hat\alpha)f_{\alpha}'
++f_{\gamma}\Sigma_{\tilde\gamma\tilde\gamma}f_{\gamma}'
++f_{\alpha}\mathrm{Cov}(\hat\alpha,\hat{\tilde\gamma})f_{\gamma}'+(\cdot)' ,
+\label{eq:app-deltaT}
+\end{equation}
+with $\Sigma_{\tilde\gamma\tilde\gamma}$ the bootstrap block of $\Sigma_{\mathrm{data}}$ and the
+cross-term from the influence representation of $\hat\alpha$. Both channels matter: a
+comparative advantage is uncertain because the trade-cost elasticity that positions it is
+estimated, and because the share it is inverted from is itself measured with error. We report the
+two contributions separately.
+
+For the variety count, differentiating the calibration condition
+$\tilde G_{s}(\widehat N_{s})=\hat G_{s}(0)$ gives
+\begin{equation}
+d\widehat N_{s}=\frac{d\hat G_{s}(0)
+-(\partial\tilde G_{s}/\partial\alpha)\,d\hat\alpha
+-(\partial\tilde G_{s}/\partial\tilde\gamma)\,d\hat{\tilde\gamma}}
+{\partial\tilde G_{s}/\partial n},
+\label{eq:app-deltaN}
+\end{equation}
+so the confidence interval for $\widehat N_{s}$ combines the sampling error in the count moment
+itself with the transmission of $\hat\alpha$ and $\hat{\tilde\gamma}$ through $q_{r's}$. The
+denominator is negative and available in closed form from \eqref{eq:app-Gclosed}. The share
+channel dominates in our estimates, so an interval that ignored it would be more than twice too
+narrow. The interval is continuous while $N_{s}$ is an integer, and we report it as such.
 
 \subsection{The price index, love of variety, and the normalization}
 \label{app:model-price}
