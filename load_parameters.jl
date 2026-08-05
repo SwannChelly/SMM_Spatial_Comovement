@@ -60,7 +60,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
-@everywhere const theta               = $(1.)#1.768
+@everywhere const theta               = $(1.768)#1.768
 
 println("\n Lambda = $lambda — Labor / CI share")
 println("\n Epsilon = $epsilon — Sales elasticity")
@@ -980,7 +980,7 @@ end
 # inversion at α = 0 (τ ≡ 1 ⇒ market access M is common within a sector and cancels),
 # so when the α prior is missing we fall back to α = 0 rather than to a second,
 # redundant code path.
-_prior_alpha = _read_prior_alpha(coefs)
+_prior_alpha = _read_prior_alpha(coefs)/theta
 _init_alpha  = _prior_alpha === nothing ? 0.0 : Float64(_prior_alpha)
 if _prior_alpha === nothing
     @warn "prior_alpha (reg_coef_cloglog_1) not found in stats.csv — inverting T at α = 0 " *
