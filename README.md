@@ -39,6 +39,7 @@ SMM_Spatial_Comovement/
 ├── tools.jl                # inference, Jacobian, weight matrix, reporting
 │
 ├── analysis.ipynb          # post-run analysis notebook (Python; installs its own deps)
+├── analysis_granular.ipynb # post-run analysis for --granular=true --ca_level=aa
 │
 ├── optimizers/             # interchangeable search engines (--optimizer=…)
 │   ├── pso_integration.jl      #   Particle Swarm Optimization (default)
@@ -76,8 +77,12 @@ Each subfolder contains a short `files.md` describing its files.
 julia pkg.jl
 ```
 
-**Python** (only for `analysis.ipynb`): the notebook installs its own dependencies
-in its first cell — just open and run it, no separate setup needed.
+**Python** (only for `analysis.ipynb` / `analysis_granular.ipynb`): each notebook
+installs its own dependencies in its first cell — just open and run it, no separate
+setup needed. `analysis_granular.ipynb` is the reporting for a granular /
+attraction-area run; set `MU = 1` or `MU = 2` in its last cell to read the step-1 or
+the step-3 best parameters. It is gated by `python3 test/test_analysis_granular.py`,
+which runs the notebook's own cells against a synthetic reporting tree.
 
 **Input data.** Each industry needs a `baseline_<industry>/` folder (e.g.
 `baseline_aero/`) holding the empirical inputs — distances, wages, sectoral shares,

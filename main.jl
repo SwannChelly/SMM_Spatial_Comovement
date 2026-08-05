@@ -638,6 +638,20 @@ end
 run_reporting(joinpath(output_folder, "step1"), K; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
               analytical=false)
 
+# Same reporting artefacts at the efficient estimate θ̂_2, so the Python reporting can
+# read the simulated moments at EITHER μ_1 (step1) or μ_2 (step3). Without this, only
+# the Step-1 fit is on disk as a moment vector; θ̂_2's moments exist nowhere as an
+# array. Guarded: a fresh tree resumed at step ≤ 2 has no step3 stage folders yet, and
+# a reporting failure must never abort the run after the estimation itself succeeded.
+if isdir(joinpath(output_folder, "step3"))
+    try
+        run_reporting(joinpath(output_folder, "step3"), K; u_draws=U_DRAWS,
+                      sample_weights=SAMPLE_WEIGHTS, analytical=false)
+    catch e
+        @warn "Step-3 reporting skipped: $e"
+    end
+end
+
 
 last_stage_folder = find_last_stage_folder(joinpath(output_folder, "step1"))
 println("\n" * "="^70)
