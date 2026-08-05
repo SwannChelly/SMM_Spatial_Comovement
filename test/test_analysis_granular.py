@@ -110,8 +110,10 @@ def build_synthetic_tree(ROOT):
     rows = []
     for s in range(S):
         for k in range(3):
-            rows.append({"A129": sectors[s], "K": k,
-                         "G(K)": G_target[s] + 0.1 * k, "N_supplier_s": N_sup[s]})
+            # Real column layout: group, A129, G, K, N_supplier_s — the value column
+            # is `G` (older files called it `G(K)`; both are accepted).
+            rows.append({"group": s + 1, "A129": sectors[s], "G": G_target[s] + 0.1 * k,
+                         "K": k, "N_supplier_s": N_sup[s]})
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
 
     # ---- the model-side structures the loader must rebuild ---------------------
@@ -196,6 +198,7 @@ def build_synthetic_tree(ROOT):
         "emp_pi_r": emp_pi_r.tolist(),
         "reg_coef": reg_coef_emp.tolist(),
         "G_target": G_target.tolist(),
+        "N_supplier_s": N_sup.astype(float).tolist(),
         "sim_final": {"labor": sim_labor.tolist(), "industry": sim_industry.tolist(),
                       "pi": sim_pi.tolist(), "reg": sim_reg.tolist(), "G0": sim_G0.tolist()},
         "domestic_share": domestic_share.tolist(),
@@ -352,6 +355,31 @@ def run_checks(ns, ROOT, exp):
         check("wrong --granular flag is caught", False)
     except (ValueError, FileNotFoundError) as e:
         check("wrong --granular flag is caught", True)
+
+    print("\n=== 11. globals().update(data) exposes the analysis.ipynb names ===")
+    g = {}
+    g.update(d2)
+    for name in ("input_folder", "folder", "coefs", "agg_labor_share", "epsilon",
+                 "agg_industry_share", "emp_pi_r", "reg_coef", "emp_gamma_ls", "X_dr",
+                 "X_rs", "filter_N_upstream_df", "idf_ze", "N_downstream", "K",
+                 "empirical_moments", "empirical_moments_dict", "best_simulated_moments",
+                 "best_simulated_moments_dict", "best_params", "n_coef", "industry",
+                 "emp_gamma_aa", "aa_names", "AA_ACTIVE", "G_target"):
+        check(f"data['{name}'] present", name in g)
+    check("empirical_moments is a column vector",
+          g["empirical_moments"].shape == (len(exp["emp_gamma_aa"]) * exp["n_AA"]
+                                           + 1 + exp["S"] + len(exp["emp_pi_r"])
+                                           + exp["n_coef"] + exp["S"], 1))
+    check("best_simulated_moments_dict keeps the stage axis LAST (old [..., K] layout)",
+          close(g["best_simulated_moments_dict"]["reg_coef"][:, -1], exp["sim_final"]["reg"])
+          and g["best_simulated_moments_dict"]["gamma_aa"].shape[:2] == (exp["S"], exp["n_AA"]))
+    check("best_params is the stage-K parameter column",
+          g["best_params"] is not None and g["best_params"].ndim == 1)
+    check("optional geography/panels degrade to None when absent",
+          g["france"] is None and g["panel_df"] is None and g["ref"] is None)
+    check("G_K.csv read through the `G` column (real layout: group, A129, G, K, N_supplier_s)",
+          close(g["G_target"], exp["G_target"]))
+    check("N_supplier_s read", close(g["N_supplier_s"], exp["N_supplier_s"]))
 
     print("\n" + "=" * 60)
     print(f"{len(ok)} passed, {len(fail)} failed")
