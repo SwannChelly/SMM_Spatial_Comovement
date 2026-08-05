@@ -31,15 +31,29 @@ N_STAGES = 3
 
 
 def build_synthetic_tree(ROOT):
-    """Write the tree and return the expectations, also dumped to ROOT/expected.json."""
-    BASE = os.path.join(ROOT, "baseline_test")
-    RUN = os.path.join(ROOT, "reporting_test_profiled_aa_gran_pso")
+    """
+    Write TWO synthetic industries and return the expectations for the first.
+
+    Two, because the reporting table is joint (aero + auto in the real notebook) and
+    the two industries have DIFFERENT sector sets — the "---" path of the table is
+    only exercised when the sector codes do not coincide.
+    """
+    exp = _build_industry(ROOT, "test", [f"C{10 + s}A" for s in range(S)])
+    exp["second"] = _build_industry(ROOT, "test2", [f"C{20 + s}A" for s in range(S)])
+    with open(os.path.join(ROOT, "expected.json"), "w") as f:
+        json.dump(exp, f)
+    return exp
+
+
+def _build_industry(ROOT, industry, sectors):
+    """Write one industry's baseline + reporting tree; return its expectations."""
+    BASE = os.path.join(ROOT, f"baseline_{industry}")
+    RUN = os.path.join(ROOT, f"reporting_{industry}_profiled_aa_gran_pso")
     for p in (BASE, RUN, f"{RUN}/step1", f"{RUN}/step2", f"{RUN}/step2/inference",
               f"{RUN}/step3", f"{RUN}/step3/inference"):
         os.makedirs(p, exist_ok=True)
 
     ze = [f"{100 + i:04d}" for i in range(R)]
-    sectors = [f"C{10 + s}A" for s in range(S)]
 
     # ---- geography: downstream regions are ZE 0, 5, 9 (sorted index order) ----
     down_idx = np.array([0, 5, 9])
@@ -110,8 +124,8 @@ def build_synthetic_tree(ROOT):
     rows = []
     for s in range(S):
         for k in range(3):
-            # Real column layout: group, A129, G, K, N_supplier_s — the value column
-            # is `G` (older files called it `G(K)`; both are accepted).
+            # Real column layout: group, A129, G, K, N_supplier_s — `G` is the value
+            # column, G = Pr(K_ls <= K), and the K = 0 row is the targeted moment.
             rows.append({"group": s + 1, "A129": sectors[s], "G": G_target[s] + 0.1 * k,
                          "K": k, "N_supplier_s": N_sup[s]})
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
@@ -171,6 +185,20 @@ def build_synthetic_tree(ROOT):
     Sigma_data = A @ A.T + np.diag(RNG.uniform(0.001, 0.01, n_gb))
     np.save(f"{RUN}/step2/Sigma_data.npy", Sigma_data)
     np.save(f"{RUN}/step2/Sigma_sim.npy", Sigma_data * 0.3)
+    np.save(f"{RUN}/step2/Omega.npy", Sigma_data * 1.3)
+    np.save(f"{RUN}/step2/W_step3.npy", np.linalg.inv(Sigma_data * 1.3))
+
+    # ---- Jacobian: rows = masked moments, cols = identified parameters --------
+    n_mom_kept = 1 + (S - 1) + (R_D - 1) + N_REG + int(gam_free.sum()) + S
+    n_par_id = 1 + (S - 1) + (R_D - 1) + 1 + int(gam_free.sum())
+    J = RNG.normal(size=(n_mom_kept, n_par_id)) * 0.05
+    for st, fn in (("step2", "jacobian_all"), ("step3", "jacobian_all_step3")):
+        np.save(f"{RUN}/{st}/{fn}.npy", J)
+        np.save(f"{RUN}/{st}/{fn}_elasticity.npy", J * 2.0)
+        np.save(f"{RUN}/{st}/{fn}_sd.npy", np.abs(J) * 0.1)
+        np.save(f"{RUN}/{st}/{fn}_elasticity_sd.npy", np.abs(J) * 0.2)
+        np.save(f"{RUN}/{st}/{fn}_param_indices.npy", np.arange(1, n_par_id + 1))
+
     for st in ("step2", "step3"):
         np.save(f"{RUN}/{st}/inference/se_moments_fitted.npy",
                 np.sqrt(np.diag(Sigma_data)) * (0.5 if st == "step2" else 0.4))
@@ -204,10 +232,11 @@ def build_synthetic_tree(ROOT):
         "domestic_share": domestic_share.tolist(),
         "agg_labor_share": agg_labor_share,
         "n_gamma_kept": int(gam_free.sum()),
+        "industry": industry,
+        "n_mom_kept": n_mom_kept, "n_par_id": n_par_id,
+        "ze": ze,
     }
-    with open(f"{ROOT}/expected.json", "w") as f:
-        json.dump(expected, f)
-    print(f"synthetic tree: {ROOT}  (S={S}, R={R}, n_AA={R_D}, n_gb={n_gb}, gamma kept={int(gam_free.sum())})")
+    print(f"synthetic {industry}: {ROOT}  (S={S}, R={R}, n_AA={R_D}, n_gb={n_gb}, gamma kept={int(gam_free.sum())})")
     return expected
 
 
@@ -335,11 +364,23 @@ def run_checks(ns, ROOT, exp):
           ns["reg_bin_labels"](4) == ns["REG_BIN_LABELS_5"][1:])
     check("reg bin labels for n_coef=5 keep all", len(ns["reg_bin_labels"](5)) == 5)
 
-    print("\n=== 9. LaTeX table: labor + industry only ===")
+    print("\n=== 9. LaTeX table: JOINT (two industries), labor + industry only ===")
     tex = ns["generate_combined_table"](
-        [{"industry": "test", "display_name": "Synthetic"}],
+        [{"industry": "test", "display_name": "Synthetic A"},
+         {"industry": "test2", "display_name": "Synthetic B"}],
         output_file=os.path.join(outdir, "moments.tex"), mu=2, base=ROOT,
         name_A129_path=os.path.join(ROOT, "does_not_exist.csv"))
+    check("both industries have their own column pair",
+          "Synthetic A" in tex and "Synthetic B" in tex
+          and tex.count(r"{Emp.} & {Sim.}") == 2)
+    check("column spec has 2 pairs", tex.count("S[table-format=1.4]") == 4)
+    check("second industry's simulated values present",
+          all(f"{v:.4f}" in tex for v in exp["second"]["sim_final"]["industry"]))
+    check("disjoint sector sets produce `---` cells", "{---}" in tex)
+    check("row count = union of both sector sets",
+          sum(1 for line in tex.splitlines() if line.strip().endswith(r"\\")
+              and line.split("&")[0].strip() in
+              set(exp["sector_names"]) | set(exp["second"]["sector_names"])) == 2 * S)
     check("Panel A present", "Panel A: Aggregate Labor Share" in tex)
     check("Panel B present", "Panel B: Aggregate Industry Shares" in tex)
     check("no regression-coefficient panel", "Panel C" not in tex and "Regression Coefficients" not in tex)
@@ -380,6 +421,60 @@ def run_checks(ns, ROOT, exp):
     check("G_K.csv read through the `G` column (real layout: group, A129, G, K, N_supplier_s)",
           close(g["G_target"], exp["G_target"]))
     check("N_supplier_s read", close(g["N_supplier_s"], exp["N_supplier_s"]))
+
+    print("\n=== 12. Jacobian: layout, labels, block grid ===")
+    check("Jacobian loaded", d2["J"] is not None and d2["J_elast"] is not None)
+    check("shape = masked moments x identified parameters",
+          d2["J"].shape == (exp["n_mom_kept"], exp["n_par_id"]))
+    check("moment labels align with the rows",
+          len(d2["moment_labels"]) == d2["J"].shape[0]
+          and sum(d2["moment_block_sizes"]) == d2["J"].shape[0])
+    check("parameter labels align with the columns",
+          len(d2["param_labels"]) == d2["J"].shape[1]
+          and sum(d2["param_block_sizes"]) == d2["J"].shape[1])
+    check("moment blocks: labor, industry-1, pi_r-1, reg_coef, gamma free, G0",
+          list(d2["moment_block_sizes"]) ==
+          [1, S - 1, exp["n_AA"] - 1, exp["n_coef"], exp["n_gamma_kept"], S])
+    check("parameter blocks: Omega_L, Omega_s-1, A-1, alpha, T free",
+          list(d2["param_block_sizes"]) == [1, S - 1, exp["n_AA"] - 1, 1, exp["n_gamma_kept"]])
+    check("param_indices file agrees with the rebuilt column count",
+          len(d2["jacobian_param_indices"]) == d2["J"].shape[1])
+    check("gamma moment labels and T parameter labels enumerate the same (s, AA) pairs",
+          [l.replace("gamma[", "") for l in d2["moment_labels"]
+           if l.startswith("gamma[")] ==
+          [l.replace("T[", "") for l in d2["param_labels"] if l.startswith("T[")])
+    check("mu = 1 reads step2/jacobian_all.npy, mu = 2 step3/jacobian_all_step3.npy",
+          d1["J"] is not None and d1["J"].shape == d2["J"].shape)
+    check("elasticity Jacobian is the one plotted",
+          close(ns["jacobian_matrix"](d2, "elasticity"), d2["J_elast"]))
+    summ = ns["jacobian_block_summary"](d2)
+    check("block summary is moment-blocks x parameter-blocks",
+          summ.shape == (len(d2["moment_block_names"]), len(d2["param_block_names"])))
+    for fn, kw in (("plot_jacobian_full", {}), ("plot_jacobian_blocks", {})):
+        try:
+            ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"), **kw)
+            check(f"{fn} -> pdf", os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0)
+        except Exception as e:
+            check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
+
+    print("\n=== 13. variance-covariance ===")
+    check("Sigma_data / Sigma_sim / Omega / W_step3 loaded",
+          all(d2[k] is not None for k in ("Sigma_data", "Sigma_sim", "Omega", "W_step3")))
+    check("all are n_gb x n_gb",
+          all(d2[k].shape == (exp["n_gb"], exp["n_gb"])
+              for k in ("Sigma_data", "Sigma_sim", "Omega")))
+    vsum = ns["variance_covariance_summary"](d2)
+    check("summary covers the three matrices",
+          set(vsum.index) == {"Sigma_data", "Sigma_sim", "Omega"}
+          and {"trace", "cond", "eig_min", "eig_max"} <= set(vsum.columns))
+    check("trace of Sigma_sim reported correctly",
+          close(vsum.loc["Sigma_sim", "trace"], np.trace(d2["Sigma_sim"]), 1e-9))
+    for fn in ("plot_variance_covariance", "plot_moment_correlation"):
+        try:
+            ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"))
+            check(f"{fn} -> pdf", os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0)
+        except Exception as e:
+            check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
 
     print("\n" + "=" * 60)
     print(f"{len(ok)} passed, {len(fail)} failed")
