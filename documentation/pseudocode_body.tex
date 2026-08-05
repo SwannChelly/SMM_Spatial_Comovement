@@ -1,0 +1,316 @@
+% =====================================================================
+%  Pseudo-code for the simulation and the estimation algorithms
+%  (Appendix B.3 of "Spatial Comovements").
+%
+%  This file is a FRAGMENT: \input{pseudocode_body} it where you want the
+%  algorithms to appear (e.g. right after Appendix B.3.2).
+%
+%  Required packages in the master preamble:
+%      \usepackage{amsmath,amssymb}
+%      \usepackage{algorithm}
+%      \usepackage{algpseudocode}
+%      \usepackage{float}          % for the [H] float placement used below
+%
+%  Cross-references: equation numbers are written literally as (B12), (B22),
+%  (B31), (B32) to match the current draft. Replace them by \eqref{...} once
+%  those equations carry labels.
+%  Recommended (renames Require/Ensure to Input/Output):
+%      \renewcommand{\algorithmicrequire}{\textbf{Input:}}
+%      \renewcommand{\algorithmicensure}{\textbf{Output:}}
+%
+%  `pseudocode.tex` in the same folder is a standalone driver that compiles
+%  this file on its own, for checking.
+% =====================================================================
+
+\subsection{Pseudo-code}
+\label{app:pseudocode}
+
+This section states the two algorithms of Appendix~B.3 in
+explicit form: Algorithm~\ref{alg:simulate} evaluates the model at a candidate
+parameter vector $\mu$ and returns the simulated moment vector
+$\widetilde{M}(\mu)$, and Algorithm~\ref{alg:smm} minimises the SMM criterion
+over $\mu$ by particle swarm optimisation. Algorithms~\ref{alg:invertT},
+\ref{alg:countN} and \ref{alg:pso} are the three subroutines they call: the
+comparative-advantage inversion, the variety-count calibration, and the swarm
+itself.
+
+Throughout, $\mu=\bigl(\Omega_L,\{\Omega_s\},\alpha,\{A_r\}\bigr)$ is the vector
+searched over; $a(r')$ denotes the attraction area of region $r'$;
+$\mathcal{R}_a$ the regions of area $a$; $\mathcal{R}_D$ the set of downstream
+buyers, $R_D=|\mathcal{R}_D|$; and $\mathcal{R}^+_s$ the regions inside active
+attraction areas for sector $s$. The calibrated objects
+\[
+  \bigl\{\theta,\ \varepsilon,\ \lambda,\ \nu,\ \{\nu_s\},\
+  \{w_{r's}\},\ \{\delta_r\},\ \{d_{r'r}\}\bigr\}
+\]
+are fixed once and for all and are suppressed from the argument lists.
+
+% ---------------------------------------------------------------------
+%  Algorithm 1 -- simulation
+% ---------------------------------------------------------------------
+\begin{algorithm}[H]
+\caption{Simulation of the economy at a candidate $\mu$ (one criterion evaluation)}
+\label{alg:simulate}
+\begin{algorithmic}[1]
+\Require candidate $\mu=(\Omega_L,\{\Omega_s\},\alpha,\{A_r\})$; empirical
+  sourcing shares $\widehat{\gamma}_{as}$; empirical count moments
+  $\widehat{G}_s(0)$ and bounds $[N^{lo}_s,N^{hi}_s]$; a fixed array of uniform
+  draws $u_{r'\rho s}\in(0,1)$, $\rho=1,\dots,m$
+\Ensure simulated moment vector $\widetilde{M}(\mu)$, and the calibrated
+  $\{T_{as}\},\{\widehat{N}_s\}$
+\vspace{2pt}
+\State $\tau_{r'r}\gets d_{r'r}^{\,\alpha}$
+  \Comment{trade costs; the only place $\alpha$ enters}
+\vspace{2pt}
+\State \textbf{Step 1 (comparative advantage).}
+  $\{T_{as}\}\gets\Call{InvertT}{\alpha,\Omega_L,\{\Omega_s\},\{A_r\};\widehat{\gamma}}$
+  \Comment{Algorithm~\ref{alg:invertT}}
+\vspace{2pt}
+\State \textbf{Step 2 (Ricardian competition).}
+\For{$s=1,\dots,S$ \textbf{and} $\rho=1,\dots,m$}
+    \For{$r'=1,\dots,R$}
+        \State $z_{r'\rho s}\gets T_{a(r')s}^{1/\theta}\bigl(-\log u_{r'\rho s}\bigr)^{-1/\theta}$
+          \Comment{Fr\'echet inverse c.d.f.}
+    \EndFor
+    \For{$r\in\mathcal{R}_D$}
+        \State $r^\star(\rho,s,r)\gets\arg\min_{r'}\; w_{r's}\tau_{r'r}/z_{r'\rho s}$
+          \Comment{winner of variety $\rho$ in market $(r,s)$}
+        \State $p_{\rho s r}\gets w_{r^\star s}\tau_{r^\star r}/z_{r^\star\rho s}$
+    \EndFor
+\EndFor
+\State $k_{r's}\gets\#\{\rho:\ r'=r^\star(\rho,s,r)\ \text{for some }r\in\mathcal{R}_D\}$,
+  \quad $p_{r's}\gets k_{r's}/m$
+  \Comment{win-anywhere counts and probabilities}
+\vspace{2pt}
+\State \textbf{Prices, sales and flows.} For every $r\in\mathcal{R}_D$:
+\State \quad $P_{rs}\gets\bigl[\tfrac1m\sum_{\rho}p_{\rho s r}^{\,1-\nu_s}\bigr]^{1/(1-\nu_s)}$,\quad
+  $P_r\gets\bigl[\sum_s\Omega_s P_{rs}^{1-\nu}\bigr]^{1/(1-\nu)}$
+\State \quad $c_r\gets\bigl[\Omega_L w_r^{1-\lambda}+(1-\Omega_L)P_r^{1-\lambda}\bigr]^{1/(1-\lambda)}$,\quad
+  $\tilde c_r\gets c_r/A_r$
+\State \quad $y_r\gets \tilde c_r^{\,\varepsilon}\,\delta_r\big/\sum_{r''}\tilde c_{r''}^{\,\varepsilon}\delta_{r''}$,\quad
+  $\pi_r\gets y_r$
+  \Comment{iso-elastic demand, $E$ normalised to $1$}
+\State \quad $X_{r'rs}\gets$ expenditure of $r$ on the varieties won by $r'$,
+  from~(B12)
+\vspace{2pt}
+\State \textbf{Step 3 (variety count).}
+  $\{\widehat{N}_s\}\gets\Call{CalibrateN}{\{k_{r's}\},m;\widehat{G}_s(0),[N^{lo}_s,N^{hi}_s]}$
+  \Comment{Algorithm~\ref{alg:countN}}
+\vspace{2pt}
+\State \textbf{Step 4 (moments).} Assemble $\widetilde{M}(\mu)$ from the single
+  solve above:
+\State \quad (1) $\widetilde{\Omega}_L$, (2) $\widetilde{\Omega}_s$, (3) $\pi_r$
+  \Comment{value blocks, from $\{X_{r'rs}\},\{c_r\},\{y_r\}$}
+\State \quad (4) $\beta$: cloglog of ``does not supply'' on $\log d_{r'a(r')}$ and
+  $\log z$, area${}\times{}$sector fixed effects, run on the simulated firm
+  population $\{(r',\rho,s)\}$
+\State \quad (5) $\widetilde{\gamma}_{as}\gets\sum_{r'\in\mathcal{R}_a}\sum_r X_{r'rs}\big/\sum_{r''}\sum_r X_{r''rs}$
+\State \quad (6) $\widetilde{G}_s(\widehat{N}_s)$
+  \Comment{count moment, evaluated at the calibrated $\widehat{N}_s$}
+\State \Return $\widetilde{M}(\mu)$
+\end{algorithmic}
+\end{algorithm}
+
+Three features of Algorithm~\ref{alg:simulate} are worth emphasising. First, the
+arrows of~(B22) run one way: $T$ is calibrated without knowing
+$N$, and $N$ does not revise $T$, so Steps~1--3 form a recursion rather
+than a simultaneous system. Second, the simulation size $m$ is a Monte Carlo
+device and is unrelated to $\widehat{N}_s$: the winner of a variety depends only
+on relative production costs, so $p_{r's}$ can be estimated at any $m$ large
+enough. Third, the uniform draws $u$ are held fixed across every evaluation of
+the criterion within an optimisation stage (common random numbers), which is
+what makes the criterion a deterministic function of $\mu$ that a swarm can
+descend; they are scrambled Sobol sequences, constructed one low-dimensional
+sequence per sector with regions as dimensions and varieties as points.
+Independent pseudo-random draws are used instead when computing $\Sigma_{sim}$
+and the numerical derivatives, where independence across replications is
+required.
+
+% ---------------------------------------------------------------------
+%  Algorithm 2 -- comparative advantage inversion
+% ---------------------------------------------------------------------
+\begin{algorithm}[H]
+\caption{\textsc{InvertT}: comparative advantage by matrix scaling with
+general-equilibrium expenditure weights}
+\label{alg:invertT}
+\begin{algorithmic}[1]
+\Require $\alpha,\Omega_L,\{\Omega_s\},\{A_r\}$; targets $\widehat{\gamma}_{as}$;
+  damping $\varsigma\in(0,1]$; tolerance $\epsilon_T$; starting values $T^{(0)}_{as}$
+\Ensure $\{T_{as}\}$ reproducing $\widehat{\gamma}_{as}$ exactly
+\State $T\gets T^{(0)}$; normalise $T_{as}\gets T_{as}/T_{a_s^{\text{ref}}s}$ for each $s$
+  \Comment{one reference area per sector fixes the scale}
+\For{$t=1,2,\dots$ \textbf{until} convergence}
+    \State $B_{ar}\gets\sum_{r'\in\mathcal{R}_a}(w_{r's}\tau_{r'r})^{-\theta}$,\quad
+      $\Phi_{rs}\gets\sum_{a'}T_{a's}B_{a'r}$
+    \State $\omega_{rs}\gets$ expenditure weights implied by $T$
+      \Comment{price and sales block of Algorithm~\ref{alg:simulate}}
+    \State $\gamma_{as}(T)\gets\sum_r\omega_{rs}\,T_{as}B_{ar}/\Phi_{rs}$
+    \State $T^{+}_{as}\gets T_{as}\bigl(\widehat{\gamma}_{as}/\gamma_{as}(T)\bigr)^{\varsigma}$
+      \Comment{multiplicative Sinkhorn update, in logs}
+    \State $T^{+}_{as}\gets T^{+}_{as}/T^{+}_{a^{\text{ref}}_s s}$ for each $s$
+    \State $\text{resid}\gets\max_{a,s}\bigl|\log T^{+}_{as}-\log T_{as}\bigr|$;\quad $T\gets T^{+}$
+    \State \textbf{if} $\text{resid}<\epsilon_T$ \textbf{then break}
+\EndFor
+\State \Return $T$
+\end{algorithmic}
+\end{algorithm}
+
+With expenditure weights held fixed, the multiplicative update is a Sinkhorn scaling of the strictly positive matrix
+$B$, hence a contraction with a fixed point unique up to the sector-specific
+scale removed by the reference-area normalisation. Recomputing $\omega_{rs}$
+inside the loop adds the general-equilibrium response of prices and sales, so
+the full map is a fixed-point iteration; the damping $\varsigma$ ($0.9$ in the
+implementation) and the stopping rule on $\max_{a,s}|\Delta\log T_{as}|$ are what
+the text refers to as requiring both sourcing shares and comparative advantages
+to converge.
+
+% ---------------------------------------------------------------------
+%  Algorithm 3 -- variety count
+% ---------------------------------------------------------------------
+\begin{algorithm}[H]
+\caption{\textsc{CalibrateN}: variety count by monotone integer search}
+\label{alg:countN}
+\begin{algorithmic}[1]
+\Require win counts $k_{r's}$ from $m$ simulated varieties; targets
+  $\widehat{G}_s(0)$; bounds $[N^{lo}_s,N^{hi}_s]$
+\Ensure $\{\widehat{N}_s\}$
+\For{$s=1,\dots,S$}
+    \State define
+      $\widetilde{G}_s(n)\gets\dfrac{1}{|\mathcal{R}^+_s|}\displaystyle\sum_{r'\in\mathcal{R}^+_s}
+      \binom{m-k_{r's}}{n}\Big/\binom{m}{n}$
+      \Comment{unbiased; decreasing in $n$}
+    \If{$\widetilde{G}_s(N^{lo}_s)\le\widehat{G}_s(0)$}
+        \State $\widehat{N}_s\gets N^{lo}_s$ \Comment{clamped at the lower bound}
+    \ElsIf{$\widetilde{G}_s(N^{hi}_s)\ge\widehat{G}_s(0)$}
+        \State $\widehat{N}_s\gets N^{hi}_s$ \Comment{clamped at the upper bound}
+    \Else
+        \State $(\underline{n},\overline{n})\gets(N^{lo}_s,N^{hi}_s)$
+        \While{$\overline{n}-\underline{n}>1$}
+            \State $n\gets\lfloor(\underline{n}+\overline{n})/2\rfloor$
+            \State \textbf{if} $\widetilde{G}_s(n)>\widehat{G}_s(0)$ \textbf{then}
+              $\underline{n}\gets n$ \textbf{else} $\overline{n}\gets n$
+        \EndWhile
+        \State $\widehat{N}_s\gets\arg\min_{n\in\{\underline{n},\overline{n}\}}
+          \bigl|\widetilde{G}_s(n)-\widehat{G}_s(0)\bigr|$
+    \EndIf
+\EndFor
+\State \Return $\{\widehat{N}_s\}$
+\end{algorithmic}
+\end{algorithm}
+
+Because $\widetilde{G}_s$ is decreasing in $n$ and is evaluated in closed form
+from the winning matrix of Step~2, the search costs $O(\log(N^{hi}_s-N^{lo}_s))$
+evaluations and never re-simulates the Ricardian competition. The count is an
+integer at every evaluation: it is never relaxed to the real line and never
+rounded. A bound that binds is recorded and reported rather than silently
+absorbed.
+
+% ---------------------------------------------------------------------
+%  Algorithm 4 -- PSO
+% ---------------------------------------------------------------------
+\begin{algorithm}[H]
+\caption{\textsc{Pso}: particle swarm minimisation of $\mathcal{Q}$ over a box}
+\label{alg:pso}
+\begin{algorithmic}[1]
+\Require objective $\mathcal{Q}$; box $[\ell,u]\subset\mathbb{R}^{d}$; swarm size
+  $P$; iterations $I$; warm start $x_0$; inertia range
+  $[\underline{w},\overline{w}]=[0.4,0.9]$; cognitive $c_1=1.5$; social $c_2=2.5$
+\Ensure $x^\star=\arg\min \mathcal{Q}$ over the visited points
+\State draw $x_1,\dots,x_{P-1}$ from a scrambled Sobol net on $[\ell,u]$;\;
+  $x_P\gets\Pi_{[\ell,u]}(x_0)$
+  \Comment{the warm start is always a particle}
+\State $v_i\gets 0$; \; $b_i\gets x_i$, $f_i\gets\mathcal{Q}(x_i)$ evaluated in
+  parallel; \; $g\gets\arg\min_i f_i$
+\For{$t=1,\dots,I$}
+    \State $w\gets\overline{w}-(\overline{w}-\underline{w})\,t/I$
+      \Comment{inertia declines linearly}
+    \For{$i=1,\dots,P$ \textbf{in parallel}}
+        \State draw $r_1,r_2\sim U[0,1]^d$
+        \State $v_i\gets w\,v_i+c_1 r_1\odot(b_i-x_i)+c_2 r_2\odot(g-x_i)$
+        \State $v_i\gets\Pi_{[-\bar v,\bar v]}(v_i)$, \; $\bar v=0.1\,(u-\ell)$
+          \Comment{velocity clamping}
+        \State $x_i\gets x_i+v_i$; reflect $x_i$ back into $[\ell,u]$, damping the
+          reflected velocity
+        \State enforce the parameter constraints (monotone distance bins when
+          $\alpha$ is binned)
+        \State $f\gets\mathcal{Q}(x_i)$
+          \Comment{one call to Algorithm~\ref{alg:simulate}}
+        \State \textbf{if} $f<\mathcal{Q}(b_i)$ \textbf{then} $b_i\gets x_i$;\;
+          \textbf{if} $f<\mathcal{Q}(g)$ \textbf{then} $g\gets x_i$
+    \EndFor
+\EndFor
+\State \Return $g$
+\end{algorithmic}
+\end{algorithm}
+
+% ---------------------------------------------------------------------
+%  Algorithm 5 -- estimation
+% ---------------------------------------------------------------------
+\begin{algorithm}[H]
+\caption{SMM estimation of $\mu$ by particle swarm optimisation}
+\label{alg:smm}
+\begin{algorithmic}[1]
+\Require empirical moments $\widehat{M}$; empirical sourcing shares
+  $\widehat{\gamma}_{as}$ and counts $\widehat{G}_s(0)$; bootstrap covariance
+  $\Sigma_{data}$; number of refinement loops $L$; swarm size $P$; iterations $I$
+\Ensure $\widehat{\mu}_2$, standard errors, and the calibrated
+  $\widehat{T},\widehat{N}$ with their standard errors
+\vspace{2pt}
+\State \textbf{Starting values.} $\Omega_L,\{\Omega_s\}$ at their input--output
+  counterparts; $A_r\propto\pi_r^{1/\varepsilon}$; $\alpha$ at the
+  extensive-margin coefficient divided by $\theta$. Call this $\mu^{(0)}$, and
+  set the box $[\ell,u]$ multiplicatively around it.
+\vspace{3pt}
+\State \textbf{Step 1: first fit under equal weights.} Let
+  $\mathcal{Q}_I(\mu)=\bigl(\widetilde{M}(\mu)-\widehat{M}\bigr)'\bigl(\widetilde{M}(\mu)-\widehat{M}\bigr)$,
+  each evaluation running Algorithm~\ref{alg:simulate}.
+\State \quad $\mu\gets\Call{Pso}{\mathcal{Q}_I,[\ell,u],P,I,\mu^{(0)}}$
+  \Comment{joint fit over all of $\mu$}
+\For{$\text{loop}=1,\dots,L$}
+    \Comment{alternating block refinement, search radius shrinking with the loop}
+    \For{$\mathcal{B}\in\bigl(\{A_r\},\ \{\alpha\},\ \{\Omega_L,\Omega_s\}\bigr)$}
+        \State $\mu\gets\Call{Pso}{\mathcal{Q}_I,\mathcal{B}\text{-box of radius }
+          \varrho_{\text{loop}}\text{ around }\mu,P,I,\mu}$
+        \Comment{coordinates outside $\mathcal{B}$ fixed}
+    \EndFor
+    \State \textbf{break if} $\max_k|\Delta\mu_k|/|\mu_k|<\epsilon_\mu$
+\EndFor
+\State $\widehat{\mu}_1\gets\mu$
+\vspace{3pt}
+\State \textbf{Step 2: the weighting matrix.} At $\widehat{\mu}_1$, re-simulate
+  $K$ times with independent draws, $\Sigma_{sim}\gets\widehat{\mathrm{Var}}
+  \bigl(\widetilde{M}^{(1)},\dots,\widetilde{M}^{(K)}\bigr)$, and set
+  $W\gets(\Sigma_{data}+\Sigma_{sim})^{-1}$.
+\vspace{3pt}
+\State \textbf{Step 3: the efficient fit.} Let
+  $\mathcal{Q}_W(\mu)=\bigl(\widetilde{M}(\mu)-\widehat{M}\bigr)'W
+  \bigl(\widetilde{M}(\mu)-\widehat{M}\bigr)$ and repeat the joint fit and the block
+  refinement of Step~1, starting from
+  $\widehat{\mu}_1$, yielding $\widehat{\mu}_2$.
+\vspace{3pt}
+\State \textbf{Step 4: inference.} At $\widehat{\mu}_2$:
+\State \quad $G\gets\partial\widetilde{M}/\partial\mu$ by central finite
+  differences with common random numbers
+\State \quad report $(G'WG)^{-1}$ and
+  $(G'WG)^{-1}G'W\Omega WG(G'WG)^{-1}$, $\Omega=\Sigma_{data}+\Sigma_{sim}$
+\State \quad $\widehat{T}$: delta method on the calibration map
+  $T^\star(\alpha,\widetilde{\gamma})$, equation~(B31)
+\State \quad $\widehat{N}$: delta method on
+  $\widetilde{G}_s(\widehat{N}_s)=\widehat{G}_s(0)$, equation~(B32)
+\State \Return $\widehat{\mu}_2$ and the associated standard errors
+\end{algorithmic}
+\end{algorithm}
+
+Two implementation notes. The block refinement inside Step~1 exists because the
+blocks of $\mu$ have very different curvature: $\{A_r\}$ is pinned almost
+one-for-one by the regional sales shares, while $\alpha$ is identified off the
+extensive margin, and a single joint swarm spends most of its budget on the
+former. Each sub-stage re-runs the swarm on one block, warm-started at the
+incumbent and floored at its criterion value, so the criterion is monotone
+across sub-stages by construction. The efficient fit of Step~3 restricts the
+criterion to the moment blocks that carry the bootstrap covariance --- the
+extensive-margin coefficients, the area-aggregated sourcing shares and the
+count moments --- and re-optimises $\alpha$ within them, holding
+$\{A_r,\Omega_L,\Omega_s\}$ at $\widehat{\mu}_1$; the remaining blocks are the
+input--output and sales targets, which are treated as fixed and carry no
+sampling variance.

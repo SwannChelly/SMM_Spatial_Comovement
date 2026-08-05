@@ -1,0 +1,27 @@
+% =====================================================================
+%  Standalone driver: compiles documentation/pseudocode_body.tex on its own.
+%      pdflatex pseudocode.tex
+%
+%  To put the algorithms in the paper instead, add the four packages below
+%  to the paper's preamble and \input{pseudocode_body} in Appendix B.3.
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{float}
+
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+
+\begin{document}
+
+\appendix
+\setcounter{section}{2}   % so the subsection numbers read B.x
+\section*{Appendix B.3 --- Pseudo-code (standalone preview)}
+
+\input{pseudocode_body}
+
+\end{document}
