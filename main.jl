@@ -665,7 +665,9 @@ if ndims(best_params) > 1
 end
 
 println("\n>>> RUNNING UNIFIED VALIDATION (ALL THREE MODELS) <<<")
-results_unified = validate_table2_all_models(best_params, industry, T_periods=36, time_fe_mode="resample")
+results_unified = validate_table2_all_models(best_params, industry, T_periods=36,
+                                             time_fe_mode="resample",
+                                             output_folder=output_folder)
 Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet"), results_unified["panel_df"])
 Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
 
@@ -717,6 +719,11 @@ for g in 1:n_good
     for rho in 1:N_rho_out
         key = (l, s, rho)
         if !haskey(siren_map, key)
+            # `global`: this is a TOP-LEVEL for loop, so its body is soft scope and a
+            # bare `siren_counter += 1` would bind a fresh local, leaving the counter
+            # at 0 (and reading it before the first write is an UndefVarError).
+            # `siren_map` needs no declaration — it is mutated, not rebound.
+            global siren_counter
             siren_counter += 1
             siren_map[key] = siren_counter
         end

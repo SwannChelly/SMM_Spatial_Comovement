@@ -34,20 +34,26 @@ Validate calibrated model by reproducing Table 2 regression.
 Dict with network, panel_df, regression_results, config, shocks
 """
 function validate_table2(
-    params, 
-    industry::String; 
+    params,
+    industry::String;
     shock_model::ShockModel = UNIVARIATE,
-    sigma_d = 0.05, 
-    T_periods = 36, 
-    rho_d = -0.15
+    sigma_d = 0.05,
+    T_periods = 36,
+    rho_d = -0.15,
+    output_folder::AbstractString = "./reporting_" * industry
 )
-    
+
     if ndims(params) > 1
         params = params[:, 1]
     end
-    
+
     input_folder = "./baseline_" * industry
-    output_folder = "./reporting_" * industry
+    # `output_folder` is a KWARG, not a name rebuilt from `industry`: main.jl's run
+    # tree carries the flag suffixes (`_profiled`, `_aa`, `_gran`, `_nlo1`, the
+    # optimizer), so "./reporting_$industry" only exists for a legacy run and the
+    # write below would fail with a bare SystemError on every flagged one. The
+    # default keeps standalone callers byte-identical.
+    mkpath(output_folder)
     
     # Empirical target
     if industry == "aero"
@@ -176,11 +182,12 @@ Dict with:
 - `multivariate`: Results from MULTIVARIATE model (or nothing if params not found)
 """
 function validate_table2_both_models(
-    params, 
+    params,
     industry::String;
     T_periods = 36,
     sigma_d = 0.05,
-    rho_d = -0.15
+    rho_d = -0.15,
+    output_folder::AbstractString = "./reporting_" * industry
 )
     println("\n" * "="^70)
     println("RUNNING BOTH SHOCK MODELS")
@@ -193,7 +200,8 @@ function validate_table2_both_models(
         shock_model = UNIVARIATE,
         T_periods = T_periods,
         sigma_d = sigma_d,
-        rho_d = rho_d
+        rho_d = rho_d,
+        output_folder = output_folder
     )
     
     # Try multivariate
@@ -205,7 +213,8 @@ function validate_table2_both_models(
         results_multivariate = validate_table2(
             params, industry;
             shock_model = MULTIVARIATE,
-            T_periods = T_periods
+            T_periods = T_periods,
+            output_folder = output_folder
         )
     else
         println("\n>>> MULTIVARIATE MODEL: Skipped (parameters not found) <<<")
@@ -262,18 +271,22 @@ Dict with:
 - Other diagnostic info
 """
 function validate_table2_all_models(
-    params, 
+    params,
     industry::String;
     T_periods = 36,
-    time_fe_mode = "resample"
+    time_fe_mode = "resample",
+    output_folder::AbstractString = "./reporting_" * industry
 )
     if ndims(params) > 1
         params = params[:, 1]
     end
-    
+
     input_folder = "./baseline_" * industry
-    output_folder = "./reporting_" * industry
-    
+    # See validate_table2: the run tree is named from the flags, so it must be PASSED
+    # in, not rebuilt from `industry`. `mkpath` so a standalone call still works when
+    # the folder does not exist yet.
+    mkpath(output_folder)
+
     # Check if all required parameter files exist
     has_univariate = isfile(joinpath(input_folder, "rho_univariate.npy"))
     has_multivariate = isfile(joinpath(input_folder, "rho_r_multivariate.npy")) && 
