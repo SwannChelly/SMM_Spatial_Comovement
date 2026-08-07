@@ -304,6 +304,44 @@ def gate_untargeted():
     assert np.nanmax(np.abs(b - raw)) > 1e-6
     print("bin profile: reference bin normalised, FE-absorbed profile differs from the raw one")
 
+    # ---------------------------------------------------------------------------
+    # 3. The specification ladder: is the gap with the reduced form a specification
+    #    difference? Each rung has a property that must hold whatever the data.
+    # ---------------------------------------------------------------------------
+    lin = NS["linear_delta_over_gamma"](panel)
+    # the closed form the markdown quotes: delta/gamma ~= eta / (1 + |eta| mean log d),
+    # so a level-linear ratio can never exceed 1/mean(log d) in magnitude
+    assert abs(lin["delta_over_gamma"]) < 1.0 / lin["mean_log_distance"] + 1e-9, lin
+    # and the same fit read at the mean distance is strictly steeper than at d = 1 km
+    assert abs(lin["elasticity_at_mean_d"]) > abs(lin["delta_over_gamma"]), lin
+    # inverting the map must return the elasticity it came from
+    r = NS["eta_from_delta_over_gamma"](-0.1, 5.0)
+    assert abs(-0.1 - r / (1 + abs(r) * 5.0)) < 1e-12, r
+    print("linear form: ratio below the 1/mean(log d) ceiling, inversion is exact")
+
+    # pooling every variety of a (region, sector) into one firm must give strictly fewer
+    # suppliers and leave the shares a proper distribution
+    firms = NS["build_a_ir_panel"](data, firm_key=("ze2010", "A129"))
+    assert firms["SIREN"].nunique() < panel["SIREN"].nunique()
+    tot_f = firms.groupby("SIREN")["a_ir"].sum()
+    assert np.allclose(tot_f.values, 1.0), tot_f.describe()
+    assert len(firms) == firms["SIREN"].nunique() * R_d
+    # a pooled firm serves at least as many regions as its varieties did separately
+    assert (firms["a_ir"] > 0).mean() >= (panel["a_ir"] > 0).mean()
+    print("multi-variety pooling: fewer suppliers, shares still sum to one, denser grid")
+
+    ladder = NS["untargeted_specification_ladder"](data, panel=panel)
+    assert "PPML, sector x buyer-region FE (reported eta)" in ladder.index
+    assert abs(ladder.loc["PPML, sector x buyer-region FE (reported eta)", "value"]
+               - res_auto["eta"]) < 1e-9
+    assert abs(ladder.loc["Level-linear, delta/gamma (empirical form)", "value"]
+               - lin["delta_over_gamma"]) < 1e-12
+    assert ladder.loc["DATA delta/gamma (Table 3)", "value"] == \
+        NS["EMPIRICAL_DELTA_OVER_GAMMA"]["auto"]["estimate"]
+    assert np.isfinite(ladder["value"].drop("-theta * alpha (trade-cost elasticity)")).all()
+    NS["plot_untargeted_ladder"](ladder, "auto", save_to=str(out / "ladder.png"))
+    print("specification ladder: every rung computed and the reported eta reproduced")
+
     # controls path
     NS["estimate_untargeted_moment"](data, panel=panel, controls=("log_productivity",))
 
