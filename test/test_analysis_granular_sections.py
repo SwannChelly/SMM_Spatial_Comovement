@@ -2,7 +2,8 @@
 Gates for the sections added to `analysis_granular.ipynb`:
   1. Identification / sensitivity  — the N_s block re-attached to the Jacobian,
   2. Untargeted moment             — the PPML distance elasticity of comovement,
-  3. Comparative advantage         — T against distance, within sector.
+  3. Comparative advantage         — T against distance, within sector,
+  4. Amplification                 — D_r and the share of upstream sales within d km.
 
 No Julia and no real data: each gate writes a synthetic run tree with the exact file
 layout the loader expects and then EXECUTES THE NOTEBOOK'S OWN CODE CELLS against it,
@@ -14,6 +15,7 @@ Requires numpy, pandas, matplotlib, statsmodels, pyarrow (pyfixest optional).
 """
 import json
 import os
+import re
 from pathlib import Path
 
 import matplotlib
@@ -29,12 +31,30 @@ TMP = HERE / "_granular_sections_tmp"
 TMP.mkdir(exist_ok=True)
 
 
+# The notebook alternates DEFINITION cells with cells that RUN the reporting — the
+# per-section `for cfg in INDUSTRIES:` loops, the joint table, the Constants cell and
+# the full run at the bottom. Those touch the real run tree, which does not exist here,
+# so they are skipped and only the definitions are executed.
+#
+# A cell is a run cell when it hits one of the markers below AND defines nothing at top
+# level. The second condition matters: the loader cell's DOCSTRING shows the call
+# `data = load_granular_data(industry, mu=2)`, so the marker alone would skip the very
+# cell that defines everything.
+RUN_CELL_MARKERS = (
+    "RUN THE REPORTING",
+    "RUN THIS SECTION ON ITS OWN",
+    "= load_granular_data(",
+    "generate_combined_table(INDUSTRIES",
+    "RUN_KWARGS = dict(",
+)
+
+
 def notebook_namespace():
     """
-    Every code cell of the notebook except the RUN cell, executed in order.
+    Every DEFINITION cell of the notebook, executed in order.
 
-    Located by content rather than by index, so inserting a section above does not
-    silently change what is being tested.
+    Cells are located by CONTENT rather than by index, so inserting a section above
+    does not silently change what is being tested.
     """
     nb = json.load(open(NB_PATH))
     ns = {}
@@ -42,9 +62,13 @@ def notebook_namespace():
         if c["cell_type"] != "code":
             continue
         src = "".join(c["source"])
-        if src.lstrip().startswith("%") or "RUN THE REPORTING" in src:
+        defines = re.search(r"^(def|class)\s", src, re.M) is not None
+        if src.lstrip().startswith("%") or (
+                not defines and any(m in src for m in RUN_CELL_MARKERS)):
             continue
         exec(compile(src, f"<notebook cell {i}>", "exec"), ns)
+    if "THETA_DEFAULT" not in ns:      # normally set by the skipped Constants cell
+        ns["THETA_DEFAULT"] = 1.768
     return ns
 
 
@@ -462,10 +486,140 @@ def gate_comparative_advantage():
     print("\nALL OK")
 
 
+def gate_amplification():
+    """D_r and the share within a radius: the ratio, the grid and the CDF in d."""
+    rng = np.random.default_rng(5)
+
+    S, R, R_d, N_rho = 3, 20, 6, 40
+    inp = TMP / "synthinput_amp"
+    folder = TMP / "synthrun_amp"
+    (folder / "step3").mkdir(parents=True, exist_ok=True)
+    inp.mkdir(parents=True, exist_ok=True)
+
+    coords = rng.uniform(0, 600, (R, 2))
+    D = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(-1))
+    np.fill_diagonal(D, 0.0)
+    np.save(inp / "distances.npy", D)
+    downstream = np.arange(1, R_d + 1)                       # 1-based model indices
+
+    # ZE codes / names, as the loader would build them
+    codes = [f"{1000 + i:04d}" for i in range(R)]
+    filter_df = pd.DataFrame({"ze2010": codes * S,
+                              "A129": np.repeat([f"C{s}" for s in range(S)], R)})
+    france = pd.DataFrame({"ze2010": codes, "ze2010_name": [f"Zone {c}" for c in codes]})
+
+    # a firm-level economy with a planted distance gradient, so the local share is not
+    # an artefact of a uniform draw
+    rows, siren = [], 0
+    TOTAL_INPUT_SHARE = 0.5          # every downstream region spends this on intermediates
+    for r in downstream:
+        w = np.exp(-np.maximum(D[:, r - 1], 1.0) / 120.0)
+        w /= w.sum()
+        for s in range(1, S + 1):
+            for rho in range(1, N_rho + 1):
+                l = int(rng.choice(np.arange(1, R + 1), p=w))
+                siren += 1
+                rows.append({"SIREN": siren, "A129": s, "ze2010": l,
+                             "ze2010_downstream": int(r),
+                             "share": TOTAL_INPUT_SHARE / (S * N_rho),
+                             "downstream_purchase": 2.0,
+                             "intermediate_derivative": 0.0,
+                             "productivity": 1.0, "sample_weight": 1.0 / N_rho})
+    sup = pd.DataFrame(rows)
+    sup.to_parquet(folder / "suppliers.parquet")
+
+    data = {"industry": "auto", "mu": 2, "S": S, "R": R, "step_dir": "step3",
+            "folder": folder, "input_folder": inp,
+            "filter_N_upstream_df": filter_df, "france": france,
+            "suppliers": pd.read_parquet(folder / "suppliers.parquet")}
+
+    # ------------------------------------------------------------------- the frame
+    diff = NS["build_diffusion_frame"](data)
+    assert len(diff) == R_d * R, (len(diff), R_d * R)                 # fully zero-filled
+    assert (diff["upstream_sales"] >= 0).all() and (diff["upstream_sales"] == 0).any()
+    chk = diff.sample(min(200, len(diff)), random_state=1)
+    assert np.allclose(chk["distance"].to_numpy(),
+                       D[chk["ze2010"] - 1, chk["ze2010_downstream"] - 1])
+    # the sum over cells reproduces the planted intermediate share, region by region
+    tot = diff.groupby("ze2010_downstream")["upstream_sales"].sum()
+    assert np.allclose(tot.to_numpy(), TOTAL_INPUT_SHARE), tot
+    assert diff["ze_name"].str.startswith("Zone").all()
+    print("diffusion frame: zero-filled, distances by index, sales reconstructed")
+
+    # ------------------------------------------------------------------ the summary
+    summ = NS["amplification_summary"](data, radii=(100, 200), diffusion=diff)
+    assert np.allclose(summ["amplification"], 1.0 + TOTAL_INPUT_SHARE)
+    assert {"share_within_100km", "share_within_200km"} <= set(summ.columns)
+    assert (summ["share_within_100km"] <= summ["share_within_200km"] + 1e-12).all()
+    assert ((summ["share_within_200km"] >= 0) & (summ["share_within_200km"] <= 1)).all()
+    # the shares are ratios of the same denominator, so they must reproduce a direct count
+    for r in downstream:
+        sub = diff[diff["ze2010_downstream"] == r]
+        want = sub.loc[sub["distance"] <= 100, "upstream_sales"].sum() / sub["upstream_sales"].sum()
+        assert abs(summ.loc[r, "share_within_100km"] - want) < 1e-12
+    print("summary: D_r = 1 + upstream sales; radii nested; shares match a direct count")
+    print(summ.round(3).to_string())
+
+    # a radius beyond the country keeps everything; a radius of zero keeps only own region
+    wide = NS["amplification_summary"](data, radii=(10_000,), diffusion=diff)
+    assert np.allclose(wide["share_within_10000km"], 1.0)
+    own = NS["amplification_summary"](data, radii=(0.0,), diffusion=diff)
+    for r in downstream:
+        sub = diff[(diff["ze2010_downstream"] == r) & (diff["distance"] <= 0)]
+        assert set(sub["ze2010"]) == {r}          # only the shocked region is at distance 0
+    print("radius limits behave (0 km = own region only, 10 000 km = everything)")
+
+    # ------------------------------------------------------------------ the profile
+    prof = NS["local_share_profile"](data, diffusion=diff)
+    assert prof.index.is_monotonic_increasing
+    for c in ("mean", "median", "weighted_mean", "p25", "p75"):
+        assert prof[c].is_monotonic_increasing, c                    # a CDF in the radius
+    assert (prof["p25"] <= prof["median"] + 1e-12).all()
+    assert (prof["median"] <= prof["p75"] + 1e-12).all()
+    assert prof["weighted_mean"].iloc[-1] > 0.9
+    print("\nprofile is a CDF in the radius:")
+    print(prof.round(3).to_string())
+
+    # ---------------------------------------------------------------------- figures
+    out = TMP / "figs"
+    out.mkdir(exist_ok=True)
+    NS["plot_amplification"](data, summary=summ, save_to=str(out / "amp.png"))
+    NS["plot_local_share"](data, radius_km=100, summary=summ, save_to=str(out / "amp_local.png"))
+    NS["plot_local_share_profile"](data, profile=prof, save_to=str(out / "amp_profile.png"))
+    NS["plot_amplification_vs_local"](data, radius_km=100, summary=summ,
+                                      save_to=str(out / "amp_scatter.png"))
+    s2, p2 = NS["amplification_report"](data, radii=(200, 100), out_folder=str(out), show=False)
+    assert "share_within_200km" in s2.columns
+
+    # the radius must actually be free: a different one gives a different column and number
+    s3 = NS["amplification_summary"](data, radii=(50,), diffusion=diff)
+    assert "share_within_50km" in s3.columns
+    assert s3["share_within_50km"].mean() < summ["share_within_100km"].mean()
+    print("\nradius is a free parameter (50 km keeps less than 100 km)")
+
+    # a missing artefact must say what is missing, and a wrong column too
+    for kw, exc in ((dict(suppliers=None), FileNotFoundError),):
+        try:
+            NS["build_diffusion_frame"](dict(data, **kw))
+        except exc as e:
+            print("expected:", str(e)[:60], "...")
+        else:
+            raise AssertionError("should have raised")
+    try:
+        NS["build_diffusion_frame"](data, value_col="nope")
+    except KeyError as e:
+        print("expected on a bad value column:", str(e)[:50], "...")
+    else:
+        raise AssertionError("should have raised")
+
+    print("\nALL OK")
+
+
 if __name__ == "__main__":
     for name, gate in (("identification", gate_identification),
                        ("untargeted moment", gate_untargeted),
-                       ("comparative advantage", gate_comparative_advantage)):
+                       ("comparative advantage", gate_comparative_advantage),
+                       ("amplification", gate_amplification)):
         print("\n" + "=" * 70)
         print(f"GATE: {name}")
         print("=" * 70)

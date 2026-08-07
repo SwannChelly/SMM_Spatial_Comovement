@@ -142,12 +142,15 @@ here; see `granular_validation.md`.
 
 ## `test_analysis_granular_sections.py`
 
-Gates the three sections added to `analysis_granular.ipynb` — the identification /
-sensitivity Jacobian (with the `N_s` block re-attached), the untargeted-moment PPML, and
-the within-sector comparative-advantage comparison. No Julia and no real data: it writes
+Gates the sections added to `analysis_granular.ipynb` — the identification / sensitivity
+Jacobian (with the `N_s` block re-attached), the untargeted-moment PPML, the within-sector
+comparative-advantage comparison, and the amplification measures $D_r$ and $L_r(d)$. No Julia and no real data: it writes
 synthetic run trees with the exact file layout the loader expects, then executes **the
 notebook's own code cells** against them (located by content, not by index, so inserting
-a section above does not change what is tested).
+a section above does not change what is tested). The notebook alternates DEFINITION cells
+with cells that RUN the reporting; a cell counts as a run cell — and is skipped — when it
+hits one of `RUN_CELL_MARKERS` **and** defines nothing at top level, so a new per-section
+`for cfg in INDUSTRIES:` cell needs no special handling.
 
 ```bash
 python test/test_analysis_granular_sections.py
@@ -155,5 +158,5 @@ python test/test_analysis_granular_sections.py
 
 Needs `numpy`, `pandas`, `matplotlib`, `statsmodels`, `pyarrow`; `pyfixest` is optional
 and, when present, adds a cross-check of the PPML against `pf.fepois`. The reasoning
-behind each gate is written out in the notebook's own "Validation of the three sections
-above" markdown cell.
+behind each gate is written out in the notebook's own "Validation of the sections above"
+markdown cell.
