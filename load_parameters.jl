@@ -60,7 +60,7 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
-@everywhere const theta               = $(1.768)#1.768
+@everywhere const theta               = $(1.)#1.768
 
 println("\n Lambda = $lambda — Labor / CI share")
 println("\n Epsilon = $epsilon — Sales elasticity")
