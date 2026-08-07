@@ -70,8 +70,9 @@ def notebook_namespace():
                 not defines and any(m in src for m in RUN_CELL_MARKERS)):
             continue
         exec(compile(src, f"<notebook cell {i}>", "exec"), ns)
-    if "THETA_DEFAULT" not in ns:      # normally set by the skipped Constants cell
-        ns["THETA_DEFAULT"] = 1.768
+    for name, value in (("THETA_DEFAULT", 1.768),      # normally set by the skipped
+                        ("EMPIRICAL_MEAN_LOG_D", 5.8)):  # Constants cell
+        ns.setdefault(name, value)
     return ns
 
 
@@ -288,13 +289,29 @@ def gate_untargeted():
     data2 = dict(data, industry="aero")
     res_aero = NS["estimate_untargeted_moment"](data2, panel=panel)
 
+    # the three fixed-effect specifications, and the map onto the reduced form's scale
+    assert set(res_auto["specs"]) == set(NS["UNTARGETED_FE_SPECS"])
+    for label, sp in res_auto["specs"].items():
+        assert abs(sp["dg"] - NS["delta_over_gamma_from_eta"](sp["eta"])) < 1e-12
+        # the map is monotone and compressive, and bounded by 1/mean(log d)
+        assert abs(sp["dg"]) < abs(sp["eta"]) + 1e-12
+        assert abs(sp["dg"]) < 1.0 / NS["EMPIRICAL_MEAN_LOG_D"]
+    assert res_auto["eta"] == res_auto["specs"]["sector x buyer region"]["eta"]
+    # the round trip through the two maps must return the elasticity it started from
+    e = res_auto["eta"]
+    assert abs(NS["eta_from_delta_over_gamma"](NS["delta_over_gamma_from_eta"](e)) - e) < 1e-10
+    print("delta/gamma map: monotone, compressive, bounded, and invertible")
+
     summ = NS["untargeted_summary"]([res_auto, res_aero])
     print("\n", summ.to_string())
     assert "delta/gamma (data)" in summ.columns and summ["eta (model)"].notna().all()
+    assert len(summ) == 2 * len(NS["UNTARGETED_FE_SPECS"])
+    assert list(summ.index.names) == ["industry", "fixed effect"]
 
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_untargeted_moment"]([res_auto, res_aero], save_to=str(out / "untargeted.png"))
+    NS["plot_untargeted_moment"]([res_auto, res_aero], scale="eta")
     NS["plot_a_ir_profile"]([res_auto, res_aero], save_to=str(out / "profile.png"))
     labels, b, se, raw = NS["a_ir_bin_profile"](panel, (0, 50, 100, 150, 200, 300, np.inf))
     assert b[0] == 0.0 and se[0] == 0.0 and abs(raw[0]) < 1e-12   # nearest bin = reference
@@ -331,15 +348,27 @@ def gate_untargeted():
     print("multi-variety pooling: fewer suppliers, shares still sum to one, denser grid")
 
     ladder = NS["untargeted_specification_ladder"](data, panel=panel)
-    assert "PPML, sector x buyer-region FE (reported eta)" in ladder.index
-    assert abs(ladder.loc["PPML, sector x buyer-region FE (reported eta)", "value"]
-               - res_auto["eta"]) < 1e-9
-    assert abs(ladder.loc["Level-linear, delta/gamma (empirical form)", "value"]
-               - lin["delta_over_gamma"]) < 1e-12
-    assert ladder.loc["DATA delta/gamma (Table 3)", "value"] == \
+    head = "PPML, sector x buyer-region FE (reported eta)"
+    assert head in ladder.index
+    assert abs(ladder.loc[head, "eta"] - res_auto["eta"]) < 1e-9
+    # every rung is also reported on the reduced form's scale, through the same map
+    assert abs(ladder.loc[head, "delta_over_gamma"]
+               - NS["delta_over_gamma_from_eta"](res_auto["eta"])) < 1e-12
+    assert abs(ladder.loc["Level-linear on the simulated panel, delta/gamma",
+                          "delta_over_gamma"] - lin["delta_over_gamma"]) < 1e-12
+    assert ladder.loc["DATA delta/gamma (Table 3)", "delta_over_gamma"] == \
         NS["EMPIRICAL_DELTA_OVER_GAMMA"]["auto"]["estimate"]
-    assert np.isfinite(ladder["value"].drop("-theta * alpha (trade-cost elasticity)")).all()
+    # the within-supplier rung must exist and differ from the cross-supplier one: the gap
+    # between them IS the composition channel the comparison hinges on
+    assert "PPML, supplier FE (within-supplier)" in ladder.index
+    assert abs(ladder.loc["PPML, supplier FE (within-supplier)", "eta"]
+               - ladder.loc[head, "eta"]) > 1e-6
+    # every rung is on the reduced-form scale except -theta*alpha, which needs
+    # best_params (absent from this synthetic panel) and is reported as missing
+    assert np.isfinite(ladder["delta_over_gamma"]
+                       .drop("-theta * alpha (trade-cost elasticity)")).all()
     NS["plot_untargeted_ladder"](ladder, "auto", save_to=str(out / "ladder.png"))
+    NS["plot_untargeted_ladder"](ladder, "auto", scale="eta")
     print("specification ladder: every rung computed and the reported eta reproduced")
 
     # controls path
