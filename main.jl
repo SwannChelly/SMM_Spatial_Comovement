@@ -653,99 +653,161 @@ if isdir(joinpath(output_folder, "step3"))
 end
 
 
-last_stage_folder = find_last_stage_folder(joinpath(output_folder, "step1"))
+# ─────────────────────────────────────────────────────────────────────────────
+# POST-HOC ANALYSIS — the firm-level economy, at BOTH estimates.
+#
+# Everything below is written into the STEP folder of the estimate it was computed
+# at, so the firm-level artefacts share the tree structure of the moments and the
+# inference:
+#
+#     <run>/step1/{suppliers.parquet, suppliers.npy, w_srd_r.npy}   at θ̂_1  (mu = 1)
+#     <run>/step3/{suppliers.parquet, suppliers.npy, w_srd_r.npy}   at θ̂_2  (mu = 2)
+#
+# so the Python reporting selects between them with the same `mu` it uses for
+# `best_simulated_moments.npy` and the inference. Previously this ran at θ̂_1 only
+# and wrote to the run ROOT, so `mu = 2` had no firm-level economy on disk at all
+# and `mu = 1`'s did not sit where the rest of that estimate's output does.
+#
+# `write_post_hoc` is a FUNCTION rather than a top-level block: besides being run
+# twice, a function body is hard scope, so `siren_counter += 1` inside the loop is
+# an ordinary local update — at top level that same line is soft scope and silently
+# binds a fresh local instead of advancing the counter.
+# ─────────────────────────────────────────────────────────────────────────────
+function write_post_hoc(params::Vector{Float64}, dest::AbstractString; label::AbstractString="")
+    mkpath(dest)
+    println("\n" * "-"^70)
+    println("Post-hoc firm-level artefacts $(isempty(label) ? "" : "at $label ")-> $dest")
+    println("-"^70)
+
+    network = solve_network(params, return_firm_level=true,
+                            u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
+
+    mu  = network.mu
+    Y_r = network.Y_r
+    w_srd_r = zeros(S, R, R)
+    X_lrs_sparse = zeros(R, R, S)
+    n_entries = length(network.firm_exp_rho)
+    for i in 1:n_entries
+        g = network.firm_exp_g[i]
+        l = GOOD_R[g]
+        s = network.firm_exp_s[i]
+        r = network.firm_exp_r[i]
+        X_lrs_sparse[l, r, s] += network.firm_exp_val[i] * mu * Y_r[r]
+    end
+
+    for s in 1:S, r_prime in 1:R
+        total = sum(X_lrs_sparse[r_prime, :, s])
+        if total > 1e-10
+            for r in 1:R
+                w_srd_r[s, r_prime, r] = X_lrs_sparse[r_prime, r, s] / total
+            end
+        end
+    end
+    npzwrite(joinpath(dest, "w_srd_r.npy"), w_srd_r)
+
+    N_rho_out = size(network.linkages_flat, 1)   # pool width under GRANULAR, N_rho otherwise
+    suppliers = zeros(Bool, S, N_rho_out, R)
+    for g in 1:n_good
+        s = GOOD_S[g]; r = GOOD_R[g]
+        for rho in 1:N_rho_out
+            if network.linkages_flat[rho, g] > 0
+                suppliers[s, rho, r] = true
+            end
+        end
+    end
+    npzwrite(joinpath(dest, "suppliers.npy"), suppliers)
+
+    sirens = Int[]; sectors = Int[]; ze2010 = Int[]; ze2010_downstream = Int[]
+    share = Float64[]; downstream_purchase = Float64[]
+    intermediate_derivative = Float64[]; productivity = Float64[]; sample_weight_vec = Float64[]
+    siren_map = Dict{Tuple{Int,Int,Int}, Int}()
+    siren_counter = 0
+    for g in 1:n_good
+        l = GOOD_R[g]; s = GOOD_S[g]
+        for rho in 1:N_rho_out
+            key = (l, s, rho)
+            if !haskey(siren_map, key)
+                siren_counter += 1
+                siren_map[key] = siren_counter
+            end
+        end
+    end
+    for i in 1:n_entries
+        rho = network.firm_exp_rho[i]; s = network.firm_exp_s[i]
+        g   = network.firm_exp_g[i];   l = GOOD_R[g]
+        r   = network.firm_exp_r[i]
+        push!(sirens, siren_map[(l, s, rho)]); push!(sectors, s)
+        push!(ze2010, l); push!(ze2010_downstream, r)
+        push!(share, network.firm_exp_val[i])
+        push!(downstream_purchase, Y_r[r] * mu)
+        push!(intermediate_derivative, network.firm_deriv_val[i])
+        push!(productivity, network.z_flat[rho, g])
+        push!(sample_weight_vec, network.sample_weights[rho, g])
+    end
+    df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
+                   ze2010_downstream=ze2010_downstream, share=share,
+                   downstream_purchase=downstream_purchase,
+                   intermediate_derivative=intermediate_derivative,
+                   productivity=productivity, sample_weight=sample_weight_vec)
+    Parquet.write_parquet(joinpath(dest, "suppliers.parquet"), df)
+
+    println("  $(nrow(df)) linkages, $(siren_counter) simulated firms, " *
+            "$(N_rho_out) varieties per cell")
+    return df
+end
+
+
 println("\n" * "="^70)
 println("POST-HOC ANALYSIS FOR $(uppercase(industry))")
 println("="^70)
-println("Loading parameters from: $last_stage_folder")
 
-best_params = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))
-if ndims(best_params) > 1
-    best_params = best_params[:, 1]
+# θ̂_1 is the last Step-1 stage; θ̂_2 is Step 3's. Both are read from disk here
+# rather than from the in-scope variables, so the block works whichever
+# run_step{1,3,4} flags this invocation had on.
+post_hoc_targets = Tuple{String,String,String}[]
+
+step1_stage = isdir(joinpath(output_folder, "step1")) ?
+    find_last_stage_folder(joinpath(output_folder, "step1")) : ""
+if !isempty(step1_stage) && isfile(joinpath(step1_stage, "best_params.npy"))
+    push!(post_hoc_targets,
+          (joinpath(step1_stage, "best_params.npy"), joinpath(output_folder, "step1"), "θ̂_1 (mu = 1)"))
+else
+    @warn "no Step-1 best_params.npy under $(joinpath(output_folder, "step1")) — " *
+          "skipping the mu = 1 post-hoc artefacts."
 end
 
-println("\n>>> RUNNING UNIFIED VALIDATION (ALL THREE MODELS) <<<")
-results_unified = validate_table2_all_models(best_params, industry, T_periods=36,
-                                             time_fe_mode="resample",
-                                             output_folder=output_folder)
-Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet"), results_unified["panel_df"])
-Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
-
-network = solve_network(best_params, return_firm_level=true, u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-folder  = output_folder
-
-mu  = network.mu
-Y_r = network.Y_r
-w_srd_r = zeros(S, R, R)
-X_lrs_sparse = zeros(R, R, S)
-n_entries = length(network.firm_exp_rho)
-for i in 1:n_entries
-    g = network.firm_exp_g[i]
-    l = GOOD_R[g]
-    s = network.firm_exp_s[i]
-    r = network.firm_exp_r[i]
-    X_lrs_sparse[l, r, s] += network.firm_exp_val[i] * mu * Y_r[r]
+theta2_path = joinpath(output_folder, "step3", "theta_hat_2.npy")
+if isfile(theta2_path)
+    push!(post_hoc_targets, (theta2_path, joinpath(output_folder, "step3"), "θ̂_2 (mu = 2)"))
+else
+    @warn "no $theta2_path — skipping the mu = 2 post-hoc artefacts (Step 3 has not run in this tree)."
 end
 
-for s in 1:S, r_prime in 1:R
-    total = sum(X_lrs_sparse[r_prime, :, s])
-    if total > 1e-10
-        for r in 1:R
-            w_srd_r[s, r_prime, r] = X_lrs_sparse[r_prime, r, s] / total
-        end
+for (param_path, dest, label) in post_hoc_targets
+    params = NPZ.npzread(param_path)
+    if ndims(params) > 1
+        params = params[:, 1]
+    end
+    println("\nLoading parameters from: $param_path")
+    # Never let one estimate's post-hoc failure lose the other's, or the run.
+    try
+        write_post_hoc(Vector{Float64}(params), dest; label=label)
+    catch e
+        @warn "post-hoc analysis failed for $label: $e"
     end
 end
-npzwrite(joinpath(folder, "w_srd_r.npy"), w_srd_r)
 
-N_rho_out = size(network.linkages_flat, 1)   # pool width under GRANULAR, N_rho otherwise
-suppliers = zeros(Bool, S, N_rho_out, R)
-for g in 1:n_good
-    s = GOOD_S[g]; r = GOOD_R[g]
-    for rho in 1:N_rho_out
-        if network.linkages_flat[rho, g] > 0
-            suppliers[s, rho, r] = true
-        end
-    end
-end
-npzwrite(joinpath(folder, "suppliers.npy"), suppliers)
+# ── Untargeted Table-2 validation: DISABLED ──────────────────────────────────
+# `validate_table2_all_models` exists only to produce `simulated_panel_unified`
+# and `regional_sales_unified` (plus its own summary), and those panels are no
+# longer used by the reporting. Uncomment the three lines to restore them; the
+# `output_folder` kwarg must stay, since the run tree is named from the flags.
+#
+# best_params_1 = NPZ.npzread(joinpath(step1_stage, "best_params.npy"))
+# results_unified = validate_table2_all_models(
+#     ndims(best_params_1) > 1 ? best_params_1[:, 1] : best_params_1, industry;
+#     T_periods=36, time_fe_mode="resample", output_folder=output_folder)
+# Parquet.write_parquet(joinpath(output_folder, "simulated_panel_unified.parquet"), results_unified["panel_df"])
+# Parquet.write_parquet(joinpath(output_folder, "regional_sales_unified.parquet"), results_unified["regional_sales_df"])
 
-sirens = Int[]; sectors = Int[]; ze2010 = Int[]; ze2010_downstream = Int[]
-share = Float64[]; downstream_purchase = Float64[]
-intermediate_derivative = Float64[]; productivity = Float64[] ; sample_weight_vec = Float64[]
-siren_map = Dict{Tuple{Int,Int,Int}, Int}()
-siren_counter = 0
-for g in 1:n_good
-    l = GOOD_R[g]; s = GOOD_S[g]
-    for rho in 1:N_rho_out
-        key = (l, s, rho)
-        if !haskey(siren_map, key)
-            # `global`: this is a TOP-LEVEL for loop, so its body is soft scope and a
-            # bare `siren_counter += 1` would bind a fresh local, leaving the counter
-            # at 0 (and reading it before the first write is an UndefVarError).
-            # `siren_map` needs no declaration — it is mutated, not rebound.
-            global siren_counter
-            siren_counter += 1
-            siren_map[key] = siren_counter
-        end
-    end
-end
-for i in 1:n_entries
-    rho = network.firm_exp_rho[i]; s = network.firm_exp_s[i]
-    g   = network.firm_exp_g[i];   l = GOOD_R[g]
-    r   = network.firm_exp_r[i]
-    push!(sirens, siren_map[(l, s, rho)]); push!(sectors, s)
-    push!(ze2010, l); push!(ze2010_downstream, r)
-    push!(share, network.firm_exp_val[i])
-    push!(downstream_purchase, Y_r[r] * mu)
-    push!(intermediate_derivative, network.firm_deriv_val[i])
-    push!(productivity, network.z_flat[rho, g])
-    push!(sample_weight_vec, network.sample_weights[rho, g])
-end
-df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
-               ze2010_downstream=ze2010_downstream, share=share,
-               downstream_purchase=downstream_purchase,
-               intermediate_derivative=intermediate_derivative,
-               productivity=productivity,sample_weight = sample_weight_vec)
-Parquet.write_parquet(joinpath(folder, "suppliers.parquet"), df)
-
-println("\nPost-hoc analysis complete. Results saved to: $folder")
+println("\nPost-hoc analysis complete. Results saved under: $output_folder")
