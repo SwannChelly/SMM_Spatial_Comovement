@@ -144,7 +144,8 @@ here; see `granular_validation.md`.
 
 Gates the sections added to `analysis_granular.ipynb` — the identification / sensitivity
 Jacobian (with the `N_s` block re-attached), the untargeted-moment PPML, the within-sector
-comparative-advantage comparison, and the amplification measures $D_r$ and $L_r(d)$. No Julia and no real data: it writes
+comparative-advantage comparison, the amplification measures $D_r$ and $L_r(d)$, and the
+input-output / Leontief benchmark. No Julia and no real data: it writes
 synthetic run trees with the exact file layout the loader expects, then executes **the
 notebook's own code cells** against them (located by content, not by index, so inserting
 a section above does not change what is tested). The notebook alternates DEFINITION cells

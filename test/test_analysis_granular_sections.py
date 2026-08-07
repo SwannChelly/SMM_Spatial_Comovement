@@ -3,7 +3,8 @@ Gates for the sections added to `analysis_granular.ipynb`:
   1. Identification / sensitivity  — the N_s block re-attached to the Jacobian,
   2. Untargeted moment             — the PPML distance elasticity of comovement,
   3. Comparative advantage         — T against distance, within sector,
-  4. Amplification                 — D_r and the share of upstream sales within d km.
+  4. Amplification                 — D_r and the share of upstream sales within d km,
+  5. IO benchmark                  — the TES parser and the Leontief multipliers.
 
 No Julia and no real data: each gate writes a synthetic run tree with the exact file
 layout the loader expects and then EXECUTES THE NOTEBOOK'S OWN CODE CELLS against it,
@@ -365,11 +366,19 @@ def gate_comparative_advantage():
         T_true[AA_ACTIVE],                         # T, s-major over (S, n_AA)
     ])
 
+    # sector codes deliberately NOT in the model's 0..S order, so a table that comes
+    # back sorted by code proves the ordering is applied rather than inherited
+    sector_names = ["C29A", "C10Z", "C25A", "C22B"][:S]
+    ze_codes = [f"{2000 + i:04d}" for i in range(R)]
     data = {
         "industry": "aero", "mu": 2, "S": S, "R": R, "n_AA": n_AA, "n_tau": n_tau,
         "folder": folder, "input_folder": inp, "step_dir": "step3",
-        "sector_names": [f"sec{s}" for s in range(S)],
-        "aa_names": [f"A{a}" for a in range(n_AA)],
+        "sector_names": sector_names,
+        "aa_names": [ze_codes[a] for a in range(n_AA)],
+        "filter_N_upstream_df": pd.DataFrame(
+            {"ze2010": ze_codes * S, "A129": np.repeat(sector_names, R)}),
+        "france": pd.DataFrame({"ze2010": ze_codes,
+                                "ze2010_name": [f"Zone {c}" for c in ze_codes]}),
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
         "T_REF_AA": T_REF_AA, "N_downstream": N_down,
         "emp_pi_r": rng.dirichlet(np.ones(n_AA)),
@@ -425,11 +434,12 @@ def gate_comparative_advantage():
     ta = THETA * ALPHA
     assert abs(eq.attrs["theta_alpha"] - ta) < 1e-12
     # sector 0 carries the planted gap, in T RATIOS so the reference normalisation cancels
-    assert abs(eq.loc["sec0", "dlogT_top_vs_median"] - BIG_GAP) < 1e-9, \
-        eq.loc["sec0", "dlogT_top_vs_median"]
-    assert abs(eq.loc["sec0", "equiv_log_d"] - BIG_GAP / ta) < 1e-9
-    assert eq.loc["sec0", "CA_beats_typical_geography"]          # 3/0.53 = 5.7 log points
-    assert not eq.loc["sec1", "CA_beats_typical_geography"]      # the flat sector
+    S0, S1 = sector_names[0], sector_names[1]
+    assert abs(eq.loc[S0, "dlogT_top_vs_median"] - BIG_GAP) < 1e-9, \
+        eq.loc[S0, "dlogT_top_vs_median"]
+    assert abs(eq.loc[S0, "equiv_log_d"] - BIG_GAP / ta) < 1e-9
+    assert eq.loc[S0, "CA_beats_typical_geography"]          # 3/0.53 = 5.7 log points
+    assert not eq.loc[S1, "CA_beats_typical_geography"]      # the flat sector
     # the extreme range is anchored at the own-region cell (distance floored at 1 km), so
     # it is much wider than the spread a buyer typically faces
     assert (eq["geo_log_range"] > eq["geo_log_spread"]).all()
@@ -440,13 +450,13 @@ def gate_comparative_advantage():
     vd = NS["ca_variance_decomposition"](data)
     tot = vd["share_CA"] + vd["share_distance"] + vd["share_covariance"]
     assert np.allclose(tot.to_numpy(), 1.0), tot                 # the identity is exact
-    assert vd.loc["sec0", "ratio_CA_over_distance"] > vd.loc["sec1", "ratio_CA_over_distance"]
+    assert vd.loc[S0, "ratio_CA_over_distance"] > vd.loc[S1, "ratio_CA_over_distance"]
     print("\n", vd.to_string())
 
     # ------------------------------------------------------------- counterfactuals
     cf = NS["counterfactual_sourcing"](data)
     assert set(cf.index.get_level_values("regime").unique()) == set(NS["CF_REGIMES"])
-    for s in data["sector_names"]:
+    for s in sector_names:
         n = cf.loc[(s, "Neither"), "n_cells"]
         assert abs(cf.loc[(s, "Neither"), "hhi"] - 1.0 / n) < 1e-9      # uniform benchmark
         assert abs(cf.loc[(s, "Neither"), "top_cell_share"] - 1.0 / n) < 1e-9
@@ -454,13 +464,13 @@ def gate_comparative_advantage():
         assert cf.loc[(s, "Distance only"), "mean_distance"] < cf.loc[(s, "Neither"), "mean_distance"]
     # the planted edge concentrates sector 0 on its top area, far above the uniform
     # benchmark, and far above the flat sector
-    assert cf.loc[("sec0", "Both forces"), "top_area_share"] > \
-        3 * cf.loc[("sec0", "Neither"), "top_area_share"]
-    assert cf.loc[("sec0", "Both forces"), "top_area_share"] > \
-        2 * cf.loc[("sec1", "Both forces"), "top_area_share"]
+    assert cf.loc[(S0, "Both forces"), "top_area_share"] > \
+        3 * cf.loc[(S0, "Neither"), "top_area_share"]
+    assert cf.loc[(S0, "Both forces"), "top_area_share"] > \
+        2 * cf.loc[(S1, "Both forces"), "top_area_share"]
     # and switching distance off concentrates it further still (CA is what does the work)
-    assert cf.loc[("sec0", "Comparative advantage only"), "top_area_share"] > \
-        cf.loc[("sec0", "Both forces"), "top_area_share"]
+    assert cf.loc[(S0, "Comparative advantage only"), "top_area_share"] > \
+        cf.loc[(S0, "Both forces"), "top_area_share"]
     print("\n", cf.round(3).to_string())
 
     # ---------------------------------------------------------------------- output
@@ -472,6 +482,19 @@ def gate_comparative_advantage():
     summ = NS["comparative_advantage_summary"](data)
     print("\n", summ.round(3).to_string())
     assert len(summ) == S
+    # every sector-indexed object comes back in A129-CODE order, not in the model's
+    # internal order and not sorted by whatever the figure ranks on
+    code_order = sorted(sector_names)
+    assert list(summ.index) == code_order, list(summ.index)
+    assert list(eq.index) == code_order, list(eq.index)
+    assert list(vd.index) == code_order, list(vd.index)
+    assert list(dict.fromkeys(cf.index.get_level_values("sector"))) == code_order
+    # and the top area is named by its commuting zone, not by its ZE code
+    caf = NS["comparative_advantage_frame"](data)
+    assert caf["area"].str.startswith("Zone").all(), caf["area"].unique()[:3]
+    assert set(caf["area_code"]) <= set(data["aa_names"])
+    assert (summ["top_area"].astype(str).str.startswith("Zone")).all()
+    print("sector-indexed output is in A129-code order; areas carry region names")
 
     # a binned trade cost has no single elasticity and must say so
     try:
@@ -615,11 +638,149 @@ def gate_amplification():
     print("\nALL OK")
 
 
+def gate_io_benchmark():
+    """The TES parser, the column normalisation, and the Leontief algebra."""
+    rng = np.random.default_rng(3)
+
+    S, R, R_d = 4, 12, 4
+    inp = TMP / "synthinput_io"
+    folder = TMP / "synthrun_io"
+    (folder / "step1").mkdir(parents=True, exist_ok=True)
+    inp.mkdir(parents=True, exist_ok=True)
+
+    coords = rng.uniform(0, 400, (R, 2))
+    D = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(-1))
+    np.fill_diagonal(D, 0.0)
+    np.save(inp / "distances.npy", D)
+
+    # --- a TES block: 8 sectors, of which 4 are the modelled ones + the downstream ---
+    SECTORS = [f"C{10 + i}A" for i in range(8)]
+    DOWN = "C29A"
+    SECTORS[5] = DOWN
+    MODELLED = [SECTORS[i] for i in (0, 1, 2, 3)]
+    dom = pd.DataFrame(rng.gamma(2.0, 50.0, (8, 8)), index=SECTORS, columns=SECTORS)
+    imp = pd.DataFrame(rng.gamma(1.0, 20.0, (8, 8)), index=SECTORS, columns=SECTORS)
+    for name, M in (("dom", dom), ("imp", imp)):
+        out = M.copy()
+        out.to_csv(inp / f"TES{name}.csv", sep=";", header=False,
+                   float_format="%.4f", decimal=",")
+
+    # --- a firm-level economy whose intermediate share is exactly 0.8 ---------------
+    LABOR_SHARE = 0.2
+    rows, siren = [], 0
+    for r in range(1, R_d + 1):
+        for s in range(1, S + 1):
+            for rho in range(1, 20 + 1):
+                siren += 1
+                rows.append({"SIREN": siren, "A129": s, "ze2010": int(rng.integers(1, R + 1)),
+                             "ze2010_downstream": r, "share": (1 - LABOR_SHARE) / (S * 20),
+                             "downstream_purchase": 1.0, "intermediate_derivative": 0.0,
+                             "productivity": 1.0, "sample_weight": 0.05})
+    pd.DataFrame(rows).to_parquet(folder / "suppliers.parquet")
+
+    codes = [f"{1000 + i:04d}" for i in range(R)]
+    data = {"industry": "auto", "mu": 1, "S": S, "R": R, "step_dir": "step1",
+            "folder": folder, "input_folder": inp, "d": DOWN,
+            "agg_labor_share": LABOR_SHARE,
+            "sector_names": MODELLED,
+            "filter_N_upstream_df": pd.DataFrame({"ze2010": codes * S,
+                                                  "A129": np.repeat(MODELLED, R)}),
+            "france": pd.DataFrame({"ze2010": codes,
+                                    "ze2010_name": [f"Zone {c}" for c in codes]}),
+            "suppliers": pd.read_parquet(folder / "suppliers.parquet")}
+
+    # ------------------------------------------------------------------ the parser
+    io = NS["read_io_table"]("dom", inp)
+    assert set(io.columns) == {"A129_1", "A129_2", "value"}
+    piv = io.pivot(index="A129_1", columns="A129_2", values="value")
+    assert np.allclose(piv.loc[SECTORS, SECTORS].to_numpy(), dom.to_numpy(), atol=1e-4)
+    print("read_io_table: comma decimals and the (supplying x using) orientation round-trip")
+
+    X = NS["io_flow_matrix"](data, kinds=("dom", "imp"))
+    assert np.allclose(X.loc[SECTORS, SECTORS].to_numpy(),
+                       (dom + imp).to_numpy(), atol=1e-3)
+    print("io_flow_matrix: dom + imp add")
+
+    # --------------------------------------------------------- technical coefficients
+    A = NS["io_technical_coefficients"](NS["io_flow_matrix"](data), 0.6)
+    assert np.allclose(A.sum(axis=0).to_numpy(), 0.6)          # every column sums to m
+    Ap = NS["io_technical_coefficients"](NS["io_flow_matrix"](data),
+                                         pd.Series(0.5, index=SECTORS))
+    assert np.allclose(Ap.sum(axis=0).to_numpy(), 0.5)
+    try:
+        NS["io_technical_coefficients"](NS["io_flow_matrix"](data), 1.2)
+    except ValueError as e:
+        print("expected on m >= 1:", str(e)[:52], "...")
+    else:
+        raise AssertionError("should have raised")
+    print("io_technical_coefficients: columns normalised to the intermediate share")
+
+    # ------------------------------------------------------------------- Leontief
+    mult = NS["leontief_multipliers"](A, max_rounds=3)
+    # a column-stochastic-to-m matrix has EVERY multiplier equal to 1/(1-m) exactly:
+    # sum_i (A^k)_{ij} = m^k, so the column sum of the inverse is the geometric series
+    assert np.allclose(mult["total"].to_numpy(), 1.0 / (1.0 - 0.6)), mult["total"]
+    assert np.allclose(mult["rounds_1"].to_numpy(), 1.0 + 0.6)
+    assert np.allclose(mult["rounds_2"].to_numpy(), 1.0 + 0.6 + 0.36)
+    assert (mult["rounds_1"] < mult["rounds_2"]).all() and (mult["rounds_2"] < mult["total"]).all()
+    print("leontief_multipliers: geometric series recovered exactly, rounds nested")
+
+    # --------------------------------------------------------------- the benchmark
+    tab = NS["io_amplification_benchmark"](data)
+    assert list(tab.index) == ["full", "subset"]
+    assert tab.loc["full", "n_sectors"] == 8
+    assert tab.loc["subset", "n_sectors"] == len(MODELLED) + 1
+    # the model's D_r - 1 must equal the planted intermediate share, and the table must
+    # say so against the labour-share moment
+    assert abs(tab.attrs["implied_intermediate_share"] - (1 - LABOR_SHARE)) < 1e-9
+    # coverage: the modelled sectors' share of the downstream column, from shares alone
+    col = NS["io_downstream_column"](data)
+    want_cov = dom.loc[MODELLED, DOWN].sum() / dom[DOWN].sum()
+    assert abs(tab.attrs["coverage_modelled_dom"] - want_cov) < 1e-6, (
+        tab.attrs["coverage_modelled_dom"], want_cov)
+    assert abs(tab.attrs["implied_total_intermediate_share"]
+               - (1 - LABOR_SHARE) / want_cov) < 1e-6
+    assert col.loc[MODELLED, "modelled"].all() and not col.loc[[SECTORS[7]], "modelled"].any()
+    assert abs(col["share_of_total"].sum() - 1.0) < 1e-9
+    assert abs(col.loc[col["modelled"], "pi_s_io"].sum() - 1.0) < 1e-9
+    # the model's simulated sector split is uniform here by construction
+    assert np.allclose(col.loc[MODELLED, "share_model"].to_numpy(), 1.0 / len(MODELLED))
+    assert tab.attrs["scalar_m"]
+    print("coverage + downstream column: shares add up, model split recovered")
+    assert abs(tab.attrs["data_intermediate_share"] - (1 - LABOR_SHARE)) < 1e-12
+    assert np.allclose(tab["leontief_total"], 1.0 / LABOR_SHARE)     # m = 1 - 0.2
+    assert (tab["captured_of_aggregate"] > 0).all()
+    print(tab.round(3).to_string())
+
+    # a downstream industry absent from the table must be named, not silently dropped
+    try:
+        NS["io_amplification_benchmark"](dict(data, d="ZZZZ"), verbose=False)
+    except KeyError as e:
+        print("expected on an unknown downstream industry:", str(e)[:55], "...")
+    else:
+        raise AssertionError("should have raised")
+
+    # and a missing table must say where it looked
+    try:
+        NS["io_flow_matrix"](dict(data, input_folder=TMP / "nowhere",
+                                  folder=TMP / "nowhere"))
+    except FileNotFoundError as e:
+        print("expected when the TES table is absent:", str(e)[:55], "...")
+    else:
+        raise AssertionError("should have raised")
+
+    out = TMP / "figs"
+    out.mkdir(exist_ok=True)
+    NS["plot_io_benchmark"](data, benchmark=tab, save_to=str(out / "io_benchmark.png"))
+    print("\nALL OK")
+
+
 if __name__ == "__main__":
     for name, gate in (("identification", gate_identification),
                        ("untargeted moment", gate_untargeted),
                        ("comparative advantage", gate_comparative_advantage),
-                       ("amplification", gate_amplification)):
+                       ("amplification", gate_amplification),
+                       ("IO benchmark", gate_io_benchmark)):
         print("\n" + "=" * 70)
         print(f"GATE: {name}")
         print("=" * 70)
