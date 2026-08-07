@@ -192,12 +192,22 @@ def _build_industry(ROOT, industry, sectors):
     n_mom_kept = 1 + (S - 1) + (R_D - 1) + N_REG + int(gam_free.sum()) + S
     n_par_id = 1 + (S - 1) + (R_D - 1) + 1 + int(gam_free.sum())
     J = RNG.normal(size=(n_mom_kept, n_par_id)) * 0.05
+    # The S variety-count columns Julia appends on the right under GRANULAR
+    # (compute_jacobian's `append_N_s`). Only block 6 — the last S rows — may be
+    # nonzero: every other moment is N_s-free by construction, and the loader must
+    # carry those exact zeros through rather than round them.
+    J_N = np.zeros((n_mom_kept, S))
+    for k in range(S):
+        J_N[n_mom_kept - S + k, k] = -0.02 * (k + 1)
+    J_full = np.hstack([J, J_N])
+    J_full_sd = np.hstack([np.abs(J) * 0.1, np.abs(J_N) * 0.1])
     for st, fn in (("step2", "jacobian_all"), ("step3", "jacobian_all_step3")):
-        np.save(f"{RUN}/{st}/{fn}.npy", J)
-        np.save(f"{RUN}/{st}/{fn}_elasticity.npy", J * 2.0)
-        np.save(f"{RUN}/{st}/{fn}_sd.npy", np.abs(J) * 0.1)
-        np.save(f"{RUN}/{st}/{fn}_elasticity_sd.npy", np.abs(J) * 0.2)
+        np.save(f"{RUN}/{st}/{fn}.npy", J_full)
+        np.save(f"{RUN}/{st}/{fn}_elasticity.npy", J_full * 2.0)
+        np.save(f"{RUN}/{st}/{fn}_sd.npy", J_full_sd)
+        np.save(f"{RUN}/{st}/{fn}_elasticity_sd.npy", J_full_sd * 2.0)
         np.save(f"{RUN}/{st}/{fn}_param_indices.npy", np.arange(1, n_par_id + 1))
+        np.save(f"{RUN}/{st}/{fn}_n_s_columns.npy", np.array([S]))
 
     for st in ("step2", "step3"):
         np.save(f"{RUN}/{st}/inference/se_moments_fitted.npy",
@@ -233,7 +243,7 @@ def _build_industry(ROOT, industry, sectors):
         "agg_labor_share": agg_labor_share,
         "n_gamma_kept": int(gam_free.sum()),
         "industry": industry,
-        "n_mom_kept": n_mom_kept, "n_par_id": n_par_id,
+        "n_mom_kept": n_mom_kept, "n_par_id": n_par_id + S, "n_par_theta": n_par_id,
         "ze": ze,
     }
     print(f"synthetic {industry}: {ROOT}  (S={S}, R={R}, n_AA={R_D}, n_gb={n_gb}, gamma kept={int(gam_free.sum())})")
@@ -416,8 +426,8 @@ def run_checks(ns, ROOT, exp):
           and g["best_simulated_moments_dict"]["gamma_aa"].shape[:2] == (exp["S"], exp["n_AA"]))
     check("best_params is the stage-K parameter column",
           g["best_params"] is not None and g["best_params"].ndim == 1)
-    check("optional geography/panels degrade to None when absent",
-          g["france"] is None and g["panel_df"] is None and g["ref"] is None)
+    check("optional geography degrades to None when absent",
+          g["france"] is None and g["ref"] is None and g["suppliers"] is None)
     check("G_K.csv read through the `G` column (real layout: group, A129, G, K, N_supplier_s)",
           close(g["G_target"], exp["G_target"]))
     check("N_supplier_s read", close(g["N_supplier_s"], exp["N_supplier_s"]))
@@ -435,10 +445,18 @@ def run_checks(ns, ROOT, exp):
     check("moment blocks: labor, industry-1, pi_r-1, reg_coef, gamma free, G0",
           list(d2["moment_block_sizes"]) ==
           [1, S - 1, exp["n_AA"] - 1, exp["n_coef"], exp["n_gamma_kept"], S])
-    check("parameter blocks: Omega_L, Omega_s-1, A-1, alpha, T free",
-          list(d2["param_block_sizes"]) == [1, S - 1, exp["n_AA"] - 1, 1, exp["n_gamma_kept"]])
-    check("param_indices file agrees with the rebuilt column count",
-          len(d2["jacobian_param_indices"]) == d2["J"].shape[1])
+    check("parameter blocks: Omega_L, Omega_s-1, A-1, alpha, T free, N_s",
+          list(d2["param_block_sizes"]) ==
+          [1, S - 1, exp["n_AA"] - 1, 1, exp["n_gamma_kept"], S])
+    check("the variety counts are the last parameter block",
+          d2["param_block_names"][-1] == "Variety count" and d2["n_N_cols"] == S
+          and [l[:4] for l in d2["param_labels"][-S:]] == ["N_s["] * S)
+    check("param_indices covers the theta columns; the N_s columns are appended after",
+          len(d2["jacobian_param_indices"]) == exp["n_par_theta"]
+          and d2["J"].shape[1] == exp["n_par_theta"] + S)
+    check("the N_s columns are exactly zero outside the zero-supplier block",
+          np.all(d2["J"][:-S, -S:] == 0.0)
+          and np.all(np.diag(d2["J"][-S:, -S:]) != 0.0))
     check("gamma moment labels and T parameter labels enumerate the same (s, AA) pairs",
           [l.replace("gamma[", "") for l in d2["moment_labels"]
            if l.startswith("gamma[")] ==
@@ -448,8 +466,35 @@ def run_checks(ns, ROOT, exp):
     check("elasticity Jacobian is the one plotted",
           close(ns["jacobian_matrix"](d2, "elasticity"), d2["J_elast"]))
     summ = ns["jacobian_block_summary"](d2)
-    check("block summary is moment-blocks x parameter-blocks",
-          summ.shape == (len(d2["moment_block_names"]), len(d2["param_block_names"])))
+    check("block summary is moment-blocks x (statistic, parameter-block)",
+          summ.shape == (len(d2["moment_block_names"]),
+                         3 * len(d2["param_block_names"]))
+          and set(summ.columns.get_level_values(0)) ==
+          {"mean_abs", "max_abs", "share_readable"})
+    # the noise mask: sigma/|epsilon| is 0.1 everywhere by construction here, so nothing
+    # is rejected at 0.5 and everything is at 0.05
+    check("noise-to-signal ratio is sigma/|elasticity|, exact zeros counted as measured",
+          close(ns["jacobian_noise_ratio"](d2)[0, 0], 0.1)
+          and np.all(ns["jacobian_noise_ratio"](d2)[:-S, -S:] == 0.0))
+    check("nothing is masked at the default threshold, everything at a strict one",
+          not ns["jacobian_noise_mask"](d2, noise_max=0.5).any()
+          and ns["jacobian_noise_mask"](d2, noise_max=0.05).mean() > 0.5)
+    ns["plot_jacobian_triptych"](d2, out_folder=outdir, tag="jac_triptych", show=False)
+    check("triptych writes the matrix, the noise map and the purged matrix",
+          all(os.path.getsize(os.path.join(
+              outdir, f"jac_triptych{suf}_{d2['industry']}_mu{d2['mu']}.pdf")) > 0
+              for suf in ("", "_noise", "_purged")))
+    for fn in ("plot_jacobian_noise", "plot_identification_map",
+               "plot_channel_elasticities", "plot_jacobian_thresholded"):
+        try:
+            ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"))
+            check(f"{fn} -> pdf", os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0)
+        except Exception as e:
+            check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
+    ident = ns["identification_summary"](d2)
+    check("identification summary separates structural zeros from weak channels",
+          ident["share_exact_zero"].loc["Extensive margin", "Variety count"] == 1.0
+          and ident["share_above"].loc["Zero-supplier share", "Variety count"] > 0)
     for fn, kw in (("plot_jacobian_full", {}), ("plot_jacobian_blocks", {})):
         try:
             ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"), **kw)
@@ -492,7 +537,11 @@ def load_notebook_code(path):
         if cell["cell_type"] != "code":
             continue
         src = "".join(cell["source"])
-        if src.lstrip().startswith("%") or "RUN THE REPORTING" in src:
+        # DEFINITION cells only. Every cell that RUNS a section on the real tree opens
+        # with the same banner, and the full run with its own — both are skipped here.
+        if (src.lstrip().startswith("%")
+                or "RUN THIS SECTION ON ITS OWN" in src
+                or "RUN THE REPORTING" in src):
             continue
         exec(compile(src, f"{os.path.basename(path)}:cell{i}", "exec"), ns)
     return ns

@@ -10,7 +10,10 @@ loading as `main.jl`, so it sees the exact same moments and masks.
 | `run_test.sh` | Launcher for the internal-validity Monte-Carlo (`run_internal_validity.jl`), mirroring `run.sh`. Usage: `./run_test.sh aero --n_coef=4 --n_tau=1 --beta0="0.5"`. |
 | `run_internal_validity.jl` | **Does the estimator recover a known truth?** Builds a synthetic economy from a chosen parameter vector θ₀, overwrites the empirical targets with moments generated at θ₀, then re-estimates. Reports point-recovery error and confidence-interval coverage over many Monte-Carlo repetitions. |
 | `run_untargeted_validation.jl` | **Out-of-sample check.** Feeds calibrated parameters into `../extras/untargeted_moments.jl` to simulate demand shocks and reproduce the paper's Table 2 comovement regression — moments that were *not* used in estimation. |
-| `test_analysis_granular.py` | **Gate for the Python reporting notebook `analysis_granular.ipynb`** (granular + attraction-area). The only test here that is not Julia, and the only one that needs no data: it writes a SYNTHETIC baseline + reporting tree with the exact file layout `main.jl --granular=true --ca_level=aa` produces, then executes the **notebook's own code cells** against it. Checks the AA mapping and area names (`X_dr.query('downstream').ze2010_downstream`, in the model's AA-column order), the AA-level γ aggregation and its s-major flattening, MOMENT_MASK (first industry / first π_r / inactive γ / per-sector reference area dropped, block 6 never masked), the block split of `best_simulated_moments.npy`, the μ₁/μ₂ folder routing (step1 + step2/inference vs step3 + step3/inference), the β→γ→G standard-error split of `Sigma_data.npy` / `se_moments_fitted.npy`, the reference-area reconstruction `γ_ref,s = c_s − Σ_{a≠ref} γ_{s,a}` (planted so it must return the simulated reference value exactly), the WLS-through-origin fit against the Julia dashboard's formula, the joint (two-industry) LaTeX table, both Jacobian axes against the shape of `jacobian_all[_step3].npy`, the Σ/Ω panels, and that `globals().update(data)` binds the analysis.ipynb names. Usage: `python3 test/test_analysis_granular.py` (needs numpy/pandas/matplotlib). |
+| `test_analysis_granular.py` | **Gate for the Python reporting notebook `analysis_granular.ipynb`** (granular + attraction-area). The only test here that is not Julia, and the only one that needs no data: it writes a SYNTHETIC baseline + reporting tree with the exact file layout `main.jl --granular=true --ca_level=aa` produces, then executes the **notebook's own code cells** against it. Checks the AA mapping and area names (`X_dr.query('downstream').ze2010_downstream`, in the model's AA-column order), the AA-level γ aggregation and its s-major flattening, MOMENT_MASK (first industry / first π_r / inactive γ / per-sector reference area dropped, block 6 never masked), the block split of `best_simulated_moments.npy`, the μ₁/μ₂ folder routing (step1 + step2/inference vs step3 + step3/inference), the β→γ→G standard-error split of `Sigma_data.npy` / `se_moments_fitted.npy`, the reference-area reconstruction `γ_ref,s = c_s − Σ_{a≠ref} γ_{s,a}` (planted so it must return the simulated reference value exactly), the WLS-through-origin fit against the Julia dashboard's formula, the joint (two-industry) LaTeX table, both Jacobian axes against the shape of `jacobian_all[_step3].npy` — including the `S`
+variety-count columns Julia appends on the right, whose entries must be EXACTLY zero
+outside the count-moment block — the noise-to-signal ratio and mask, the Σ/Ω panels and
+their correlation companions, and that `globals().update(data)` binds the analysis.ipynb names. Usage: `python3 test/test_analysis_granular.py` (needs numpy/pandas/matplotlib). |
 | `test_extensive_margin.jl` | Geometry screen (Phase-2 "GATE G2") for the analytical `reg_coef` moment — see the detailed note below. |
 | `test_t_reorder.jl` | Guard test for the s-major flattening convention of the T parameters. Asserts the T-parameter axis and the γ-moment axis enumerate the (sector, region) pairs in the same order — a silent mismatch would fit the wrong T. |
 | `test_ge_inversion.jl` | Phase-0 feasibility gate for T-profiling (`invert_T_ge`): round-trip recovery, GE-Sinkhorn convergence (`ρ_full`, `κ_S`, `‖J_GE‖`), uniqueness, cost. |
@@ -143,7 +146,10 @@ here; see `granular_validation.md`.
 ## `test_analysis_granular_sections.py`
 
 Gates the sections added to `analysis_granular.ipynb` — the identification / sensitivity
-Jacobian (with the `N_s` block re-attached), the untargeted-moment PPML, the within-sector
+Jacobian (the variety-count columns and the noise-to-signal mask), the untargeted-moment
+PPML (`pyfixest.fepois`, gated against `statsmodels`' Poisson GLM with explicit dummies,
+plus the decomposition identity and the fixed-effect-absorbed distance profile), the
+within-sector
 comparative-advantage comparison, the amplification measures $D_r$ and $L_r(d)$, and the
 input-output / Leontief benchmark. No Julia and no real data: it writes
 synthetic run trees with the exact file layout the loader expects, then executes **the
@@ -157,7 +163,7 @@ hits one of `RUN_CELL_MARKERS` **and** defines nothing at top level, so a new pe
 python test/test_analysis_granular_sections.py
 ```
 
-Needs `numpy`, `pandas`, `matplotlib`, `statsmodels`, `pyarrow`; `pyfixest` is optional
-and, when present, adds a cross-check of the PPML against `pf.fepois`. The reasoning
+Needs `numpy`, `pandas`, `matplotlib`, `statsmodels`, `pyarrow` and `pyfixest` (the
+notebook estimates the untargeted moment with it, so it is no longer optional). The reasoning
 behind each gate is written out in the notebook's own "Validation of the sections above"
 markdown cell.

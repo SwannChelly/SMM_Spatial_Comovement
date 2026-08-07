@@ -265,6 +265,12 @@ if run_step2
         K             = 50,
         step_rel      = 1e-2,
         base_seed     = 2_000_000,  # disjoint from Σ_sim seeds (1:K_sim) and step-3 (1_000_000)
+        # N_s is calibrated (integer bisection) exactly as T is calibrated (Sinkhorn),
+        # so the FULL Jacobian carries both: the S variety-count columns are appended
+        # to the right, leaving every θ column index — and hence gb_cols below —
+        # untouched.
+        append_N_s    = GRANULAR,
+        N_s_base_seed = 7_100_000,   # disjoint from run_profiled_inference's 7_000_000
         load_existing = load_jacobian
     )
 
@@ -458,6 +464,8 @@ if run_step4
         K             = 50,
         step_rel      = 1e-2,
         base_seed     = 1_000_000,
+        append_N_s    = GRANULAR,    # see the Step-2 call: N_s is a parameter too
+        N_s_base_seed = 7_200_000,
         load_existing = load_jacobian
     )
 

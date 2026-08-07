@@ -1461,6 +1461,18 @@ every active column (asserted). `J_elast` is derived from raw `J`.
                     more than 10× the across-replication `J_sd` (nonlinear/clamped regime).
 - `richardson_check`: recompute every column at `2δ` and report the relative gap to the `δ`
                     estimate (default `true`); diagnostic only, returned `J` is unchanged.
+- `append_N_s`    : (GRANULAR only) append the `S` variety-count columns `∂m/∂N_s` to the
+                    RIGHT of the parameter axis, so the saved Jacobian covers every
+                    parameter the model has rather than only the coordinates of `θ`.
+                    `N_s` is calibrated by the integer bisection exactly as `T` is
+                    calibrated by the Sinkhorn inversion, so leaving it out was a
+                    bookkeeping accident. Columns come from `compute_N_s_jacobian` (a
+                    unit first difference — `N_s` is an integer, so one variety IS the
+                    step) evaluated at the same pinned `N̂_s` the rest of the Jacobian
+                    holds fixed. Appending on the right leaves every existing column
+                    index untouched, so `param_indices`-based slicing is unaffected;
+                    `<file>_n_s_columns.npy` records how many were appended.
+- `N_s_K`, `N_s_base_seed` : replication count and seed for those columns.
 - `profile_T`     : T-profiling (SMM only). When `true`, every evaluated parameter
                     vector is routed through `profiled_theta` first, so its T block is
                     replaced by the Sinkhorn image `T*(α,Ω,A)`. Perturbing an α/head
@@ -1500,9 +1512,15 @@ function compute_jacobian(theta::Vector{Float64};
                           load_existing::Bool = false,
                           profile_T::Bool = false,
                           hold_N_s::Bool = GRANULAR,
+                          append_N_s::Bool = false,
+                          N_s_K::Int = 10,
+                          N_s_base_seed::Int = 7_000_000,
                           draw_method::Symbol = INFERENCE_DRAW_METHOD)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
+    # Columns the returned Jacobian will carry: the perturbed θ coordinates, plus the
+    # S variety counts when they are appended (see the `append_N_s` block below).
+    n_cols_out = n_perturb + (append_N_s && GRANULAR && !analytical ? S : 0)
 
     # Fail here, not deep inside the AD tape: the analytical moment vector has no
     # block 6, so under GRANULAR it is one block short of MOMENT_MASK.
@@ -1585,9 +1603,11 @@ function compute_jacobian(theta::Vector{Float64};
             J_elast    = isfile(epath)   ? NPZ.npzread(epath)   : zeros(size(J))
             J_sd       = isfile(sdpath)  ? NPZ.npzread(sdpath)  : zeros(size(J))
             J_elast_sd = isfile(esdpath) ? NPZ.npzread(esdpath) : zeros(size(J))
-            @assert size(J, 2) == n_perturb (
-                "Loaded Jacobian $jpath has $(size(J,2)) columns but $n_perturb params " *
-                "were requested — delete the file or fix param_indices.")
+            @assert size(J, 2) == n_cols_out (
+                "Loaded Jacobian $jpath has $(size(J,2)) columns but $n_cols_out were " *
+                "requested ($n_perturb θ params" *
+                (n_cols_out > n_perturb ? " + $S variety counts" : "") *
+                ") — delete the file or fix param_indices/append_N_s.")
             if isfile(ipath)
                 saved_idx = vec(Int.(NPZ.npzread(ipath)))
                 (length(saved_idx) == length(indices) && all(saved_idx .== collect(indices))) ||
@@ -1767,11 +1787,14 @@ function compute_jacobian(theta::Vector{Float64};
             end
         end
 
-        return (J_k, J_elast_k, J_fwd_k, J_bwd_k, J_rich_k)
+        return (J_k, J_elast_k, J_fwd_k, J_bwd_k, J_rich_k, m0_k)
     end
 
     # Stack into 3-D arrays and reduce
     N_moments = size(rep_results[1][1], 1)
+    # The base moment vector, averaged over the same replications — the denominator the
+    # elasticities are formed with. Needed again below for the appended N_s columns.
+    m0_bar = dropdims(mean(reduce(hcat, [rep_results[k][6] for k in 1:K]); dims=2); dims=2)
     J_stack       = Array{Float64}(undef, N_moments, n_perturb, K)
     J_elast_stack = Array{Float64}(undef, N_moments, n_perturb, K)
     for k in 1:K
@@ -1900,6 +1923,46 @@ function compute_jacobian(theta::Vector{Float64};
         end
     end
 
+    # ── Variety counts as ordinary parameter columns ─────────────────────────
+    # T and N_s are both CALIBRATED inside the model — T by the Sinkhorn inversion,
+    # N_s by the monotone integer bisection on Ḡ_s(n) — yet only T used to appear in
+    # the saved Jacobian, because it is a coordinate of θ and N_s is not. That is a
+    # bookkeeping accident, not a modelling statement, and it made the reported
+    # "full" Jacobian describe a strict subset of the model's parameters.
+    #
+    # With `append_N_s`, the S variety-count columns are appended to the RIGHT of the
+    # parameter axis, so every existing column keeps its position and every consumer
+    # that slices by `param_indices` is unaffected. The columns come from
+    # `compute_N_s_jacobian`: a unit first difference m(N̂_s+1) − m(N̂_s), which is the
+    # derivative because N_s is an integer — there is no step size to choose. They are
+    # evaluated at the SAME pinned N̂_s the rest of this Jacobian holds fixed, so the
+    # matrix is internally consistent (the inference file `jacobian_N_s.npy` pins N̂_s
+    # at its own θ̂ evaluation and can differ by a variety).
+    n_N_cols = 0
+    if append_N_s && GRANULAR && !analytical
+        println("\nAppending the variety-count columns to the Jacobian " *
+                "(unit first difference m(N̂_s+1) − m(N̂_s), $S sectors)...")
+        flush(stdout)
+        G_N, G_N_sd, N_used, _ = compute_N_s_jacobian(
+            theta; N_hat=N_fixed, K=N_s_K, base_seed=N_s_base_seed,
+            draw_method=draw_method, profile_T=profile_T)
+        n_N_cols = size(G_N, 2)
+        E_N    = zeros(size(G_N))
+        E_N_sd = zeros(size(G_N))
+        for s in 1:n_N_cols, mm in 1:N_moments
+            if abs(m0_bar[mm]) > 1e-12
+                E_N[mm, s]    = (N_used[s] / m0_bar[mm]) * G_N[mm, s]
+                E_N_sd[mm, s] = (N_used[s] / abs(m0_bar[mm])) * G_N_sd[mm, s]
+            end
+        end
+        J          = hcat(J,          G_N)
+        J_sd       = hcat(J_sd,       G_N_sd)
+        J_elast    = hcat(J_elast,    E_N)
+        J_elast_sd = hcat(J_elast_sd, E_N_sd)
+        println("  N̂_s = $(N_used); Jacobian is now $(size(J,1))×$(size(J,2)) " *
+                "($(n_perturb) θ columns + $(n_N_cols) variety counts).")
+    end
+
     # ── Save ────────────────────────────────────────────────────────────────
     out_dir = joinpath(output_folder, output_subdir)
     mkpath(out_dir)
@@ -1909,6 +1972,10 @@ function compute_jacobian(theta::Vector{Float64};
     NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_elasticity_sd.npy")), J_elast_sd)
     NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_param_indices.npy")),
                  collect(indices))
+    # How many of the trailing columns are variety counts rather than coordinates of θ
+    # (0 when none were appended), so a reader never has to infer it from the width.
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_n_s_columns.npy")),
+                 [n_N_cols])
 
     # ── Block-level diagnostic ──────────────────────────────────────────────
     println("\nMean |elasticity| across $K replications, by block:")

@@ -1,6 +1,6 @@
 """
 Gates for the sections added to `analysis_granular.ipynb`:
-  1. Identification / sensitivity  — the N_s block re-attached to the Jacobian,
+  1. Identification / sensitivity  — the variety-count columns and the noise mask,
   2. Untargeted moment             — the PPML distance elasticity of comovement,
   3. Comparative advantage         — T against distance, within sector,
   4. Amplification                 — D_r and the share of upstream sales within d km,
@@ -12,7 +12,7 @@ so what is tested is the shipped artefact rather than a copy of it. Run with
 
     python test/test_analysis_granular_sections.py
 
-Requires numpy, pandas, matplotlib, statsmodels, pyarrow (pyfixest optional).
+Requires numpy, pandas, matplotlib, pyfixest, pyarrow.
 """
 import json
 import os
@@ -48,6 +48,8 @@ RUN_CELL_MARKERS = (
     "generate_combined_table(INDUSTRIES",
     "RUN_KWARGS = dict(",
 )
+# ... except that a definition cell may legitimately contain one of those strings in a
+# docstring, which is why `notebook_namespace` also requires the cell to define nothing.
 
 
 def notebook_namespace():
@@ -77,92 +79,89 @@ NS = notebook_namespace()
 
 
 def gate_identification():
-    """The N_s block embedded on the masked moment rows, and the thresholded figures."""
+    """
+    The variety-count columns on the parameter axis, and the noise-to-signal mask.
+
+    Julia appends dm/dN_s to the saved Jacobian, so the notebook receives them as
+    ordinary columns; what has to hold here is that the two thresholds do different
+    things — a structural zero must be reported as a zero, an entry whose Monte-Carlo
+    standard deviation swamps it must be reported as unmeasured, and the two must never
+    be pooled.
+    """
     S, n_AA, n_coef, n_tau, R_d = 3, 4, 4, 1, 4
     n_gam = 6
     moment_block_sizes = [1, S - 1, R_d - 1, n_coef, n_gam, S]
-    param_block_sizes = [1, S - 1, R_d - 1, n_tau, n_gam]
+    param_block_sizes = [1, S - 1, R_d - 1, n_tau, n_gam, S]
     n_rows, n_par = sum(moment_block_sizes), sum(param_block_sizes)
-    n_gb = n_coef + n_gam + S
-
-    full_len = 1 + S + R_d + n_coef + S * n_AA + S
-    mask = np.ones(full_len, dtype=bool)
-    mask[1] = False                     # first industry share
-    mask[1 + S] = False                 # first pi_r
-    off_gam = 1 + S + R_d + n_coef
-    gam_keep = np.zeros(S * n_AA, dtype=bool)
-    gam_keep[:n_gam] = True
-    mask[off_gam:off_gam + S * n_AA] = gam_keep
-    assert mask.sum() == n_rows, (mask.sum(), n_rows)
 
     rng = np.random.default_rng(0)
-    folder = TMP / "synthrun"
-    (folder / "step3" / "inference").mkdir(parents=True, exist_ok=True)
-    G_N = np.zeros((n_gb, S))
-    for s in range(S):
-        G_N[n_coef + n_gam + s, s] = -0.02 * (s + 1)     # diagonal on the G0 rows
-    np.save(folder / "step3" / "inference" / "jacobian_N_s.npy", G_N)
-    np.save(folder / "step3" / "inference" / "jacobian_N_s_sd.npy", np.abs(G_N) * 0.05)
+    E = rng.normal(0, 0.1, (n_rows, n_par))
+    E_sd = np.abs(E) * 0.1                       # readable everywhere by default
+    # the N_s block: exactly zero outside the zero-supplier rows, diagonal on them
+    E[:, n_par - S:] = 0.0
+    E_sd[:, n_par - S:] = 0.0
+    for k in range(S):
+        E[n_rows - S + k, n_par - S + k] = -0.25
+        E_sd[n_rows - S + k, n_par - S + k] = 0.02
+    # one entry deliberately drowned in noise: large elasticity, larger SD
+    E[0, 0], E_sd[0, 0] = 0.4, 0.8
 
     data = {
         "industry": "aero", "mu": 2, "K": 0, "granular": True, "S": S, "n_AA": n_AA,
-        "n_coef": n_coef, "n_tau": n_tau, "folder": folder, "inference_step": "step3",
+        "n_coef": n_coef, "n_tau": n_tau, "folder": TMP / "synthrun",
+        "inference_step": "step3", "n_N_cols": S,
         "sector_names": [f"S{s}" for s in range(S)],
-        "moment_mask": mask,
-        "best_simulated_moments": np.abs(rng.normal(1.0, 0.1, (full_len, 2))) + 0.5,
-        "granular_diagnostics": {"N_hat": np.array([12.0, 8.0, 20.0])},
         "moment_block_sizes": moment_block_sizes,
         "param_block_sizes": param_block_sizes,
         "moment_block_names": ["Labor share", "Industry shares", "Downstream sales",
                                "Extensive margin", "Regional sourcing shares",
                                "Zero-supplier share"],
         "param_block_names": ["Omega_L", "Industry shares", "Productivity",
-                              "Trade cost", "Comparative advantage"],
+                              "Trade cost", "Comparative advantage", "Variety count"],
         "moment_labels": [f"m{i}" for i in range(n_rows)],
-        "param_labels": [f"p{i}" for i in range(n_par)],
-        "J": rng.normal(0, 0.1, (n_rows, n_par)),
-        "J_elast": rng.normal(0, 0.1, (n_rows, n_par)),
-        "J_sd": np.abs(rng.normal(0, 0.01, (n_rows, n_par))),
-        "J_elast_sd": np.abs(rng.normal(0, 0.01, (n_rows, n_par))),
+        "param_labels": [f"p{i}" for i in range(n_par - S)]
+                        + [f"N_s[S{s}]" for s in range(S)],
+        "J": E / 2.0, "J_elast": E, "J_sd": E_sd / 2.0, "J_elast_sd": E_sd,
     }
 
-    ext = NS["with_variety_counts"](data)
-    assert ext["J_elast"].shape == (n_rows, n_par + S), ext["J_elast"].shape
-    assert ext["param_block_names"][-1] == "Variety count"
-    assert len(ext["param_labels"]) == n_par + S
-    assert len(ext["param_block_sizes"]) == len(ext["param_block_names"])
+    R = NS["jacobian_noise_ratio"](data)
+    assert np.all(R[:, n_par - S:][: n_rows - S] == 0.0), "structural zeros must read 0"
+    assert abs(R[0, 0] - 2.0) < 1e-12, R[0, 0]
+    assert abs(R[1, 1] - 0.1) < 1e-12, R[1, 1]
+    mask = NS["jacobian_noise_mask"](data, noise_max=NS["NOISE_MAX"])
+    assert mask[0, 0] and mask.sum() == 1, mask.sum()
+    print("noise ratio: exact zeros measured, the planted noisy entry is the only mask")
 
-    # the N_s columns must be exactly zero outside block 6, and the elasticity must be
-    # N_hat * dm/dN / m on the G0 rows
-    E = ext["J_elast"][:, n_par:]
-    assert np.all(E[:n_rows - S, :] == 0.0)
-    m0 = data["best_simulated_moments"][:, 0][mask]
-    for s in range(S):
-        row = n_rows - S + s
-        want = G_N[n_coef + n_gam + s, s] * 12.0 * (1 if s else 1)
-        want = G_N[n_coef + n_gam + s, s] * data["granular_diagnostics"]["N_hat"][s] / m0[row]
-        assert abs(E[row, s] - want) < 1e-12, (E[row, s], want)
-    print("N_s block embedding OK")
-
-    df = NS["identification_summary"](ext)
-    print(df["share_above"])
-    assert df["share_above"].loc["Zero-supplier share", "Variety count"] > 0
+    df = NS["identification_summary"](data)
     assert df["share_exact_zero"].loc["Extensive margin", "Variety count"] == 1.0
+    assert df["share_above"].loc["Zero-supplier share", "Variety count"] > 0
+    assert df["share_readable"].loc["Labor share", "Omega_L"] < 1.0
+    assert df["share_live"].loc["Labor share", "Omega_L"] == 0.0   # large but unmeasured
+    print("identification summary: structural zeros, weak channels and noise separated")
+
+    # the channel figure must not let an unmeasurable entry produce a bar
+    axes = NS["plot_channel_elasticities"](data, noise_max=NS["NOISE_MAX"])
+    assert len(axes) == 3
 
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
-    NS["plot_identification_map"](ext, save_to=str(out / "map.png"))
-    NS["plot_jacobian_thresholded"](ext, save_to=str(out / "thr.png"))
-    NS["plot_channel_elasticities"](ext, save_to=str(out / "chan.png"))
-    NS["plot_channel_elasticities"](ext, stat="mean")
-    NS["plot_jacobian_full"](ext)          # the existing plots must still accept the extended dict
-    NS["plot_jacobian_blocks"](ext)
-    print(NS["jacobian_block_summary"](ext))
+    for fn in ("plot_identification_map", "plot_jacobian_thresholded",
+               "plot_jacobian_noise", "plot_jacobian_full", "plot_jacobian_blocks"):
+        NS[fn](data, save_to=str(out / f"{fn}.png"))
+    print(NS["jacobian_block_summary"](data).round(3).to_string())
 
+    # a run whose Jacobian has no variety-count columns must say so, not plot nonsense
+    plain = dict(data,
+                 param_block_names=data["param_block_names"][:-1],
+                 param_block_sizes=data["param_block_sizes"][:-1],
+                 param_labels=data["param_labels"][:n_par - S],
+                 n_N_cols=0,
+                 J=data["J"][:, :n_par - S], J_elast=E[:, :n_par - S],
+                 J_sd=data["J_sd"][:, :n_par - S], J_elast_sd=E_sd[:, :n_par - S])
     try:
-        NS["plot_channel_elasticities"](data)
+        NS["plot_channel_elasticities"](plain)
     except ValueError as e:
-        print("expected failure on the un-augmented dict:", str(e)[:80])
+        print("expected failure without the variety-count columns:", str(e)[:80])
     else:
         raise AssertionError("should have raised")
 
@@ -173,51 +172,40 @@ def gate_untargeted():
     rng = np.random.default_rng(7)
 
     # ---------------------------------------------------------------------------
-    # 1. ppml_absorb against statsmodels GLM Poisson with EXPLICIT group dummies
+    # 1. fepois_fit — the thin pyfixest wrapper — against statsmodels' Poisson GLM with
+    #    EXPLICIT group dummies. Different algorithm, same estimand: what is being gated
+    #    is that the formula, the weights and the absorbed fixed effect are wired the way
+    #    the moment intends, not pyfixest's own arithmetic.
     # ---------------------------------------------------------------------------
     n, n_g = 4000, 12
     g = rng.integers(0, n_g, n)
     x1 = rng.normal(0, 1, n)
-    x2 = rng.normal(0, 1, n)
-    a = rng.normal(0, 0.7, n_g)
-    eta_true = np.array([-0.35, 0.20])
-    mu_true = np.exp(a[g] + x1 * eta_true[0] + x2 * eta_true[1])
+    a_g = rng.normal(0, 0.7, n_g)
+    eta_true = -0.35
+    mu_true = np.exp(a_g[g] + x1 * eta_true)
     y = rng.poisson(mu_true).astype(float)
 
-    X = np.column_stack([x1, x2])
-    fit = NS["ppml_absorb"](y, X, g, cluster=None)
+    d = pd.DataFrame({"a_ir": y, "log_distance": x1, "fe_group": g.astype(str),
+                      "sample_weight": np.ones(n), "cluster": g.astype(str)})
+    fit = NS["fepois_fit"](d, "a_ir", cluster=None)
+    beta = float(fit.coef()["log_distance"])
 
     D = pd.get_dummies(pd.Series(g), drop_first=False).to_numpy(dtype=float)
-    Xd = np.column_stack([X, D])
-    sm_fit = sm.GLM(y, Xd, family=sm.families.Poisson()).fit()
-    print("beta   ours:", fit["beta"], " statsmodels:", sm_fit.params[:2])
-    assert np.allclose(fit["beta"], sm_fit.params[:2], atol=1e-8), "beta mismatch"
-    assert np.allclose(fit["se"], sm_fit.bse[:2], rtol=1e-6), (fit["se"], sm_fit.bse[:2])
-    print("PPML == statsmodels GLM Poisson with explicit dummies (beta and classical se)")
+    sm_fit = sm.GLM(y, np.column_stack([x1, D]), family=sm.families.Poisson()).fit()
+    print("beta   pyfixest:", beta, " statsmodels:", sm_fit.params[0])
+    assert abs(beta - sm_fit.params[0]) < 1e-6, "beta mismatch"
 
-    # weights
-    w = rng.gamma(2.0, 0.5, n)
-    fw = NS["ppml_absorb"](y, X, g, w=w, cluster=None)
-    smw = sm.GLM(y, Xd, family=sm.families.Poisson(), freq_weights=w).fit()
-    assert np.allclose(fw["beta"], smw.params[:2], atol=1e-8), (fw["beta"], smw.params[:2])
-    print("weighted PPML matches too")
+    # a non-count outcome: PPML is a conditional-MEAN estimator, shares are legitimate
+    d_share = d.assign(a_ir=mu_true * rng.gamma(3, 1 / 3, n))
+    b_share = float(NS["fepois_fit"](d_share, "a_ir", cluster=None).coef()["log_distance"])
+    assert abs(b_share - eta_true) < 0.1, b_share
+    print("continuous (share-like) outcome recovers the truth:", b_share)
 
-    # non-count outcome: PPML is a conditional-MEAN estimator, shares are legitimate
-    y_share = mu_true * rng.gamma(3, 1 / 3, n)
-    fs = NS["ppml_absorb"](y_share, X, g, cluster=None)
-    assert np.max(np.abs(fs["beta"] - eta_true)) < 0.1, fs["beta"]
-    print("continuous (share-like) outcome recovers the truth:", fs["beta"])
-
-    # separated group: all-zero outcome in one group must be dropped, not crash
-    y_sep = y.copy()
-    y_sep[g == 3] = 0.0
-    fsep = NS["ppml_absorb"](y_sep, X, g, cluster=g)
-    assert fsep["n_dropped_groups"] == 1 and fsep["n_obs"] == int((g != 3).sum())
-    print("separated group dropped:", fsep["n_dropped_groups"], "->", fsep["n_obs"], "obs")
-
-    # clustered vcov >= classical here, and the machinery runs
-    fc = NS["ppml_absorb"](y, X, g, cluster=rng.integers(0, 30, n))
-    print("CRV1 se:", fc["se"], " classical se:", fit["se"], " clusters:", fc["n_clusters"])
+    # weights and clustering must both go through
+    d_w = d.assign(sample_weight=rng.gamma(2.0, 0.5, n))
+    fw = NS["fepois_fit"](d_w, "a_ir", cluster="cluster")
+    print("weighted + CRV1 se:", float(fw.se()["log_distance"]),
+          " classical se:", float(fit.se()["log_distance"]))
 
     # ---------------------------------------------------------------------------
     # 2. End to end on a synthetic run tree with a PLANTED distance decay
@@ -263,6 +251,7 @@ def gate_untargeted():
 
     data = {"industry": "auto", "mu": 1, "S": S, "R": R, "step_dir": "step1",
             "folder": folder, "input_folder": inp,
+            "suppliers_path": folder / "suppliers.parquet",
             "suppliers": pd.read_parquet(folder / "suppliers.parquet")}
 
     panel = NS["build_a_ir_panel"](data)
@@ -281,20 +270,19 @@ def gate_untargeted():
     assert res_auto["eta"] < 0, res_auto["eta"]
     print(f"planted eta = {ETA_PLANT} (plus the extensive margin, so |eta| should exceed it)")
 
-    # the same thing through pyfixest, if it happens to be installed
-    try:
-        import pyfixest as pf
-        pfd = panel.rename(columns={"a_ir": "y"})
-        m = pf.fepois(fml="y ~ log_distance | fe_group", data=pfd,
-                      weights="sample_weight", vcov={"CRV1": "cluster"})
-        print("pyfixest eta:", float(m.coef().iloc[0]), " se:", float(m.se().iloc[0]))
-        assert abs(float(m.coef().iloc[0]) - res_auto["eta"]) < 1e-6
-        print("matches pyfixest.fepois")
-    except ImportError:
-        print("(pyfixest not installed — skipped the cross-check)")
-
+    # the decomposition: the extensive margin must be negative (a more distant supplier
+    # is less likely to serve at all) and the identity must close to within the
+    # fixed-effect wedge it is documented to carry
     dec = NS["decompose_untargeted_moment"](data, panel=panel)
-    assert dec["extensive"]["beta"][0] < 0
+    tab = dec["table"].set_index("channel")["coefficient"]
+    assert tab.iloc[1] < 0, tab
+    assert abs(dec["gap"]) < 0.25, dec["gap"]
+    assert dec["table"].loc[2, "n_obs"] < dec["table"].loc[0, "n_obs"]   # positives only
+    print("decomposition: extensive margin negative, identity closes to", round(dec["gap"], 4))
+
+    # the served indicator the extensive-margin regression runs on
+    assert set(np.unique(panel["served"])) <= {0.0, 1.0}
+    assert np.allclose(panel["served"].to_numpy(), (panel["a_ir"] > 0).astype(float))
 
     # a second industry so the joint table/figure paths are exercised
     data2 = dict(data, industry="aero")
@@ -308,6 +296,13 @@ def gate_untargeted():
     out.mkdir(exist_ok=True)
     NS["plot_untargeted_moment"]([res_auto, res_aero], save_to=str(out / "untargeted.png"))
     NS["plot_a_ir_profile"]([res_auto, res_aero], save_to=str(out / "profile.png"))
+    labels, b, se, raw = NS["a_ir_bin_profile"](panel, (0, 50, 100, 150, 200, 300, np.inf))
+    assert b[0] == 0.0 and se[0] == 0.0 and abs(raw[0]) < 1e-12   # nearest bin = reference
+    assert len(labels) == len(b) == len(raw)
+    assert np.isfinite(b[1:]).all()
+    # the fixed effect must actually change the profile: absorbed != unconditional
+    assert np.nanmax(np.abs(b - raw)) > 1e-6
+    print("bin profile: reference bin normalised, FE-absorbed profile differs from the raw one")
 
     # controls path
     NS["estimate_untargeted_moment"](data, panel=panel, controls=("log_productivity",))
@@ -382,6 +377,9 @@ def gate_comparative_advantage():
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
         "T_REF_AA": T_REF_AA, "N_downstream": N_down,
         "emp_pi_r": rng.dirichlet(np.ones(n_AA)),
+        # observed AA-level sourcing shares: what the Sinkhorn inversion targets, and
+        # the empirical half of the covariance split
+        "emp_gamma_aa": np.where(AA_ACTIVE, rng.uniform(0.01, 0.4, (S, n_AA)), 0.0),
         "best_params": best_params,
         "coefs": pd.DataFrame({"value": [1.0]}),        # no `theta` entry -> the default
     }
@@ -453,6 +451,43 @@ def gate_comparative_advantage():
     assert vd.loc[S0, "ratio_CA_over_distance"] > vd.loc[S1, "ratio_CA_over_distance"]
     print("\n", vd.to_string())
 
+    # ------------------------------------------------------- the exact win test
+    wm = NS["ca_win_margin"](data)
+    w_buy = data["emp_pi_r"] / data["emp_pi_r"].sum()
+    for s in range(S):
+        name = sector_names[s]
+        if name not in wm.index:
+            continue
+        blk = geom["by_sector"][s]
+        act = np.flatnonzero(AA_ACTIVE[s])
+        top = int(act[np.argmax(est["T"][s, act])])
+        in_top = blk["areas"] == top
+        # the margin must be the closed form, recomputed here from scratch
+        score = np.log(est["T"][s, blk["areas"]])[:, None] - ta * np.log(blk["distance"])
+        margin = (score[in_top].max(0) - score[~in_top].max(0)) / ta
+        assert abs(wm.loc[name, "mean_win_margin"] - float(margin @ w_buy)) < 1e-9
+        assert abs(wm.loc[name, "share_buyers_won"] - float((margin > 0) @ w_buy)) < 1e-12
+        # a positive margin must mean the argmax cell really is in the top area
+        winner_in_top = in_top[blk["rho"].argmax(axis=0)]
+        assert np.array_equal(margin > 0, winner_in_top)
+        # the within-area handicap is pure distance: T cancels inside an area
+        ld = np.log(blk["distance"])
+        assert abs(wm.loc[name, "mean_within_penalty"]
+                   - float((ld[in_top].max(0) - ld[in_top].min(0)) @ w_buy)) < 1e-9
+    # the planted 3-log-point edge must win every buyer; the flat sector must not
+    assert wm.loc[S0, "share_buyers_won"] == 1.0, wm.loc[S0, "share_buyers_won"]
+    assert wm.loc[S1, "share_buyers_won"] < 1.0
+    print("\n", wm.to_string())
+    print("win margin: matches the closed form, agrees with the argmax, T cancels within area")
+
+    # --------------------------------------------------- where the covariance comes from
+    cb = NS["ca_covariance_benchmark"](data)
+    assert np.allclose(cb["check_gamma_minus_M"].to_numpy(), 0.0, atol=1e-12), cb
+    assert np.allclose((cb["cov_gamma"] - cb["cov_M"]).to_numpy(),
+                       cb["cov_T"].to_numpy(), atol=1e-12)
+    assert cb["share_covariance"].notna().all()
+    print("\n", cb.round(4).to_string())
+
     # ------------------------------------------------------------- counterfactuals
     cf = NS["counterfactual_sourcing"](data)
     assert set(cf.index.get_level_values("regime").unique()) == set(NS["CF_REGIMES"])
@@ -478,6 +513,7 @@ def gate_comparative_advantage():
     out.mkdir(exist_ok=True)
     NS["plot_ca_distribution"](data, save_to=str(out / "ca_dist.png"))
     NS["plot_ca_distance_equivalence"](data, save_to=str(out / "ca_equiv.png"))
+    NS["plot_ca_win_margin"](data, save_to=str(out / "ca_win_margin.png"))
     NS["plot_counterfactual_sourcing"](data, save_to=str(out / "ca_cf.png"))
     summ = NS["comparative_advantage_summary"](data)
     print("\n", summ.round(3).to_string())
@@ -495,6 +531,14 @@ def gate_comparative_advantage():
     assert set(caf["area_code"]) <= set(data["aa_names"])
     assert (summ["top_area"].astype(str).str.startswith("Zone")).all()
     print("sector-indexed output is in A129-code order; areas carry region names")
+
+    # every column of the summary has to be documented, and nothing is documented that
+    # the summary does not produce — the glossary is the table's reading guide
+    gloss = NS["comparative_advantage_glossary"]()
+    assert set(summ.columns) <= set(gloss.index), set(summ.columns) - set(gloss.index)
+    assert set(gloss.index) - set(summ.columns) == set(), \
+        set(gloss.index) - set(summ.columns)
+    print("every summary column is documented in comparative_advantage_glossary()")
 
     # a binned trade cost has no single elasticity and must say so
     try:
@@ -662,7 +706,7 @@ def gate_io_benchmark():
     imp = pd.DataFrame(rng.gamma(1.0, 20.0, (8, 8)), index=SECTORS, columns=SECTORS)
     for name, M in (("dom", dom), ("imp", imp)):
         out = M.copy()
-        out.to_csv(inp / f"TES{name}.csv", sep=";", header=False,
+        out.to_csv(inp / f"TES_{name}.csv", sep=";", header=False,
                    float_format="%.4f", decimal=",")
 
     # --- a firm-level economy whose intermediate share is exactly 0.8 ---------------
