@@ -368,9 +368,24 @@ end
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # (5) α × DAMPING STABILITY MAP, at the REAL data target
-#     Everything below lives inside functions: a top-level `for` in Julia is SOFT
-#     scope, so assigning to a global inside one either warns or silently binds a
-#     fresh local (the bug documented for main.jl's siren_counter).
+#
+# M = ∂log γ_model/∂log T on the free coordinates is only 62×62 here, so it is
+# MATERIALISED DENSELY and eigen-decomposed rather than power-iterated: that gives
+# the exact ρ(I−δM) = max_j |1−δλ_j| (complex λ included), and lets the ε/θ
+# counterfactuals be built as OPERATORS instead of from a per-cell formula.
+#
+# M is split into three channels by freezing progressively more of the GE response:
+#   M_alloc  : expenditure E frozen at T*  ⇒ pure matrix scaling (Birkhoff)
+#   M_pq     : Y_r frozen, prices P_sr,P_r,c_r free  ⇒ adds the ν and λ channels
+#   M_full   : everything free              ⇒ adds the ε (demand) channel
+# so  M_νλ = M_pq − M_alloc  and  M_ε = M_full − M_pq.
+# Since Y_r = δ_r p_r^ε / Σ p^ε δ, the ε channel is LINEAR in ε given the Y-shares,
+# so M(ε′) = M_alloc + M_νλ + (ε′/ε)·M_ε is exact to first order. And θ enters the
+# price transmission as −1/θ while σ enters through θα, so
+# M(θ′, α′) = M_alloc(a) + (θ/θ′)(M_νλ(a) + M_ε(a)) evaluated at a = θ′α′/θ.
+#
+# Everything below lives inside functions: a top-level `for` in Julia is SOFT scope,
+# so assigning to a global inside one either warns or silently binds a fresh local.
 # ═══════════════════════════════════════════════════════════════════════════════
 const ALPHA_GRID  = sort(unique(round.(vcat(collect(0.10:0.10:1.20),
                                             alpha_hat, 0.45, 0.50, 0.55); digits = 4)))
@@ -378,10 +393,70 @@ const DAMP_GRID   = [0.9, 0.7, 0.5, 0.3, 0.1]
 const DAMP_PROD   = 0.9                    # profiling.jl's invert_T_ge default
 const REAL_TARGET = EMP_GAMMA_T_TILDE      # the production target
 
-# Traced damped Sinkhorn: the same recursion as invert_T_ge, plus the SIGNED step on
-# one tracked coordinate. A high sign-flip fraction is OSCILLATION (λ > 2/δ); a low
-# one with a shrinking residual is CREEP (slow contraction). `resid` alone cannot
-# tell them apart, and they call for opposite fixes.
+# γ in T-column space with a prescribed amount of the GE response frozen.
+#   mode = :full    — everything endogenous (identical to gamma_of)
+#   mode = :pq      — Y_r pinned at `Y_pin`, prices free  (ν and λ channels only)
+#   mode = :alloc   — the whole expenditure matrix pinned at `E_pin` (matrix scaling)
+function gamma_mode(T_par, tau, mode::Symbol; Y_pin = nothing, E_pin = nothing)
+    T_ze = gather_T_to_ze(T_par)
+    local E
+    if mode === :alloc
+        E = E_pin
+        Phi = compute_Phi(T_ze, tau)
+    else
+        pr  = compute_prices_analytical(Ω_L, Ω_s, A, T_ze, tau)
+        Phi = pr.Phi
+        Yv  = mode === :pq ? Y_pin : pr.Y_r
+        E   = [Ω_s[s] * (pr.P_sr[s,dr]/pr.P_r[dr])^(1-nu) *
+               (pr.P_r[dr]/pr.c_r[dr])^(1-lambda) * (1-Ω_L) * pr.mu * Yv[dr]
+               for s in 1:S, dr in 1:R_downstream]
+    end
+    X_ls = zeros(R, S)
+    for g in 1:n_good
+        s = GOOD_S[g]; l = GOOD_R[g]; w = W_RS_FLAT[g]
+        for dr in 1:R_downstream
+            Phi[s, dr] < 1e-300 && continue
+            X_ls[l, s] += T_ze[s, l] * (w * tau[l, dr])^(-theta) / Phi[s, dr] * E[s, dr]
+        end
+    end
+    Xs = vec(sum(X_ls, dims = 1)); gz = zeros(R, S)
+    for s in 1:S
+        xs = Xs[s]; xs < 1e-300 && continue
+        for r in 1:R; gz[r, s] = X_ls[r, s] / xs * domestic_share[s]; end
+    end
+    return aggregate_gamma_to_T(gz)
+end
+
+# Dense M = ∂log γ / ∂log T on the free coordinates, by central differences.
+# The Sinkhorn step is log T⁺ = log T + δ(log target − log γ), so DΨ_δ = I − δM.
+function dense_M(T_at, a::Float64, mode::Symbol; eps_fd = 1e-5)
+    tau = build_tau([a])
+    pr  = compute_prices_analytical(Ω_L, Ω_s, A, gather_T_to_ze(T_at), tau)
+    Y_pin = copy(pr.Y_r)
+    E_pin = [Ω_s[s] * (pr.P_sr[s,dr]/pr.P_r[dr])^(1-nu) *
+             (pr.P_r[dr]/pr.c_r[dr])^(1-lambda) * (1-Ω_L) * pr.mu * pr.Y_r[dr]
+             for s in 1:S, dr in 1:R_downstream]
+    M = zeros(n_free, n_free)
+    for (k, (s, c)) in enumerate(free_coords)
+        Tp = copy(T_at); Tp[s,c] *= exp(eps_fd);  refnorm!(Tp)
+        Tm = copy(T_at); Tm[s,c] *= exp(-eps_fd); refnorm!(Tm)
+        gp = gamma_mode(Tp, tau, mode; Y_pin = Y_pin, E_pin = E_pin)
+        gm = gamma_mode(Tm, tau, mode; Y_pin = Y_pin, E_pin = E_pin)
+        for (j, (s2, c2)) in enumerate(free_coords)
+            a1 = gp[c2, s2]; a2 = gm[c2, s2]
+            M[j, k] = (a1 > 0 && a2 > 0) ? (log(a1) - log(a2)) / (2 * eps_fd) : 0.0
+        end
+    end
+    return M
+end
+
+# ρ(I − δM) from the spectrum (exact; handles a complex pair).
+spec_rho(ev, delta) = maximum(abs.(1 .- delta .* ev))
+
+# Traced damped Sinkhorn: the production recursion plus the SIGNED step on one
+# tracked coordinate. A high sign-flip fraction is OSCILLATION (some |1−δλ|>1 with
+# λ real and large); a low one with a shrinking residual is CREEP. `resid` alone
+# cannot tell them apart, and they call for opposite fixes.
 function invert_traced(a::Float64, T_init::AbstractMatrix; damping::Float64,
                        max_iter::Int = 500, tol::Float64 = 1e-9)
     tau   = build_tau([a])
@@ -441,80 +516,88 @@ function classify(r)
     return "CREEP"
 end
 
-# M = ∂log γ_model / ∂log T on the free coordinates.  DΨ_undamped = I − M, so
-# M·v = v − DΨ·v; the damped iteration matrix is I − δM.
-function M_operator(T_at, a::Float64)
-    tau_a = build_tau([a])
-    sf    = T -> sink_update(T, gamma_of(T, tau_a), REAL_TARGET)
-    return v -> (v .- jvp(sf, T_at, v))
-end
-
 struct AlphaRow
     a::Float64; exists::Bool; iters::Int; resid::Float64
-    lmax::Float64; lmin::Float64
+    lmax::Float64; lmin::Float64; cplx::Bool
+    kappaS::Float64                       # ρ(M_alloc−I): the pure Birkhoff channel
 end
 
 # ── (5a) does a fixed point EXIST, and what is the spectrum of M there? ─────────
 function stability_scan()
     println("\n(5a) Does a fixed point EXIST at each α?  (δ=0.05, 20000 iters — stable for λ<40)")
-    println("      α      exists  iters      resid    |  λ_max(M)  λ_min(M)  δ*=2/λmax   δ_opt   rate")
-    println("     " * "-"^94)
-    rows   = AlphaRow[]
-    Tstars = Dict{Float64, Matrix{Float64}}()
+    println("      α      exists  iters      resid    |  λmax(M) λmin(M)  cplx  κ_S  | δ*=2/λmax  δ_opt   rate")
+    println("     " * "-"^103)
+    rows  = AlphaRow[]
+    Tst   = Dict{Float64, Matrix{Float64}}()
+    Mall  = Dict{Float64, NTuple{3, Matrix{Float64}}}()   # (alloc, νλ, ε)
     for a in ALPHA_GRID
         r0 = invert_traced(a, T_rs_init; damping = 0.05, max_iter = 20000, tol = 1e-10)
-        Tstars[a] = r0.T
-        lmax = NaN; lmin = NaN
+        Tst[a] = r0.T
+        lmax = NaN; lmin = NaN; cplx = false; kap = NaN
         if r0.converged
-            Mv   = M_operator(r0.T, a)
-            lmax = spectral_radius(Mv, n_free)
-            # ρ(λmax·I − M) = λmax − λmin for a real spectrum bounded above by λmax.
-            lmin = lmax - spectral_radius(v -> (lmax .* v .- Mv(v)), n_free)
+            M_al = dense_M(r0.T, a, :alloc)
+            M_pq = dense_M(r0.T, a, :pq)
+            M_fu = dense_M(r0.T, a, :full)
+            Mall[a] = (M_al, M_pq .- M_al, M_fu .- M_pq)
+            ev   = eigvals(M_fu)
+            cplx = maximum(abs.(imag.(ev))) > 1e-6 * max(1.0, maximum(abs.(ev)))
+            lmax = maximum(real.(ev)); lmin = minimum(real.(ev))
+            kap  = maximum(abs.(eigvals(M_al) .- 1))   # ρ(DΨ) of pure matrix scaling
         end
-        @printf("   %6.3f   %-6s %6d   %.2e  |  %8.3f %8.3f  %8.3f  %6.3f  %5.3f\n",
+        @printf("   %6.3f   %-6s %6d   %.2e  | %7.3f %7.3f  %-4s %5.3f | %8.3f %6.3f  %5.3f\n",
                 a, r0.converged ? "yes" : "NO", r0.iters, r0.resid,
-                lmax, lmin, 2/lmax, 2/(lmin+lmax), (lmax-lmin)/(lmax+lmin))
-        push!(rows, AlphaRow(a, r0.converged, r0.iters, r0.resid, lmax, lmin))
+                lmax, lmin, cplx ? "yes" : "no", kap,
+                2/lmax, 2/(lmin+lmax), (lmax-lmin)/(lmax+lmin))
+        push!(rows, AlphaRow(a, r0.converged, r0.iters, r0.resid, lmax, lmin, cplx, kap))
     end
-    println("     λ_max(M) is the gain of the worst log-T direction. The damped update IS")
-    println("     Richardson iteration on log T, so it is STABLE iff δ < δ* = 2/λ_max and")
-    println("     FASTEST at δ_opt = 2/(λ_min+λ_max), rate (λmax−λmin)/(λmax+λmin).")
-    println("     An `exists=NO` row is a DIFFERENT diagnosis: no δ helps, the target margin")
-    println("     is infeasible at that α (a Hall-type transport condition fails).")
-    return rows, Tstars
+    println("     The damped update IS Richardson iteration on log T: STABLE iff δ < δ* = 2/λmax,")
+    println("     FASTEST at δ_opt = 2/(λmin+λmax), rate (λmax−λmin)/(λmax+λmin). κ_S is what the")
+    println("     inversion WOULD cost with expenditure frozen — the pure matrix-scaling channel.")
+    println("     `exists=NO` is a DIFFERENT diagnosis: no δ helps, the target margin is infeasible.")
+    return rows, Tst, Mall
 end
 
-# ── (5b/c) predicted ρ(I − δM) vs what invert_T_ge actually does ────────────────
-function damping_map(rows, Tstars)
-    println("\n(5b/c) PREDICTED ρ(I−δM)  vs  OBSERVED invert_traced (max_iter=500, tol=1e-9, T_init=T_rs_init)")
+# ── (5b/c) predicted ρ(I − δM) vs what the recursion actually does ──────────────
+function damping_map(rows, Tst, Mall)
+    println("\n(5b/c) PREDICTED ρ(I−δM) from the spectrum  vs  OBSERVED (max_iter=500, tol=1e-9, T_init=T_rs_init)")
     print("      α    ")
     for d in DAMP_GRID; @printf("|  δ=%.1f: ρ  class  it ", d); end
     println()
     println("     " * "-"^(11 + 22 * length(DAMP_GRID)))
     for row in rows
         @printf("   %6.3f ", row.a)
-        Mv = row.exists ? M_operator(Tstars[row.a], row.a) : nothing
+        ev = haskey(Mall, row.a) ? eigvals(sum(Mall[row.a])) : nothing
         for d in DAMP_GRID
-            rho = Mv === nothing ? NaN : spectral_radius(v -> (v .- d .* Mv(v)), n_free)
+            rho = ev === nothing ? NaN : spec_rho(ev, d)
             ro  = invert_traced(row.a, T_rs_init; damping = d, max_iter = 500, tol = 1e-9)
             @printf("| %5.2f %-6s %4d ", rho, classify(ro), ro.iters)
         end
         println()
     end
-    println("     ρ < 1 predicts convergence; ρ ≥ 1 predicts failure AT ANY BUDGET.")
-    println("     OSCIL = sign-flipping steps (λ_max > 2/δ — the instability). CREEP = monotone, slow.")
-    println("     Column-by-column agreement between the ρ and the class IS the confirmation.")
+    println("     ρ < 1 predicts LOCAL convergence; ρ ≥ 1 predicts failure at any budget.")
+    println("     A cell with ρ < 1 but OSCIL is NOT a contradiction: ρ is the linearisation AT")
+    println("     T*(α), while the run starts from T_rs_init. That cell is a BASIN failure — the")
+    println("     fixed point is locally attracting but the production warm start is outside its")
+    println("     basin at that δ. Read it as: this δ needs a better start (or a lower δ) here.")
 end
 
-rows, Tstars = stability_scan()
-damping_map(rows, Tstars)
+rows, Tstars, Mchan = stability_scan()
+damping_map(rows, Tstars, Mchan)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# (6) MECHANISM: the diagonal of M, measured exactly and decomposed
-#         M_c = 1 − σ̄_c + G_c
-#         σ̄_c = Σ_dr ω_{c,dr} σ_{c,dr}                     (allocation, a contraction)
-#         G_c = −(1/θ) Σ_dr ω_{c,dr} η_E(dr) σ_{c,dr}      (GE feedback, positive)
-#         η_E = (1−ν)(1−ψ_s) + (1−λ)ψ_s(1−χ) + ε·χ·ψ_s·(1−ξ)
+# (6) MECHANISM: where the loop gain comes from
+#     M_c = 1 − σ̄_c + G_c ,  G_c = −(1/θ)Σ_dr ω_{c,dr} η_E(dr) σ_{c,dr}
+#     η_E = (1−ν)(1−ψ_s) + (1−λ)ψ_s(1−χ) + ε·χ·ψ_s·(1−ξ)
+#     with ψ_s the sector's share of P_r, χ = (1−Ω^L)(P_r/c_r)^{1−λ} = D_r − 1 the
+#     intermediate share of downstream unit cost, ξ the destination's weight in P_agg.
+#
+#     ⚠ G_c is the RAW loop gain, BEFORE the γ normaliser (γ_c = X_c/Σ_c' X_c') and
+#     the per-sector reference gauge remove its common mode. Both strip out the part
+#     of the demand boost that accrues to every supplier of the same destinations, so
+#     the raw G_c OVERSTATES the diagonal of M — often by a factor of ~3. The columns
+#     are printed side by side for exactly that reason: G_raw is the ATTRIBUTION (which
+#     channel carries the feedback), the FD diagonal and λmax(M) are the MAGNITUDES.
+#     Never read a stability threshold off G_raw; read it off λmax(M).
 # ═══════════════════════════════════════════════════════════════════════════════
 function mechanism(T_par, tau)
     T_ze = gather_T_to_ze(T_par)
@@ -534,7 +617,6 @@ function mechanism(T_par, tau)
         E[s, dr] = Ω_s[s] * (pr.P_sr[s,dr]/pr.P_r[dr])^(1-nu) *
                    (pr.P_r[dr]/pr.c_r[dr])^(1-lambda) * (1-Ω_L) * pr.mu * pr.Y_r[dr]
     end
-    # σ[c,dr,s] = share of T-column c in Φ[s,dr] (summed over the cells of the area)
     sig = zeros(T_COL_DIM, R_downstream, S)
     for g in 1:n_good
         s = GOOD_S[g]; l = GOOD_R[g]; c = T_GATHER[l]; w = W_RS_FLAT[g]
@@ -548,13 +630,11 @@ function mechanism(T_par, tau)
         X = [sig[c, dr, s] * E[s, dr] for dr in 1:R_downstream]
         tot = sum(X); tot < 1e-300 && continue
         om = X ./ tot
-        sigbar = sum(om[dr] * sig[c,dr,s]                                      for dr in 1:R_downstream)
-        t1 = sum(om[dr] * sig[c,dr,s] * (1-nu)*(1-psi[s,dr])                   for dr in 1:R_downstream)
-        t2 = sum(om[dr] * sig[c,dr,s] * (1-lambda)*psi[s,dr]*(1-chi[dr])       for dr in 1:R_downstream)
-        t3 = sum(om[dr] * sig[c,dr,s] * chi[dr]*psi[s,dr]*(1-xi[dr])           for dr in 1:R_downstream)
-        # t3 keeps ε OUT as a separate factor, so section 7 can vary it post hoc.
-        G  = -(t1 + t2 + epsilon * t3) / theta
-        out[(s,c)] = (sigbar = sigbar, G = G, M = 1 - sigbar + G,
+        sigbar = sum(om[dr] * sig[c,dr,s]                                for dr in 1:R_downstream)
+        t1 = sum(om[dr] * sig[c,dr,s] * (1-nu)*(1-psi[s,dr])             for dr in 1:R_downstream)
+        t2 = sum(om[dr] * sig[c,dr,s] * (1-lambda)*psi[s,dr]*(1-chi[dr]) for dr in 1:R_downstream)
+        t3 = sum(om[dr] * sig[c,dr,s] * chi[dr]*psi[s,dr]*(1-xi[dr])     for dr in 1:R_downstream)
+        out[(s,c)] = (sigbar = sigbar, G = -(t1 + t2 + epsilon*t3)/theta,
                       t1 = t1, t2 = t2, t3 = t3,
                       psi = sum(om[dr]*psi[s,dr] for dr in 1:R_downstream),
                       chi = sum(om[dr]*chi[dr]   for dr in 1:R_downstream))
@@ -562,93 +642,80 @@ function mechanism(T_par, tau)
     return out
 end
 
-# Exact FD of the diagonal: bump log T[s,c], read Δlog γ[c,s]. Includes the
-# normaliser and the ref gauge, so it is the truth the formula is checked against.
-function M_diag_fd(T_par, tau; eps_fd = 1e-5)
-    out = Dict{Tuple{Int,Int}, Float64}()
-    for (s, c) in free_coords
-        Tp = copy(T_par); Tp[s,c] *= exp(eps_fd);  refnorm!(Tp)
-        Tm = copy(T_par); Tm[s,c] *= exp(-eps_fd); refnorm!(Tm)
-        gp = gamma_of(Tp, tau)[c,s]; gm = gamma_of(Tm, tau)[c,s]
-        (gp > 0 && gm > 0) && (out[(s,c)] = (log(gp) - log(gm)) / (2 * eps_fd))
-    end
-    return out
-end
-
-function mechanism_table(rows, Tstars)
+function mechanism_table(rows, Tst, Mall)
     println("\n" * "="^76)
-    println("(6) MECHANISM: M_c = 1 − σ̄_c + G_c   (allocation contraction + GE feedback)")
+    println("(6) MECHANISM: which channel carries the loop gain")
     println("="^76)
-    println("\n    α    max σ̄  mean σ̄ |  ψ̄     χ̄   |  η_E terms: ν      λ       ε     | maxM(form) maxM(FD)  λmax(M)  worst")
-    println("   " * "-"^116)
-    store = Dict{Float64, Dict{Tuple{Int,Int}, NamedTuple}}()
+    println("\n    α    max σ̄  mean σ̄ |  ψ̄     χ̄   | η_E: ν      λ       ε    | G_raw  diagM  λmax | λmax by channel: alloc  +νλ   +ε")
+    println("   " * "-"^128)
     for row in rows
         row.exists || continue
-        tau_a = build_tau([row.a]); Tp = Tstars[row.a]
-        mk = mechanism(Tp, tau_a); store[row.a] = mk
-        isempty(mk) && continue
-        fd  = M_diag_fd(Tp, tau_a)
-        ks  = collect(keys(mk))
-        Mf  = [mk[k].M for k in ks]
-        kk  = ks[argmax(Mf)]
-        Mfd = isempty(fd) ? NaN : maximum(values(fd))
+        tau_a = build_tau([row.a]); Tp = Tst[row.a]
+        mk = mechanism(Tp, tau_a); isempty(mk) && continue
+        ks  = collect(keys(mk)); Gs = [mk[k].G for k in ks]; kk = ks[argmax(Gs)]
         sb  = [mk[k].sigbar for k in ks]
-        @printf("  %5.3f  %6.3f %6.3f | %5.3f %5.3f | %+7.3f %+7.3f %+8.3f | %9.3f %9.3f %8.3f  (%d,%d)\n",
+        (M_al, M_nl, M_ep) = Mall[row.a]
+        dg  = maximum(diag(M_al .+ M_nl .+ M_ep))
+        l_a = maximum(real.(eigvals(M_al)))
+        l_b = maximum(real.(eigvals(M_al .+ M_nl)))
+        @printf("  %5.3f  %6.3f %6.3f | %5.3f %5.3f | %+6.3f %+6.3f %+7.3f | %6.3f %6.3f %6.3f | %14.3f %6.3f %5.3f\n",
                 row.a, maximum(sb), mean(sb), mk[kk].psi, mk[kk].chi,
                 mk[kk].t1, mk[kk].t2, epsilon * mk[kk].t3,
-                maximum(Mf), Mfd, row.lmax, kk[1], kk[2])
+                maximum(Gs), dg, row.lmax, l_a, l_b, row.lmax)
     end
-    println("   The ε column dwarfs the ν and λ terms — the feedback is a DEMAND loop, not a")
-    println("   trade-cost one. maxM(form) should track maxM(FD); λmax(M) ≥ max diagonal.")
-    println("   Instability at damping δ  ⟺  λ_max(M) > 2/δ   (δ=0.9 ⇒ 2.222 ; δ=0.5 ⇒ 4).")
-    return store
+    println("   `λmax by channel` is the decisive column: alloc = pure matrix scaling (should sit")
+    println("   at ≈1, i.e. the multiplicative update is an exact Newton step), +νλ adds the price")
+    println("   channels, +ε adds the demand loop. Whatever gap opens between the second and third")
+    println("   number IS the ε feedback, measured rather than argued.")
+    println("   G_raw ≫ diagM is expected — see the header: the normaliser removes the common mode.")
 end
 
-mech_store = mechanism_table(rows, Tstars)
+mechanism_table(rows, Tstars, Mchan)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# (7) COUNTERFACTUAL ε and θ, without rebinding the consts
-#     ε enters only through t3, so its counterfactual is exact to first order.
-#     θ enters TWICE and in OPPOSITE directions: through the 1/θ price transmission
-#     (explicit) and through σ̄, which is a function of θα. So M under θ' at α' is
-#     read off the grid point a = θ'α'/θ, with the gain rescaled by θ/θ'.
+# (7) COUNTERFACTUAL ε and θ, built from the OPERATORS (not the raw formula)
+#     M(ε′)      = M_alloc + M_νλ + (ε′/ε)·M_ε          — exact to first order,
+#                  because Y_r = δ_r p_r^ε/Σ p^ε δ makes the ε channel linear in ε.
+#     M(θ′, α′)  = M_alloc(a) + (θ/θ′)(M_νλ(a) + M_ε(a)),  a = θ′α′/θ
+#                  — the allocation channel depends on θα only, the price
+#                  transmission ∂log P_sr/∂log Φ = −1/θ on θ alone.
 # ═══════════════════════════════════════════════════════════════════════════════
-function max_M_cf(store, a::Float64, eps_cf::Float64, th_cf::Float64)
-    haskey(store, a) || return NaN
-    mk = store[a]; isempty(mk) && return NaN
-    return maximum(1 - v.sigbar - (v.t1 + v.t2 + eps_cf * v.t3) / th_cf for v in values(mk))
+function lmax_cf(Mall, a::Float64, eps_cf::Float64, th_cf::Float64)
+    haskey(Mall, a) || return NaN
+    (M_al, M_nl, M_ep) = Mall[a]
+    M = M_al .+ (theta / th_cf) .* (M_nl .+ (eps_cf / epsilon) .* M_ep)
+    return maximum(real.(eigvals(M)))
 end
 
-function crit_alpha(store, eps_cf::Float64, th_cf::Float64, delta::Float64)
-    lim  = 2 / delta
-    best = NaN
+function crit_alpha(Mall, eps_cf::Float64, th_cf::Float64, delta::Float64)
+    lim = 2 / delta; best = NaN
     for a in ALPHA_GRID
-        m = max_M_cf(store, a, eps_cf, th_cf)
-        (isnan(m) || m >= lim) && continue
-        ap = a * theta / th_cf                     # the grid point a means α' = a·θ/θ'
+        l = lmax_cf(Mall, a, eps_cf, th_cf)
+        (isnan(l) || l >= lim) && continue
+        ap = a * theta / th_cf
         (isnan(best) || ap > best) && (best = ap)
     end
     return best
 end
 
-function counterfactual_table(store)
+function counterfactual_table(Mall)
     println("\n" * "="^76)
-    println("(7) COUNTERFACTUAL critical α  (largest α with max_c M_c < 2/δ, on this grid)")
+    println("(7) COUNTERFACTUAL critical α  (largest α on the grid with λmax(M) < 2/δ)")
     println("="^76)
-    ths = (theta, 1.768)                           # 1.768 = the value load_parameters.jl:63 overrides
+    ths = (theta, 1.768)          # 1.768 = the value load_parameters.jl:63 overrides with 1.0
+    top = maximum(ALPHA_GRID)
     for delta in (0.9, 0.5, 0.3)
-        @printf("\n  damping δ = %.1f    (stability limit  max_c M_c < %.3f)\n", delta, 2/delta)
+        @printf("\n  damping δ = %.1f    (stability limit  λmax(M) < %.3f)\n", delta, 2/delta)
         print("       ε   ")
-        for t in ths; @printf("   θ=%-8.3f", t); end
+        for t in ths; @printf("    θ=%-8.3f", t); end
         println()
         for e in (epsilon, epsilon/2, epsilon/4, -2.0)
             @printf("   %7.2f ", e)
             for t in ths
-                ca = crit_alpha(store, e, t, delta)
+                ca  = crit_alpha(Mall, e, t, delta)
                 lab = isnan(ca) ? "none" :
-                      (ca >= maximum(ALPHA_GRID) * theta / t - 1e-9 ?
-                       @sprintf(">%.2f", ca) : @sprintf("%.3f", ca))
-                @printf("   %-10s", lab)
+                      (ca >= top * theta / t - 1e-9 ? @sprintf(">%.2f", ca) : @sprintf("%.3f", ca))
+                @printf("    %-10s", lab)
             end
             println()
         end
@@ -657,9 +724,10 @@ function counterfactual_table(store)
             epsilon, theta, DAMP_PROD)
     println("  against the α at which the PSO log's `T non-converged` rate crosses 50%.")
     println("  `none` = unstable everywhere on the grid; `>x` = still stable at the grid top.")
+    println("  θ′ columns stop at the grid top rescaled by θ/θ′, so a `>` there is a shorter reach.")
 end
 
-counterfactual_table(mech_store)
+counterfactual_table(Mchan)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # VERDICT
@@ -669,24 +737,21 @@ function verdict(rows)
     go = (rt_err < 1e-8) && (ρ_full < 1) && (max_spread < 1e-7)
     @printf("PHASE-0 GATE (at α̂ = %.4f): %s\n", alpha_hat,
             go ? "GO ✓  (round-trip, ρ_full<1, uniqueness)" : "NO-GO ✗ — inspect above")
-    lm   = [r.lmax for r in rows if r.exists && !isnan(r.lmax)]
-    safe = [r.a    for r in rows if r.exists && !isnan(r.lmax) && r.lmax < 2/DAMP_PROD]
-    if isempty(safe)
-        @printf("STABILITY at the production δ=%.1f: UNSTABLE over the whole α grid.\n", DAMP_PROD)
-    else
-        @printf("STABILITY at the production δ=%.1f: stable up to α ≈ %.3f on this grid.\n",
-                DAMP_PROD, maximum(safe))
+    ok = [r for r in rows if r.exists && !isnan(r.lmax)]
+    for d in DAMP_GRID
+        safe = [r.a for r in ok if r.lmax < 2/d]
+        @printf("  δ=%.1f : locally stable up to α ≈ %s\n", d,
+                isempty(safe) ? "(nowhere on the grid)" : @sprintf("%.3f", maximum(safe)))
     end
-    if !isempty(lm)
-        @printf("Largest damping stable over the WHOLE grid: δ < 2/max λ_max = %.3f\n",
-                2 / maximum(lm))
-    end
+    isempty(ok) || @printf("Largest damping locally stable over the WHOLE grid: δ < 2/max λmax = %.3f\n",
+                           2 / maximum(r.lmax for r in ok))
     nofix = [r.a for r in rows if !r.exists]
-    isempty(nofix) || @printf("⚠ NO fixed point at α ∈ %s — infeasible target, damping cannot help.\n",
+    isempty(nofix) || @printf("⚠ NO fixed point at α ∈ %s — infeasible target; damping cannot help.\n",
                               string(nofix))
-    println("If the stable-δ number is well below 0.9, invert_T_ge's default damping — chosen")
-    println("from a Phase-0 measurement taken INSIDE the stable region — is what caps α, and")
-    println("the PSO α ceiling is a solver artefact rather than a feature of the fit.")
+    println("A local-stability ceiling well below the α search box means invert_T_ge's damping —")
+    println("not the criterion — is what caps α, and the PSO α ceiling is a solver artefact.")
+    println("Cross-check it against the OBSERVED column of (5b/c): where the two disagree, the")
+    println("binding constraint is the BASIN, not local stability, and the fix is the warm start.")
     println("="^76)
 end
 
