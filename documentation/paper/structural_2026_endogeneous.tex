@@ -1,0 +1,421 @@
+
+
+We next develop a structural model that rationalizes the spatial propagation patterns documented in the data and allows us to quantify the role of production networks in shaping the incidence of sectoral shocks. The model has a Ricardian structure that is used to recover firm-to-firm linkages not directly observed in the data. However, since the extensive margin pattern we uncover relies on regions where no suppliers comes from, we depart from the textbook Eaton-Kortum by limiting the number of varieties per sector to a fixed value. This granular Ricardian model allows us to endogeneise the region hosting no suppliers. The full derivation of the model is presented in Appendix~\ref{ap:structural}.
+
+%==============================================================================
+\subsection{Model}\label{subsec:model}
+%==============================================================================
+
+
+
+\paragraph{Environment.}
+The economy consists of $R+1$ regions, where the $(R+1)^{\text{th}}$ region represents the rest of the world. \isa{we never mention how we discipline the share of input purchases sourced from the RoW} \swann{I think we do in the Appendix section called "Notes on foreign parameters". I think we can specify that we allow for imports but since we don't have the balance sheet information for those suppliers, we don't model firm-level linkages for foreign suppliers.} Firms operate either in upstream sectors $s = 1,\ldots,S$ or in the downstream industry $d$ (motor vehicles or aerospace). Each domestic region hosts at most one representative downstream firm. Firm locations and sectoral assignments are taken as exogenous. We allow for imports, but in the absence of balance-sheet information on foreign suppliers we do not model firm-level linkages abroad; the foreign share of sourcing is calibrated (Appendix~\ref{app:model-foreign}).\\ 
+
+Domestic regions are additionally grouped into attraction areas. An attraction area $a$ is the set of upstream regions sharing the same nearest downstream producer, and we write $a(r')$ for the area of region $r'$ and $\mathcal{R}_{a}$ for its members. Because the model is estimated separately for the motor vehicles and aerospace industries, we omit the downstream-industry index in the remainder of the exposition. Unless otherwise stated, all variables and parameters should therefore be understood as industry-specific.
+
+
+\paragraph{Final demand.}
+Downstream firms compete under monopolistic competition and face an isoelastic demand function:
+$$q_{r} = \left(\frac{p_{r}}{P}\right)^{\varepsilon-1}\frac{E}{P}\,\delta_{r}^D,$$
+where $\delta_{r}^D$ is a region-specific demand shifter, $E/P$ denotes aggregate real expenditure and $p_{r}/P$ is the relative price of the variety produced in region $r$.
+Demand shifters are later used to simulate downstream shocks and trace their propagation through production networks. The market for final goods is assumed to be perfectly integrated.
+
+\paragraph{Production.}
+Downstream firms produce using labor and intermediate inputs according to a constant-returns-to-scale production technology:
+\begin{equation}
+  y_r = A_r g(\ell_r,\{q_{rs}\}_{s=1}^{S})  
+\end{equation}
+where $A_r$ denotes total factor productivity, $\ell_r$ is labor input and $q_{rs}$ is the quantity of the input bundle from sector $s$ used in production. As discussed in Appendix~\ref{apsec:structural}, the structural estimation assumes a nested CES specification, where $\Omega^L$ scales the labor share, $\Omega^s$ denotes the expenditure share on inputs from sector $s$ and each $q_{rs}$ is itself a CES aggregate over a of a fix number $N_s$ of varieties.
+
+\paragraph{Upstream technology and sourcing.}
+Each upstream sector $s$ consists of $N_{s}$ horizontally
+differentiated varieties, indexed $\rho=1,\dots,N_{s}$. For each variety, there is an infinite number of firms producing it with a constant-returns-to-scale technology that relies solely on labor. Productivity draws follow a sector- and region-specific Fréchet distribution:
+$$\Pr\left(z_{rs}(j) \leq z\right) = e^{-T_{rs}z^{-\theta}}, \quad T_{rs} > 0.$$
+The parameter $T_{rs}$ governs average productivity, while $\theta$ controls the dispersion of productivity draws. Shipping intermediate goods from region $r'$ to region $r$ involves iceberg trade costs, denoted $\tau_{r'rs}$ which are parameterized as a function of geographic distance.
+
+In the baseline specification, comparative advantage is a property of the attraction area rather than of the individual sector x region. \begin{equation}
+T_{r's}=T_{a(r')s}\qquad\text{for every }r'\in\mathcal{R}_{a}.
+\label{eq:T-area}
+\end{equation}
+
+The model yields two important quantities that will use to discipline the parameters in the estimation. First are the bilateral sourcing shares. Following \cite{EatonKortum2002}, downstream firms source each variety from the lowest-cost supplier, in France or abroad. The probability that a downstream firm located in region $r$ sources an input from sector $s$ in region $r'$ is given by:
+\begin{equation}
+\gamma_{r'rs} = \frac{T_{r's}(w_{r's}\tau_{r'rs})^{-\theta}}
+                     {\sum_{k=1}^{R+1} T_{ks}(w_{ks}\tau_{krs})^{-\theta}}
+\label{eq:gamma_rrs}
+\end{equation}
+where $w_{r's}$ denotes the unit production cost in region-sector pair $(r',s)$. Because trade costs increase with geographic distance, sourcing probabilities decline with spatial separation, generating localized production networks. 
+
+We then aggregate bilateral sourcing shares at the regional level:
+
+\begin{equation}\label{eq:gamma_rs}
+    \gamma_{r's}=\sum_r \frac{X_{rs}}{ \sum_r X_{rs}} \gamma_{r'rs}
+\end{equation}
+where $X_{rs}$ denotes the value of intermediate inputs from sector $s$ shipped to downstream firms located in region $r$. This quantity will be used to pinned down comparative advantages. 
+
+
+Second is the extensive margin probability. Our surveys record whether an upstream firm supplies the downstream industry, not which buyer it serves. The relevant object is therefore not the bilateral sourcing probability \eqref{eq:gamma_rrs} but the probability that a region wins a given variety somewhere in the industry --- the union over downstream buyers,
+
+\begin{equation}
+p_{r's}\;\equiv\;\Pr\Big(\bigcup_{r=1}^{R}\big\{\text{$r'$ wins variety $\rho$ for buyer $r$}\big\}\Big).
+\label{eq:p}
+\end{equation}
+
+
+
+
+This extensive margin probability falls with the distance and raises with comparative advantages. For a given variety the champion cost is common across buyers and only $\tau_{r'rs}$ differs, so win events are
+positively dependent across buyers and $p_{r's}>1-\prod_{r}(1-\gamma_{r'rs})$: a firm productive enough to win one market is more likely to win the others. For a large number of downstream regions, there is no tractable closed form for $p_{r's}$, and we evaluate it by simulation. This is why the model is estimated by simulated rather than analytical method of moments.\footnote{Writing $p_{r's}$ in closed form requires inclusion--exclusion over subsets of downstream buyers,
+$p_{r's}=\sum_{\emptyset\neq\mathcal{S}\subseteq\{1,\dots,R\}}(-1)^{|\mathcal{S}|+1} \Pr(\cap_{r\in\mathcal{S}}\{\text{$r'$ wins for }r\})$, a sum with $2^{R}-1$ terms. With the number of downstream regions we observe this is prohibitive, and dominance pruning of the subsets --- discarding buyers whose win event contains another's --- reduces the count but not reliably enough to be usable inside an optimizer. }
+
+With $N_{s}$ varieties the win events are independent across $\rho$, so the industry-wide supplier count is binomial,
+
+\begin{equation}
+K_{r's}\sim\mathrm{Bin}\big(N_{s},p_{r's}\big), \qquad \Pr\big(K_{r's}=0\big)=(1-p_{r's})^{N_{s}}>0 .
+\label{eq:binomial}
+\end{equation}
+
+The zero-supplier probability is strictly positive and endogenous: it falls with comparative advantage, rises with distance through, and falls with the variety count: when $N_s \rightarrow 0$ we fall back to the Eaton-Kortum model where a downstream firm sources from all regions. For each sector, we define $G_s(K)$ the share of regions with at most $K$ suppliers.
+
+
+
+
+%==============================================================================
+\subsection{Estimation and fit}\label{subsec:estimation_fit}
+%==============================================================================
+
+We estimate the model using Simulated Method of Moments. Unlike the standard Ricardian trade literature, which relies on bilateral input–output flows, such flows are not observed in our setting. Instead, we exploit survey information on supplier relationships together with VAT data on firm sales to discipline the spatial structure of sourcing and demand. These moments provide direct information on the geography of production networks and allow us to identify the key parameters governing trade costs and regional comparative advantage in the \cite{EatonKortum2002} framework.
+
+We parametrize the trade cost using the distance between two regions: $\tau_{r'rs}=d_{r'r}^{\alpha}$; and obtain the model's parameters:
+\begin{equation}
+\big\{\Omega_{L},\;\{\Omega_{s}\},\;\alpha,\;\{A_{r}\},
+\{T_{as}\},\;\{N_{s}\}\big\},
+\end{equation}
+
+Beyond these structural parameters, the model includes several demand- and supply-side elasticities, which we calibrate as described in Appendix~\ref{app:model-calibration}. We also provide there additional details on the optimization procedure and on the calculation of standard errors. 
+
+
+\paragraph{Targeted moments.} The model is matched to six families of moments. The downstream industry's labor share and the sectoral composition of intermediate expenditures are constructed from input-output tables and identify $\Omega_{L}$ and $\{\Omega_{s}\}_{s=1}^{S}$. The regional distribution of downstream sales, $\pi_{r}$, is recovered from the VAT data and identifies the downstream productivity parameters $\{A_{r}\}$, up to a multiplicative constant and therefore normalized relative to the largest region.
+
+The elasticity of trade costs to distance is discipline by the extensive margin (Equation~\eqref{eq:reduced_form_spatialIO}). Contrary to this section, we don't estimate the profile using a linear probability model. We use instead the prediction of the model in the limit of a single downstream buyer $a$. For a firm $z$ located in $(r',s)$ its probability to win variety $\rho$'s market is $\rho_{r's}(z) = e^{-\Phi_{as}(w_{r's}\tau_{r'rs})^{\theta}z^{-\theta}}$ which implies that $\Pr(\text{no supply} \mid z) = 1 - \exp(-\exp(\eta))$ where $\eta = \ln \Phi_{as} + \theta \ln w_{r's} + \theta \alpha \ln d_{r'a} - \theta \ln z$. Consequently, we are going to estimate both in the data and the model the following complementary log log design:
+
+\begin{equation}\label{eq:firm-cloglog}
+\Pr(\text{no supply} \mid z) = 1 - \exp(-\exp(FE_{a(r')s} + \theta \alpha \ln d_{r'a(r')} - \theta \ln z))  
+\end{equation}
+
+
+
+where $z$ is the productivity of the firm, approximated in the data by its sales\footnote{More precisely, we run two specifications in the data. One where we regress on the distance as a continuous variable and use the estimated coefficient as a starting point for $\alpha$ in the estimation. In the second, the distance is binarized as in the linear probability model to build the targeted moments.}. 
+
+Contrary to the first set of parameters, comparative advantages and number of varieties are not free parameters. They are calibrated inside the model. For $\{T_{as}\}$, the area-aggregated sourcing shares are as numerous as the comparative-advantage parameters, and for given trade costs and expenditures the mapping from $T$ to those shares is invertible: there is a unique vector of comparative advantages, up to the per-sector reference normalization, that reproduces the observed shares exactly. We compute it by a matrix-scaling iteration alternated with the general-equilibrium solve (Appendix~\ref{app:model-estimation}). For $\{N_{s}\}$, the count moment $\bar G_{s}(0)$ is decreasing in the variety count and, by the argument below, does not require re-simulation, so the variety count that best matches it is found by a monotone integer search over the bounds \eqref{eq:app-bounds}. 
+
+
+\paragraph{Identification.} The channels are close to orthogonal by construction. $\alpha$ is read from a within-area gradient that comparative advantage cannot touch, because comparative advantage is constant within the area. $T_{as}$ is read from across-area value shares. $N_{s}$ is read from the level of the empty-region share, which the fixed effect strips out of the $\alpha$ regression. \swann{A ajouter une analyse de sensibilité pour justifier cette affirmation. On peut montrer la jacobienne. A rediscuter. }
+
+
+\begin{figure}[H]
+    \centering
+\caption{Empirical vs. simulated moments\label{fig:emp_sim_gamma_coef_G0}}
+    \begin{tabular}{cc}
+    Motor vehicles &Aerospace\\
+    \multicolumn{2}{c}{Regional sourcing shares ($\gamma_{as}$)}\\
+        \includegraphics[width = 0.5\linewidth]{figures/emp_sim_gamma_aa_auto_mu1.pdf}&\includegraphics[width = 0.5\linewidth]{figures/emp_sim_gamma_aa_aero_mu1.pdf}\\ \vspace{1em}\\
+\multicolumn{2}{c}{Extensive margin coefficients}\\
+ \includegraphics[width = 0.5\linewidth]{figures/emp_sim_reg_coef_auto_mu1.pdf} &  \includegraphics[width = 0.5\linewidth]{figures/emp_sim_reg_coef_aero_mu1.pdf}  \\   \vspace{1em}\\  
+ \multicolumn{2}{c}{Share of commuting zones without supplier ($G_s(0)$)}\\
+ \includegraphics[width = 0.5\linewidth]{figures/emp_sim_G0_auto_mu1.pdf} &  
+ \includegraphics[width = 0.5\linewidth]{figures/emp_sim_G0_aero_mu1.pdf}  \\  
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: The figure displays scatter plots of empirical versus simulated regional sourcing shares ($\gamma_{r's}$, top panels) and the extensive margin coefficients estimated using complementary log log model (middle panels) and share of commuting zone without supplier (bottom panel) for the motor vehicles industry (left panels) and the aerospace industry (right panels). The black line denotes the 45-degree line. The statistics reported in each top panel correspond to the slope coefficient from a linear regression of simulated moments on empirical moments. 
+    In the top panel, regional sourcing shares for the reference attraction areas are in red. For the middle and bottom panel, standard errors for the empirical points are computed using bootstrap. Standard errors for the simulated points are recovered from the delta method (see Appendix~\ref{app:model-standard_errors}). 
+    }
+\end{figure}
+
+Figure~\ref{fig:emp_sim_gamma_coef_G0},  Table~\ref{tab:moments_comparison_combined} and Figure~\ref{fig:emp_sim_pi} in the Appendix compare empirical and simulated moments for both industries. The model reproduces closely the aggregate labor share and sectoral expenditure shares (Table~\ref{tab:moments_comparison_combined}), including the strong within-sector sourcing observed in aerospace (62\%) and the prominent role of automotive equipment in motor vehicles (24\%). Similarly, the model tracks closely the distribution of downstream sales (Figure~\ref{fig:emp_sim_pi}) for both industries.  \swann{En réalité le fit de la distribution des ventes n'est pas top pour les petites downstream. Je laisse ça comme ça comme ça risque de changer. }
+
+In the top panel of Figure~\ref{fig:emp_sim_gamma_coef_G0} we report the comparison for the regional sourcing shares $\gamma_{as}$ at the attraction area level. Simulated moments align closely with the 45-degree line in both industries. In the middle panel, the extensive margin coefficients implied by the model are most of the time not statistically different from the one observed in the data. Finally, the bottom panel shows that the empirical and simulated distribution of the count moment align closely. The number of varieties per sector range from 2 to 23 in the Motor Vehicles industry and from 3 to 14 in the Aerospace industry. 
+
+\paragraph{Trade cost and comparative advantages}: \swann{Il faut qu'on ait une discussion sur la taille des trades costs et la distribution des avantages comparatifs. }
+
+
+\paragraph{Untargeted moment: the distance elasticity of spatial comovement.}
+
+The reduced-form estimates uncover an interesting contrast across industries. Table~\ref{tab:reduced_form_micro_distance} shows that supplier--downstream comovement declines more rapidly with distance in the motor vehicle industry than in aerospace, even though Section~\ref{sec:reduced_form_evidence} showed that supplier linkages themselves decay more rapidly with distance in aerospace. This suggests that the spatial propagation of shocks is governed by more than the elasticity of trade costs alone.
+
+Appendix~\ref{apsec:untargeted_moments} provides a structural interpretation of this result. Under the assumption that downstream demand shocks are the only source of fluctuations, the reduced-form ratio $\delta/\gamma$ identifies the elasticity of the average share of suppliers' sales directed to a downstream region with respect to distance,
+\[
+\frac{\partial\log\mathbb{E}\!\left[a_{ir}\mid s,r,\mathrm{Dist}_{r'r}=d\right]}
+{\partial\log d},
+\]
+where $a_{ir}$ denotes the share of supplier $i$'s sales directed to downstream region $r$. The derivation shows that this elasticity combines two forces. The first is the extensive margin: suppliers located farther away are less likely to serve a given downstream region. The second reflects the endogenous organization of the production network: when suppliers become more distant from one downstream region, the resulting decline in sales can be redirected toward other downstream regions. The scope for such reallocation depends on the spatial distribution of downstream demand. In the motor vehicle industry, production is distributed around many hubs which implies that customer portfolio of suppliers is very diversified. Moving away from one hub can largely redirect sales toward other hubs. By contrast, the aerospace industry is much more concentrated around two hubs, leaving less scope for reallocating sales toward a single downstream region when moving away from the other. The structural decomposition therefore explains why the distance elasticity of comovement can be stronger in motor vehicles despite a weaker extensive-margin gradient.
+
+This interpretation also makes $\delta/\gamma$ a particularly informative untargeted moment. While the estimation targets the spatial decay of production linkages, it does not target how the equilibrium network structure translates those linkages into the spatial propagation of downstream shocks. Matching $\delta/\gamma$ therefore requires the model to jointly reproduce both the distance sensitivity of sourcing decisions and the geography of downstream production. To construct the model counterpart of this moment, we compute the share $a_{ir}$ of each supplier's sales directed to every downstream region and estimate
+
+$$
+\mathbb{E}\!\left[a_{ir}\mid s,r',r\right]
+=
+\exp\!\left(\alpha_{rs(i)}+\eta\log\mathrm{Dist}_{r'r}\right),
+$$
+
+where $\alpha_{rs(i)}$ denotes sector$\times$downstream-region fixed effects. The coefficient $\eta$ is directly comparable to the empirical ratio $\delta/\gamma$.
+
+In the data, $\delta/\gamma=-0.109$ (95\% CI $[-0.122,-0.096]$) in motor vehicles and $-0.098$ (95\% CI $[-0.130,-0.065]$) in aerospace. The model reproduces both the sign of the elasticity and, more importantly, its cross-industry ranking, with $\hat{\eta}=-0.166$ in motor vehicles and $\hat{\eta}=-0.063$ in aerospace.
+
+%==============================================================================
+\section{Quantitative implications for spatial comovements}\label{subsec:counterfactuals}
+%==============================================================================
+Using the estimated model, we quantify the spatial diffusion of demand shocks originating in downstream industries and decompose the resulting upstream responses into amplification and geographic incidence.
+
+%Armed with the estimated model, we can now study the diffusion of shocks from downstream producers to upstream suppliers. Given a localized demand shock, we quantify (i) the amplification multiplier associated with production linkages and (ii) its spatial allocation. While the former arises in any model with input-output linkages and is primarily determined by the production-function parameters ($\Omega^L, {\Omega^s}$), the latter is more specific to our framework with endogenous production linkages. In our model, the spatial diffusion of shocks is governed by the interaction between regional comparative advantage (${T_{rs}}$) and trade costs (${\tau_{r'rs}}$).
+
+\begin{comment}
+We organize this section around two exercises: 
+
+\begin{enumerate}
+    \item The spatial diffusion of a €1 downstream shocks as a function of its origin. We first quantify the amplification multiplier and spatial heterogeneity of diffusion of the shock within a 100\km~ radius centered on the shocked region. Then we embedded the model prediction in order to analyze recent shocks affecting both industries.  For aerospace, the 2019--2025 Military Programming Law; for motor vehicles, the 2024 EV eco-score subsidy reform.
+    \item The consequence of a shock on trade costs or comparative advantage in the reallocation of the production network and the comovement between regions. 
+\end{enumerate}
+
+
+\swann{A réécrire. }
+\end{comment}
+\subsection{Spatial diffusion of downstream shocks.}
+
+We first quantify the average amplification of demand shocks using hypothetical nominal shocks to each downstream industry and region. Results are summarized in Figure \ref{fig:amplification} for the motor vehicles (left panel) and aerospace (right panel) industries. The top panel reports amplification coefficients, defined as the aggregate increase in sales associated with one additional euro of demand in a given sector$\times$downstream-region pair. These multipliers are relatively homogeneous across downstream industries and regions within each sector: one additional euro of final demand generates roughly 50 cents of upstream sales. These patterns are consistent with a simple accounting logic: higher downstream demand translates mechanically into upstream purchases, with the scale of amplification governed by input-output shares. 
+\isa{Would it be possible to compare with all sectors (eg in appendix), using solely the IO coefficients? if it is not too difficult, that would help say something about the scale: Is 1.5 high or not? How big is it compared to the aggregate effect, which can be recovered from the Leontief inverse? The simple IO case is described in details in Acemoglu et al (2016): \url{https://www.journals.uchicago.edu/doi/epdf/10.1086/685961} Note that they also have a section on the local diffusion of shocks, which we should cite}
+
+As technical input shares are homogeneous across firms in the downstream industry, amplification coefficients exhibit little spatial variation. Any residual dispersion is driven by differences in local access to upstream suppliers and by their implications for the share of input purchases sourced from abroad. \isa{is it true? My intuition would be that a relatively difficult access to low price suppliers generates i) lower input purchases (substitution to labor) and ii) more input purchases to non-French firms. Both channels should reduce the multiplier. However, I find it surprising that we find among the lowest amplification multiplier terms a region like Toulouse which should in principle get good access to local inputs. Is the reason to be found in low elasticities of substitution, that generate a positive impact of relatively expansive input purchases? }
+
+%On average, the amplification coefficient is equal to 45 cents in the motor vehicles sector and 50 cents in the aerospace sector. Moving across downstream regions, we observe that the variation in these additional sales is limited. Such low variance is a direct outcome of the model: when facing higher demand, firms expand output by combining labor and intermediates in proportions governed primarily by their technical input shares ($\Omega^L$ and $\{\Omega^s\}$). Since regional variation in labor costs is small relative to regional variation in intermediate input prices, the optimal input mix---and thus the amplification coefficient---varies little across regions.\\
+
+
+
+
+\begin{figure}[H]
+    \centering
+\caption{Amplification of shocks along vertical production linkages\label{fig:amplification} }
+    \begin{tabular}{cc}
+    Motor vehicles&Aerospace\\
+    \multicolumn{2}{c}{Amplification of one euro downstream demand shocks}\\
+        \includegraphics[width = 0.5\linewidth]{figures/Amplification_auto.pdf} & \includegraphics[width = 0.5\linewidth]{figures/Amplification_aero.pdf}   
+          \\  
+    \multicolumn{2}{c}{Share of upstream sales within 100 km of the shock}\\
+        \includegraphics[width = 0.5\linewidth]{figures/Coefficient_plot_auto.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/Coefficient_plot_aero.pdf}  
+        
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: The top panel represents the amplification of shocks affecting individual commuting zones in the Motor vehicles industry (left panel) and aerospace industry (right panel). The amplification coefficient is measured as the size of additional sales for each unit of demand in the downstream industry, aggregated across downstream firms and their domestic suppliers. The bottom panel measures the share of additional sales that are contained in a radius of 100 km around the downstream region shocked.}%The bottom panel measures how geographically spread the amplification is. We first measure the distribution of additional sales across commuting zones and then regress results on distance from the focal commuting zone. The distance elasticity is the estimated coefficient on distance. }
+    \label{fig:amplification}
+\end{figure}
+Whereas average amplification is fairly homogeneous across industries and regions, the bottom panel of Figure \ref{fig:amplification} illustrates substantial differences in the spatial diffusion of shocks. For each downstream region, we compute the share of additional upstream sales generated within a 100 km radius of the region hit by the demand shock. In the motor vehicles industry, shocks originating in Beauvais or Île-de-France are the most spatially concentrated, with more than one third of the amplification contained within a 100 km radius. By contrast, in Le Havre, the 50 cents of additional upstream sales generated by a one-euro increase in downstream production accrue almost entirely outside the local area.
+
+The heterogeneity is even more pronounced in the aerospace industry. The spatial concentration of high-productivity upstream suppliers around Toulouse and Île-de-France implies that shocks to these hubs induce largely local amplification, whereas shocks to other downstream regions have more diffuse effects. The aerospace industry thus provides a clear illustration of the efficiency–stability trade-off discussed in the introduction: while the concentration of high-productivity suppliers around Toulouse and Paris enhances the competitiveness of the downstream industry, it also increases these regions’ exposure to sector-specific shocks.
+%More than fifty percent of the amplification of shocks hitting downstream firms around Toulouse stays within the Toulouse area. Although less extreme, the  than those arising in downstream regions located in the North-East of France. However, this difference remains modest compared to the motor vehicles industry, where Toulouse and Île-de-France constitute two major hubs. In this sector, shocks originating in peripheral regions diffuse more broadly across space and are disproportionately transmitted toward these two hubs.
+
+
+The above results imply that (i) production linkages generate sizable amplification of demand shocks, and (ii) the spatial diffusion of these shocks varies across industries and regions. In the next section, we use these patterns to analyze the spatial propagation of recent shocks affecting both industries.
+
+\subsection{Spatial consequences of military procurements and EV subsidies}
+
+\paragraph{Military Procurement in the Aerospace Sector.} The rise in geopolitical tensions has led several countries, including France, to increase their defense spending. As a consequence, firms in the defense sector are exposed to positive demand shocks that are largely largely driven by geopolitical considerations rather than firm-level conditions. We next use such shocks to evaluate the model's predictions on the spatial diffusion of demand-driven changes in activity.
+
+Under the 2019–2025 \textit{Loi de programmation militaire} (LPM), the French government commissioned 169 H160M helicopters from Airbus Helicopters. The contract covers design, production, and maintenance and is estimated at approximately €10 billion over ten years. In the context of our model, this policy constitutes a large, plausibly exogenous demand shock to a single dwonstream producer, which propagates through the production network to its suppliers.
+
+This shock is particularly informative for our analysis because of its spatial dimension: Airbus Helicopters’ headquarters are located in Marignane, north-west of Marseille. As documented in Section \ref{sec:data_stylized_facts}, this region is not among the most specialized in aerospace equipment, implying that the initial impact is geographically concentrated but that equilibrium effects are likely to diffuse across space through supplier linkages. In addition, the contract is sizeable, representing approximately twice the firm’s 2019 annual revenue, which ensures that spillover effects through the production network are economically meaningful.
+\swann{Ajouter une footnote pour justifier que l'on peut rester en PE étant donné la taille du choc. } \isa{More generally, we have not mentioned our assumptions on input costs when discussing the model's estimation. We need to add something there, before eventually mentioning GE effects of procurement here.}
+
+Within our model, the contract generates €470 million in annualized incremental sales for direct suppliers of Airbus-Helicopters. \isa{Not sure about this statement. You mean that 10 billion over 10 years is approximately 1 billion a year, which generates an addition 470 million per year in upstream sectors? } Due to the geographic isolation of Marseille--Aubagne, the local economy relies heavily on supply chains centered in Toulouse and Paris. This structural dependence ensures that the shock propagates toward distant spatial nodes, with 89\% of the incremental sales being captured by suppliers in those two regions, leaving a mere 1\% for firms within the Marseille--Aubagne area. \isa{how can we be slightly more precise here? We already know from Figure 6 that the amplification is roughly .5, ie 500 million per year and that less than 2\% of this goes to Marseille-Aubagne. So maybe we can discuss more which exact CZ benefit? I understand that this will be Toulouse and Ile de france but how much for each? Other CZ? maybe a map here?}
+
+%Consequently, the two-hub structure of the aerospace industry generates strong spatial comovement across regions. Shocks to downstream activity originating in Toulouse and Île-de-France are largely absorbed locally, leading to a concentration and amplification of fluctuations within these hubs. Conversely, shocks arising in peripheral regions are transmitted through production linkages toward these central nodes, rather than remaining locally contained. This asymmetric propagation implies that both local and remote shocks contribute to fluctuations in hub regions, thereby synchronizing economic activity across space and reinforcing aggregate comovement.
+
+
+
+\paragraph{EV subsidies in the Car industry.}
+
+
+For the motor vehicles industry, we quantify the spatial consequences of the 2024 reform of the French EV environmental score. Prior to 2024, all battery-electric vehicles meeting price and weight thresholds qualified for a purchase subsidy of approximately \euro{5,000}. In January~2024, France introduced a life-cycle emissions threshold---the \textit{score environnemental}---that disqualified models whose manufacturing-stage carbon footprint exceeded a fixed ceiling. Because upstream emissions correlate strongly with the location of assembly and battery production, the reform effectively excluded most Chinese-assembled models. Roughly 30\% of 2023 EV sales lost eligibility overnight, corresponding to a price increase of approximately \euro{4,260} per disqualified vehicle.
+ 
+Using exhaustive French registration data matched to assembly plants and battery origins, \cite{MalgouyresMayerNolden2025} estimate a three-level nested logit demand system and show that the reform triggered a sharp reallocation of sales toward European-assembled vehicles, while reducing overall EV penetration by approximately 0.9~percentage points. Their difference-in-differences estimates imply that losing the bonus reduces sales of affected models by roughly 60\%, with an own-price semi-elasticity for EVs of $\hat{\beta}_{EV} = -0.154$ per thousand euros. The nested logit parameters---estimated by combining the quasi-experimental price variation with US second-choice survey moments from \cite{AllcottEtAl2024}---are $\hat{\alpha} = 0.087$, $\hat{\mu}_3 = 0.648$, and $\hat{\mu}_{4,E} = 0.569$.
+ 
+We rely on these estimates to construct region-specific demand shocks affecting downstream motor vehicle producers, and feed them through our structural model to quantify the upstream spatial diffusion. The shock exploits regional heterogeneity in the production composition across three vehicle categories---eligible EVs, non-eligible EVs, and ICE vehicles---so that regions specializing in the assembly of disqualified models experience larger negative demand shifts. A detailed description of the procedure is provided in Appendix~\ref{app:ev_ecoscore}.
+ 
+Overall, the estimated size of the shock amounts to X euros, and the additional upstream sales implied by our model are equal to X euros.
+
+
+\begin{comment}
+    
+\paragraph{Taking stock} We have shown that the spatial organization of production networks concentrates the transmission of shocks toward a small number of hub regions. In the aerospace industry, a large share of suppliers serving multiple downstream regions are located in Toulouse and Île-de-France, implying that shocks originating in other regions are disproportionately propagated toward these hubs. In this sense, hub regions act as aggregators of network-driven fluctuations, as their activity loads on shocks affecting a broad set of downstream locations.
+
+Our model focuses on the motor vehicle or aerospace production network and therefore captures this exposure within a given industry. Combining this mechanism with the empirical evidence on the sectoral composition of regions documented in Section~\ref{sec:data_stylized_facts} provides additional insight into the implications for local volatility. In particular, Toulouse is highly specialized in aerospace activity, whereas Île-de-France is significantly more diversified across sectors. As a result, the network-driven exposure identified in the model is likely to translate into a higher sensitivity of local economic activity to aerospace shocks in Toulouse than in Île-de-France.
+
+This observation raises a policy-relevant question: to what extent can the spatial structure of production networks be reshaped in order to reduce the exposure of key regions to sector-specific shocks, while preserving the benefits of industrial concentration? In the next section, we use the model to address this question by analyzing how changes in trade costs and regional comparative advantage affect the organization of production networks and the resulting exposure of regions to downstream shocks.
+
+ 
+
+
+\subsubsection{Reorganizing production network}
+
+
+\swann{Ci dessous je donne le détail des calculs mais on pourrait en renvoyer une partie en Appendix.}
+
+\subsubsection*{Theoretical results}
+
+The model implied production network is the outcome of trade costs and sector - region comparative advantage. A policymaker can influence the production network structure either by reducing trade cost between region (investment in infrastructure) of increasing the comparative advantage of regions (through cluster-based policies). We seek in this section to understand how the reduction of trade costs and the increase of comparative advantage is going to i) reorganize the network, ii) affect the comovement between regions. We first expose theoretical results and then run simulations to quantify those effects. 
+
+A region is composed by downstream firms and upstream firms. Sales change of upstream firms is totally determined by the transmission of downstream shocks: $d\ln x_{it} = \sum_r a_{ri}^D \delta_{r,t}^D$. Consequently, the spatial comovement between two regions is given by: 
+
+$$\Cov (r',l) = M_{r'.}\Sigma_{dd}M_{l.}^T$$
+
+with $M_{r'r} = \sum_{s} w_s^{r'} w_{d}^{sr'}w_{r}^{dsr'}$ the network matrix and $\Sigma_{dd}$ the variance covariance matrix of downstream shocks. $w_s^{r'}$ is the weight of $s$ in $r'$, $w_{d}^{sr'}$ is the share of sales of $s$ in $r'$ to the downstream industry and $w_{r}^{dsr'}$ is the share of those sales toward downstream region $r$, the outcome of the estimated model:
+
+
+\begin{equation}
+w_r^{sr'd} \;=\; \frac{\gamma_{r'rs}\,X_{rs}}{\sum_{r''}\gamma_{r'r''s}\,X_{r''s}},
+\end{equation}
+
+with $X_{rs}$ the purchase of inputs from sector $s$ by downstream firm in $r$. Any change in trade cost or comparative advantage will affect upstream sales portfolio and shift  $w_{r}^{dsr'}$, affecting the spatial comovement $\Cov(r',l)$. To assess such effect, we first derive $\gamma_{r'rs}$ with respect to $\tau_{krs}$ and $T_{ks}$ for any upstream region $k$:
+
+\begin{align}
+    \frac{d\ln \gamma_{r'rs}}{d\ln \tau_{krs}} &= -\theta (\mathds{1}\{r'=k\}- \gamma_{krs}) \\
+    \frac{d\ln \gamma_{r'rs}}{d\ln T_{ks}} &=  (\mathds{1}\{r'=k\} - \gamma_{krs}) 
+\end{align}
+
+A decrease of trade cost or increase in comparative advantage has two distinct effects. If $k = r'$ it will increase the purchase from this $k$, the less if $r$ is already purchasing from $k$. If $k \neq r'$, it will decrease the purchase since $r'$ become relatively less competitive. Turning to $w_r^{dsr'}$ we have for any variable $y$: 
+
+\begin{align}
+    \frac{d\ln w_r^{dsr'} }{d\ln y} = \frac{d\ln \gamma_{r'rs}}{d\ln y} -  \sum_{r^{''}} w_{r^{''}}^{dr's}\frac{d\ln \gamma_{r'r^{''}s}}{d\ln y} + \frac{d\ln X_{rs}}{d\ln y} -  \sum_{r^{''}} w_{r^{''}}^{dr's}\frac{d\ln X_{r^{''}s}}{d\ln y}
+\end{align}
+
+
+For the remaining we consider $X_{rs}$ constant for all $r$. \swann{Je fais cette hypothèse car ça permet de simplifier les calculs dans un premier temps. Je pense que c'est important dans le modèle final de ne pas la faire. }Since for all $r^{''} \neq r$ we have $\frac{d\ln \gamma_{r'r^{''}s}}{d\ln \tau_{krs}} = 0$:
+
+\begin{align}
+\frac{d \ln w_r^{sr'd}}{d \ln \tau_{krs}} &\;=\; \bigl(1 - w_r^{sr'd}\bigr)\,\frac{d \ln \gamma_{r'rs}}{d \ln \tau_{krs}} \;=\; -\theta\bigl(\mathds{1}\{r'=k\}-\gamma_{krs}\bigr)\bigl(1-w_r^{sr'd}\bigr),
+\label{eq:w_elast_tau_destr}\\[4pt]
+\frac{d \ln w_{r''}^{sr'd}}{d \ln \tau_{krs}} &\;=\; -w_r^{sr'd}\,\frac{d \ln \gamma_{r'rs}}{d \ln \tau_{krs}} \;=\; +\theta\bigl(\mathds{1}\{r'=k\}-\gamma_{krs}\bigr)\,w_r^{sr'd}, \qquad r''\neq r.
+\label{eq:w_elast_tau_otherdest}
+\end{align}
+
+
+Reducing trade cost between $k$ and $r$ is going to concentrate the portfolio around $r$ if $k = r'$ and away from $r$ otherwise. For the comparative advantage the effect is a bit more complicated. Because $T_{ks}$ affects $\gamma_{r'r''s}$ for all destinations $r''$ (not just one), the chain rule yields a portfolio-wide reallocation:
+\begin{align}
+\frac{d \ln w_r^{sr'd}}{d \ln T_{ks}} 
+&\;=\; \frac{d \ln \gamma_{r'rs}}{d \ln T_{ks}} - \sum_{r''}w_{r''}^{sr'd}\frac{d \ln \gamma_{r'r''s}}{d \ln T_{ks}} \notag\\
+&\;=\; \bigl(\mathds{1}\{r'=k\}-\gamma_{krs}\bigr) - \sum_{r''}w_{r''}^{sr'd}\bigl(\mathds{1}\{r'=k\}-\gamma_{kr''s}\bigr) \notag\\
+&\;=\; \sum_{r''}w_{r''}^{sr'd}\,\gamma_{kr''s} - \gamma_{krs}
+\label{eq:w_elast_T}
+\end{align}
+The indicator terms cancel in the third line: the result is independent of whether $r' = k$. This is sharper than previous elasticity, which depends on the relationship between origin $r'$ and the focal $k$.
+
+\medskip\noindent
+\textit{Mechanism.} A rise in $T_{ks}$ produces a \emph{uniform within-portfolio reallocation} for every origin $r'$: allocation shifts toward destinations $r$ where $k$ is currently under-represented (small $\gamma_{krs}$ relative to the portfolio-average $\sum_{r''}w_{r''}^{sr'd}\gamma_{kr''s}$), and away from destinations where $k$ is over-represented. This means cluster policy in $k$ has a \emph{symmetric effect across all origins} — every supplier network reorganizes toward the same destinations regardless of where the supplier is located. This is in sharp contrast to the trade cost reduction, where infrastructure linking $k$ to a specific destination $r$ produces origin-specific responses.\\
+
+
+\swann{La formule (13) n'est pas intuitive au début. Pour bien la comprendre, on peut placer trois points sur une ligne. Le point de gauche et celui du milieu sont des régions avec une upstream et downstream firm. Le point de droite a uniquement une downstream firm. On augmente $T_{sr}$ au milieu. Toutes les downstream vont + sourcer du milieu mais celles aux extrémités relativement moins que celle du milieu. La redirection du flux va concentrer le portfolio du point de gauche sur les downstream des extrêmes. On peut ajouter une footnote pour l'expliquer.}
+
+Turning to spatial comovements, abstracting from any across sector spillover we have for any variable $y$: 
+
+
+\begin{equation}\label{eq:V_elast_tau}
+    \frac{d \Cov(r',l)}{d \ln y} \;=\; \sum_{r}\Bigl[\bigl(\Sigma M_{l\cdot}^\top\bigr)_r M_{r'r}\,\frac{d \ln \ln M_{r'r}}{d \ln y}                 + \bigl(\Sigma M_{r'\cdot}^\top\bigr)_r M_{lr}\,\frac{d \ln M_{lr}}{d \ln y}\Bigr].
+\end{equation}
+
+When $y$ is $\tau_{krs}$, a decrease in $\tau_{krs}$ lead to an increase in $M_{kr}$ and a decrease in $M_{r'r}$ for $r'\neq q$. Consequently, the total effect on spatial comovement is ambiguous. If the reorganization of the network is such that $r'$ and $l$ are more exposed to similar shocks then it increases the spatial comovement between them. If downstream shocks are iid, $\Cov(k,r)$ increases and $\Cov(k,l)$ decreases for $l \neq r$. Reversely,  $\Cov(r',r)$ decreases for $r' \neq r$ and $\Cov(r',l)$ increases for $l \neq r$. \\
+
+When $y$ is $T_{ks}$, the total effect is ambiguous and depends on portfolio reorganization interacted with the structure of the covariance matrix. 
+
+
+\subsubsection*{Optimal cluster-based policy: a portfolio result}
+
+We use the elasticities above to derive the optimal allocation of a fixed budget $B$ for cluster-based industrial policy.
+
+\swann{Cet exercice est pour moi intéressant conventuellement, car il permet de reboucler avec la motivation initiale et de réfléchir à la manière de construire spatialement les chaînes de valeurs au sein d'un pays (Résilience des systèmes de production). Par exemple, compte tenu de la distribution des usines de l'automobile, est ce que c'est optimal de faire la vallée de la batterie dans les Hauts-de-France ?  Mais si jamais le coût de la volatilité est faible (et c'est ce que je comprends de la littérature) alors il n'est pas trop intéressant quantitativement parlant. }
+
+\swann{Ici le planner internalise le coût de la volatilité. L'entreprise ne l'internalise pas quand elle forme ses liens. Si jamais on avait fait un modèle multi pays je pense que cette hypothèse aurait été problèmatique mais comme on est within country je pense que c'est ok. }
+
+\paragraph{Setup.}
+A planner allocates a budget $B$ across regions to subsidize comparative advantage. Let $b_{r}\geq 0$ be the budget allocated to region $r$, with $\sum_r b_r \leq B$. The induced productivity satisfies $T_{rs}(b_r) = \widehat T_{rs}\cdot f(b_r)$, where $\widehat T_{rs}$ is the estimated baseline and $f$ is a strictly increasing, strictly concave function with $f(0)=1$ and $f'(0) > 0$. Concavity captures the assumption of diminishing returns to local R\&D and infrastructure investment. \swann{Je n'ai pas de référence en tête mais j'imagine que c'est standard.}
+
+The planner's objective combines an efficiency term (the negative of an aggregate downstream price index, weighted by destination expenditure) and a stability constraint (an upper bound on aggregate variance). Formally: 
+
+
+
+\begin{equation}
+\min_{\{b_r\}_{r=1}^R}\;\; P\bigl(\{T_{rs}(b_r)\}\bigr) \quad\text{s.t.}\quad \sum_r b_r \leq B,\;\; \Omega\Sigma\Omega^T \leq \bar V,\;\; b_r \geq 0,
+\label{eq:planner_problem}
+\end{equation}
+where $P$ is the downstream industry price index, $\Sigma$ the region level variance covariance matrix, $\Omega$ planners weights on those comovements and $\Bar{V}$ the constraint on the aggregate variance. Investing in a specific location increases $T_{sr}$ and therefore lowers the marginal cost of production of downstream firms sourcing from this region. Consequently, the aggregate price index is reduced. However, portfolio reallocation might increase the spatial comovement affecting local and aggregate stability.
+
+
+
+
+\paragraph{The price-index elasticity.}
+In Eaton--Kortum, the sectoral price index satisfies $p_{rs}^{-\theta}\propto \Phi_{rs}$ (up to constants from the gamma function). Differentiating:
+\begin{equation}
+\frac{\partial \ln p_{rs}}{\partial \ln T_{ks}}  \;=\; -\frac{1}{\theta}\frac{\partial \ln \Phi_{rs}}{\partial \ln T_{ks}} \;=\; -\frac{\gamma_{krs}}{\theta}.
+\label{eq:price_elast_T}
+\end{equation}
+
+Aggregating across sectors and destinations, the welfare-relevant price elasticity is
+\begin{equation}
+\frac{\partial \ln P}{\partial \ln T_{ks}} \;=\; -\frac{1}{\theta}\sum_{r}\omega_r^{\mathcal{P}}\,\Omega^s\,\gamma_{krs} \;\equiv\; -\frac{1}{\theta}\,\bar\gamma_{ks},
+\label{eq:welfare_elast_T}
+\end{equation}
+where $\omega_r^{\mathcal{P}}$ is destination $r$'s weight in welfare and $\bar\gamma_{ks} \equiv \sum_r \omega_r^{\mathcal{P}}\Omega^s\gamma_{krs}$ summarizes $k$'s \emph{network centrality} in supplying sector $s$. Centrally located regions with high average sourcing shares deliver higher marginal welfare returns per unit of comparative advantage.
+
+\paragraph{ The variance elasticity.}
+Define the variance elasticity $\mathcal{V}'_{ks} \equiv \partial \mathcal{V}/\partial \ln T_{ks}$, computed via \eqref{eq:V_elast_tau} applied to the appropriate variance aggregate. From §B.4, $\mathcal{V}'_{ks}$ is sign-ambiguous: negative when $k$ is a \emph{stabilizing} hub (its shock is uncorrelated or counter-correlated with the existing exposures of regions reallocating toward it), positive when $k$ is a \emph{concentrating} hub.
+
+\paragraph{ First-order conditions.}
+Let $\lambda \geq 0$ be the budget multiplier and $\mu \geq 0$ the multiplier on the variance constraint. The Lagrangian first-order condition for $b_r > 0$ is
+
+\begin{equation}
+\boxed{\;f'(b_r)\cdot\underbrace{\Bigl[\,\underbrace{\tfrac{1}{\theta}\bar\gamma_{rs}}_{\text{efficiency gain}}                  \;-\;
+\underbrace{\mu\,\mathcal{V}'_{rs}}_{\text{variance cost}}\,\Bigr]}_{\text{Marginal value of subsidy in $r$}}
+\;=\;\lambda
+\quad\text{for all $r$ with $b_r > 0$.}
+\;}
+\label{eq:foc}
+\end{equation}
+
+The marginal value per euro of subsidy in region $r$ is the sum of two components: an efficiency gain proportional to $r$'s network centrality $\bar\gamma_{rs}$, and a variance cost proportional to $r$'s contribution to aggregate variance $\mathcal{V}'_{rs}$. Diminishing returns $f'(b_r)$ ensure that the optimal allocation spreads investment across multiple regions rather than concentrating in one.
+
+\paragraph{ The interior characterization.}
+Equation \eqref{eq:foc} delivers the central theoretical result of this section. Two regions $r$ and $r'$ receive interior allocations ($b_r, b_{r'} > 0$) if and only if their marginal values are equalized:
+\begin{equation}
+\frac{f'(b_r)}{f'(b_{r'})}
+\;=\;
+\frac{\frac{1}{\theta}\bar\gamma_{r's} - \mu\mathcal{V}'_{r's}}
+     {\frac{1}{\theta}\bar\gamma_{rs} - \mu\mathcal{V}'_{rs}}.
+\label{eq:interior}
+\end{equation}
+Concavity of $f$ ($f' > 0$, $f'' < 0$) implies that regions with higher marginal value receive larger allocations. The composition of "marginal value" is the substantive content of the result.
+
+\begin{proposition}[Optimal cluster policy]
+\label{prop:cluster_policy}
+Under \eqref{eq:planner_problem} with strictly concave $f$, the optimal allocation $\{b_r^\ast\}$ favors regions $r$ that are jointly:
+
+\begin{enumerate}
+\item \emph{Centrally located in the production network of sector $s$} ($ \bar\gamma_{rs}$ large) — yielding high efficiency gains; and 
+\item \emph{Diversifying} relative to the existing covariance structure of  ownstream shocks ($\mathcal{V}'_{rs} < 0$) — yielding stability gains.
+\end{enumerate}
+
+Conversely, regions that are already-saturated hubs of incumbent sourcing ($\gamma_{r\cdot s}$ near 1 in many destinations) deliver low marginal returns on both dimensions: efficiency returns are small because their share is bounded above, and the diversification benefit is negative because reinforcing them concentrates aggregate exposure.
+\end{proposition}
+
+\medskip\noindent
+\textit{Mechanism and policy interpretation.} The optimal cluster-based policy is not the one that reinforces existing hubs. It is the one that develops regions that are \emph{moderately central but currently under-supplied}. These regions deliver two complementary benefits. First, by virtue of central location, an increase in their comparative advantage propagates to many downstream firms, lowering the price index across the network. Second, because their downstream-shock exposure is not yet large, drawing more sourcing toward them diversifies the existing portfolio of upstream regions, smoothing local business-cycle fluctuations. Reinforcing already-saturated hubs (e.g., Toulouse in aerospace) yields diminishing efficiency returns and adds variance through concentration. Reinforcing isolated peripheral regions (e.g., a CZ with no pre-existing linkages) yields high variance reduction in principle but low efficiency because the productivity gain is poorly diffused across the network. The optimum lies at intermediate centrality.
+
+\medskip\noindent
+
+\textit{Empirical implementation.} For each sector $s$, we compute $\bar\gamma_{rs}$ and $\mathcal{V}'_{rs}$ from the estimated model and report:
+\begin{enumerate}
+\item the cross-section of marginal welfare returns $\bar\gamma_{rs}$ across upstream regions;
+\item the cross-section of variance returns $\mathcal{V}'_{rs}$ across the same regions;
+\item the resulting optimal allocation $b_r^\ast$ under a calibrated $f(\cdot)$, for two specifications of the variance constraint ($\mathcal{V}$ = aggregate, $\mathcal{V}$ = local for selected regions).
+\end{enumerate}
+The headline statement is the comparison between $b_r^\ast$ and the allocation that would maximize efficiency alone ($\mu = 0$), which reinforces existing hubs. The variance-constrained optimum redirects a quantifiable share of the budget toward moderately-central, diversifying
+regions.
+
+
+\end{comment}
