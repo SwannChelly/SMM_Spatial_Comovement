@@ -86,13 +86,32 @@ end
 """
     invert_T_ge(alpha, Omega_L, Omega_s, A;
                 target = EMP_GAMMA_T_TILDE, T_init = copy(T_rs_init),
-                max_iter = 500, tol = 1e-9, damping = 0.9, verbose = false)
+                max_iter = 2000, tol = 1e-9, damping = 0.5, verbose = false)
         -> (T::(S,T_COL_DIM), iters, converged::Bool, resid, resid_hist)
 
-`damping` is the log-space relaxation δ (δ=1 is pure Sinkhorn). Phase-0 measured
-the undamped map as a strong contraction (ρ_full≈0.01 at the aero calibration),
-so the default is 0.9 (fast) rather than the very conservative 0.5; drop it toward
-0.5 if a far-from-init particle ever oscillates.
+`damping` is the log-space relaxation δ (δ=1 is pure Sinkhorn). The update is
+Richardson iteration on log T against M = ∂log γ/∂log T, so it is stable iff
+δ < 2/λ_max(M) and fastest at δ = 2/(λ_min+λ_max).
+
+**Why the default is 0.5 and not 0.9.** The original 0.9 was set from a Phase-0
+measurement taken at α ≈ 0.1 with a default head, where the map is nearly the
+identity (λ_max ≈ 1.0, i.e. the multiplicative update is an exact Newton step) and
+ρ_full ≈ 0.01. That is not representative: λ_max grows with α through the
+ε-driven demand loop — raising T in an area cuts input prices in the destinations
+it serves, and with ε = −16 their sales jump, sending demand back to that area.
+`test/test_ge_inversion.jl` measures the whole map on aero: the pure matrix-scaling
+channel contributes λ_max ≡ 1.000 at EVERY α and the ν/λ price channels add
+nothing, while the ε channel takes λ_max from 1.006 at α = 0.1 to 2.31 at α = 0.8.
+Empirically (its section 5b/c, from the production warm start) δ = 0.9 converges
+only up to α ≈ 0.50, δ = 0.5 up to α ≈ 0.70, δ = 0.3 up to α ≈ 1.10. Under
+`profile_T` a non-converging particle was still SCORED (see `profiled_theta_full`),
+so the outer PSO read the solver's ceiling as a wall in the criterion and α could
+not travel past it. At α̂ = 0.43 the cost of the change is 34 iterations instead of
+32 — the inversion is ~13% of one loss — so 0.5 is close to free.
+
+`max_iter` is 2000 rather than 500 for the same reason: at δ = 0.5 the iteration
+count rises with α (34 at α̂, 60 at α = 0.7), and a budget that truncates a
+converging run is indistinguishable downstream from a divergent one.
 
 Profile T by the GE-Sinkhorn inversion of `target`. Both `target` and the returned
 `T` live in the T-COLUMN space (`T_COL_DIM` wide): upstream ZE under `CA_LEVEL == :ze`,
@@ -117,8 +136,8 @@ fall back on `T_init`.
 function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
                      target::AbstractMatrix = EMP_GAMMA_T_TILDE,
                      T_init::AbstractMatrix = copy(T_rs_init),
-                     max_iter::Int = 500, tol::Float64 = 1e-9,
-                     damping::Float64 = 0.9, verbose::Bool = false)
+                     max_iter::Int = 2000, tol::Float64 = 1e-9,
+                     damping::Float64 = 0.5, verbose::Bool = false)
     tau   = build_tau(alpha)
     # The inversion iterates in the T-COLUMN space: ZE under :ze, attraction areas
     # under :aa. Each pass gathers T onto the ZE the model simulates, evaluates the
@@ -177,6 +196,55 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
 end
 
 
+# ── Warm-start cache for the profiled inversion ────────────────────────────────
+# `invert_T_ge`'s default start is `T_rs_init`, the γ-inversion at the PRIOR α with a
+# default head. Under `profile_T` the PSO evaluates hundreds of nearby particles per
+# iteration, so that start is the SAME distant point every time even once the swarm
+# has concentrated somewhere else entirely — and at higher α the failures measured by
+# `test/test_ge_inversion.jl` are BASIN failures (ρ(I−δM) < 1, so the fixed point is
+# locally attracting, yet the run started from `T_rs_init` still oscillates). Starting
+# from the last T* this worker actually solved attacks that directly.
+#
+# One slot per worker (`profiling.jl` is `@everywhere include`d, and PSO's `pmap`
+# hands each worker a stream of particles from the same swarm, hence from a similar
+# region of the head box). `Ref` rather than a Dict: nothing here is a memo — a cached
+# T* is only ever a STARTING POINT, never a returned value.
+#
+# DETERMINISM, which is the reason for the two-stage structure below. The fixed point
+# is unique (test section 3: 10/10 random starts agree to 2.5e-11), so a CONVERGED
+# result does not depend on where the iteration began. A NON-converged result does.
+# So the cache is written only on convergence, and a warm-started run that fails is
+# retried from `T_rs_init` — which means the value returned to the optimizer is
+# exactly what it would have been without the cache, converged or not. The cache can
+# change the iteration count and whether a particle converges; it can never change the
+# T* of a particle that converges, nor the fallback T of one that does not.
+const T_WARM_CACHE = Ref{Union{Nothing, Matrix{Float64}}}(nothing)
+
+"""
+    invert_T_ge_warm(alpha, Omega_L, Omega_s, A; kwargs...) -> same as invert_T_ge
+
+`invert_T_ge` started from this worker's last converged T* when there is one, falling
+back to the ordinary `T_rs_init` start if the warm attempt fails. See the note above
+for why that fallback is what keeps the profiled objective deterministic. Only the
+`profile_T` optimisation path uses this; the inference Jacobians in `tools.jl` keep
+calling `invert_T_ge` directly with their own explicit `T_init`, since each of their
+perturbations must start from the same pinned point to difference cleanly.
+"""
+function invert_T_ge_warm(alpha, Omega_L::Real, Omega_s, A; kwargs...)
+    cached = T_WARM_CACHE[]
+    if cached !== nothing && size(cached) == (S, T_COL_DIM) && all(isfinite, cached)
+        res = invert_T_ge(alpha, Omega_L, Omega_s, A; T_init = copy(cached), kwargs...)
+        if res.converged
+            T_WARM_CACHE[] = copy(res.T)
+            return res
+        end
+    end
+    res = invert_T_ge(alpha, Omega_L, Omega_s, A; kwargs...)   # T_init = T_rs_init
+    res.converged && (T_WARM_CACHE[] = copy(res.T))
+    return res
+end
+
+
 """
     profiled_theta(x_levels) -> Vector{Float64}
 
@@ -197,7 +265,13 @@ end
     profiled_theta_full(x_levels) -> (theta, converged::Bool, resid, iters)
 
 Same as `profiled_theta` but also surfaces the `invert_T_ge` convergence status of
-the T inversion for this particle. Used both by `profiled_theta` (which keeps only
+the T inversion for this particle. Routed through `invert_T_ge_warm`, so it starts
+from this worker's last converged T*.
+
+⚠ On `converged = false` the T block is still filled with the LAST ITERATE — this
+function does not fall back and does not penalise. The caller must act on the flag
+(`optimizer.jl`'s objective should return `Inf` rather than score a fabricated T);
+otherwise the outer search reads the solver's failure region as a region of bad fit. Used both by `profiled_theta` (which keeps only
 `.theta`) and by the PSO per-report T-convergence diagnostic (which keeps only the
 `.converged` flag). Kept top-level so it serializes across the `pmap` workers.
 """
@@ -206,7 +280,7 @@ function profiled_theta_full(x_levels::AbstractVector)
     Ωs = x_levels[2:(1 + S)];                      Ωs = Ωs ./ sum(Ωs)
     A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
     α  = x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)]
-    res = invert_T_ge(α, ΩL, Ωs, A)
+    res = invert_T_ge_warm(α, ΩL, Ωs, A)
     xf = copy(x_levels)
     xf[(2 + S + R_downstream + N_TAU):end] = vec(permutedims(res.T))[T_MASK]
     return (theta = xf, converged = res.converged, resid = res.resid, iters = res.iters)
@@ -252,7 +326,7 @@ function profiled_theta_probe(x_levels::AbstractVector)
         A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
         α  = collect(Float64, x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)])
         α_fallback = α
-        res = invert_T_ge(α, ΩL, Ωs, A)
+        res = invert_T_ge_warm(α, ΩL, Ωs, A)
         return (converged = res.converged, alpha = α, iters = res.iters, resid = res.resid)
     catch
         return (converged = false, alpha = α_fallback, iters = -1, resid = Inf)
