@@ -86,32 +86,52 @@ end
 """
     invert_T_ge(alpha, Omega_L, Omega_s, A;
                 target = EMP_GAMMA_T_TILDE, T_init = copy(T_rs_init),
-                max_iter = 2000, tol = 1e-9, damping = 0.5, verbose = false)
+                max_iter = 600, tol = 1e-9, damping = 0.3, verbose = false)
         -> (T::(S,T_COL_DIM), iters, converged::Bool, resid, resid_hist)
 
 `damping` is the log-space relaxation δ (δ=1 is pure Sinkhorn). The update is
 Richardson iteration on log T against M = ∂log γ/∂log T, so it is stable iff
 δ < 2/λ_max(M) and fastest at δ = 2/(λ_min+λ_max).
 
-**Why the default is 0.5 and not 0.9.** The original 0.9 was set from a Phase-0
-measurement taken at α ≈ 0.1 with a default head, where the map is nearly the
+**Why the default is 0.3 and not 0.9.** The original 0.9 was set from a Phase-0
+measurement taken at α ≈ 0.1 with a DEFAULT head, where the map is nearly the
 identity (λ_max ≈ 1.0, i.e. the multiplicative update is an exact Newton step) and
-ρ_full ≈ 0.01. That is not representative: λ_max grows with α through the
-ε-driven demand loop — raising T in an area cuts input prices in the destinations
-it serves, and with ε = −16 their sales jump, sending demand back to that area.
+ρ_full ≈ 0.01. That is not representative: λ_max grows with α through the ε-driven
+demand loop — raising T in an area cuts input prices in the destinations it serves,
+and with ε = −16 their sales jump, sending demand back to that area.
 `test/test_ge_inversion.jl` measures the whole map on aero: the pure matrix-scaling
-channel contributes λ_max ≡ 1.000 at EVERY α and the ν/λ price channels add
-nothing, while the ε channel takes λ_max from 1.006 at α = 0.1 to 2.31 at α = 0.8.
-Empirically (its section 5b/c, from the production warm start) δ = 0.9 converges
-only up to α ≈ 0.50, δ = 0.5 up to α ≈ 0.70, δ = 0.3 up to α ≈ 1.10. Under
-`profile_T` a non-converging particle was still SCORED (see `profiled_theta_full`),
-so the outer PSO read the solver's ceiling as a wall in the criterion and α could
-not travel past it. At α̂ = 0.43 the cost of the change is 34 iterations instead of
-32 — the inversion is ~13% of one loss — so 0.5 is close to free.
+channel contributes λ_max ≡ 1.000 at EVERY α and the ν/λ price channels add nothing,
+so the ε channel is the WHOLE of the rise.
 
-`max_iter` is 2000 rather than 500 for the same reason: at δ = 0.5 the iteration
-count rises with α (34 at α̂, 60 at α = 0.7), and a budget that truncates a
-converging run is indistinguishable downstream from a divergent one.
+The ceiling is a SURFACE in (α, Ω^L, Ω^s, A), not a function of α — the gain runs
+through ψ_s (the sector's share of P_r) and χ = (1−Ω^L)(P_r/c_r)^{1−λ}. The BINDING
+head is `main.jl`'s step-1 warm start, not θ̂: `agg_industry_share` is far more
+concentrated than the estimated Ω^s (ψ̄ ≈ 0.79 against 0.55), so at α = 1.2 the start
+head has λ_max = 6.59 against θ̂'s 2.13. Measured α ceiling, cold from `T_rs_init`:
+
+    δ      start head   θ̂ head
+    0.9      0.40         0.50
+    0.5      0.60         0.70
+    0.3      0.80         1.10
+    0.1     >1.20        >1.20
+
+Under `profile_T` a non-converging particle used to be SCORED, so the outer PSO read
+the solver's ceiling as a wall in the criterion and α could not travel past it
+(`optimizer.jl` now returns `Inf` instead). δ = 0.3 puts the ceiling clear of the
+whole economically interesting range at BOTH heads. Cost at the start head's
+α = 0.385: 59 iterations against 33 at δ = 0.5, i.e. the inversion goes from ~9% to
+~16% of one loss — and less than that in production, where `invert_T_ge_warm` starts
+from a nearby T* rather than cold.
+
+**`max_iter` is 600.** It is sized for the SLOW CONVERGING runs, not the typical
+ones: 33–80 iterations is normal, but as α approaches the stability ceiling ρ → 1
+and the count blows up (the test records 466 iterations for a run that does converge,
+at δ = 0.7, α = 0.5). The worst converging cold run at δ = 0.3 over both heads and the
+whole α grid is 212, so 600 leaves ~3× headroom for heads the scan did not visit. It
+is deliberately far below the earlier 2000: now that a failure is REJECTED rather
+than scored, the budget is what a rejected particle COSTS — twice over, since
+`invert_T_ge_warm` retries from `T_rs_init` — so an oversized budget is paid on
+exactly the evaluations that contribute nothing.
 
 Profile T by the GE-Sinkhorn inversion of `target`. Both `target` and the returned
 `T` live in the T-COLUMN space (`T_COL_DIM` wide): upstream ZE under `CA_LEVEL == :ze`,
@@ -136,8 +156,8 @@ fall back on `T_init`.
 function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
                      target::AbstractMatrix = EMP_GAMMA_T_TILDE,
                      T_init::AbstractMatrix = copy(T_rs_init),
-                     max_iter::Int = 2000, tol::Float64 = 1e-9,
-                     damping::Float64 = 0.5, verbose::Bool = false)
+                     max_iter::Int = 600, tol::Float64 = 1e-9,
+                     damping::Float64 = 0.3, verbose::Bool = false)
     tau   = build_tau(alpha)
     # The inversion iterates in the T-COLUMN space: ZE under :ze, attraction areas
     # under :aa. Each pass gathers T onto the ZE the model simulates, evaluates the

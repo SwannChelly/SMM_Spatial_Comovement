@@ -453,7 +453,7 @@ const ALPHA_GRID  = sort(unique(round.(vcat(collect(0.10:0.10:1.20),
                                             [h.alpha for h in HEADS],
                                             0.45, 0.50, 0.55, 0.65); digits = 4)))
 const DAMP_GRID   = [0.9, 0.7, 0.5, 0.3, 0.1]
-const DAMP_PROD   = 0.5                    # profiling.jl's invert_T_ge default
+const DAMP_PROD   = 0.3                    # profiling.jl's invert_T_ge default
 const REAL_TARGET = EMP_GAMMA_T_TILDE      # the production target
 
 # γ in T-column space with a prescribed amount of the GE response frozen.
