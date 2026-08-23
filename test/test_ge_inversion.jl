@@ -8,7 +8,7 @@
 #     julia test/test_ge_inversion.jl aero            # run.sh defaults (see below)
 #     julia test/test_ge_inversion.jl aero 4 1 ./reporting_aero_profiled_aa_gran_nlo1_pso
 #  Args: industry [n_coef] [n_tau] [run_folder] [reg_method] [include_control]
-#        [granular] [ca_level] [relax_n_lo]
+#        [granular] [ca_level] [relax_n_lo] [ref_head=start|theta_hat]
 #
 # ⚠ THE CONFIG ARGS ARE NOT OPTIONAL DECORATION — and the DEFAULTS HERE MATCH
 # `run.sh`, not the legacy model. `load_parameters.jl` reads the modelling flags as
@@ -36,7 +36,10 @@
 #   (4) COST. invert_T_ge vs one full_SMM loss.
 #
 #   (5) α × DAMPING STABILITY MAP  ← the section that reproduces the PSO log.
-#       For each α on a grid, at the REAL data target and the estimated head:
+#       Run once PER HEAD (see the Head block below): the ceiling is a surface in
+#       (α, Ω^L, Ω^s, A), so the START head governs the first PSO iterations and the
+#       θ̂ head governs the end of a stage — which is why the observed cliff MOVES.
+#       For each α on a grid, at the REAL data target:
 #         (a) find T*(α) with a very small δ (δ=0.05, long budget). Small δ is
 #             stable for any M < 2/δ = 40, so it converges whenever a fixed point
 #             EXISTS. If even this fails, the target is infeasible at that α — a
@@ -113,8 +116,8 @@ draw_method     = :sobol    # run.sh: --draws=sobol
 
 input_folder  = "./baseline_$industry"
 # Default run tree = exactly what main.jl builds from the run.sh defaults, so
-# load_theta() finds the θ̂ of the run being explained instead of falling back to a
-# default head at α = 0.1 (which is what made the earlier gate report GO).
+# saved_theta() finds the θ̂ of the run being explained; the START head is built
+# independently of the tree, so section 5 runs even on a fresh one.
 default_tree = "./reporting_$industry" * (profile_T ? "_profiled" : "") *
                (ca_level == :aa ? "_aa" : "") * (granular ? "_gran" : "") *
                (relax_n_lo && granular ? "_nlo1" : "") * "_$optimizer_backend"
@@ -135,8 +138,42 @@ println("GE-Sinkhorn T-inversion: feasibility gate + α × damping stability map
 @printf("  anchoring θ̂ on: %s\n", output_folder)
 println("="^76)
 
-# ── θ̂: prefer a saved estimate (same config), else a documented default ───────
-function load_theta()
+# ── HEADS ─────────────────────────────────────────────────────────────────────
+# The stability of the inversion is a surface in (α, Ω^L, Ω^s, A), not a function of
+# α alone: the loop gain runs through χ = (1−Ω^L)(P_r/c_r)^{1−λ} and ψ_s, both of
+# which are head objects. So the scan is run at EVERY head that matters, not one.
+#
+#   "start"  — main.jl's step-1 warm start, reproduced verbatim from main.jl:196-203:
+#              Ω^L = agg_labor_share, Ω^s = agg_industry_share,
+#              A = normalise(π_r^{1/|ε|} · w), α = P_alpha, T = T_rs_init.
+#              THIS is the head the PSO swarm is actually built around at iteration 1,
+#              and therefore the head whose ceiling explains the early failure rate.
+#   "theta_hat" — the estimate on disk, if the run tree has one. The head the swarm
+#              converges TO, and the ceiling that binds late in the search.
+#
+# Reading the map at θ̂ alone was the earlier mistake: on aero θ̂ has Ω̂^L = 0.095
+# against a start value of agg_labor_share, so the two heads sit at different points
+# of the χ surface and give different α ceilings — which is exactly why the observed
+# PSO cliff moves between iteration 1 and the end of a stage.
+struct Head
+    name  :: String
+    L     :: Float64
+    S     :: Vector{Float64}
+    A     :: Vector{Float64}
+    alpha :: Float64
+    T     :: Matrix{Float64}
+end
+
+function start_theta()
+    A_init = copy(emp_pi_r_full) .^ (1 / abs(epsilon)) .*
+             regional_wages[N_downstream_per_region .!= 0]
+    A_init ./= sum(A_init)
+    β = N_TAU == 1 ? [P_alpha] : fill(P_alpha, N_TAU)
+    return vcat([agg_labor_share], agg_industry_share, A_init, β,
+                vec(permutedims(T_rs_init))[T_MASK])
+end
+
+function saved_theta()
     expected = 1 + S + R_downstream + N_TAU + count(T_MASK)
     for rel in (("step3", "theta_hat_2.npy"), ("step1", "theta_hat_1.npy"),
                 ("step1", "best_params.npy"))
@@ -147,24 +184,46 @@ function load_theta()
             @printf("Loaded θ̂ from %s (length %d)\n", p, length(θ)); return θ
         end
     end
-    T_red = vec(permutedims(T_rs_init))[T_MASK]
-    Ω_L   = 0.5; Ω_s = ones(S); A = ones(R_downstream)
-    β     = N_TAU == 1 ? [P_alpha] : collect(range(0.05, 0.30, length = N_TAU))
-    θ = vcat(Ω_L, Ω_s, A, β, T_red)
-    @printf("⚠ No θ̂ under %s — using DEFAULT head (Ω^L=0.5, Ω^s/A=1, α=prior=%.4f).\n",
-            output_folder, β[1])
-    println("  The stability map still runs (it sweeps α itself), but ψ_s and χ — which")
-    println("  set the GE gain — are then at the default head, not the estimated one.")
-    @assert length(θ) == expected
-    return θ
+    @printf("No θ̂ under %s — scanning the START head only.\n", output_folder)
+    return nothing
 end
 
-θ0                    = load_theta()
-Ω_L, Ω_s, A, alpha_hat_v, _ = unpack_params(θ0)
-T_hat_par             = unpack_T_par(θ0)          # (S, T_COL_DIM) — the COLUMN space
-alpha_hat                     = alpha_hat_v[1]
-tau0                  = build_tau(alpha_hat_v)
-@printf("Head: Ω^L=%.4f  α̂=%.4f  |  ‖Ω^s‖₁=%.3f  A[1]=%.3f\n", Ω_L, alpha_hat, sum(Ω_s), A[1])
+function make_head(name, θ)
+    L, Sv, Av, αv, _ = unpack_params(θ)
+    return Head(name, L, collect(Sv), collect(Av), αv[1], unpack_T_par(θ))
+end
+
+const HEADS = let hs = Head[make_head("start", start_theta())]
+    θs = saved_theta()
+    θs === nothing || push!(hs, make_head("theta_hat", θs))
+    hs
+end
+
+# 10th arg selects which head sections 1-4 (the feasibility gate) run at; the α ×
+# damping map in section 5 always covers ALL heads. Default "start".
+ref_name = length(ARGS) >= 10 && !isempty(strip(ARGS[10])) ? String(strip(ARGS[10])) : "start"
+const REF_HEAD = let i = findfirst(h -> h.name == ref_name, HEADS)
+    i === nothing ? HEADS[1] : HEADS[i]
+end
+
+println()
+for h in HEADS
+    @printf("Head %-10s Ω^L=%.4f  α=%.4f  |  ‖Ω^s‖₁=%.3f  A[1]=%.4f  median T=%.4g%s\n",
+            h.name, h.L, h.alpha, sum(h.S), h.A[1] / sum(h.A),
+            median(filter(>(0), vec(h.T))), h === REF_HEAD ? "   ← gate (1-4)" : "")
+end
+
+# Sections 1-4 read these as globals. `set_head!` rebinds them so section 5 onward
+# can sweep heads; nothing after the sweep reads them.
+Ω_L, Ω_s, A = REF_HEAD.L, REF_HEAD.S, REF_HEAD.A
+T_hat_par   = REF_HEAD.T
+alpha_hat   = REF_HEAD.alpha
+alpha_hat_v = [alpha_hat]
+tau0        = build_tau(alpha_hat_v)
+function set_head!(h::Head)
+    global Ω_L = h.L; global Ω_s = h.S; global A = h.A
+    return h
+end
 
 # Free (active, non-reference) coordinates in T-COLUMN space — the identified
 # log-T directions. Under :ze a column IS a ZE; under :aa it is an attraction area.
@@ -388,7 +447,8 @@ end
 # so assigning to a global inside one either warns or silently binds a fresh local.
 # ═══════════════════════════════════════════════════════════════════════════════
 const ALPHA_GRID  = sort(unique(round.(vcat(collect(0.10:0.10:1.20),
-                                            alpha_hat, 0.45, 0.50, 0.55); digits = 4)))
+                                            [h.alpha for h in HEADS],
+                                            0.45, 0.50, 0.55, 0.65); digits = 4)))
 const DAMP_GRID   = [0.9, 0.7, 0.5, 0.3, 0.1]
 const DAMP_PROD   = 0.5                    # profiling.jl's invert_T_ge default
 const REAL_TARGET = EMP_GAMMA_T_TILDE      # the production target
@@ -523,8 +583,9 @@ struct AlphaRow
 end
 
 # ── (5a) does a fixed point EXIST, and what is the spectrum of M there? ─────────
-function stability_scan()
-    println("\n(5a) Does a fixed point EXIST at each α?  (δ=0.05, 20000 iters — stable for λ<40)")
+function stability_scan(h::Head)
+    set_head!(h)
+    @printf("\n(5a) [head=%s] Does a fixed point EXIST at each α?  (δ=0.05, 20000 iters — stable for λ<40)\n", h.name)
     println("      α      exists  iters      resid    |  λmax(M) λmin(M)  cplx  κ_S  | δ*=2/λmax  δ_opt   rate")
     println("     " * "-"^103)
     rows  = AlphaRow[]
@@ -558,8 +619,9 @@ function stability_scan()
 end
 
 # ── (5b/c) predicted ρ(I − δM) vs what the recursion actually does ──────────────
-function damping_map(rows, Tst, Mall)
-    println("\n(5b/c) PREDICTED ρ(I−δM) from the spectrum  vs  OBSERVED (max_iter=500, tol=1e-9, T_init=T_rs_init)")
+function damping_map(h::Head, rows, Tst, Mall)
+    set_head!(h)
+    @printf("\n(5b/c) [head=%s] PREDICTED ρ(I−δM) from the spectrum vs OBSERVED (max_iter=2000, tol=1e-9, T_init=T_rs_init)\n", h.name)
     print("      α    ")
     for d in DAMP_GRID; @printf("|  δ=%.1f: ρ  class  it ", d); end
     println()
@@ -569,7 +631,7 @@ function damping_map(rows, Tst, Mall)
         ev = haskey(Mall, row.a) ? eigvals(sum(Mall[row.a])) : nothing
         for d in DAMP_GRID
             rho = ev === nothing ? NaN : spec_rho(ev, d)
-            ro  = invert_traced(row.a, T_rs_init; damping = d, max_iter = 500, tol = 1e-9)
+            ro  = invert_traced(row.a, T_rs_init; damping = d, max_iter = 2000, tol = 1e-9)
             @printf("| %5.2f %-6s %4d ", rho, classify(ro), ro.iters)
         end
         println()
@@ -581,8 +643,24 @@ function damping_map(rows, Tst, Mall)
     println("     basin at that δ. Read it as: this δ needs a better start (or a lower δ) here.")
 end
 
-rows, Tstars, Mchan = stability_scan()
-damping_map(rows, Tstars, Mchan)
+# One full pass per head. `set_head!` rebinds the globals the helpers read, so each
+# pass measures the map at that head and nothing leaks between passes.
+const SCANS = Dict{String, Vector{AlphaRow}}()
+const MCHANS = Dict{String, Dict{Float64, NTuple{3, Matrix{Float64}}}}()
+function run_all_heads()
+    for h in HEADS
+        println("\n" * "="^76)
+        @printf("HEAD = %s   (Ω^L=%.4f, α=%.4f)\n", h.name, h.L, h.alpha)
+        println("="^76)
+        rws, tst, mch = stability_scan(h)
+        damping_map(h, rws, tst, mch)
+        mechanism_table(h, rws, tst, mch)
+        counterfactual_table(h, mch)
+        SCANS[h.name]  = rws
+        MCHANS[h.name] = mch
+    end
+end
+# (called at the bottom, after mechanism_table / counterfactual_table are defined)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # (6) MECHANISM: where the loop gain comes from
@@ -642,9 +720,10 @@ function mechanism(T_par, tau)
     return out
 end
 
-function mechanism_table(rows, Tst, Mall)
+function mechanism_table(h::Head, rows, Tst, Mall)
+    set_head!(h)
     println("\n" * "="^76)
-    println("(6) MECHANISM: which channel carries the loop gain")
+    @printf("(6) MECHANISM [head=%s]: which channel carries the loop gain\n", h.name)
     println("="^76)
     println("\n    α    max σ̄  mean σ̄ |  ψ̄     χ̄   | η_E: ν      λ       ε    | G_raw  diagM  λmax | λmax by channel: alloc  +νλ   +ε")
     println("   " * "-"^128)
@@ -698,9 +777,9 @@ function crit_alpha(Mall, eps_cf::Float64, th_cf::Float64, delta::Float64)
     return best
 end
 
-function counterfactual_table(Mall)
+function counterfactual_table(h::Head, Mall)
     println("\n" * "="^76)
-    println("(7) COUNTERFACTUAL critical α  (largest α on the grid with λmax(M) < 2/δ)")
+    @printf("(7) COUNTERFACTUAL [head=%s] critical α (largest grid α with λmax(M) < 2/δ)\n", h.name)
     println("="^76)
     ths = (theta, 1.768)          # 1.768 = the value load_parameters.jl:63 overrides with 1.0
     top = maximum(ALPHA_GRID)
@@ -727,32 +806,44 @@ function counterfactual_table(Mall)
     println("  θ′ columns stop at the grid top rescaled by θ/θ′, so a `>` there is a shorter reach.")
 end
 
-counterfactual_table(Mchan)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # VERDICT
 # ═══════════════════════════════════════════════════════════════════════════════
-function verdict(rows)
+function verdict()
     println("\n" * "="^76)
     go = (rt_err < 1e-8) && (ρ_full < 1) && (max_spread < 1e-7)
-    @printf("PHASE-0 GATE (at α̂ = %.4f): %s\n", alpha_hat,
+    @printf("PHASE-0 GATE (head=%s, α = %.4f): %s\n", REF_HEAD.name, alpha_hat,
             go ? "GO ✓  (round-trip, ρ_full<1, uniqueness)" : "NO-GO ✗ — inspect above")
-    ok = [r for r in rows if r.exists && !isnan(r.lmax)]
-    for d in DAMP_GRID
-        safe = [r.a for r in ok if r.lmax < 2/d]
-        @printf("  δ=%.1f : locally stable up to α ≈ %s\n", d,
-                isempty(safe) ? "(nowhere on the grid)" : @sprintf("%.3f", maximum(safe)))
+    println("\nLocal-stability ceiling on α, by head and damping (λmax(M) < 2/δ):")
+    print("   head        ")
+    for d in DAMP_GRID; @printf("  δ=%.1f  ", d); end
+    println("| δ_max over the grid")
+    for h in HEADS
+        rws = get(SCANS, h.name, AlphaRow[])
+        ok  = [r for r in rws if r.exists && !isnan(r.lmax)]
+        @printf("   %-12s", h.name)
+        for d in DAMP_GRID
+            safe = [r.a for r in ok if r.lmax < 2/d]
+            @printf("  %-6s", isempty(safe) ? "none" : @sprintf("%.2f", maximum(safe)))
+        end
+        @printf("| %s\n", isempty(ok) ? "-" :
+                @sprintf("%.3f", 2 / maximum(r.lmax for r in ok)))
+        nofix = [r.a for r in rws if !r.exists]
+        isempty(nofix) || @printf("     ⚠ NO fixed point at α ∈ %s — infeasible target; damping cannot help.\n",
+                                  string(nofix))
     end
-    isempty(ok) || @printf("Largest damping locally stable over the WHOLE grid: δ < 2/max λmax = %.3f\n",
-                           2 / maximum(r.lmax for r in ok))
-    nofix = [r.a for r in rows if !r.exists]
-    isempty(nofix) || @printf("⚠ NO fixed point at α ∈ %s — infeasible target; damping cannot help.\n",
-                              string(nofix))
-    println("A local-stability ceiling well below the α search box means invert_T_ge's damping —")
-    println("not the criterion — is what caps α, and the PSO α ceiling is a solver artefact.")
-    println("Cross-check it against the OBSERVED column of (5b/c): where the two disagree, the")
-    println("binding constraint is the BASIN, not local stability, and the fix is the warm start.")
+    println("\nThe `start` row is what governs the FIRST PSO iterations (the swarm is built")
+    println("around main.jl's warm start); the `theta_hat` row is what binds once the swarm has")
+    println("converged. If they differ, the observed `T non-converged` cliff MOVES during a")
+    println("stage — which is the pattern the production logs show.")
+    println("A ceiling well below the α search box means invert_T_ge's damping, not the")
+    println("criterion, is what caps α, and the PSO α ceiling is a solver artefact.")
+    println("Cross-check against the OBSERVED column of (5b/c): where the two disagree, the")
+    println("binding constraint is the BASIN, not local stability, and the fix is the warm")
+    println("start (invert_T_ge_warm) rather than a lower δ.")
     println("="^76)
 end
 
-verdict(rows)
+run_all_heads()
+verdict()
