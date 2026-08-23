@@ -470,7 +470,29 @@ function train_stage(
         x_full = build_x_full(x_stage)
 
         # T-profiling: replace the (searched-or-stale) T block with T*(α,Ω,A).
-        profile_T && (x_full = profiled_theta(x_full))
+        #
+        # A NON-CONVERGED inversion is REJECTED, not scored. `profiled_theta_full`
+        # returns the last iterate when the GE-Sinkhorn recursion fails, and that
+        # iterate is an arbitrary point on a divergent/oscillating path — not
+        # T*(α,Ω,A) for this particle, and not T*(·) for any other. Scoring it feeds
+        # the swarm a loss for a T the model never implied, and because the failures
+        # are concentrated at high α (they are the ε-driven demand loop of
+        # profiling.jl's header, whose gain rises with α), the search reads the
+        # SOLVER's frontier as a wall in the criterion and α cannot travel past it.
+        # `Inf` is the idiom the backends already use for a failed evaluation: PSO
+        # filters it out of the reported mean and it can never become a personal or
+        # global best, so a failed particle is carried along by the swarm's own
+        # dynamics instead of voting on where the optimum is.
+        #
+        # Deliberately NOT a fallback to T_rs_init: that would score the particle at
+        # a T which is not its own — and one that fits the γ block WELL, since it is
+        # the inversion at the prior α — so high α would look artificially good. A
+        # silent upward bias is worse than a rejected point.
+        if profile_T
+            prof = profiled_theta_full(x_full)
+            prof.converged || return Inf
+            x_full = prof.theta
+        end
 
         # Resolved on the process that RUNS the evaluation, so the arrays are read
         # from that worker's own module state instead of being deserialized per task.
@@ -546,7 +568,22 @@ function train_stage(
 
     # T-profiling: the returned θ carries T*(α̂,Ω̂,Â) so downstream reporting and
     # Step-4 inference (which keeps the full T columns) see the profiled T.
-    profile_T && (final_params = profiled_theta(final_params))
+    #
+    # Unlike the objective, this does NOT reject on failure — it has to return a θ.
+    # After the `Inf` guard above the incumbent can only come from a particle whose
+    # inversion converged, so a failure here means every particle in the stage failed
+    # (the whole box is outside the solver's reach) and `best_fitness` is already
+    # Inf. That is a run-level problem, not a scoring one, so it is reported loudly
+    # and the last iterate is returned rather than silently passed off as T*.
+    if profile_T
+        prof = profiled_theta_full(final_params)
+        prof.converged || @warn "invert_T_ge did NOT converge at the stage optimum: the " *
+            "returned T is the last iterate, not T*(α̂,Ω̂,Â). With the objective's " *
+            "convergence guard in place this means no particle in the stage converged — " *
+            "check the α box against test/test_ge_inversion.jl's stability map, and lower " *
+            "invert_T_ge's damping if the box reaches past the ceiling it reports." resid=prof.resid iters=prof.iters
+        final_params = prof.theta
+    end
 
     return final_params, best_fitness, history
 end

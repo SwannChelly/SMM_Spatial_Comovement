@@ -408,6 +408,9 @@ n_conv, max_spread = uniqueness_check()
 println("\n" * "-"^76)
 println("(4) COST: invert_T_ge vs one full_SMM loss vs one analytical eval")
 println("-"^76)
+# The reference head as a full level vector, for the full_SMM timing below.
+theta_ref = vcat(REF_HEAD.L, REF_HEAD.S, REF_HEAD.A, REF_HEAD.alpha,
+                 vec(permutedims(REF_HEAD.T))[T_MASK])
 invert_T_ge(alpha_hat_v, Ω_L, Ω_s, A; max_iter = 200, tol = 1e-9)   # JIT warm
 t_inv = @elapsed for _ in 1:5
     invert_T_ge(alpha_hat_v, Ω_L, Ω_s, A; max_iter = 500, tol = 1e-9)
@@ -416,8 +419,8 @@ t_inv /= 5
 @printf("  invert_T_ge (production default target):  %.4f s / call\n", t_inv)
 let t_smm = NaN
     try
-        full_SMM(θ0; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
-        t_smm = @elapsed full_SMM(θ0; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
+        full_SMM(theta_ref; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
+        t_smm = @elapsed full_SMM(theta_ref; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
         @printf("  full_SMM loss (outer-loop unit):          %.4f s / call  (inversion = %.1f%%)\n",
                 t_smm, 100 * t_inv / t_smm)
     catch e
@@ -749,7 +752,6 @@ function mechanism_table(h::Head, rows, Tst, Mall)
     println("   G_raw ≫ diagM is expected — see the header: the normaliser removes the common mode.")
 end
 
-mechanism_table(rows, Tstars, Mchan)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # (7) COUNTERFACTUAL ε and θ, built from the OPERATORS (not the raw formula)
