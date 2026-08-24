@@ -276,6 +276,8 @@ def gate_untargeted():
     # fixed-effect wedge it is documented to carry
     dec = NS["decompose_untargeted_moment"](data, panel=panel)
     tab = dec["table"].set_index("channel")["coefficient"]
+    # the identity decomposes the REPORTED number: same fixed effect as the baseline
+    assert abs(dec["table"].loc[0, "coefficient"] - res_auto["eta"]) < 1e-9
     assert tab.iloc[1] < 0, tab
     assert abs(dec["gap"]) < 0.25, dec["gap"]
     assert dec["table"].loc[2, "n_obs"] < dec["table"].loc[0, "n_obs"]   # positives only
@@ -289,14 +291,18 @@ def gate_untargeted():
     data2 = dict(data, industry="aero")
     res_aero = NS["estimate_untargeted_moment"](data2, panel=panel)
 
-    # the three fixed-effect specifications, and the map onto the reduced form's scale
+    # the estimated fixed-effect specifications, and the map onto the reduced form's scale
     assert set(res_auto["specs"]) == set(NS["UNTARGETED_FE_SPECS"])
+    # the baseline is the two-way effect: the reduced form's own design, and the variation
+    # the appendix's derivative is taken along
+    assert NS["UNTARGETED_FE_SPECS"][NS["BASELINE_FE_LABEL"]] == NS["BASELINE_FE"]
+    assert set(NS["BASELINE_FE"].split(" + ")) == {"fe_group", "SIREN"}
     for label, sp in res_auto["specs"].items():
         assert abs(sp["dg"] - NS["delta_over_gamma_from_eta"](sp["eta"])) < 1e-12
         # the map is monotone and compressive, and bounded by 1/mean(log d)
         assert abs(sp["dg"]) < abs(sp["eta"]) + 1e-12
         assert abs(sp["dg"]) < 1.0 / NS["EMPIRICAL_MEAN_LOG_D"]
-    assert res_auto["eta"] == res_auto["specs"]["sector x buyer region"]["eta"]
+    assert res_auto["eta"] == res_auto["specs"][NS["BASELINE_FE_LABEL"]]["eta"]
     # the round trip through the two maps must return the elasticity it started from
     e = res_auto["eta"]
     assert abs(NS["eta_from_delta_over_gamma"](NS["delta_over_gamma_from_eta"](e)) - e) < 1e-10
@@ -348,7 +354,7 @@ def gate_untargeted():
     print("multi-variety pooling: fewer suppliers, shares still sum to one, denser grid")
 
     ladder = NS["untargeted_specification_ladder"](data, panel=panel)
-    head = "PPML, sector x buyer-region FE (reported eta)"
+    head = "PPML, supplier + buyer-region FE (baseline eta)"
     assert head in ladder.index
     assert abs(ladder.loc[head, "eta"] - res_auto["eta"]) < 1e-9
     # every rung is also reported on the reduced form's scale, through the same map
@@ -358,11 +364,14 @@ def gate_untargeted():
                           "delta_over_gamma"] - lin["delta_over_gamma"]) < 1e-12
     assert ladder.loc["DATA delta/gamma (Table 3)", "delta_over_gamma"] == \
         NS["EMPIRICAL_DELTA_OVER_GAMMA"]["auto"]["estimate"]
-    # the within-supplier rung must exist and differ from the cross-supplier one: the gap
-    # between them IS the composition channel the comparison hinges on
-    assert "PPML, supplier FE (within-supplier)" in ladder.index
-    assert abs(ladder.loc["PPML, supplier FE (within-supplier)", "eta"]
-               - ladder.loc[head, "eta"]) > 1e-6
+    # the one-way rungs must exist and differ from the baseline: the gap to the
+    # sector x buyer-region rung IS the market-access channel the comparison hinges on
+    for rung in ("   ... dropping the supplier FE", "   ... dropping the buyer-region FE"):
+        assert rung in ladder.index
+        assert abs(ladder.loc[rung, "eta"] - ladder.loc[head, "eta"]) > 1e-6
+    # the multi-variety rung is estimated on the pooled panel, so on fewer observations
+    assert (ladder.loc["PPML, multi-variety firms (baseline FE)", "n_obs"]
+            < ladder.loc[head, "n_obs"])
     # every rung is on the reduced-form scale except -theta*alpha, which needs
     # best_params (absent from this synthetic panel) and is reported as missing
     assert np.isfinite(ladder["delta_over_gamma"]
