@@ -311,8 +311,10 @@ def gate_untargeted():
     summ = NS["untargeted_summary"]([res_auto, res_aero])
     print("\n", summ.to_string())
     assert "delta/gamma (data)" in summ.columns and summ["eta (model)"].notna().all()
-    assert len(summ) == 2 * len(NS["UNTARGETED_FE_SPECS"])
-    assert list(summ.index.names) == ["industry", "fixed effect"]
+    # ONE row per industry: the section reports one specification, and the fixed effect it
+    # was run under is a column rather than a second index level
+    assert len(summ) == 2 and list(summ.index.names) == ["industry"]
+    assert set(summ["fixed effect"]) == {NS["BASELINE_FE_LABEL"]}
 
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
@@ -621,6 +623,9 @@ def gate_comparative_advantage():
     caf = NS["comparative_advantage_frame"](data)
     assert caf["area"].str.startswith("Zone").all(), caf["area"].unique()[:3]
     assert set(caf["area_code"]) <= set(data["aa_names"])
+    # Test 1 is read in base-10: one unit on its axis is an order of magnitude of T, and
+    # (being scale-free) 1/(theta*alpha) decades of distance
+    assert np.allclose(caf["log10_T_dev"], caf["log_T_dev"] / np.log(10.0))
     assert (summ["top_area"].astype(str).str.startswith("Zone")).all()
     print("sector-indexed output is in A129-code order; areas carry region names")
 
