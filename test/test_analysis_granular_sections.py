@@ -364,14 +364,13 @@ def gate_untargeted():
                           "delta_over_gamma"] - lin["delta_over_gamma"]) < 1e-12
     assert ladder.loc["DATA delta/gamma (Table 3)", "delta_over_gamma"] == \
         NS["EMPIRICAL_DELTA_OVER_GAMMA"]["auto"]["estimate"]
-    # the one-way rungs must exist and differ from the baseline: the gap to the
-    # sector x buyer-region rung IS the market-access channel the comparison hinges on
-    for rung in ("   ... dropping the supplier FE", "   ... dropping the buyer-region FE"):
-        assert rung in ladder.index
-        assert abs(ladder.loc[rung, "eta"] - ladder.loc[head, "eta"]) > 1e-6
+    # ONE specification is reported: no rung may be estimated at another fixed effect,
+    # which would measure a different object under the same heading
+    assert not any("dropping" in ix for ix in ladder.index), list(ladder.index)
     # the multi-variety rung is estimated on the pooled panel, so on fewer observations
     assert (ladder.loc["PPML, multi-variety firms (baseline FE)", "n_obs"]
             < ladder.loc[head, "n_obs"])
+    assert "-theta * alpha (trade-cost elasticity)" in ladder.index
     # every rung is on the reduced-form scale except -theta*alpha, which needs
     # best_params (absent from this synthetic panel) and is reported as missing
     assert np.isfinite(ladder["delta_over_gamma"]
@@ -379,6 +378,23 @@ def gate_untargeted():
     NS["plot_untargeted_ladder"](ladder, "auto", save_to=str(out / "ladder.png"))
     NS["plot_untargeted_ladder"](ladder, "auto", scale="eta")
     print("specification ladder: every rung computed and the reported eta reproduced")
+
+    # theta*alpha is read off the RUN's own best_params, not carried in the markdown:
+    # layout [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA))]
+    S_t, R_t, n_AA_t, alpha_t = 3, 4, 5, 0.37
+    aa_active = np.zeros((S_t, n_AA_t), dtype=bool)
+    aa_active[:, :2] = True
+    bp = np.concatenate([[0.1], np.full(S_t, 0.2), np.full(R_t, 0.3), [alpha_t],
+                         np.full(int(aa_active.sum()), 1.0)])
+    d_ta = {"best_params": bp, "S": S_t, "n_tau": 1, "aa_names": ["a"] * R_t,
+            "AA_ACTIVE": aa_active, "coefs": None, "folder": ".", "step_dir": "step1"}
+    assert abs(NS["theta_alpha"](d_ta) - NS["THETA_DEFAULT"] * alpha_t) < 1e-12
+    try:                                   # a flag mismatch must be an error, not a number
+        NS["theta_alpha"](dict(d_ta, best_params=bp[:-1]))
+        raise AssertionError("theta_alpha accepted a mis-sized best_params")
+    except ValueError as e:
+        print("expected on a mis-sized best_params:", str(e)[:70], "...")
+    print("theta*alpha: read off best_params by the raw layout")
 
     # controls path
     NS["estimate_untargeted_moment"](data, panel=panel, controls=("log_productivity",))
