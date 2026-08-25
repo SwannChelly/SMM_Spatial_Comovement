@@ -296,13 +296,22 @@ def gate_untargeted():
                - (panel["a_ir"] > 0).sum() / panel["SIREN"].nunique()) < 1e-9
     md = NS["margin_decomposition"]([dec, dict(dec, industry="aero")])
     assert list(md.index) == ["Motor Vehicles", "Aerospace"]
-    # the three pieces are a partition of the bracket, by construction
-    parts = ["extensive E(Lambda)", "price (1-nu_s)/theta", "composition (residual)"]
+    # the granular derivation's pieces: the two structural ones plus what the
+    # cross-section adds must partition the bracket, and the substitution piece must be
+    # the ESTIMATED intensive coefficient times the MEASURED openness, not a residual
+    parts = ["extensive E(Lambda)", "substitution (nu_s-1)/theta x E(1-a)",
+             "granular selection"]
     assert set(parts) <= set(md.columns), md.columns
     tot = md["bracket |eta|/(theta*alpha)"]
     if np.isfinite(dec["theta_alpha"]):
         assert abs(tot.iloc[0] - abs(dec["eta"]) / dec["theta_alpha"]) < 1e-12
         assert np.allclose(md[parts].sum(axis=1), tot)
+        assert np.allclose(md["substitution (nu_s-1)/theta x E(1-a)"],
+                           abs(dec["eta_int"]) / dec["theta_alpha"]
+                           * facts["openness_weighted"])
+        assert np.allclose(md["structural total"],
+                           md["extensive E(Lambda)"]
+                           + md["substitution (nu_s-1)/theta x E(1-a)"])
     NS["plot_margin_decomposition"](md, save_to=str(TMP / "figs" / "margins.png"))
     print("margins net of theta*alpha: normalised, and checked against the panel's facts")
 
@@ -344,14 +353,9 @@ def gate_untargeted():
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_untargeted_moment"]([res_auto, res_aero], save_to=str(out / "untargeted.png"))
-    NS["plot_a_ir_profile"]([res_auto, res_aero], save_to=str(out / "profile.png"))
-    labels, b, se, raw = NS["a_ir_bin_profile"](panel, (0, 50, 100, 150, 200, 300, np.inf))
-    assert b[0] == 0.0 and se[0] == 0.0 and abs(raw[0]) < 1e-12   # nearest bin = reference
-    assert len(labels) == len(b) == len(raw)
-    assert np.isfinite(b[1:]).all()
-    # the fixed effect must actually change the profile: absorbed != unconditional
-    assert np.nanmax(np.abs(b - raw)) > 1e-6
-    print("bin profile: reference bin normalised, FE-absorbed profile differs from the raw one")
+    # the a_ir distance profile is gone: the section reports one number per rung, and a
+    # bin-dummy figure of the same regression was one picture too many
+    assert "plot_a_ir_profile" not in NS and "a_ir_bin_profile" not in NS
 
     # ---------------------------------------------------------------------------
     # 3. The specification ladder: is the gap with the reduced form a specification
@@ -421,6 +425,73 @@ def gate_untargeted():
 
     # controls path
     NS["estimate_untargeted_moment"](data, panel=panel, controls=("log_productivity",))
+
+    # ---------------------------------------------------------------------------
+    # 4. The granular derivation (appendix, "Untargeted moment: the granular case"),
+    #    gated on an economy built the way the model builds one: Frechet draws, the
+    #    lowest-cost origin takes the whole variety, CES demand within the sector. The
+    #    derivation makes three claims, and none of them is a matter of taste.
+    # ---------------------------------------------------------------------------
+    rg = np.random.default_rng(11)
+    Rc, Rb, Nv, th, al, nus = 12, 10, 300, 1.0, 0.4, 1.5
+    xy = rg.uniform(0, 300, (Rc, 2))
+    Dg = np.maximum(np.sqrt(((xy[:, None, :] - xy[None, :Rb, :]) ** 2).sum(-1)), 1.0)
+    Tc = rg.lognormal(0, 0.8, Rc)
+    Yb = rg.lognormal(0, 0.8, Rb)
+    taug = Dg ** al
+    zg = (Tc[:, None] / rg.exponential(1.0, (Rc, Nv))) ** (1 / th)
+    costs = taug[:, None, :] / zg[:, :, None]                      # (Rc, Nv, Rb)
+    wing = costs.argmin(axis=0)
+    pmin = costs.min(axis=0)
+    Pb = (pmin ** (1 - nus)).sum(axis=0) ** (1 / (1 - nus))
+    Xg = (pmin / Pb) ** (1 - nus) * Yb                             # (Nv, Rb)
+
+    recs = [(f"{wing[v, r]}-{v}", wing[v, r], r, Xg[v, r])
+            for v in range(Nv) for r in range(Rb)]
+    g = pd.DataFrame(recs, columns=["SIREN", "cell", "buyer", "X"])
+    tot_i = g.groupby("SIREN")["X"].sum()
+    fm = g.drop_duplicates("SIREN")[["SIREN", "cell"]]
+    gp = fm.merge(pd.DataFrame({"buyer": range(Rb)}), how="cross").merge(
+        g[["SIREN", "buyer", "X"]], on=["SIREN", "buyer"], how="left")
+    gp["X"] = gp["X"].fillna(0.0)
+    gp["a_ir"] = gp["X"] / gp["SIREN"].map(tot_i)
+    gp["log_distance"] = np.log(Dg[gp["cell"].to_numpy(), gp["buyer"].to_numpy()])
+    gp["served"] = (gp["a_ir"] > 0).astype(float)
+    gp["fe_group"] = gp["buyer"].astype(str)
+    gp["cluster"] = gp["cell"].astype(str)
+    gp["sample_weight"] = 1.0
+
+    b_tot = float(NS["fepois_fit"](gp, "a_ir", fe=NS["BASELINE_FE"],
+                                   cluster=None).coef()["log_distance"])
+    b_ext = float(NS["fepois_fit"](gp, "served", fe=NS["BASELINE_FE"],
+                                   cluster=None).coef()["log_distance"])
+    b_int = float(NS["fepois_fit"](gp[gp["a_ir"] > 0], "a_ir", fe=NS["BASELINE_FE"],
+                                   cluster=None).coef()["log_distance"])
+    print(f"\ngranular economy: theta*alpha = {th * al:.3f}, (1-nu_s)*alpha = "
+          f"{(1 - nus) * al:.3f}")
+    print(f"  total {b_tot:+.4f} (net {b_tot / (th * al):+.2f})   "
+          f"ext {b_ext:+.4f} (net {b_ext / (th * al):+.2f})   "
+          f"int {b_int:+.4f} (net {b_int / (th * al):+.2f})")
+    # (a) conditional on winning, the share responds at the CES elasticity, EXACTLY: the
+    #     supplier effect holds c/z and the portfolio total fixed, the buyer effect holds
+    #     P_sr fixed, so log a is linear in log d with slope (1 - nu_s) alpha
+    assert abs(b_int - (1 - nus) * al) < 1e-6, (b_int, (1 - nus) * al)
+    # (b) E(Lambda | win) = 1 - gamma, so the extensive margin is the trade elasticity
+    assert abs(b_ext / (th * al) + 1.0) < 0.25, b_ext / (th * al)
+    # (c) the cross-sectional total is steeper than the structural comparative static,
+    #     and pooling the varieties of a cell removes the gap by removing the selection
+    gp2 = gp.assign(SIREN=gp["cell"].astype(str))
+    gp2 = gp2.groupby(["SIREN", "buyer", "log_distance", "fe_group", "cluster"],
+                      as_index=False)["X"].sum()
+    gp2["a_ir"] = gp2["X"] / gp2["SIREN"].map(gp2.groupby("SIREN")["X"].sum())
+    gp2["served"] = (gp2["a_ir"] > 0).astype(float)
+    gp2["sample_weight"] = 1.0
+    p_ext = float(NS["fepois_fit"](gp2, "served", fe=NS["BASELINE_FE"],
+                                   cluster=None).coef()["log_distance"])
+    assert abs(b_tot) > abs(b_ext + b_int) + 1e-3, (b_tot, b_ext + b_int)
+    assert abs(p_ext) < abs(b_ext), (p_ext, b_ext)        # pooled cells serve everyone
+    print("  granular derivation: intensive == (1-nu_s)alpha exactly, extensive ~ "
+          "-theta*alpha, and pooling kills the extensive margin")
 
     # a missing artefact must say what is missing
     try:

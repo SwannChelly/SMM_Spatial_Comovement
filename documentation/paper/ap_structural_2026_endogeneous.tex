@@ -639,6 +639,74 @@ $$
 The term $1-a_r^D$ capture the fact that when we increase the distance between a supplier and a downstream region, sales toward this region will be reduced thus increasing the importance of other downstream regions in the portfolio of the supplier. When the distance increases, the probability to serve downstream region $r$ decreases and therefore further reducing the comovement with this region. This is what $\Lambda$ captures.
 
 
+\paragraph{Untargeted moment: the granular case}\label{apsec:untargeted_granular}
+
+The derivation above is written for the continuum, where a ``supplier'' is a
+(region, sector) cell whose sourcing share $\gamma_{r'rs}$ carries the trade elasticity
+$\theta$. Under the granular specification a supplier is one \emph{variety} producer, and
+the substitution pattern enters the moment through a different parameter. Let sector $s$
+have $N_s$ varieties. For each variety $\omega$ and each downstream region $r$ the
+lowest-cost origin wins the whole variety, and the winner prices at
+$p = c_{r'}\tau_{r'r}/z$, so its sales to $r$ are
+\begin{equation*}
+X_{i\to r} \;=\; \mathbf{1}\{i \text{ wins } \omega \text{ in } r\}\;
+\Omega^s(1-\Omega^L)\Big(\tfrac{p}{P_{sr}}\Big)^{1-\nu_s}
+\Big(\tfrac{P_{sr}}{P_{r}}\Big)^{1-\nu}\Big(\tfrac{P_{r}}{c_{r}}\Big)^{1-\lambda}\mu Y_r ,
+\qquad a_{ir}=\frac{X_{i\to r}}{\sum_{r''}X_{i\to r''}} .
+\end{equation*}
+
+\emph{The extensive margin is the trade elasticity.} With Fr\'echet draws, the surprisal
+$\Lambda_{r'rs}(z)=\Phi_{-r'}(c_{r'}\tau_{r'r}/z)^{\theta}$ is exponentially distributed
+across draws with rate $k = T_{r'}(c_{r'}\tau_{r'r})^{-\theta}/\Phi_{-r'}$, where
+$\Phi_{-r'}$ excludes the origin's own term. Hence
+$\mathbb{P}(\text{win})=\mathbb{E}(e^{-\Lambda})=k/(1+k)=\gamma_{r'rs}$ and
+\begin{equation}
+\mathbb{E}\big(\Lambda \mid i \text{ wins}\big)
+=\frac{\mathbb{E}(\Lambda e^{-\Lambda})}{\mathbb{E}(e^{-\Lambda})}
+=\frac{1}{1+k}=1-\gamma_{r'rs},
+\label{eq:lambda_win}
+\end{equation}
+so among realised suppliers the extensive term is
+$-\theta\frac{d\ln\tau}{d\ln d}(1-\gamma_{r'rs})$: exactly the elasticity of the
+continuum sourcing share. Granularity does not change the extensive margin.
+
+\emph{The substitution pattern does change.} Conditional on winning, the variety is not
+reallocated across origins --- only its \emph{volume} responds, at the within-sector CES
+elasticity:
+\begin{equation*}
+\frac{d\ln X_{i\to r}}{d\ln d}\Big|_{\text{win}} = (1-\nu_s)\frac{d\ln\tau_{r'r}}{d\ln d},
+\qquad\text{hence}\qquad
+\frac{d\ln a_{ir}}{d\ln d}\Big|_{\text{win}} = (1-\nu_s)\frac{d\ln\tau_{r'r}}{d\ln d}\,(1-a_{ir}),
+\end{equation*}
+the $(1-a)$ portfolio term multiplying $(\nu_s-1)$ rather than $\theta$. Collecting the two
+margins,
+\begin{equation}
+\frac{\delta}{\gamma}\;\simeq\;-\,\mathbb{E}\Big(\frac{d\ln\tau}{d\ln d}\Big)\times
+\frac{\mathbb{E}\Big(\frac{\rho}{\tilde\rho}a_r^D\big[\theta\Lambda+(\nu_s-1)(1-a_r^D)\big]\Big)}
+{\mathbb{E}\Big(\frac{\rho}{\tilde\rho}a_r^D \mid d=1\Big)} .
+\label{eq:dg_granular}
+\end{equation}
+The continuum expression is the special case in which the two terms share the same
+coefficient $\theta$: there, moving a cell away from $r$ reallocates \emph{varieties} as
+well as volumes, and variety reallocation is what carries $\theta$. At the variety level
+that channel is already inside $\Lambda$, and what is left is pure CES substitution. With
+the calibration used here ($\theta=1$, $\nu_s=1.5$) the granular substitution term is half
+the continuum one, $(\nu_s-1)/\theta = 0.5$.
+
+\emph{Two consequences for the estimated counterpart.} First, a regression of $a_{ir}$ on
+$\log d$ that absorbs a supplier fixed effect holds the portfolio total
+$\sum_{r''}X_{i\to r''}$ fixed, so on served cells it recovers $(1-\nu_s)\alpha$ and
+\emph{not} $(1-\nu_s)\alpha(1-a_{ir})$: the portfolio term has to be reintroduced by
+multiplying that coefficient by the measured $\mathbb{E}(1-a)$, which is an observable of
+the simulated economy. Second, \eqref{eq:dg_granular} is a comparative static for one
+supplier--buyer pair, whereas $\delta/\gamma$ is estimated on a cross-section in which
+distant pairs are observed only when the draw and the local competition were favourable.
+That pair-level selection is absorbed by neither a supplier nor a buyer fixed effect, and
+it is specific to the granular economy: pooling the varieties of a cell into a single
+multi-variety firm drives the extensive margin to zero and returns the cross-sectional
+slope to the continuum value $-\theta\alpha$.
+
+
 \subsection{EV eco-score reform: shock construction}\label{app:ev_ecoscore}
  
 This appendix describes the construction of the region-specific downstream demand shocks used in Section~4.3, based on the estimates of \cite{MalgouyresMayerNolden2025}.
