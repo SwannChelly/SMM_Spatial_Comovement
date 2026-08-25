@@ -283,6 +283,25 @@ def gate_untargeted():
     assert dec["table"].loc[2, "n_obs"] < dec["table"].loc[0, "n_obs"]   # positives only
     print("decomposition: extensive margin negative, identity closes to", round(dec["gap"], 4))
 
+    # the margins net of theta*alpha: the identity must hold on the normalised numbers
+    # too, and the panel's own facts must be the objects they are compared with
+    d_ta = dict(data, best_params=None)
+    facts = NS["panel_margin_facts"](panel)
+    assert 0.0 <= facts["serving_rate"] <= 1.0
+    assert abs(facts["serving_rate"] + facts["share_zero"] - 1.0) < 1e-12
+    assert 0.0 <= facts["openness_weighted"] <= 1.0
+    # the share-weighted openness is the SMALLER one: large shares carry large weight
+    assert facts["openness_weighted"] <= facts["openness_served"] + 1e-12
+    assert abs(facts["buyers_per_supplier"]
+               - (panel["a_ir"] > 0).sum() / panel["SIREN"].nunique()) < 1e-9
+    md = NS["margin_decomposition"]([dec, dict(dec, industry="aero")])
+    assert list(md.index) == ["Motor Vehicles", "Aerospace"]
+    if np.isfinite(dec["theta_alpha"]):
+        assert abs(md.loc["Motor Vehicles", "bracket |eta|/(theta*alpha)"]
+                   - abs(dec["eta"]) / dec["theta_alpha"]) < 1e-12
+    NS["plot_margin_decomposition"](md, save_to=str(TMP / "figs" / "margins.png"))
+    print("margins net of theta*alpha: normalised, and checked against the panel's facts")
+
     # the served indicator the extensive-margin regression runs on
     assert set(np.unique(panel["served"])) <= {0.0, 1.0}
     assert np.allclose(panel["served"].to_numpy(), (panel["a_ir"] > 0).astype(float))
@@ -310,7 +329,9 @@ def gate_untargeted():
 
     summ = NS["untargeted_summary"]([res_auto, res_aero])
     print("\n", summ.to_string())
-    assert "delta/gamma (data)" in summ.columns and summ["eta (model)"].notna().all()
+    assert "delta/gamma (data)" in summ.columns and summ["delta/gamma (model)"].notna().all()
+    # the paper reads one scale: no elasticity column anywhere in the table
+    assert "eta (model)" not in summ.columns and "se" not in summ.columns
     # ONE row per industry: the section reports one specification, and the fixed effect it
     # was run under is a column rather than a second index level
     assert len(summ) == 2 and list(summ.index.names) == ["industry"]
@@ -319,7 +340,6 @@ def gate_untargeted():
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_untargeted_moment"]([res_auto, res_aero], save_to=str(out / "untargeted.png"))
-    NS["plot_untargeted_moment"]([res_auto, res_aero], scale="eta")
     NS["plot_a_ir_profile"]([res_auto, res_aero], save_to=str(out / "profile.png"))
     labels, b, se, raw = NS["a_ir_bin_profile"](panel, (0, 50, 100, 150, 200, 300, np.inf))
     assert b[0] == 0.0 and se[0] == 0.0 and abs(raw[0]) < 1e-12   # nearest bin = reference
@@ -356,30 +376,27 @@ def gate_untargeted():
     print("multi-variety pooling: fewer suppliers, shares still sum to one, denser grid")
 
     ladder = NS["untargeted_specification_ladder"](data, panel=panel)
-    head = "PPML, supplier + buyer-region FE (baseline eta)"
-    assert head in ladder.index
-    assert abs(ladder.loc[head, "eta"] - res_auto["eta"]) < 1e-9
-    # every rung is also reported on the reduced form's scale, through the same map
-    assert abs(ladder.loc[head, "delta_over_gamma"]
+    # exactly the five rows the paper shows, and nothing else — in particular no
+    # elasticity column: only the delta/gamma reading is comparable to Table 3
+    assert list(ladder.index) == ["Baseline eta", "Intensive margin", "Extensive margin",
+                                  "Multi-variety firms",
+                                  "Empirical delta/gamma (Table 3)"], list(ladder.index)
+    assert "eta" not in ladder.columns and "se" not in ladder.columns
+    assert abs(ladder.loc["Baseline eta", "delta/gamma"]
                - NS["delta_over_gamma_from_eta"](res_auto["eta"])) < 1e-12
-    assert abs(ladder.loc["Level-linear on the simulated panel, delta/gamma",
-                          "delta_over_gamma"] - lin["delta_over_gamma"]) < 1e-12
-    assert ladder.loc["DATA delta/gamma (Table 3)", "delta_over_gamma"] == \
+    assert ladder.loc["Empirical delta/gamma (Table 3)", "delta/gamma"] == \
         NS["EMPIRICAL_DELTA_OVER_GAMMA"]["auto"]["estimate"]
-    # ONE specification is reported: no rung may be estimated at another fixed effect,
-    # which would measure a different object under the same heading
-    assert not any("dropping" in ix for ix in ladder.index), list(ladder.index)
+    # the level-linear cross-check is kept as an attribute, not as a rung
+    assert abs(ladder.attrs["delta_over_gamma"] - lin["delta_over_gamma"]) < 1e-12
     # the multi-variety rung is estimated on the pooled panel, so on fewer observations
-    assert (ladder.loc["PPML, multi-variety firms (baseline FE)", "n_obs"]
-            < ladder.loc[head, "n_obs"])
-    assert "-theta * alpha (trade-cost elasticity)" in ladder.index
-    # every rung is on the reduced-form scale except -theta*alpha, which needs
-    # best_params (absent from this synthetic panel) and is reported as missing
-    assert np.isfinite(ladder["delta_over_gamma"]
-                       .drop("-theta * alpha (trade-cost elasticity)")).all()
+    assert (ladder.loc["Multi-variety firms", "n_obs"]
+            < ladder.loc["Baseline eta", "n_obs"])
+    # every interval is on the delta/gamma scale and brackets its point estimate
+    assert (ladder["ci_lo"] <= ladder["delta/gamma"]).all()
+    assert (ladder["delta/gamma"] <= ladder["ci_hi"]).all()
+    assert np.isfinite(ladder["delta/gamma"]).all()
     NS["plot_untargeted_ladder"](ladder, "auto", save_to=str(out / "ladder.png"))
-    NS["plot_untargeted_ladder"](ladder, "auto", scale="eta")
-    print("specification ladder: every rung computed and the reported eta reproduced")
+    print("specification ladder: five rows, delta/gamma only, baseline reproduced")
 
     # theta*alpha is read off the RUN's own best_params, not carried in the markdown:
     # layout [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA))]
