@@ -71,6 +71,7 @@ def notebook_namespace():
             continue
         exec(compile(src, f"<notebook cell {i}>", "exec"), ns)
     for name, value in (("THETA_DEFAULT", 1.768),      # normally set by the skipped
+                        ("NU_S_DEFAULT", 1.5),
                         ("EMPIRICAL_MEAN_LOG_D", 5.8)):  # Constants cell
         ns.setdefault(name, value)
     return ns
@@ -271,51 +272,84 @@ def gate_untargeted():
     assert res_auto["eta"] < 0, res_auto["eta"]
     print(f"planted eta = {ETA_PLANT} (plus the extensive margin, so |eta| should exceed it)")
 
-    # the decomposition: the extensive margin must be negative (a more distant supplier
-    # is less likely to serve at all) and the identity must close to within the
-    # fixed-effect wedge it is documented to carry
-    dec = NS["decompose_untargeted_moment"](data, panel=panel)
-    tab = dec["table"].set_index("channel")["coefficient"]
-    # the identity decomposes the REPORTED number: same fixed effect as the baseline
-    assert abs(dec["table"].loc[0, "coefficient"] - res_auto["eta"]) < 1e-9
-    assert tab.iloc[1] < 0, tab
-    assert abs(dec["gap"]) < 0.25, dec["gap"]
-    assert dec["table"].loc[2, "n_obs"] < dec["table"].loc[0, "n_obs"]   # positives only
-    print("decomposition: extensive margin negative, identity closes to", round(dec["gap"], 4))
+    # ---------------------------------------------------------------------------
+    #    The STRUCTURAL moment: Lambda, the closed-form margins, and the gap. These
+    #    replace the estimated decomposition, so what is gated is the arithmetic of
+    #    `attach_lambda` (against a direct loop) and the shares (against their formula).
+    # ---------------------------------------------------------------------------
+    S_l, R_l = 2, 6
+    aa_of_ze = np.array([0, 0, 1, 1, 2, 2])
+    T_aa = np.array([[1.0, 0.4, 0.25], [0.7, 1.3, 0.9]])
+    cell_mask = np.ones((S_l, R_l), dtype=bool)
+    cell_mask[1, 5] = False                                # one cell out of the economy
+    coords_l = rng.uniform(0, 200, (R_l, 2))
+    D_l = np.sqrt(((coords_l[:, None, :] - coords_l[None, :, :]) ** 2).sum(-1))
+    np.fill_diagonal(D_l, 0.0)
+    inp_l = TMP / "synthinput_lam"
+    inp_l.mkdir(exist_ok=True)
+    np.save(inp_l / "distances.npy", D_l)
+    al_l, th_l, R_d_l = 0.35, 1.4, 3
+    n_T = int(np.ones((S_l, 3), dtype=bool).sum())
+    bp_l = np.concatenate([[0.1], np.full(S_l, 0.2), np.full(R_d_l, 0.3), [al_l],
+                           T_aa.ravel()])
+    data_l = {"industry": "auto", "mu": 1, "S": S_l, "R": R_l, "n_AA": 3, "n_tau": 1,
+              "step_dir": "step1", "folder": TMP, "input_folder": inp_l,
+              "aa_names": ["a", "b", "c"], "aa_of_ze": aa_of_ze,
+              "AA_ACTIVE": np.ones((S_l, 3), dtype=bool), "CELL_MASK": cell_mask,
+              "T_REF_AA": np.array([0, 0]), "best_params": bp_l,
+              "coefs": pd.DataFrame({"stat": ["theta"], "value": [th_l]}),
+              "sector_names": ["s0", "s1"]}
 
-    # the margins net of theta*alpha: the identity must hold on the normalised numbers
-    # too, and the panel's own facts must be the objects they are compared with
-    d_ta = dict(data, best_params=None)
-    facts = NS["panel_margin_facts"](panel)
-    assert 0.0 <= facts["serving_rate"] <= 1.0
-    assert abs(facts["serving_rate"] + facts["share_zero"] - 1.0) < 1e-12
-    assert 0.0 <= facts["openness_weighted"] <= 1.0
-    # the share-weighted openness is the SMALLER one: large shares carry large weight
-    assert facts["openness_weighted"] <= facts["openness_served"] + 1e-12
-    assert abs(facts["buyers_per_supplier"]
-               - (panel["a_ir"] > 0).sum() / panel["SIREN"].nunique()) < 1e-9
-    md = NS["margin_decomposition"]([dec, dict(dec, industry="aero")])
-    assert list(md.index) == ["Motor Vehicles", "Aerospace"]
-    # the granular derivation's pieces: the two structural ones plus what the
-    # cross-section adds must partition the bracket, and the substitution piece must be
-    # the ESTIMATED intensive coefficient times the MEASURED openness, not a residual
-    parts = ["extensive E(Lambda)", "substitution (nu_s-1)/theta x E(1-a)",
-             "granular selection"]
-    assert set(parts) <= set(md.columns), md.columns
-    tot = md["bracket |eta|/(theta*alpha)"]
-    if np.isfinite(dec["theta_alpha"]):
-        assert abs(tot.iloc[0] - abs(dec["eta"]) / dec["theta_alpha"]) < 1e-12
-        assert np.allclose(md[parts].sum(axis=1), tot)
-        assert np.allclose(md["substitution (nu_s-1)/theta x E(1-a)"],
-                           abs(dec["eta_int"]) / dec["theta_alpha"]
-                           * facts["openness_weighted"])
-        assert np.allclose(md["structural total"],
-                           md["extensive E(Lambda)"]
-                           + md["substitution (nu_s-1)/theta x E(1-a)"])
-    NS["plot_margin_decomposition"](md, save_to=str(TMP / "figs" / "margins.png"))
-    print("margins net of theta*alpha: normalised, and checked against the panel's facts")
+    rows_l = []
+    for i_f, (cell, sec) in enumerate([(0, 1), (2, 1), (3, 2), (4, 2), (1, 1)]):
+        for b in range(1, R_d_l + 1):
+            rows_l.append({"SIREN": f"f{i_f}", "A129": sec, "ze2010": cell + 1,
+                           "ze2010_downstream": b, "share": 1.0 + 0.1 * b,
+                           "downstream_purchase": 1.0, "productivity": 0.5 + 0.3 * i_f,
+                           "sample_weight": 1.0, "intermediate_derivative": 0.0})
+    data_l["suppliers"] = pd.DataFrame(rows_l)
+    data_l["suppliers_path"] = "synthetic"
+    pan_l = NS["build_a_ir_panel"](data_l)
+    pan_l = NS["attach_lambda"](data_l, pan_l)
 
-    # the served indicator the extensive-margin regression runs on
+    # Lambda against a direct loop over the definition. T enters REF-NORMALISED, exactly
+    # as `unpack_params` normalises it inside the model — T is identified only up to a
+    # per-sector scale, and Lambda inherits that normalisation.
+    T_norm = T_aa / T_aa[:, data_l["T_REF_AA"]][np.arange(S_l), np.arange(S_l)][:, None]
+    Tze = T_norm[:, aa_of_ze]
+    dfl = np.maximum(D_l, 1.0)
+    ok = True
+    for k in range(0, len(pan_l), 3):
+        row = pan_l.iloc[k]
+        sx, ox, bx = int(row["A129"]) - 1, int(row["ze2010"]) - 1, \
+            int(row["ze2010_downstream"]) - 1
+        phi = sum(Tze[sx, l] * (dfl[l, bx] ** al_l) ** (-th_l)
+                  for l in range(R_l) if cell_mask[sx, l] and l != ox)
+        lam = phi * (dfl[ox, bx] ** al_l) ** th_l * row["productivity"] ** (-th_l)
+        ok &= abs(lam - row["lambda_ir"]) < 1e-10 * max(1.0, abs(lam))
+    assert ok, "attach_lambda disagrees with a direct loop over its own definition"
+    print("attach_lambda: Lambda matches a direct loop over (T, w tau, Phi_{-r'})")
+
+    # an aggregated panel has no pair-level draw, so it must be refused
+    try:
+        NS["attach_lambda"](data_l, NS["build_a_ir_panel"](data_l,
+                                                           firm_key=("ze2010", "A129")))
+        raise AssertionError("attach_lambda accepted a pooled panel")
+    except ValueError as e:
+        print("expected on a pooled panel:", str(e)[:70], "...")
+
+    # the shares are the formula, exactly: no identity to fail
+    sres_l = NS["structural_eta"](data_l, pan_l, verbose=False)
+    nu_l = NS["model_nu_s"](data_l)
+    num = th_l * sres_l["E_lambda"]
+    den = num + (nu_l - 1.0) * sres_l["E_open"]
+    assert abs(sres_l["share_ext"] - num / den) < 1e-12
+    assert abs(sres_l["share_ext"] + sres_l["share_int"] - 1.0) < 1e-12
+    assert abs(sres_l["eta_struct"] - (sres_l["eta_struct_ext"]
+                                       + sres_l["eta_struct_int"])) < 1e-12
+    print("structural_eta: the two shares are the closed form and sum to one exactly")
+
+    # the served indicator the extensive-margin regression runs on    # the served indicator the extensive-margin regression runs on
     assert set(np.unique(panel["served"])) <= {0.0, 1.0}
     assert np.allclose(panel["served"].to_numpy(), (panel["a_ir"] > 0).astype(float))
 
@@ -323,18 +357,15 @@ def gate_untargeted():
     data2 = dict(data, industry="aero")
     res_aero = NS["estimate_untargeted_moment"](data2, panel=panel)
 
-    # the estimated fixed-effect specifications, and the map onto the reduced form's scale
-    assert set(res_auto["specs"]) == set(NS["UNTARGETED_FE_SPECS"])
-    # the baseline is the two-way effect: the reduced form's own design, and the variation
-    # the appendix's derivative is taken along
-    assert NS["UNTARGETED_FE_SPECS"][NS["BASELINE_FE_LABEL"]] == NS["BASELINE_FE"]
+    # ONE specification, and it is the two-way effect: the reduced form's own design, and
+    # the variation the appendix's derivative is taken along. The result is flat — there is
+    # no `specs` dict any more, because there is nothing to choose between.
     assert set(NS["BASELINE_FE"].split(" + ")) == {"fe_group", "SIREN"}
-    for label, sp in res_auto["specs"].items():
-        assert abs(sp["dg"] - NS["delta_over_gamma_from_eta"](sp["eta"])) < 1e-12
-        # the map is monotone and compressive, and bounded by 1/mean(log d)
-        assert abs(sp["dg"]) < abs(sp["eta"]) + 1e-12
-        assert abs(sp["dg"]) < 1.0 / NS["EMPIRICAL_MEAN_LOG_D"]
-    assert res_auto["eta"] == res_auto["specs"][NS["BASELINE_FE_LABEL"]]["eta"]
+    assert res_auto["fe"] == NS["BASELINE_FE"] and "specs" not in res_auto
+    assert abs(res_auto["dg"] - NS["delta_over_gamma_from_eta"](res_auto["eta"])) < 1e-12
+    # the map is monotone and compressive, and bounded by 1/mean(log d)
+    assert abs(res_auto["dg"]) < abs(res_auto["eta"]) + 1e-12
+    assert abs(res_auto["dg"]) < 1.0 / NS["EMPIRICAL_MEAN_LOG_D"]
     # the round trip through the two maps must return the elasticity it started from
     e = res_auto["eta"]
     assert abs(NS["eta_from_delta_over_gamma"](NS["delta_over_gamma_from_eta"](e)) - e) < 1e-10
@@ -383,25 +414,29 @@ def gate_untargeted():
     assert (firms["a_ir"] > 0).mean() >= (panel["a_ir"] > 0).mean()
     print("multi-variety pooling: fewer suppliers, shares still sum to one, denser grid")
 
-    ladder = NS["untargeted_specification_ladder"](data, panel=panel)
-    # exactly the five rows the paper shows, and nothing else — in particular no
-    # elasticity column: only the delta/gamma reading is comparable to Table 3
-    assert list(ladder.index) == ["Baseline eta", "Intensive margin", "Extensive margin",
-                                  "Multi-variety firms",
+    ladder = NS["untargeted_specification_ladder"](data, panel=panel, structural=sres_l)
+    # exactly the rows the paper shows, and no elasticity column: only the delta/gamma
+    # reading is comparable to Table 3
+    assert list(ladder.index) == ["Baseline eta (PPML)", "Level-linear refit",
+                                  "Multi-variety firms", "Structural eta",
                                   "Empirical delta/gamma (Table 3)"], list(ladder.index)
     assert "eta" not in ladder.columns and "se" not in ladder.columns
-    assert abs(ladder.loc["Baseline eta", "delta/gamma"]
+    assert abs(ladder.loc["Baseline eta (PPML)", "delta/gamma"]
                - NS["delta_over_gamma_from_eta"](res_auto["eta"])) < 1e-12
     assert ladder.loc["Empirical delta/gamma (Table 3)", "delta/gamma"] == \
         NS["EMPIRICAL_DELTA_OVER_GAMMA"]["auto"]["estimate"]
-    # the level-linear cross-check is kept as an attribute, not as a rung
-    assert abs(ladder.attrs["delta_over_gamma"] - lin["delta_over_gamma"]) < 1e-12
+    # the level-linear refit is a RUNG now, since it carries one part of the gap
+    assert abs(ladder.loc["Level-linear refit", "delta/gamma"]
+               - lin["delta_over_gamma"]) < 1e-12
+    # the structural rung is computed, so it has no interval
+    assert not np.isfinite(ladder.loc["Structural eta", "ci_lo"])
     # the multi-variety rung is estimated on the pooled panel, so on fewer observations
     assert (ladder.loc["Multi-variety firms", "n_obs"]
-            < ladder.loc["Baseline eta", "n_obs"])
-    # every interval is on the delta/gamma scale and brackets its point estimate
-    assert (ladder["ci_lo"] <= ladder["delta/gamma"]).all()
-    assert (ladder["delta/gamma"] <= ladder["ci_hi"]).all()
+            < ladder.loc["Baseline eta (PPML)", "n_obs"])
+    # every interval that exists is on the delta/gamma scale and brackets its point
+    iv = ladder[np.isfinite(ladder["ci_lo"])]
+    assert (iv["ci_lo"] <= iv["delta/gamma"]).all()
+    assert (iv["delta/gamma"] <= iv["ci_hi"]).all()
     assert np.isfinite(ladder["delta/gamma"]).all()
     NS["plot_untargeted_ladder"](ladder, "auto", save_to=str(out / "ladder.png"))
     print("specification ladder: five rows, delta/gamma only, baseline reproduced")
@@ -478,6 +513,23 @@ def gate_untargeted():
     assert abs(b_int - (1 - nus) * al) < 1e-6, (b_int, (1 - nus) * al)
     # (b) E(Lambda | win) = 1 - gamma, so the extensive margin is the trade elasticity
     assert abs(b_ext / (th * al) + 1.0) < 0.25, b_ext / (th * al)
+    #     and Lambda is exponential across draws, so E(exp(-Lambda)) is the serving rate.
+    #     Lambda is computable in closed form here because the economy is known.
+    Phi_all = (Tc[:, None] * taug ** (-th)).sum(0)                    # (Rb,)
+    own = Tc[:, None] * taug ** (-th)
+    o_i = gp["cell"].to_numpy()
+    b_i = gp["buyer"].to_numpy()
+    v_i = np.array([int(sr.split("-")[1]) for sr in gp["SIREN"]])
+    lam_g = ((Phi_all[b_i] - own[o_i, b_i]) * taug[o_i, b_i] ** th
+             * zg[o_i, v_i] ** (-th))
+    p_exp = float(np.mean(np.exp(-lam_g)))
+    rate = float(gp["served"].mean())
+    # the panel keeps only varieties that won somewhere, so its serving rate is
+    # conditional on Sup = 1 while E(exp(-Lambda)) is unconditional: the ratio sits below
+    # one by the selection factor, and a ratio at or above one means Lambda is too small
+    print(f"  E(exp(-Lambda)) = {p_exp:.3f} against a serving rate of {rate:.3f} "
+          f"(ratio {p_exp / rate:.2f}, below one by the Sup = 1 conditioning)")
+    assert 0.5 <= p_exp / rate <= 1.05, (p_exp, rate)
     # (c) the cross-sectional total is steeper than the structural comparative static,
     #     and pooling the varieties of a cell removes the gap by removing the selection
     gp2 = gp.assign(SIREN=gp["cell"].astype(str))
