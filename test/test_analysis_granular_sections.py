@@ -296,9 +296,13 @@ def gate_untargeted():
                - (panel["a_ir"] > 0).sum() / panel["SIREN"].nunique()) < 1e-9
     md = NS["margin_decomposition"]([dec, dict(dec, industry="aero")])
     assert list(md.index) == ["Motor Vehicles", "Aerospace"]
+    # the three pieces are a partition of the bracket, by construction
+    parts = ["extensive E(Lambda)", "price (1-nu_s)/theta", "composition (residual)"]
+    assert set(parts) <= set(md.columns), md.columns
+    tot = md["bracket |eta|/(theta*alpha)"]
     if np.isfinite(dec["theta_alpha"]):
-        assert abs(md.loc["Motor Vehicles", "bracket |eta|/(theta*alpha)"]
-                   - abs(dec["eta"]) / dec["theta_alpha"]) < 1e-12
+        assert abs(tot.iloc[0] - abs(dec["eta"]) / dec["theta_alpha"]) < 1e-12
+        assert np.allclose(md[parts].sum(axis=1), tot)
     NS["plot_margin_decomposition"](md, save_to=str(TMP / "figs" / "margins.png"))
     print("margins net of theta*alpha: normalised, and checked against the panel's facts")
 
