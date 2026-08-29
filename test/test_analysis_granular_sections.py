@@ -2,6 +2,7 @@
 Gates for the sections added to `analysis_granular.ipynb`:
   1. Identification / sensitivity  — the variety-count columns and the noise mask,
   2. Untargeted moment             — the PPML distance elasticity of comovement,
+  2b. Untargeted count moment      — G_s(K) beyond the targeted K = 0,
   3. Comparative advantage         — T against distance, within sector,
   4. Amplification                 — D_r and the share of upstream sales within d km,
   5. IO benchmark                  — the TES parser and the Leontief multipliers.
@@ -377,6 +378,245 @@ def gate_untargeted():
     # a missing artefact must say what is missing
     try:
         NS["build_a_ir_panel"](dict(data, suppliers=None))
+    except FileNotFoundError as e:
+        print("\nexpected:", str(e)[:70], "...")
+    else:
+        raise AssertionError("should have raised")
+
+    print("\nALL OK")
+
+def gate_untargeted_counts():
+    """
+    G_s(K) beyond K = 0: the K* selection rule, and the count distribution the model
+    predicts once N_hat has been spent on G_s(0).
+
+    Three risks, all silent. The *selection*: the empirical curve is a step function, so
+    a crossing K can sit on a plateau where the data have no mass, and a moment placed
+    there is a comparison against granularity. The *estimator*: the hypergeometric
+    estimator must be unbiased for Pr(Bin(N,q) <= K) and must collapse at K = 0 onto
+    `gbar_cell`, the estimator the criterion matched block 6 with — otherwise the K = 0
+    column of the model curve is not the fitted moment and nothing above it is
+    comparable either. The *inversion*: the implied variety count must reproduce N_hat
+    when it is asked the K = 0 question, or the N ratio is measuring the solver.
+    """
+    rng = np.random.default_rng(23)
+
+    # ---------------------------------------------------------------------------
+    # 1. The selection rule, on curves built by hand so K* is known by inspection
+    # ---------------------------------------------------------------------------
+    K = np.arange(0, 6)
+    #            K = 0    1     2     3     4     5
+    G = np.array([[0.40, 0.55, 0.72, 0.85, 0.95, 1.00],   # target .70 -> K* = 2
+                  [0.20, 0.20, 0.30, 0.65, 0.90, 1.00],   # target .60 -> K* = 3
+                  [0.50, 0.75, 0.75, 0.90, 0.97, 1.00],   # target .75, but G(1)=G(2):
+                                                          #   crossing at K=1 has mass
+                                                          #   (0.50 -> 0.75) so K* = 1
+                  [0.10, 0.12, 0.15, 0.18, 0.20, 0.22],   # never reaches .55 -> none
+                  [1.00, 1.00, 1.00, 1.00, 1.00, 1.00]])  # degenerate: no non-empty cell
+    names = ["a", "b", "c", "d", "e"]
+    sel = NS["select_untargeted_K"]({"K": K, "G": G}, sector_names=names)
+    print(sel.to_string())
+    assert list(sel["K_star"]) == [2, 3, 1, -1, -1], list(sel["K_star"])
+    assert sel.loc["d", "status"].startswith("not reached")
+    assert sel.loc["e", "status"].startswith("degenerate")
+    # every selected K must clear the halfway threshold AND sit on a step with mass
+    for name in ("a", "b", "c"):
+        s = names.index(name)
+        j = int(sel.loc[name, "K_star"])
+        assert G[s, j] >= sel.loc[name, "target"] - 1e-12
+        assert G[s, j] > G[s, j - 1] + 1e-12
+        assert sel.loc[name, "frac_of_nonempty"] >= 0.5 - 1e-12
+    # a curve whose crossing lands EXACTLY on a plateau must advance to the next rung
+    G_flat = np.array([[0.40, 0.70, 0.70, 0.88, 0.95, 1.00]])   # target .70, G(1)=G(2)
+    sel_flat = NS["select_untargeted_K"]({"K": K, "G": G_flat}, sector_names=["f"],
+                                         verbose=False)
+    assert int(sel_flat["K_star"].iloc[0]) == 1, sel_flat        # K=1 itself has mass
+    G_flat2 = np.array([[0.70, 0.70, 0.70, 0.88, 0.95, 1.00]])   # target .85: K=3
+    sel_flat2 = NS["select_untargeted_K"]({"K": K, "G": G_flat2}, sector_names=["f"],
+                                          verbose=False)
+    assert int(sel_flat2["K_star"].iloc[0]) == 3, sel_flat2
+    print("selection: median of the non-empty mass, never on a plateau, "
+          "truncated and degenerate curves refused")
+
+    # ---------------------------------------------------------------------------
+    # 2. The estimator. At K = 0 it must BE `gbar_cell`, and it must be unbiased for
+    #    Pr(Bin(N,q) <= K) — which is the whole claim the section rests on.
+    # ---------------------------------------------------------------------------
+    def gbar_cell(k, m, n):
+        """model_CP.jl's own combinatorial estimator, transcribed."""
+        if n <= 0:
+            return 1.0
+        if n > m - k:
+            return 0.0
+        from math import lgamma
+        lg = lambda x: lgamma(x + 1)
+        return float(np.exp(lg(m - k) - lg(m - k - n) - lg(m) + lg(m - n)))
+
+    m, N = 60, 9
+    ks = np.arange(0, m + 1)
+    cdf = NS["count_cdf_cells"](ks, m, N, 4)
+    assert cdf.shape == (m + 1, 5)
+    ref0 = np.array([gbar_cell(int(k), m, N) for k in ks])
+    assert np.abs(cdf[:, 0] - ref0).max() < 1e-12, np.abs(cdf[:, 0] - ref0).max()
+    print("K = 0 column reproduces gbar_cell to", f"{np.abs(cdf[:, 0] - ref0).max():.2e}")
+    # a CDF: non-decreasing in K, inside [0, 1]
+    assert (np.diff(cdf, axis=1) >= -1e-12).all()
+    assert (cdf >= -1e-12).all() and (cdf <= 1 + 1e-12).all()
+    # k = 0 (the cell wins nothing) must give probability one at every K
+    assert np.allclose(cdf[0], 1.0)
+
+    # unbiasedness: E_k[estimator] must equal the Binomial CDF at the true q. The
+    # weights are formed in LOG space: an exact C(4000, k) does not fit in a float.
+    def binom_pmf(n, q):
+        kk = np.arange(n + 1)
+        lg = NS["_log_factorials"](n)
+        return np.exp(lg[n] - lg[kk] - lg[n - kk] + kk * np.log(q)
+                      + (n - kk) * np.log1p(-q))
+
+    for q in (0.05, 0.2, 0.5):
+        w = binom_pmf(m, q)
+        got = w @ cdf                                     # E over k ~ Bin(m, q)
+        want = np.cumsum(binom_pmf(N, q)[:5])
+        err = np.abs(got - want).max()
+        print(f"  unbiased at q = {q}: max |E[estimator] - Pr(Bin(N,q) <= K)| = {err:.2e}")
+        assert err < 1e-12, err
+    # the plug-in is biased at this m and must converge to the same thing as m grows
+    q0 = 0.2
+    w0 = binom_pmf(m, q0)
+    want0 = np.cumsum(binom_pmf(N, q0)[:5])
+    plug = NS["count_cdf_cells"](ks, m, N, 4, estimator="plugin")
+    d_small = np.abs((w0 @ plug) - want0).max()
+    m_big = 4000
+    ks_b = np.arange(0, m_big + 1)
+    plug_b = NS["count_cdf_cells"](ks_b, m_big, N, 4, estimator="plugin")
+    d_big = np.abs((binom_pmf(m_big, q0) @ plug_b) - want0).max()
+    print(f"  plug-in bias: {d_small:.2e} at m = {m}, {d_big:.2e} at m = {m_big}")
+    assert d_big < d_small
+    # N > m is undefined for the subset estimator and must say so
+    try:
+        NS["count_cdf_cells"](ks, m, m + 1, 1)
+    except ValueError as e:
+        assert "exceeds the draw count" in str(e)
+    else:
+        raise AssertionError("N > m should have raised")
+
+    # ---------------------------------------------------------------------------
+    # 3. End to end on a synthetic run tree with a PLANTED count distribution
+    # ---------------------------------------------------------------------------
+    S, R, R_d, m = 4, 40, 10, 120
+    folder = TMP / "synthrun_cnt"
+    inp = TMP / "synthinput_cnt"
+    (folder / "step1").mkdir(parents=True, exist_ok=True)
+    inp.mkdir(parents=True, exist_ok=True)
+
+    CELL_MASK = np.zeros((S, R), dtype=bool)
+    for s in range(S):
+        CELL_MASK[s, rng.choice(R, 25, replace=False)] = True
+    N_true = np.array([6, 11, 4, 9])
+    q = np.zeros((S, R))
+    linkages = np.zeros((S, m, R), dtype=bool)
+    for s in range(S):
+        cells = np.flatnonzero(CELL_MASK[s])
+        q[s, cells] = rng.uniform(0.005, 0.25, cells.size)
+        for l in cells:
+            linkages[s, :, l] = rng.random(m) < q[s, l]
+    np.save(folder / "step1" / "suppliers.npy", linkages)
+    k_true = linkages.sum(axis=1)
+
+    # the empirical curve is the model's own, at N_true, so a correct pipeline must come
+    # back with N implied by K* equal to N_hat equal to N_true
+    K_max = 8
+    G_plant = np.full((S, K_max + 1), np.nan)
+    for s in range(S):
+        G_plant[s] = NS["count_cdf_cells"](k_true[s][CELL_MASK[s]], m, int(N_true[s]),
+                                           K_max).mean(axis=0)
+    sectors = ["101", "205", "310", "422"]
+    # N_supplier_s sets the model's own bounds N_LO = ceil(N_obs / R_d) = 2 and
+    # N_HI = 20, which must bracket every planted N_true for the bisection to be free
+    rows = [{"group": s + 1, "A129": sectors[s], "G": G_plant[s, kk], "K": kk,
+             "N_supplier_s": 20} for s in range(S) for kk in range(K_max + 1)]
+    pd.DataFrame(rows).to_csv(inp / "G_K.csv", index=False)
+
+    data = {"industry": "auto", "mu": 1, "S": S, "R": R, "n_AA": R_d,
+            "step_dir": "step1", "folder": folder, "input_folder": inp,
+            "CELL_MASK": CELL_MASK, "sector_names": sectors, "sector_codes": sectors,
+            "granular_diagnostics": {"N_hat": N_true.astype(float),
+                                     "q_hat": (k_true / m)[CELL_MASK.T.T].ravel()},
+            "simulated_moments_dict": {"G0": G_plant[:, 0]}}
+    # q_hat is enumerated in Julia's column-major findall order over (S, R)
+    cells_rs = np.argwhere(CELL_MASK.T)
+    data["granular_diagnostics"]["q_hat"] = (k_true / m)[cells_rs[:, 1], cells_rs[:, 0]]
+
+    curve = NS["read_count_cdf"](data)
+    assert list(curve["K"]) == list(range(K_max + 1))
+    assert np.allclose(curve["G"], G_plant), np.abs(curve["G"] - G_plant).max()
+    assert curve["sector_codes"] == sectors
+    print("\nG_K.csv round-trip: the whole curve, in the model's sector order")
+
+    res = NS["untargeted_count_moment"](data)
+    tab = res["table"]
+    # the K = 0 column IS block 6 — computed here from the counts, not read off the
+    # moment vector — so it must equal what the criterion reported
+    assert np.abs(res["G_model"][:, 0] - G_plant[:, 0]).max() < 1e-12
+    # the bisection re-run here must return the planted variety count, unclamped
+    assert (res["N_hat_recomputed"] == N_true).all(), res["N_hat_recomputed"]
+    assert set(res["clamp_recomputed"]) == {"none"}, res["clamp_recomputed"]
+    # and it must report a bound that binds rather than silently crossing it — the
+    # model's N_LO = ceil(N_obs / R_d) is a theorem, not a search convention
+    n_cl, cl = NS["implied_variety_count"](k_true[2][CELL_MASK[2]], m, G_plant[2, 0], 0,
+                                           n_lo=int(N_true[2]) + 2, n_hi=20)
+    assert (n_cl, cl) == (int(N_true[2]) + 2, "lo"), (n_cl, cl)
+    # and, the data being the model's own curve, the K* inversion must return it too
+    ok = tab["K*"].notna().to_numpy()
+    assert ok.all(), tab["status"].to_dict()
+    assert np.abs(tab.loc[ok, "gap at K*"]).max() < 1e-12
+    assert (tab.loc[ok, "N implied by K*"].to_numpy() == N_true[ok]).all()
+    assert np.allclose(tab.loc[ok, "N ratio"], 1.0)
+    # the model's own K* must agree with the data's when the two curves coincide
+    assert (tab.loc[ok, "K* (model's own)"].to_numpy()
+            == tab.loc[ok, "K*"].to_numpy()).all()
+    print("planted economy: N_hat, K* and the implied N all recovered exactly")
+
+    # a MISSPECIFIED model: give it the wrong variety count and the gap must open, with
+    # the implied N pointing back at the truth
+    res_bad = NS["untargeted_count_moment"](data, N_hat=N_true + 3, verbose=False)
+    tb = res_bad["table"]
+    assert np.abs(tb.loc[ok, "gap at K*"]).max() > 1e-3
+    assert (tb.loc[ok, "N implied by K*"].to_numpy() == N_true[ok]).all()
+    assert (tb.loc[ok, "N ratio"] < 1).all()
+    # more varieties => fewer empty cells and fewer cells below any fixed K
+    assert (res_bad["G_model"][:, 0] < res["G_model"][:, 0]).all()
+    print("misspecified N: the gap opens and the implied N points back at the truth")
+
+    # the q_hat fallback: no suppliers.npy, plug-in only, and the cell enumeration must
+    # be Julia's column-major findall order or the sectors get each other's cells
+    folder_q = TMP / "synthrun_cnt_q"
+    (folder_q / "step1").mkdir(parents=True, exist_ok=True)
+    data_q = dict(data, folder=folder_q)
+    k_q, m_q, _ = NS["load_supplier_counts"](data_q)
+    assert m_q is None
+    assert np.abs(k_q - k_true / m).max() < 1e-12, "q_hat scattered to the wrong cells"
+    G_q = NS["model_count_cdf"](data_q, K_max, N_true, estimator="plugin")
+    G_plug = NS["model_count_cdf"](data, K_max, N_true, estimator="plugin")
+    assert np.abs(G_q - G_plug).max() < 1e-12
+    # and the moment itself must run on that path, downgrading the estimator rather
+    # than asking the subset estimator for an m it does not have
+    res_q = NS["untargeted_count_moment"](data_q, verbose=False)
+    assert res_q["estimator"] == "plugin" and res_q["m"] is None
+    assert np.abs(res_q["G_model"] - G_q).max() < 1e-12
+    print("q_hat fallback: cells in Julia's order, plug-in estimator only")
+
+    summ = NS["untargeted_count_summary"]([res, dict(res, industry="aero")])
+    assert list(summ.index.names) == ["industry", "sector"] and len(summ) == 2 * S
+
+    out = TMP / "figs"
+    out.mkdir(exist_ok=True)
+    NS["plot_count_cdf"](res, save_to=str(out / "count_cdf.png"))
+    NS["plot_untargeted_count"](res, save_to=str(out / "count_moment.png"))
+
+    # a missing G_K.csv must say what is missing
+    try:
+        NS["read_count_cdf"](dict(data, input_folder=TMP / "nowhere"))
     except FileNotFoundError as e:
         print("\nexpected:", str(e)[:70], "...")
     else:
@@ -889,6 +1129,7 @@ def gate_io_benchmark():
 if __name__ == "__main__":
     for name, gate in (("identification", gate_identification),
                        ("untargeted moment", gate_untargeted),
+                       ("untargeted count moment", gate_untargeted_counts),
                        ("comparative advantage", gate_comparative_advantage),
                        ("amplification", gate_amplification),
                        ("IO benchmark", gate_io_benchmark)):

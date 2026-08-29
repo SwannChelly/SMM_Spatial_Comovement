@@ -149,7 +149,12 @@ Gates the sections added to `analysis_granular.ipynb` — the identification / s
 Jacobian (the variety-count columns and the noise-to-signal mask), the untargeted-moment
 PPML (`pyfixest.fepois`, gated against `statsmodels`' Poisson GLM with explicit dummies,
 plus the decomposition identity and the fixed-effect-absorbed distance profile), the
-within-sector
+untargeted COUNT moment $G_s(K^*)$ (the $K^*$ selection rule against hand-built step
+functions — including a curve whose crossing lands on a plateau and one truncated before
+the halfway point — the hypergeometric estimator's unbiasedness for
+$\Pr(\mathrm{Bin}(N,q)\le K)$ and its collapse onto `gbar_cell` at $K = 0$, and the
+implied-variety-count inversion on a planted economy where $\hat N_s$, $K^*$ and
+$N^{(K^*)}_s$ must all come back exactly), the within-sector
 comparative-advantage comparison, the amplification measures $D_r$ and $L_r(d)$, and the
 input-output / Leontief benchmark. No Julia and no real data: it writes
 synthetic run trees with the exact file layout the loader expects, then executes **the
