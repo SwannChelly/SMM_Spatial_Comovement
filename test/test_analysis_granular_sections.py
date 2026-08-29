@@ -789,6 +789,19 @@ def gate_comparative_advantage():
     # the extreme range is anchored at the own-region cell (distance floored at 1 km), so
     # it is much wider than the spread a buyer typically faces
     assert (eq["geo_log_range"] > eq["geo_log_spread"]).all()
+    # the edge in kilometres: the same ratio anchored at ONE reference distance, so it
+    # is the ratio times that anchor for every sector, and the anchor is a real distance
+    ref = eq.attrs["ref_distance_km"]
+    assert np.isfinite(ref) and ref > 0
+    assert np.allclose(eq["equiv_distance_km"].to_numpy(),
+                       ref * eq["equiv_distance_ratio"].to_numpy())
+    assert eq.loc[S0, "equiv_distance_km"] > eq.loc[S1, "equiv_distance_km"]
+    # and the caller can set the anchor, which must scale the column and nothing else
+    eq2 = NS["ca_distance_equivalence"](data, ref_km=100.0)
+    assert eq2.attrs["ref_distance_km"] == 100.0
+    assert np.allclose(eq2["equiv_distance_km"].to_numpy(),
+                       100.0 * eq["equiv_distance_ratio"].to_numpy())
+    assert np.allclose(eq2["equiv_log_d"].to_numpy(), eq["equiv_log_d"].to_numpy())
     print(eq[["top_area", "dlogT_top_vs_median", "equiv_log_d", "geo_log_spread",
               "geo_log_range", "CA_beats_typical_geography"]].to_string())
 
@@ -861,6 +874,26 @@ def gate_comparative_advantage():
     out.mkdir(exist_ok=True)
     NS["plot_ca_distribution"](data, save_to=str(out / "ca_dist.png"))
     NS["plot_ca_distance_equivalence"](data, save_to=str(out / "ca_equiv.png"))
+    NS["plot_ca_distance_equivalence"](data, ref_km=50.0, annotate_ratio=False)
+    # both figures are on log axes now, and their labels must be the numbers themselves
+    ax_km = NS["plot_ca_distance_equivalence"](data)
+    assert ax_km.get_xscale() == "log"
+    fmt = ax_km.xaxis.get_major_formatter()
+    assert fmt(100.0) == "100" and fmt(1000.0) == "1000"
+    assert fmt(10000.0) == "$10^{4}$", fmt(10000.0)      # scientific above 1000 km
+    assert fmt(0.1) == "0.1"
+    ax_t1 = NS["plot_ca_distribution"](data)
+    assert ax_t1.get_xscale() == "log"
+    f1 = ax_t1.xaxis.get_major_formatter()
+    assert (f1(0.01), f1(0.1), f1(1.0), f1(10.0), f1(100.0)) == \
+        ("0.01", "0.1", "1", "10", "100")
+    # the T ratios are plotted, not their logs: the top area's point must sit at exp(dev)
+    caf = NS["comparative_advantage_frame"](data)
+    top0 = caf[caf["sector"] == S0].sort_values("rank").iloc[0]
+    xs = np.concatenate([c.get_offsets()[:, 0] for c in ax_t1.collections])
+    assert np.isclose(xs, np.exp(top0["log_T_dev"])).any(), np.exp(top0["log_T_dev"])
+    assert (xs > 0).all()                                # nothing landed in log space
+    print("test 1 and test 2 axes: log scale, ticks labelled as numbers/kilometres")
     NS["plot_ca_win_margin"](data, save_to=str(out / "ca_win_margin.png"))
     NS["plot_counterfactual_sourcing"](data, save_to=str(out / "ca_cf.png"))
     summ = NS["comparative_advantage_summary"](data)
