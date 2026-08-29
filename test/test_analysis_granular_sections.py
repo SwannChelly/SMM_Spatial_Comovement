@@ -438,6 +438,21 @@ def gate_untargeted_counts():
     print("selection: median of the non-empty mass, never on a plateau, "
           "truncated and degenerate curves refused")
 
+    # ... and on a SPARSE, per-sector support, which is what G_K.csv actually gives:
+    # a sector's curve is reported at the counts it realises, so the union grid skips
+    # integers and "G_s(K-1)" means the sector's previous RUNG, not K-1.
+    K_sp = np.array([0, 1, 2, 5, 9, 40])
+    nan = np.nan
+    G_sp = np.array([[0.30, nan, 0.55, 0.72, nan, 1.00],   # support {0,2,5,40}, tgt .65
+                     [0.20, 0.20, nan, nan, 0.70, 1.00]])  # support {0,1,9,40}, tgt .60
+    sel_sp = NS["select_untargeted_K"]({"K": K_sp, "G": G_sp}, sector_names=["p", "q"],
+                                       verbose=False)
+    # p: 0.55 at K=2 is below .65, 0.72 at K=5 clears it and rises -> K* = 5
+    # q: K=1 is a plateau (0.20 -> 0.20) and below target anyway; K=9 rises -> K* = 9
+    assert list(sel_sp["K_star"]) == [5, 9], list(sel_sp["K_star"])
+    assert list(sel_sp["K_max_available"]) == [40, 40]
+    print("selection on a sparse per-sector support: rungs read on the sector's own K")
+
     # ---------------------------------------------------------------------------
     # 2. The estimator. At K = 0 it must BE `gbar_cell`, and it must be unbiased for
     #    Pr(Bin(N,q) <= K) — which is the whole claim the section rests on.
@@ -532,10 +547,16 @@ def gate_untargeted_counts():
                                            K_max).mean(axis=0)
     sectors = ["101", "205", "310", "422"]
     # N_supplier_s sets the model's own bounds N_LO = ceil(N_obs / R_d) = 2 and
-    # N_HI = 20, which must bracket every planted N_true for the bisection to be free
+    # N_HI = 20, which must bracket every planted N_true for the bisection to be free.
+    # The K grid is written SPARSE and PER SECTOR, as the real G_K.csv is: each sector
+    # gets its own subset of the integers, so the union grid skips values and no column
+    # index can be assumed to equal its K.
+    K_support = {0: [0, 1, 2, 4, 8], 1: [0, 2, 3, 5, 8], 2: [0, 1, 3, 6],
+                 3: [0, 1, 2, 3, 8]}
     rows = [{"group": s + 1, "A129": sectors[s], "G": G_plant[s, kk], "K": kk,
-             "N_supplier_s": 20} for s in range(S) for kk in range(K_max + 1)]
+             "N_supplier_s": 20} for s in range(S) for kk in K_support[s]]
     pd.DataFrame(rows).to_csv(inp / "G_K.csv", index=False)
+    K_union = np.array(sorted({k for v in K_support.values() for k in v}))
 
     data = {"industry": "auto", "mu": 1, "S": S, "R": R, "n_AA": R_d,
             "step_dir": "step1", "folder": folder, "input_folder": inp,
@@ -548,16 +569,35 @@ def gate_untargeted_counts():
     data["granular_diagnostics"]["q_hat"] = (k_true / m)[cells_rs[:, 1], cells_rs[:, 0]]
 
     curve = NS["read_count_cdf"](data)
-    assert list(curve["K"]) == list(range(K_max + 1))
-    assert np.allclose(curve["G"], G_plant), np.abs(curve["G"] - G_plant).max()
+    assert list(curve["K"]) == list(K_union), (curve["K"], K_union)
+    assert curve["G"].shape == (S, K_union.size)
+    for s in range(S):
+        on = np.isin(K_union, K_support[s])
+        assert np.allclose(curve["G"][s, on], G_plant[s, K_union[on]])
+        assert np.isnan(curve["G"][s, ~on]).all()      # absent rungs stay absent
     assert curve["sector_codes"] == sectors
-    print("\nG_K.csv round-trip: the whole curve, in the model's sector order")
+    print("\nG_K.csv round-trip: the sparse per-sector support, in the model's order")
+
+    # the model curve must be evaluated ON THAT GRID, column for column — reading it as
+    # 0..K_max would silently misalign every point past the first gap
+    G_on_grid = NS["model_count_cdf"](data, K_union, N_true)
+    G_dense = NS["model_count_cdf"](data, int(K_union[-1]), N_true)
+    assert G_on_grid.shape == (S, K_union.size)
+    assert np.abs(G_on_grid - G_dense[:, K_union]).max() < 1e-15
+    print("model curve read on the empirical grid, not on 0..K_max")
 
     res = NS["untargeted_count_moment"](data)
     tab = res["table"]
+    # the two curves must be on the same axis, which is what the runtime failure was
+    assert res["G_emp"].shape == res["G_model"].shape == (S, K_union.size)
+    assert res["K"].size == res["G_model"].shape[1]
     # the K = 0 column IS block 6 — computed here from the counts, not read off the
     # moment vector — so it must equal what the criterion reported
     assert np.abs(res["G_model"][:, 0] - G_plant[:, 0]).max() < 1e-12
+    # and on every reported rung the model must land on the (planted) data
+    for s in range(S):
+        on = np.isin(K_union, K_support[s])
+        assert np.abs(res["G_model"][s, on] - G_plant[s, K_union[on]]).max() < 1e-12
     # the bisection re-run here must return the planted variety count, unclamped
     assert (res["N_hat_recomputed"] == N_true).all(), res["N_hat_recomputed"]
     assert set(res["clamp_recomputed"]) == {"none"}, res["clamp_recomputed"]
@@ -596,8 +636,8 @@ def gate_untargeted_counts():
     k_q, m_q, _ = NS["load_supplier_counts"](data_q)
     assert m_q is None
     assert np.abs(k_q - k_true / m).max() < 1e-12, "q_hat scattered to the wrong cells"
-    G_q = NS["model_count_cdf"](data_q, K_max, N_true, estimator="plugin")
-    G_plug = NS["model_count_cdf"](data, K_max, N_true, estimator="plugin")
+    G_q = NS["model_count_cdf"](data_q, K_union, N_true, estimator="plugin")
+    G_plug = NS["model_count_cdf"](data, K_union, N_true, estimator="plugin")
     assert np.abs(G_q - G_plug).max() < 1e-12
     # and the moment itself must run on that path, downgrading the estimator rather
     # than asking the subset estimator for an m it does not have
@@ -612,6 +652,7 @@ def gate_untargeted_counts():
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_count_cdf"](res, save_to=str(out / "count_cdf.png"))
+    NS["plot_count_cdf"](res, x_max=np.inf)          # the whole grid
     NS["plot_untargeted_count"](res, save_to=str(out / "count_moment.png"))
 
     # a missing G_K.csv must say what is missing
