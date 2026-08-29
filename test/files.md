@@ -152,7 +152,13 @@ plus the decomposition identity and the fixed-effect-absorbed distance profile),
 untargeted COUNT moment $G_s(K^*) - G_s(0)$ (the $K^*$ selection rule against hand-built
 step functions under both rules — the default first step of the curve, and the deeper
 `median` rung, including curves that are flat at the low counts, truncated, or reported
-on a sparse per-sector support — the hypergeometric estimator's unbiasedness for
+on a sparse per-sector support; the STATISTICAL-SECRECY censoring, checked on a planted
+economy whose published curve was generated through it, where the censored model must
+reproduce the published curve exactly, the increment must be $\Pr(c \le K \le K^*)$ on
+both sides rather than $\Pr(1 \le K \le K^*)$ on the model's, and the
+censoring-consistent variety count must come back equal to the planted one while the
+uncensored bisection — what the criterion runs — comes back below it; the hypergeometric
+estimator's unbiasedness for
 $\Pr(\mathrm{Bin}(N,q)\le K)$ and its collapse onto `gbar_cell` at $K = 0$, and the
 implied-variety-count inversion on a planted economy where $\hat N_s$, $K^*$ and
 $N^{(K^*)}_s$ must all come back exactly), the within-sector
