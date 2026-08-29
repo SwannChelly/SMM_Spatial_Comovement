@@ -149,9 +149,10 @@ Gates the sections added to `analysis_granular.ipynb` — the identification / s
 Jacobian (the variety-count columns and the noise-to-signal mask), the untargeted-moment
 PPML (`pyfixest.fepois`, gated against `statsmodels`' Poisson GLM with explicit dummies,
 plus the decomposition identity and the fixed-effect-absorbed distance profile), the
-untargeted COUNT moment $G_s(K^*)$ (the $K^*$ selection rule against hand-built step
-functions — including a curve whose crossing lands on a plateau and one truncated before
-the halfway point — the hypergeometric estimator's unbiasedness for
+untargeted COUNT moment $G_s(K^*) - G_s(0)$ (the $K^*$ selection rule against hand-built
+step functions under both rules — the default first step of the curve, and the deeper
+`median` rung, including curves that are flat at the low counts, truncated, or reported
+on a sparse per-sector support — the hypergeometric estimator's unbiasedness for
 $\Pr(\mathrm{Bin}(N,q)\le K)$ and its collapse onto `gbar_cell` at $K = 0$, and the
 implied-variety-count inversion on a planted economy where $\hat N_s$, $K^*$ and
 $N^{(K^*)}_s$ must all come back exactly), the within-sector

@@ -406,51 +406,76 @@ def gate_untargeted_counts():
     # ---------------------------------------------------------------------------
     K = np.arange(0, 6)
     #            K = 0    1     2     3     4     5
-    G = np.array([[0.40, 0.55, 0.72, 0.85, 0.95, 1.00],   # target .70 -> K* = 2
-                  [0.20, 0.20, 0.30, 0.65, 0.90, 1.00],   # target .60 -> K* = 3
-                  [0.50, 0.75, 0.75, 0.90, 0.97, 1.00],   # target .75, but G(1)=G(2):
-                                                          #   crossing at K=1 has mass
-                                                          #   (0.50 -> 0.75) so K* = 1
-                  [0.10, 0.12, 0.15, 0.18, 0.20, 0.22],   # never reaches .55 -> none
+    G = np.array([[0.40, 0.55, 0.72, 0.85, 0.95, 1.00],   # rises at K=1 -> K* = 1
+                  [0.20, 0.20, 0.30, 0.65, 0.90, 1.00],   # flat at K=1   -> K* = 2
+                  [0.50, 0.50, 0.50, 0.90, 0.97, 1.00],   # flat until 3  -> K* = 3
+                  [0.10, 0.10, 0.10, 0.10, 0.10, 0.10],   # never rises   -> none
                   [1.00, 1.00, 1.00, 1.00, 1.00, 1.00]])  # degenerate: no non-empty cell
     names = ["a", "b", "c", "d", "e"]
     sel = NS["select_untargeted_K"]({"K": K, "G": G}, sector_names=names)
     print(sel.to_string())
-    assert list(sel["K_star"]) == [2, 3, 1, -1, -1], list(sel["K_star"])
-    assert sel.loc["d", "status"].startswith("not reached")
+    # the DEFAULT rule is the first step of the curve above the targeted K = 0
+    assert sel.attrs["rule"] == "first_step"
+    assert list(sel["K_star"]) == [1, 2, 3, -1, -1], list(sel["K_star"])
+    assert sel.loc["d", "status"].startswith("the curve never rises")
     assert sel.loc["e", "status"].startswith("degenerate")
-    # every selected K must clear the halfway threshold AND sit on a step with mass
     for name in ("a", "b", "c"):
-        s = names.index(name)
+        si = names.index(name)
         j = int(sel.loc[name, "K_star"])
-        assert G[s, j] >= sel.loc[name, "target"] - 1e-12
-        assert G[s, j] > G[s, j - 1] + 1e-12
-        assert sel.loc[name, "frac_of_nonempty"] >= 0.5 - 1e-12
-    # a curve whose crossing lands EXACTLY on a plateau must advance to the next rung
-    G_flat = np.array([[0.40, 0.70, 0.70, 0.88, 0.95, 1.00]])   # target .70, G(1)=G(2)
-    sel_flat = NS["select_untargeted_K"]({"K": K, "G": G_flat}, sector_names=["f"],
-                                         verbose=False)
-    assert int(sel_flat["K_star"].iloc[0]) == 1, sel_flat        # K=1 itself has mass
-    G_flat2 = np.array([[0.70, 0.70, 0.70, 0.88, 0.95, 1.00]])   # target .85: K=3
-    sel_flat2 = NS["select_untargeted_K"]({"K": K, "G": G_flat2}, sector_names=["f"],
-                                          verbose=False)
-    assert int(sel_flat2["K_star"].iloc[0]) == 3, sel_flat2
-    print("selection: median of the non-empty mass, never on a plateau, "
-          "truncated and degenerate curves refused")
+        # the increment IS the moment, it is strictly positive by construction, and
+        # every earlier rung of the curve was flat — that is what "first step" means
+        assert abs(sel.loc[name, "dG_at_K"] - (G[si, j] - G[si, 0])) < 1e-15
+        assert sel.loc[name, "dG_at_K"] > 0
+        assert np.allclose(G[si, 1:j], G[si, 0])
+        assert abs(sel.loc[name, "frac_of_nonempty"]
+                   - sel.loc[name, "dG_at_K"] / (1 - G[si, 0])) < 1e-15
+    print("selection: the first rung at which the curve rises, increment strictly > 0")
+
+    # the deeper point is still reachable, and it is a DIFFERENT one
+    sel_med = NS["select_untargeted_K"]({"K": K, "G": G}, sector_names=names,
+                                        rule="median", verbose=False)
+    assert sel_med.attrs["rule"] == "median"
+    assert list(sel_med["K_star"]) == [2, 3, 3, -1, -1], list(sel_med["K_star"])
+    for name in ("a", "b", "c"):
+        si = names.index(name)
+        j = int(sel_med.loc[name, "K_star"])
+        assert G[si, j] >= sel_med.loc[name, "target"] - 1e-12
+        assert sel_med.loc[name, "frac_of_nonempty"] >= 0.5 - 1e-12
+    assert sel_med.loc["a", "K_star"] != sel.loc["a", "K_star"]
+    # under "median" a curve that never reaches the halfway point is refused
+    G_trunc = np.array([[0.10, 0.12, 0.15, 0.18, 0.20, 0.22]])
+    assert int(NS["select_untargeted_K"]({"K": K, "G": G_trunc}, sector_names=["f"],
+                                         rule="median", verbose=False)["K_star"].iloc[0]) == -1
+    # ... but its FIRST STEP exists, which is the point of the default rule
+    assert int(NS["select_untargeted_K"]({"K": K, "G": G_trunc}, sector_names=["f"],
+                                         verbose=False)["K_star"].iloc[0]) == 1
+    try:
+        NS["select_untargeted_K"]({"K": K, "G": G}, rule="nonsense", verbose=False)
+    except ValueError as e:
+        assert "first_step" in str(e)
+    else:
+        raise AssertionError("an unknown rule should have raised")
+    print("selection: 'median' still available, reads a different (deeper) point")
 
     # ... and on a SPARSE, per-sector support, which is what G_K.csv actually gives:
     # a sector's curve is reported at the counts it realises, so the union grid skips
     # integers and "G_s(K-1)" means the sector's previous RUNG, not K-1.
     K_sp = np.array([0, 1, 2, 5, 9, 40])
     nan = np.nan
-    G_sp = np.array([[0.30, nan, 0.55, 0.72, nan, 1.00],   # support {0,2,5,40}, tgt .65
-                     [0.20, 0.20, nan, nan, 0.70, 1.00]])  # support {0,1,9,40}, tgt .60
+    G_sp = np.array([[0.30, nan, 0.55, 0.72, nan, 1.00],   # support {0,2,5,40}
+                     [0.20, 0.20, nan, nan, 0.70, 1.00]])  # support {0,1,9,40}
     sel_sp = NS["select_untargeted_K"]({"K": K_sp, "G": G_sp}, sector_names=["p", "q"],
                                        verbose=False)
-    # p: 0.55 at K=2 is below .65, 0.72 at K=5 clears it and rises -> K* = 5
-    # q: K=1 is a plateau (0.20 -> 0.20) and below target anyway; K=9 rises -> K* = 9
-    assert list(sel_sp["K_star"]) == [5, 9], list(sel_sp["K_star"])
+    # p: its first REPORTED rung is K = 2, and the curve rises there  -> K* = 2
+    # q: K = 1 is reported but flat (0.20 -> 0.20); the next is K = 9 -> K* = 9
+    assert list(sel_sp["K_star"]) == [2, 9], list(sel_sp["K_star"])
     assert list(sel_sp["K_max_available"]) == [40, 40]
+    assert abs(sel_sp.loc["p", "dG_at_K"] - (0.55 - 0.30)) < 1e-15
+    # the same on the deeper rule, to show the two read different rungs of one curve
+    sel_sp_med = NS["select_untargeted_K"]({"K": K_sp, "G": G_sp},
+                                           sector_names=["p", "q"], rule="median",
+                                           verbose=False)
+    assert list(sel_sp_med["K_star"]) == [5, 9], list(sel_sp_med["K_star"])
     print("selection on a sparse per-sector support: rungs read on the sector's own K")
 
     # ---------------------------------------------------------------------------
@@ -598,6 +623,27 @@ def gate_untargeted_counts():
     for s in range(S):
         on = np.isin(K_union, K_support[s])
         assert np.abs(res["G_model"][s, on] - G_plant[s, K_union[on]]).max() < 1e-12
+    # the moment is the INCREMENT, and it must be exactly the two levels differenced
+    assert res["rule"] == "first_step"
+    lev_e = tab["dG data"] + tab["G_s(0) data"]
+    lev_m = tab["dG model"] + tab["G_s(0) model"]
+    for si, name in enumerate(sectors):
+        ks = tab.loc[name, "K*"]
+        if not np.isfinite(ks):
+            continue
+        j = int(np.searchsorted(K_union, int(ks)))
+        assert abs(lev_e[name] - curve["G"][si, j]) < 1e-12
+        assert abs(lev_m[name] - res["G_model"][si, j]) < 1e-12
+        assert abs(tab.loc[name, "gap"]
+                   - (tab.loc[name, "dG model"] - tab.loc[name, "dG data"])) < 1e-15
+        # K* is the first REPORTED rung where the data's curve rises above G_s(0)
+        on = [kk for kk in K_support[si] if kk > 0]
+        first = next(kk for kk in on
+                     if curve["G"][si, np.searchsorted(K_union, kk)] > curve["G"][si, 0])
+        assert int(ks) == first, (name, ks, first)
+    assert (tab["dG data"].dropna() > 0).all()          # nonzero by construction
+    print("the moment is the increment G_s(K*) - G_s(0), read at the first step")
+
     # the bisection re-run here must return the planted variety count, unclamped
     assert (res["N_hat_recomputed"] == N_true).all(), res["N_hat_recomputed"]
     assert set(res["clamp_recomputed"]) == {"none"}, res["clamp_recomputed"]
@@ -609,20 +655,27 @@ def gate_untargeted_counts():
     # and, the data being the model's own curve, the K* inversion must return it too
     ok = tab["K*"].notna().to_numpy()
     assert ok.all(), tab["status"].to_dict()
-    assert np.abs(tab.loc[ok, "gap at K*"]).max() < 1e-12
-    assert (tab.loc[ok, "N implied by K*"].to_numpy() == N_true[ok]).all()
+    assert np.abs(tab.loc[ok, "gap"]).max() < 1e-12
+    assert (tab.loc[ok, "N implied by G_s(K*)"].to_numpy() == N_true[ok]).all()
     assert np.allclose(tab.loc[ok, "N ratio"], 1.0)
-    # the model's own K* must agree with the data's when the two curves coincide
-    assert (tab.loc[ok, "K* (model's own)"].to_numpy()
-            == tab.loc[ok, "K*"].to_numpy()).all()
+    # The model's own first step can only come EARLIER than the data's: the Binomial
+    # puts mass at every count from one upward, while the data's support may skip the
+    # low ones. Sector 205's support has no K = 1, so the data's first step is 2 and the
+    # model's is 1 — that is the documented diagnostic, not a discrepancy in the economy,
+    # and the mass the model puts on the skipped counts is already inside `dG model`.
+    assert (tab.loc[ok, "K* (model)"].to_numpy() <= tab.loc[ok, "K*"].to_numpy()).all()
+    assert tab.loc["205", "K*"] == 2 and tab.loc["205", "K* (model)"] == 1
+    assert 1 not in K_support[1] and 1 in K_support[0]
+    same = tab["K*"] == 1
+    assert (tab.loc[same, "K* (model)"] == 1).all()
     print("planted economy: N_hat, K* and the implied N all recovered exactly")
 
     # a MISSPECIFIED model: give it the wrong variety count and the gap must open, with
     # the implied N pointing back at the truth
     res_bad = NS["untargeted_count_moment"](data, N_hat=N_true + 3, verbose=False)
     tb = res_bad["table"]
-    assert np.abs(tb.loc[ok, "gap at K*"]).max() > 1e-3
-    assert (tb.loc[ok, "N implied by K*"].to_numpy() == N_true[ok]).all()
+    assert np.abs(tb.loc[ok, "gap"]).max() > 1e-3
+    assert (tb.loc[ok, "N implied by G_s(K*)"].to_numpy() == N_true[ok]).all()
     assert (tb.loc[ok, "N ratio"] < 1).all()
     # more varieties => fewer empty cells and fewer cells below any fixed K
     assert (res_bad["G_model"][:, 0] < res["G_model"][:, 0]).all()
@@ -651,9 +704,18 @@ def gate_untargeted_counts():
 
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
+    # the deeper rule must run end to end too, and read a different rung
+    res_med = NS["untargeted_count_moment"](data, rule="median", verbose=False)
+    assert res_med["rule"] == "median"
+    assert (res_med["table"]["K*"].dropna() >= tab["K*"].dropna()).all()
+    assert np.abs(res_med["table"].loc[ok, "gap"]).max() < 1e-12   # still the same economy
+    print("the 'median' rule runs end to end and reads a deeper rung of the same curve")
+
     NS["plot_count_cdf"](res, save_to=str(out / "count_cdf.png"))
     NS["plot_count_cdf"](res, x_max=np.inf)          # the whole grid
     NS["plot_untargeted_count"](res, save_to=str(out / "count_moment.png"))
+    ax_lv = NS["plot_untargeted_count"](res, level=True)
+    assert ax_lv.get_ylabel() == r"$G_s(K^*)$"
 
     # a missing G_K.csv must say what is missing
     try:
