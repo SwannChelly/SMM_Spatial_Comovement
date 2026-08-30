@@ -198,6 +198,30 @@ if granular_local
     c_K      = _gk_col(["k"])
     c_G      = _gk_col(["g(k)", "g_k", "gk", "g"])
     c_N      = _gk_col(["n_supplier_s", "n_supplier", "n_suppliers"])
+    # CSV.jl types a column from ALL of its rows, so ONE non-numeric entry — a
+    # top-coded bin label ("10+"), an "NA", a French decimal comma — makes the whole
+    # column String/InlineString and a bare Float64(x) throws MethodError on String7.
+    # Coerce cell by cell instead: numbers pass through, strings are parsed after
+    # normalising separators, and anything that is not a number returns `nothing`
+    # for the caller to skip (a "10+" row is simply not the K=0 row we are after).
+    _gk_num(x) = begin
+        if x === missing
+            nothing
+        elseif x isa Real
+            Float64(x)
+        else
+            # drop blank / apostrophe thousands separators (incl. non-breaking space)
+            s = strip(replace(string(x), '\u00a0' => "", ' ' => "", '\'' => ""))
+            if isempty(s)
+                nothing
+            else
+                # "1,234.5" ⇒ ',' is a thousands separator; "0,5432" ⇒ ',' is decimal.
+                s = occursin(',', s) ?
+                    (occursin('.', s) ? replace(s, "," => "") : replace(s, "," => ".")) : s
+                tryparse(Float64, s)
+            end
+        end
+    end
     # Sector ids in G_K.csv are the A129 labels; map them to 1..S by sorted order,
     # matching how filter_N_upstream.csv's A129 is turned into sector indices below.
     gk_sectors = sort(unique(gk_df[!, c_sector]))
@@ -209,13 +233,19 @@ if granular_local
     N_HI_local     = zeros(Int, S_)
     for (s, a129) in enumerate(gk_sectors)
         rows = findall(==(a129), gk_df[!, c_sector])
-        nsup = unique(gk_df[rows, c_N])
-        @assert length(nsup) == 1 "G_K.csv: N_supplier_s is not constant within A129=$a129 (got $nsup)"
-        n_obs = Int(round(Float64(nsup[1])))
+        nsup = unique(Float64[v for v in (_gk_num(gk_df[i, c_N]) for i in rows) if v !== nothing])
+        @assert length(nsup) == 1 (
+            "G_K.csv: N_supplier_s is not a single number within A129=$a129 " *
+            "(parsed $nsup from $(unique(gk_df[rows, c_N])))")
+        n_obs = Int(round(nsup[1]))
         @assert n_obs >= 1 "G_K.csv: N_supplier_s = $n_obs for A129=$a129 must be ≥ 1"
-        k0 = findfirst(i -> Int(round(Float64(gk_df[i, c_K]))) == 0, rows)
-        k0 === nothing && error("G_K.csv has no K=0 row for A129=$a129 — Ḡ_s(0) is the targeted moment.")
-        G_target_local[s] = Float64(gk_df[rows[k0], c_G])
+        k0 = findfirst(i -> (v = _gk_num(gk_df[i, c_K]); v !== nothing && round(v) == 0), rows)
+        k0 === nothing && error("G_K.csv has no K=0 row for A129=$a129 — Ḡ_s(0) is the " *
+                                "targeted moment. K values on those rows: $(gk_df[rows, c_K])")
+        g0 = _gk_num(gk_df[rows[k0], c_G])
+        g0 === nothing && error("G_K.csv: G(0) for A129=$a129 is not a number " *
+                                "(got $(repr(gk_df[rows[k0], c_G])) in column '$c_G')")
+        G_target_local[s] = g0
         N_HI_local[s]     = n_obs
         # The model bound is ⌈N^obs_s / N_d⌉ (finite_sample2.tex §3.3). RELAX_N_LO
         # replaces it by the trivial 1, freeing the bisection over the whole range —
