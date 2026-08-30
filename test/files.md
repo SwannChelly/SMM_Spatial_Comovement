@@ -167,3 +167,28 @@ Needs `numpy`, `pandas`, `matplotlib`, `statsmodels`, `pyarrow` and `pyfixest` (
 notebook estimates the untargeted moment with it, so it is no longer optional). The reasoning
 behind each gate is written out in the notebook's own "Validation of the sections above"
 markdown cell.
+
+---
+
+## `test_diversification_identities.py` — the theory note's algebra
+
+Numerical gate for `documentation/diversification.md`, the companion note on customer
+diversification. It re-derives every displayed identity of that note — the Herfindahl
+representation of variance and the Gram representation of comovement, the
+extensive/intensive decomposition, the aggregation gain, the softmax form of the cell
+portfolio, the four comparative statics of Lemma 1, the closed-form extensive margin
+`E[n] = Σ_r γ`, the FKG bound, the tilting identity behind `δ/γ = −θα κ (Λ̄ + 1 − H̃)`,
+and the planner's variance return — by finite differences, Monte Carlo over the
+Ricardian assignment, and exact arithmetic.
+
+```bash
+python test/test_diversification_identities.py
+```
+
+Needs only `numpy`; no data, no Julia. Exit code 1 on any failure. Three tests are there
+specifically to catch claims that a first draft of the note got wrong and that are easy
+to reintroduce: that a cell's **own** comparative advantage *does* move the composition
+of its customer portfolio (through `Φ`, obeying the same elasticity as any rival's `T`);
+that the `α → ∞` limit is governed by **relative** log-distance, not by the nearest
+destination; and that the note's equation (20) needs a *single* upstream sector, not
+merely the absence of cross-sector spillovers.
