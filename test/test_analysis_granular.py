@@ -14,7 +14,7 @@ reconstruction in the gamma panel, and the LaTeX table's contents.
 Runs every gate, prints PASS/FAIL per gate and exits non-zero if any failed.
 Print-only otherwise; nothing in the estimation pipeline is touched.
 """
-import json, os, sys, tempfile, warnings
+import io, json, os, sys, tempfile, warnings
 
 import matplotlib
 matplotlib.use("Agg")
@@ -283,6 +283,55 @@ def run_checks(ns, ROOT, exp):
           close(d2["empirical_moments_dict"]["G0"], exp["G_target"]))
     check("labor share", close(d2["empirical_moments_dict"]["agg_labor_share"],
                                [exp["agg_labor_share"]]))
+
+    print("\n=== 2b. Gbar_s(0): the figure against Julia's own reporting ===")
+    # Four writings of the same moment: G_K.csv and `G0_target` on the empirical side,
+    # block 6 of best_simulated_moments.npy and `G0_fit` on the simulated side. They are
+    # produced by different Julia code paths at the same theta, so agreement is a real
+    # cross-check — and the checker has to be able to FAIL, or it checks nothing. The
+    # synthetic tree supplies both cases: step3's moment vector carries exactly the
+    # `G0_fit` planted in step3/granular_diagnostics.npz, while step1's is that same
+    # vector scaled by 0.95 against an unscaled step2 npz.
+    d1 = ns["load_granular_data"]("test", mu=1, base=ROOT)
+    g2 = ns["g0_consistency"](d2, verbose=False)
+    g1 = ns["g0_consistency"](d1, verbose=False)
+    check("consistency table is indexed by sector, one row each",
+          list(g2.index) == exp["sector_names"])
+    check("target column is G_K.csv at K = 0",
+          close(g2["target (G_K.csv)"], exp["G_target"]))
+    check("target agrees with the diagnostics' frozen G_TARGET",
+          close(g2["d_target"], np.zeros(exp["S"])))
+    check("fit column is block 6 of the moment vector",
+          close(g2["fit (moment vector)"], d2["simulated_moments_dict"]["G0"]))
+    check("matching moment vector and diagnostics -> agrees",
+          bool(g2.attrs["agrees"]) and g2.attrs["max_abs_fit_gap"] <= 1e-12)
+    check("a diagnostics file at another theta is CAUGHT, not averaged over",
+          not bool(g1.attrs["agrees"]))
+    check("the caught gap is the planted one (5% of G0_fit)",
+          close(g1.attrs["max_abs_fit_gap"],
+                np.max(np.abs(np.array(exp["sim_final"]["G0"]) * 0.05)), 1e-12))
+    check("residual column is fit - target",
+          close(g2["residual (fit - target)"],
+                np.asarray(g2["fit (moment vector)"]) - np.asarray(g2["target (G_K.csv)"])))
+    check("N_hat and clamp carried through from the diagnostics",
+          list(g2["clamp"]) == ["none", "none", "none", "lo"])
+    # A G_K.csv whose A129 set differs from filter_N_upstream.csv's would attach every
+    # sector's zero-supplier target to another sector, silently and identically in Julia.
+    gk_path = os.path.join(ROOT, "baseline_test", "G_K.csv")
+    gk_orig = open(gk_path).read()
+    try:
+        gk = pd.read_csv(io.StringIO(gk_orig))
+        gk["A129"] = gk["A129"].replace({exp["sector_names"][0]: "ZZZZ"})
+        gk.to_csv(gk_path, index=False)
+        raised = False
+        try:
+            ns["load_granular_data"]("test", mu=2, base=ROOT)
+        except ValueError as e:
+            raised = "do not enumerate the same sectors" in str(e)
+        check("a G_K.csv covering different sectors is refused, not silently misaligned",
+              raised)
+    finally:
+        open(gk_path, "w").write(gk_orig)
 
     print("\n=== 3. moment mask (must reproduce load_parameters.jl) ===")
     mask, S, nAA = d2["moment_mask"], d2["S"], d2["n_AA"]
