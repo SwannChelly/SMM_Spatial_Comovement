@@ -563,21 +563,28 @@ def gate_untargeted_counts():
     np.save(folder / "step1" / "suppliers.npy", linkages)
     k_true = linkages.sum(axis=1)
 
-    # the empirical curve is the model's own, at N_true, so a correct pipeline must come
-    # back with N implied by K* equal to N_hat equal to N_true
+    # The empirical curve is the model's own at N_true, put through STATISTICAL SECRECY:
+    # a zone with fewer than C suppliers is reported as having none, so the curve is flat
+    # over K = 0..C-1 at Pr(K <= C-1). A correct pipeline must undo none of that on the
+    # data side and reproduce all of it on the model side.
+    C = NS["COUNT_CENSOR_MIN"]
+    assert C == 3
     K_max = 8
-    G_plant = np.full((S, K_max + 1), np.nan)
+    G_unc = np.full((S, K_max + 1), np.nan)          # the TRUE curve, Pr(K <= k)
     for s in range(S):
-        G_plant[s] = NS["count_cdf_cells"](k_true[s][CELL_MASK[s]], m, int(N_true[s]),
-                                           K_max).mean(axis=0)
+        G_unc[s] = NS["count_cdf_cells"](k_true[s][CELL_MASK[s]], m, int(N_true[s]),
+                                         K_max).mean(axis=0)
+    G_plant = G_unc[:, np.maximum(np.arange(K_max + 1), C - 1)]     # what is published
+    assert np.allclose(G_plant[:, :C], G_plant[:, [C - 1]])         # flat below C
+    assert (G_plant[:, 0] > G_unc[:, 0]).all()                      # and strictly above
     sectors = ["101", "205", "310", "422"]
     # N_supplier_s sets the model's own bounds N_LO = ceil(N_obs / R_d) = 2 and
     # N_HI = 20, which must bracket every planted N_true for the bisection to be free.
     # The K grid is written SPARSE and PER SECTOR, as the real G_K.csv is: each sector
     # gets its own subset of the integers, so the union grid skips values and no column
     # index can be assumed to equal its K.
-    K_support = {0: [0, 1, 2, 4, 8], 1: [0, 2, 3, 5, 8], 2: [0, 1, 3, 6],
-                 3: [0, 1, 2, 3, 8]}
+    K_support = {0: [0, 1, 2, 3, 8], 1: [0, 2, 3, 5, 8], 2: [0, 1, 3, 6],
+                 3: [0, 1, 2, 4, 8]}          # sector 422 has no zone with exactly 3
     rows = [{"group": s + 1, "A129": sectors[s], "G": G_plant[s, kk], "K": kk,
              "N_supplier_s": 20} for s in range(S) for kk in K_support[s]]
     pd.DataFrame(rows).to_csv(inp / "G_K.csv", index=False)
@@ -623,6 +630,65 @@ def gate_untargeted_counts():
     for s in range(S):
         on = np.isin(K_union, K_support[s])
         assert np.abs(res["G_model"][s, on] - G_plant[s, K_union[on]]).max() < 1e-12
+    # ---------------------------------------------------------------- censoring
+    # the model curve must be censored EXACTLY as the data are: flat below C, equal to
+    # the uncensored curve at and above C
+    assert res["censor_min"] == C
+    Gm, Gr = res["G_model"], res["G_model_uncensored"]
+    below = K_union < C
+    for si in range(S):
+        assert np.allclose(Gm[si, below], Gm[si, np.searchsorted(K_union, C - 1)]
+                           if (C - 1) in K_union else Gm[si, 0])
+        at_or_above = ~below
+        assert np.allclose(Gm[si, at_or_above], Gr[si, at_or_above])
+        assert Gm[si, 0] > Gr[si, 0]           # the wedge Pr(1 <= K <= C-1) is positive
+    # and it must reproduce the planted published curve exactly, on every reported rung
+    for si in range(S):
+        on = np.isin(K_union, K_support[si])
+        assert np.abs(Gm[si, on] - G_plant[si, K_union[on]]).max() < 1e-12
+    # the UNCENSORED K = 0 column is the one that is block 6
+    assert np.abs(Gr[:, 0] - G_unc[:, 0]).max() < 1e-12
+    print("censoring: the model curve is flat below C and untouched above it")
+
+    # the first step therefore lands AT the censoring threshold, on both sides, unless
+    # the sector has no zone with exactly C suppliers
+    assert tab.loc["101", "K*"] == C and tab.loc["205", "K*"] == C
+    assert tab.loc["422", "K*"] == 4          # its support skips 3
+    assert (tab["K* (model)"].dropna() == C).all()
+
+    # The censored increment is Pr(C <= K <= K*) on both sides, not Pr(1 <= K <= K*) on
+    # the model's: the censored curve's value at K = 0 is Pr(K <= C-1), so everything
+    # below C is differenced away. At K* = C it collapses to Pr(K = C) exactly.
+    for si, name in enumerate(sectors):
+        ks = int(tab.loc[name, "K*"])
+        exact = G_unc[si, ks] - G_unc[si, C - 1]
+        assert abs(tab.loc[name, "dG model"] - exact) < 1e-12, (name, exact)
+        if ks == C:
+            assert abs(tab.loc[name, "dG model"]
+                       - (G_unc[si, C] - G_unc[si, C - 1])) < 1e-12
+    # sector 422's data have no zone with exactly 3, but the MODEL does, so its
+    # increment carries that mass and the two sides may legitimately differ there —
+    # which is the finding the moment exists to surface
+    assert tab.loc["422", "dG model"] > G_unc[3, 4] - G_unc[3, 3] - 1e-12
+    # without the transformation the model would be biased UP by the censored zones
+    res_nc = NS["untargeted_count_moment"](data, censor_min=1, verbose=False)
+    assert (res_nc["table"]["dG model"] > tab["dG model"] + 1e-6).all()
+    print("the increment is Pr(K = K*) on both sides; without censoring it is inflated")
+
+    # the same censoring is what the TARGETED moment suffers from, and the wedge table
+    # must say so: the criterion matches Pr(K = 0) against a target that is Pr(K <= C-1),
+    # so the censoring-consistent variety count is LARGER than the estimated one
+    cens = res["censoring"]
+    wedge = cens[f"wedge Pr(1 <= K <= {C - 1})"].to_numpy()
+    assert (wedge > 0).all()
+    assert np.allclose(wedge, Gm[:, 0] - Gr[:, 0])
+    assert (res["N_censored"] >= res["N_hat_recomputed"]).all()
+    assert (res["N_censored"] > res["N_hat_recomputed"]).any()
+    # and read correctly, the bisection must return the PLANTED variety count, since the
+    # published curve was generated from N_true through the censoring
+    assert (res["N_censored"] == N_true).all(), (res["N_censored"], N_true)
+    print("censoring diagnostic: the wedge is positive and N censored-consistent = truth")
+
     # the moment is the INCREMENT, and it must be exactly the two levels differenced
     assert res["rule"] == "first_step"
     lev_e = tab["dG data"] + tab["G_s(0) data"]
@@ -644,9 +710,11 @@ def gate_untargeted_counts():
     assert (tab["dG data"].dropna() > 0).all()          # nonzero by construction
     print("the moment is the increment G_s(K*) - G_s(0), read at the first step")
 
-    # the bisection re-run here must return the planted variety count, unclamped
-    assert (res["N_hat_recomputed"] == N_true).all(), res["N_hat_recomputed"]
-    assert set(res["clamp_recomputed"]) == {"none"}, res["clamp_recomputed"]
+    # The bisection that reads the target as Pr(K = 0) — what the criterion does — must
+    # come back BELOW the truth, since it is matching a target inflated by the censoring.
+    # The censoring-consistent one returns the planted count exactly (asserted above).
+    assert (res["N_hat_recomputed"] <= N_true).all(), res["N_hat_recomputed"]
+    assert (res["N_hat_recomputed"] < N_true).any(), res["N_hat_recomputed"]
     # and it must report a bound that binds rather than silently crossing it — the
     # model's N_LO = ceil(N_obs / R_d) is a theorem, not a search convention
     n_cl, cl = NS["implied_variety_count"](k_true[2][CELL_MASK[2]], m, G_plant[2, 0], 0,
@@ -658,16 +726,12 @@ def gate_untargeted_counts():
     assert np.abs(tab.loc[ok, "gap"]).max() < 1e-12
     assert (tab.loc[ok, "N implied by G_s(K*)"].to_numpy() == N_true[ok]).all()
     assert np.allclose(tab.loc[ok, "N ratio"], 1.0)
-    # The model's own first step can only come EARLIER than the data's: the Binomial
-    # puts mass at every count from one upward, while the data's support may skip the
-    # low ones. Sector 205's support has no K = 1, so the data's first step is 2 and the
-    # model's is 1 — that is the documented diagnostic, not a discrepancy in the economy,
-    # and the mass the model puts on the skipped counts is already inside `dG model`.
+    # The censored model's first step can only come EARLIER than the data's: it is C by
+    # construction, while the data's support may skip C (sector 422 does), in which case
+    # the data's first step is further out and the model carries mass the data do not.
     assert (tab.loc[ok, "K* (model)"].to_numpy() <= tab.loc[ok, "K*"].to_numpy()).all()
-    assert tab.loc["205", "K*"] == 2 and tab.loc["205", "K* (model)"] == 1
-    assert 1 not in K_support[1] and 1 in K_support[0]
-    same = tab["K*"] == 1
-    assert (tab.loc[same, "K* (model)"] == 1).all()
+    assert C not in K_support[3] and C in K_support[0]
+    assert tab.loc["422", "K*"] > C and tab.loc["422", "K* (model)"] == C
     print("planted economy: N_hat, K* and the implied N all recovered exactly")
 
     # a MISSPECIFIED model: give it the wrong variety count and the gap must open, with
