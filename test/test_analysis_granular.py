@@ -14,7 +14,7 @@ reconstruction in the gamma panel, and the LaTeX table's contents.
 Runs every gate, prints PASS/FAIL per gate and exits non-zero if any failed.
 Print-only otherwise; nothing in the estimation pipeline is touched.
 """
-import json, os, sys, tempfile, warnings
+import io, json, os, sys, tempfile, warnings
 
 import matplotlib
 matplotlib.use("Agg")
@@ -119,14 +119,19 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/reg_coef_cloglog_{N_REG}.npy", reg_coef_emp)
 
     # ---- G_K.csv --------------------------------------------------------------
+    # G = Pr(K_ls <= K), so the curve must be non-decreasing in K and bounded by 1:
+    # the reporting reads K = 0 as the targeted moment and K >= 1 as the untargeted
+    # continuation, and both are checked for monotonicity.
     G_target = np.array([0.30, 0.45, 0.20, 0.55])
     N_sup = np.array([40, 26, 51, 18])
+    K_ROWS = 4
+    G_curve_emp = np.minimum(1.0, G_target[:, None] + 0.1 * np.arange(K_ROWS)[None, :])
     rows = []
     for s in range(S):
-        for k in range(3):
+        for k in range(K_ROWS):
             # Real column layout: group, A129, G, K, N_supplier_s — `G` is the value
             # column, G = Pr(K_ls <= K), and the K = 0 row is the targeted moment.
-            rows.append({"group": s + 1, "A129": sectors[s], "G": G_target[s] + 0.1 * k,
+            rows.append({"group": s + 1, "A129": sectors[s], "G": G_curve_emp[s, k],
                          "K": k, "N_supplier_s": N_sup[s]})
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
 
@@ -162,7 +167,29 @@ def _build_industry(ROOT, industry, sectors):
     sim_industry = agg_industry_share * RNG.uniform(0.9, 1.1, S)
     sim_pi = emp_pi_r * RNG.uniform(0.9, 1.1, R_D)
     sim_reg = reg_coef_emp * RNG.uniform(0.8, 1.2, N_REG)
-    sim_G0 = np.clip(G_target + RNG.normal(0, 0.05, S), 0, 1)
+    # The count moment is not free: it is `mean_l C(m-k_l, n)/C(m, n)` at the profiled
+    # N_hat_s, over the cells of sector s. The reporting rebuilds the curve from the
+    # `q_hat` / `N_hat` the diagnostics npz carries, so the synthetic tree has to be
+    # self-consistent the way a real run is — plant the win counts first and DERIVE
+    # block 6 from them, or the K = 0 identity has nothing to gate.
+    N_HAT = np.array([12, 7, 21, 4])
+    N_RHO = max(100, int(N_sup.max()))              # load_parameters.jl's rule
+    K_COUNTS = RNG.integers(0, 30, int(CELL_MASK.sum()))
+    q_hat_plant = K_COUNTS / N_RHO
+    _lg = np.concatenate([[0.0], np.cumsum(np.log(np.arange(1, N_RHO + 1, dtype=float)))])
+
+    def _lb(a, b):
+        return _lg[a] - _lg[b] - _lg[a - b]
+
+    def _gbar0(kk, n):
+        out = np.zeros(np.shape(kk), float)
+        ok = n <= N_RHO - kk
+        out[ok] = np.exp(_lb(N_RHO - kk[ok], n) - _lb(N_RHO, n))
+        return out
+
+    _cell_s = np.flatnonzero(CELL_MASK.ravel(order="F")) % S
+    sim_G0 = np.array([_gbar0(K_COUNTS[_cell_s == s], int(N_HAT[s])).mean()
+                       for s in range(S)])
 
     final = np.concatenate([sim_labor, sim_industry, sim_pi, sim_reg,
                             sim_gamma_aa.ravel(), sim_G0])
@@ -213,18 +240,20 @@ def _build_industry(ROOT, industry, sectors):
         np.save(f"{RUN}/{st}/inference/se_moments_fitted.npy",
                 np.sqrt(np.diag(Sigma_data)) * (0.5 if st == "step2" else 0.4))
         np.savez(f"{RUN}/{st}/granular_diagnostics.npz",
-                 N_hat=np.array([12.0, 7.0, 21.0, 4.0]),
+                 N_hat=N_HAT.astype(float),
                  N_LO=np.array([14.0, 9.0, 17.0, 6.0]),
                  N_HI=N_sup.astype(float),
                  clamped=np.array([0.0, 0.0, 0.0, -1.0]),
                  G0_fit=sim_G0, G0_target=G_target,
                  N_count=np.array([690.0, 120.0, 55.0, 33.0]),
-                 q_hat=RNG.uniform(0.01, 0.3, int(CELL_MASK.sum())),
+                 q_hat=q_hat_plant,
                  b_logz=np.array([-1.768]), EK=RNG.uniform(0.1, 3, S))
 
     # ---- the expectations the test checks against ----------------------------
     expected = {
         "S": S, "R": R, "n_AA": R_D, "n_coef": N_REG, "n_gb": n_gb,
+        "G_curve_emp": G_curve_emp.tolist(), "K_rows": list(range(K_ROWS)),
+        "N_hat": N_HAT.tolist(), "n_rho": N_RHO,
         "aa_names": [ze[i] for i in down_idx],
         "sector_names": sectors,
         "aa_of_ze": aa_of_ze.tolist(),
@@ -283,6 +312,103 @@ def run_checks(ns, ROOT, exp):
           close(d2["empirical_moments_dict"]["G0"], exp["G_target"]))
     check("labor share", close(d2["empirical_moments_dict"]["agg_labor_share"],
                                [exp["agg_labor_share"]]))
+
+    print("\n=== 2b. Gbar_s(0): the figure against Julia's own reporting ===")
+    # Four writings of the same moment: G_K.csv and `G0_target` on the empirical side,
+    # block 6 of best_simulated_moments.npy and `G0_fit` on the simulated side. They are
+    # produced by different Julia code paths at the same theta, so agreement is a real
+    # cross-check — and the checker has to be able to FAIL, or it checks nothing. The
+    # synthetic tree supplies both cases: step3's moment vector carries exactly the
+    # `G0_fit` planted in step3/granular_diagnostics.npz, while step1's is that same
+    # vector scaled by 0.95 against an unscaled step2 npz.
+    d1 = ns["load_granular_data"]("test", mu=1, base=ROOT)
+    g2 = ns["g0_consistency"](d2, verbose=False)
+    g1 = ns["g0_consistency"](d1, verbose=False)
+    check("consistency table is indexed by sector, one row each",
+          list(g2.index) == exp["sector_names"])
+    check("target column is G_K.csv at K = 0",
+          close(g2["target (G_K.csv)"], exp["G_target"]))
+    check("target agrees with the diagnostics' frozen G_TARGET",
+          close(g2["d_target"], np.zeros(exp["S"])))
+    check("fit column is block 6 of the moment vector",
+          close(g2["fit (moment vector)"], d2["simulated_moments_dict"]["G0"]))
+    check("matching moment vector and diagnostics -> agrees",
+          bool(g2.attrs["agrees"]) and g2.attrs["max_abs_fit_gap"] <= 1e-12)
+    check("a diagnostics file at another theta is CAUGHT, not averaged over",
+          not bool(g1.attrs["agrees"]))
+    check("the caught gap is the planted one (5% of G0_fit)",
+          close(g1.attrs["max_abs_fit_gap"],
+                np.max(np.abs(np.array(exp["sim_final"]["G0"]) * 0.05)), 1e-12))
+    check("residual column is fit - target",
+          close(g2["residual (fit - target)"],
+                np.asarray(g2["fit (moment vector)"]) - np.asarray(g2["target (G_K.csv)"])))
+    check("N_hat and clamp carried through from the diagnostics",
+          list(g2["clamp"]) == ["none", "none", "none", "lo"])
+    # A G_K.csv whose A129 set differs from filter_N_upstream.csv's would attach every
+    # sector's zero-supplier target to another sector, silently and identically in Julia.
+    gk_path = os.path.join(ROOT, "baseline_test", "G_K.csv")
+    gk_orig = open(gk_path).read()
+    try:
+        gk = pd.read_csv(io.StringIO(gk_orig))
+        gk["A129"] = gk["A129"].replace({exp["sector_names"][0]: "ZZZZ"})
+        gk.to_csv(gk_path, index=False)
+        raised = False
+        try:
+            ns["load_granular_data"]("test", mu=2, base=ROOT)
+        except ValueError as e:
+            raised = "do not enumerate the same sectors" in str(e)
+        check("a G_K.csv covering different sectors is refused, not silently misaligned",
+              raised)
+    finally:
+        open(gk_path, "w").write(gk_orig)
+
+    print("\n=== 2c. the count curve Gbar_s(K), K = 0..3 ===")
+    # K = 0 is block 6 of the moment vector and N_hat_s is calibrated on it; K >= 1 is
+    # untargeted and exists nowhere on the Julia side, so the notebook rebuilds it from
+    # `q_hat` and `N_hat`. The gate that matters is that the rebuild REPRODUCES block 6
+    # at K = 0 — same estimator, same cells, same draw count — because that is the only
+    # thing tying the untargeted panels to the targeted one.
+    cc = ns["count_curve"](d2, K_values=(0, 1, 2, 3))
+    check("curve is indexed by (sector, K)", list(cc.index.names) == ["A129", "K"] and
+          len(cc) == exp["S"] * 4)
+    check("empirical curve is the rest of G_K.csv",
+          close(cc["empirical"].values.reshape(exp["S"], 4),
+                np.array(exp["G_curve_emp"])))
+    check("the unbiased estimator was used (no fallback)",
+          cc.attrs["estimator"].startswith("unbiased"))
+    check("N_rho recovered from N_HI as load_parameters.jl fixes it",
+          cc.attrs["n_rho"] == exp["n_rho"])
+    check("K = 0 column reproduces block 6 of the moment vector",
+          close(cc.xs(0, level="K")["simulated"].values,
+                d2["simulated_moments_dict"]["G0"], 1e-12))
+    check("K = 0 gap is reported and is machine zero",
+          cc.attrs["K0_gap_vs_moment_vector"] <= 1e-12)
+    sim_w = cc["simulated"].values.reshape(exp["S"], 4)
+    check("simulated curve is a CDF: non-decreasing in K",
+          bool((np.diff(sim_w, axis=1) >= -1e-12).all()))
+    check("simulated curve stays in [0, 1]",
+          bool((sim_w >= -1e-12).all() and (sim_w <= 1 + 1e-12).all()))
+    check("only K = 0 is flagged as targeted",
+          list(cc["targeted"].values.reshape(exp["S"], 4)[0]) == [True, False, False, False])
+    check("N_hat carried through per sector",
+          close(cc.xs(0, level="K")["N_hat"].values, exp["N_hat"]))
+    check("residual is simulated - empirical",
+          close(cc["residual"].values, cc["simulated"].values - cc["empirical"].values))
+    # A K the data pipeline never tabulated must leave the panel's empirical series
+    # empty rather than silently borrowing a neighbouring K.
+    cc9 = ns["count_curve"](d2, K_values=(0, 9))
+    check("a K absent from G_K.csv comes back NaN, not shifted",
+          bool(np.isnan(cc9.xs(9, level="K")["empirical"].values).all())
+          and close(cc9.xs(0, level="K")["simulated"].values,
+                    d2["simulated_moments_dict"]["G0"], 1e-12))
+    # The cell -> sector map: Julia's findall over the (S, R) CELL_MASK is
+    # COLUMN-major, so reading q_hat in C order would shuffle cells between sectors.
+    cs = ns["_cell_sectors"](d2)
+    check("cell -> sector map is column-major, matching findall(CELL_MASK)",
+          list(cs) == list(np.flatnonzero(np.array(exp["CELL_MASK"]).ravel(order="F"))
+                           % exp["S"]))
+    check("one q_hat per simulated cell",
+          cs.size == int(np.array(exp["CELL_MASK"]).sum()))
 
     print("\n=== 3. moment mask (must reproduce load_parameters.jl) ===")
     mask, S, nAA = d2["moment_mask"], d2["S"], d2["n_AA"]
@@ -360,7 +486,8 @@ def run_checks(ns, ROOT, exp):
     print("\n=== 8. figures render ===")
     outdir = os.path.join(ROOT, "out")
     os.makedirs(outdir, exist_ok=True)
-    for fn, kw in (("plot_gamma_aa", {}), ("plot_pi_r", {}), ("plot_reg_coef", {}), ("plot_G0", {})):
+    for fn, kw in (("plot_gamma_aa", {}), ("plot_pi_r", {}), ("plot_reg_coef", {}),
+                   ("plot_G0", {}), ("plot_count_curve", {"K_values": (0, 1, 2, 3)})):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
