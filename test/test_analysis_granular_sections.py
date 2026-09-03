@@ -750,7 +750,21 @@ def gate_comparative_advantage():
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_ca_distribution"](data, save_to=str(out / "ca_dist.png"))
-    NS["plot_ca_distance_equivalence"](data, save_to=str(out / "ca_equiv.png"))
+    axe = NS["plot_ca_distance_equivalence"](data, save_to=str(out / "ca_equiv.png"))
+    # Test 2's figure reports the distance EQUIVALENCE alone, in kilometres, on a log x
+    # axis with plain-number labels — no scientific notation, and no geography markers
+    # (those belong to test 3, which does the comparison buyer by buyer).
+    assert axe.get_xscale() == "log"
+    assert len(axe.collections) == 0, "the geography benchmark markers should be gone"
+    assert len(axe.patches) >= S, "one bar per sector"
+    axe.figure.canvas.draw()
+    labs = [t.get_text() for t in axe.get_xticklabels() if t.get_text()]
+    assert labs and not any(("e" in l.lower() or "\u00d7" in l) for l in labs), \
+        f"x tick labels must be plain numbers, got {labs}"
+    assert all(l.replace(",", "").replace(".", "").isdigit() for l in labs), \
+        f"x tick labels must be full numbers in km, got {labs}"
+    assert "km" in axe.get_xlabel()
+    print("\n  test-2 figure: log x, plain km labels", labs[:6])
     NS["plot_ca_win_margin"](data, save_to=str(out / "ca_win_margin.png"))
     NS["plot_counterfactual_sourcing"](data, save_to=str(out / "ca_cf.png"))
     summ = NS["comparative_advantage_summary"](data)

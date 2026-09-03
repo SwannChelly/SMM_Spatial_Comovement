@@ -460,6 +460,35 @@ def run_checks(ns, ROOT, exp):
     # must be SAID, not silently plotted.
     gkv_path = os.path.join(ROOT, "baseline_test", "G_K_var.csv")
     gkv_orig = open(gkv_path).read()
+
+    # A sector whose bootstrap variance is 0 (or missing) must keep its POINT and simply
+    # lose its bar: the value is known, only its uncertainty is not. Drawing it through
+    # errorbar with a zero yerr would put a bare cap on the marker; a NaN yerr drops the
+    # point entirely. Both are wrong, and the second is what makes a point look absent.
+    try:
+        z = pd.read_csv(io.StringIO(gkv_orig))
+        z.loc[z["K"] == 2, "var"] = 0.0
+        z.to_csv(gkv_path, index=False)
+        d_z = ns["load_granular_data"]("test", mu=2, base=ROOT)
+        cc_z = ns["count_curve"](d_z, K_values=(0, 1, 2, 3))
+        check("a zero bootstrap variance keeps the empirical VALUE",
+              bool(np.isfinite(cc_z.xs(2, level="K")["empirical"].values).all()) and
+              close(cc_z.xs(2, level="K")["se_empirical"].values, np.zeros(exp["S"])))
+        axs_z = ns["plot_count_curve"](d_z, K_values=(0, 1, 2, 3))
+        ax_k2 = axs_z[1][0]            # ncols=2 => K=2 is the second row, first column
+        emp = [c for c in ax_k2.containers if c.get_label() == "Empirical"]
+        n_pts = sum(len(c[0].get_xdata()) for c in emp)
+        check("every sector is still plotted at K = 2 despite a zero variance",
+              n_pts == exp["S"])
+        check("and none of them carries an error bar",
+              not any(getattr(c, "has_yerr", False) for c in emp))
+        # the K = 0 panel, where the variances are nonzero, must still show bars
+        emp0 = [c for c in axs_z[0][0].containers if c.get_label() == "Empirical"]
+        check("a panel with nonzero variances still draws its bars",
+              any(getattr(c, "has_yerr", False) for c in emp0))
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
     try:
         bad = pd.read_csv(io.StringIO(gkv_orig))
         bad.loc[bad["K"] == 0, "var"] *= 9.0          # 3x the SE
@@ -540,6 +569,31 @@ def run_checks(ns, ROOT, exp):
               bool(np.isnan(cc_nb["se_empirical"].values).all()))
     finally:
         os.rename(gkv_path + ".off", gkv_path)
+
+    # G is CUMULATIVE, so a (sector, K) row absent from G_K.csv means no mass was added
+    # there, not that the level is unknown. Differencing a NaN would poison TWO
+    # increments (K and K+1) and erase two empirical points from the figure.
+    gk_path2 = os.path.join(ROOT, "baseline_test", "G_K.csv")
+    gk_orig2 = open(gk_path2).read()
+    try:
+        g = pd.read_csv(io.StringIO(gk_orig2))
+        g = g[~((g["K"] == 2) & (g["A129"] == exp["sector_names"][0]))]
+        g.to_csv(gk_path2, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cc_gap = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                       K_values=(0, 1, 2, 3))
+        emp_gap = cc_gap["empirical"].values.reshape(exp["S"], 4)
+        ref = np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)
+        check("a missing K row is read as a flat CDF (increment 0), not two NaNs",
+              bool(np.isfinite(emp_gap).all()) and abs(emp_gap[0, 2]) < 1e-12
+              and abs(emp_gap[0, 3] - (ref[0, 2] + ref[0, 3])) < 1e-12)
+        check("and the fill is announced rather than silent",
+              "the CDF is flat there" in buf.getvalue())
+        check("other sectors are untouched by one sector's gap",
+              close(emp_gap[1:], ref[1:]))
+    finally:
+        open(gk_path2, "w").write(gk_orig2)
 
     # A K the data pipeline never tabulated must leave the panel's empirical series
     # empty rather than silently borrowing a neighbouring K.
