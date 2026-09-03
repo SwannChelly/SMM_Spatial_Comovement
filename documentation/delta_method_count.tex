@@ -150,6 +150,15 @@ the published $\mathrm{se}_N$ moves slightly as a result.
 It must hold the bootstrap variance of the \textbf{increment} $\hat p_s(K)$, not of the
 cumulative $\Ghat_s(K)$: those coincide only at $K=0$.
 
+The value column is found by name (\texttt{var}/\texttt{variance}, else
+\texttt{se}/\texttt{sd}/\texttt{std}); a file written off \texttt{G\_K.csv}'s own schema
+often keeps it called \texttt{G}, which names the object measured rather than the statistic,
+so whatever single column remains beside \texttt{A129} and \texttt{K} is read as a variance
+and the choice is announced. Two spare columns are refused rather than guessed.
+
+Only $K\le\texttt{COUNT\_CURVE\_K\_MAX}$ is kept, from this file and from
+\texttt{G\_K.csv} alike, so the variance file need only cover the low $K$ actually plotted.
+
 \texttt{A129} holds the sector \textbf{codes}, exactly the values \texttt{G\_K.csv} carries
 (\texttt{C30C}, \texttt{2501}, \dots) --- not a $1\dots S$ index. Sectors are matched by
 value, so row order is irrelevant, but the two files must agree on the code's dtype; the

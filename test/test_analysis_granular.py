@@ -473,6 +473,46 @@ def run_checks(ns, ROOT, exp):
     finally:
         open(gkv_path, "w").write(gkv_orig)
 
+    # A G_K_var.csv written off G_K.csv's own schema keeps the value column called `G`,
+    # which names the object measured, not the statistic. It must still be read, as a
+    # variance, and the fallback must SAY so rather than guess silently.
+    try:
+        gcol = pd.read_csv(io.StringIO(gkv_orig)).rename(columns={"var": "G"})
+        gcol.to_csv(gkv_path, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cc_g = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                     K_values=(0, 1, 2, 3))
+        check("a value column named `G` is read as the variance, and the choice announced",
+              "as the VARIANCE" in buf.getvalue() and
+              close(cc_g["se_empirical"].values.reshape(exp["S"], 4),
+                    np.array(exp["G_pmf_se"])))
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    # An ambiguous file (two spare columns) must refuse rather than pick one.
+    try:
+        amb = pd.read_csv(io.StringIO(gkv_orig)).rename(columns={"var": "G"})
+        amb["other"] = 1.0
+        amb.to_csv(gkv_path, index=False)
+        raised = False
+        try:
+            ns["load_granular_data"]("test", mu=2, base=ROOT)
+        except KeyError as e:
+            raised = "cannot tell which column holds the variance" in str(e)
+        check("an ambiguous G_K_var.csv is refused, not guessed", raised)
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    # k_max truncates every count-curve input at once, so raising the constant is the
+    # single place that widens the reporting.
+    d_k1 = ns["load_granular_data"]("test", mu=2, base=ROOT, k_max=1)
+    check("k_max truncates the empirical curve and its bootstrap SE together",
+          d_k1["G_curve_K"] == [0, 1] and d_k1["G_pmf"].shape[1] == 2
+          and d_k1["G_pmf_se"].shape[1] == 2)
+    check("k_max leaves G_target (the K = 0 targeted moment) untouched",
+          close(d_k1["G_target"], d2["G_target"]))
+
     # Sectors are matched by VALUE on the A129 code. A file whose codes do not line up
     # (a renamed sector, or an int64 column against a string one) would otherwise hand
     # back an all-NaN band with no complaint.
