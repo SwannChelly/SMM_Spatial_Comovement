@@ -472,6 +472,62 @@ end
 
 
 """
+The `K` values at which the supplier-count DISTRIBUTION is tabulated as a diagnostic.
+`K = 0` is the targeted moment (block 6); `K ≥ 1` is the untargeted shape check
+(gate V8 of `documentation/granular_validation.md`).
+"""
+const COUNT_CURVE_K = 0:3
+
+"""
+    gbar_cell_K(k, m, n, j, lg) -> Float64
+
+UNBIASED estimator of `Pr[K_ls = j]`, the probability that cell `l` hosts EXACTLY
+`j` suppliers among `n` varieties, from `k` observed wins out of `m` draws.
+
+    E[ C(k,j) C(m−k, n−j) / C(m,n) ] = C(n,j) q^j (1−q)^(n−j)     for every j ≤ n ≤ m
+
+Same argument as `gbar_cell`, one step more general: take the `n` varieties to be `n`
+of the `m` simulated draws sampled WITHOUT replacement, so the win count among them is
+Hypergeometric; marginalising over the draws each is a win with probability `q`
+independently, and the expectation is the Binomial pmf EXACTLY — no approximation.
+
+At `j = 0` it collapses to `C(m−k,n)/C(m,n)`, i.e. to `gbar_cell` verbatim. That
+identity is what ties the untargeted `j ≥ 1` panels to the targeted `j = 0` moment:
+they are the same estimator, so a discrepancy at `K = 0` is a bug, not a convention.
+
+Note this is the INCREMENT (exactly `j`), not the CDF. `N̂_s` is calibrated on the
+`j = 0` level, so under a cumulative convention every panel would contain the fitted
+level and re-test what is already targeted; the increments isolate the free content —
+the SHAPE of the count distribution.
+"""
+@inline function gbar_cell_K(k::Integer, m::Integer, n::Integer, j::Integer,
+                             lg::Vector{Float64})
+    n <= 0 && return j == 0 ? 1.0 : 0.0
+    (j < 0 || j > n || j > k) && return 0.0
+    n - j > m - k && return 0.0
+    return exp((lg[k+1]     - lg[j+1]   - lg[k-j+1]) +
+               (lg[m-k+1]   - lg[n-j+1] - lg[m-k-n+j+1]) -
+               (lg[m+1]     - lg[n+1]   - lg[m-n+1]))
+end
+
+"""
+    gbar_sector_K(cells, k_counts, m, n, j, lg) -> Float64
+
+`Ḡ_s(j) = mean over cells l of Pr[K_ls = j]`, via the unbiased `gbar_cell_K`. At
+`j = 0` it equals `gbar_sector`, i.e. block 6 of the moment vector.
+"""
+function gbar_sector_K(cells, k_counts::AbstractVector{<:Integer}, m::Integer,
+                       n::Integer, j::Integer, lg::Vector{Float64})
+    isempty(cells) && return j == 0 ? 1.0 : 0.0
+    acc = 0.0
+    @inbounds for g in cells
+        acc += gbar_cell_K(k_counts[g], m, n, j, lg)
+    end
+    return acc / length(cells)
+end
+
+
+"""
     concentrate_N_s(k_counts, m) -> (N_hat::Vector{Int}, clamped::Vector{Symbol})
 
 Profile the variety count `N_s` out of the loss by a **monotone integer bisection**
@@ -2233,6 +2289,9 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     clamped    = Symbol[]
     q_hat      = Float64[]
     G0         = Float64[]
+    k_counts_o = Int[]          # win counts per cell (diagnostic; `gbar_*` needs k and m)
+    n_draw_o   = 0              # the m behind those counts
+    G_curve    = zeros(0, 0)    # S × length(COUNT_CURVE_K), the count DISTRIBUTION
 
     if GRANULAR
         n_draw = size(linkages_flat, 1)
@@ -2272,6 +2331,22 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
             isempty(cells) && continue
             G0[s] = gbar_sector(cells, k_counts, n_draw, N_hat[s], lg_G0)
         end
+
+        # The count DISTRIBUTION, Ḡ_s(K) = mean_l Pr[K_ls = K], as a DIAGNOSTIC — it
+        # never enters the moment vector. K = 0 reproduces G0 above by construction
+        # (`gbar_cell_K` at j = 0 IS `gbar_cell`), which is what lets the untargeted
+        # K ≥ 1 panels be read on the same scale as the targeted one. Cheap: O(1) per
+        # (cell, K) off the shared log-factorial table.
+        k_counts_o = k_counts
+        n_draw_o   = n_draw
+        G_curve    = zeros(S, length(COUNT_CURVE_K))
+        @inbounds for s in 1:S
+            cells = CELLS_OF_SECTOR[s]
+            isempty(cells) && continue
+            for (i, KK) in enumerate(COUNT_CURVE_K)
+                G_curve[s, i] = gbar_sector_K(cells, k_counts, n_draw, N_hat[s], KK, lg_G0)
+            end
+        end
     end
 
 
@@ -2299,6 +2374,11 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
         clamped           = clamped,                    # :none / :lo / :hi per sector
         q_hat             = q_hat,                      # win-somewhere probability per cell
         b_logz            = b_logz,                     # log-z coefficient (should equal −θ)
+        # APPENDED, never inserted: positional indices 1–6 into this NamedTuple are the
+        # six moment blocks and must not move.
+        G_curve           = G_curve,                    # S × |COUNT_CURVE_K| count pmf
+        k_counts          = k_counts_o,                 # wins per cell, for gbar_* at any K
+        n_draw            = n_draw_o,                   # the m behind k_counts
     )
 end
 
@@ -2321,7 +2401,8 @@ Main SMM function for optimization.
 function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
              u_draws::Union{Nothing, Matrix{Float64}}=nothing,
              sample_weights::Union{Nothing, AbstractMatrix{Float64}}=nothing,
-             N_fixed::Union{Nothing, Vector{Int}}=nothing)
+             N_fixed::Union{Nothing, Vector{Int}}=nothing,
+             return_full::Bool=false)
 
     # The full-size `z_flat` (6.7 MB at N_rho = 723, n_good = 1161; 37 MB at
     # N_RHO_INFERENCE) is only needed by the DENSE regression path. Under the streaming
@@ -2354,7 +2435,13 @@ function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Fl
     # Compute and return moments
     moments = compute_moments(network, params; N_fixed=N_fixed)
 
-    return moment_blocks_tuple(moments)
+    # `return_full` hands back the whole NamedTuple (moment blocks AND the non-moment
+    # diagnostics — `G_curve`, `q_hat`, `N_hat`, ...) instead of just the blocks.
+    # `moments_to_vec` / `moment_blocks_tuple` accept either, so nothing downstream
+    # changes; it exists so a caller that already paid for the network solve can read a
+    # diagnostic off the SAME evaluation rather than re-solving. Default false ⇒ the
+    # historical Tuple, byte-identical.
+    return return_full ? moments : moment_blocks_tuple(moments)
 end
 
 
@@ -2392,7 +2479,9 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
     EK = [m.N_hat[GOOD_S[g]] * m.q_hat[g] for g in 1:n_good]
 
     return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, b_logz = m.b_logz,
-            G0 = m.G0, G_target = collect(G_TARGET), N_count = N_count, EK = EK)
+            G0 = m.G0, G_target = collect(G_TARGET), N_count = N_count, EK = EK,
+            G_curve = m.G_curve, k_counts = m.k_counts, n_draw = m.n_draw,
+            K_values = collect(COUNT_CURVE_K))
 end
 
 
@@ -2513,7 +2602,8 @@ function full_SMM(params, simulation=false, second_stage=false;
                   moment_blocks::Union{Nothing, Vector{Int}}=nothing,
                   analytical::Bool=false,
                   n_quad::Int=200,
-                  N_fixed::Union{Nothing, Vector{Int}}=nothing)
+                  N_fixed::Union{Nothing, Vector{Int}}=nothing,
+                  return_full::Bool=false)
 
     if analytical
         @assert !GRANULAR "the analytical/GMM path does not implement the granular count " *
@@ -2524,7 +2614,7 @@ function full_SMM(params, simulation=false, second_stage=false;
     else
         simulated_moments = SMM(params, simulation; precomputed_tau=precomputed_tau,
                                 u_draws=u_draws, sample_weights=sample_weights,
-                                N_fixed=N_fixed)
+                                N_fixed=N_fixed, return_full=return_full)
     end
 
     # `second_stage` is retained as an ignored positional arg for call-site

@@ -255,6 +255,12 @@ if run_step2
     W_step3 = build_step3_weight_matrix(theta_hat_1, input_folder;
                                          K=K_sim, output_folder=output_folder)
     #W_step3 = NPZ.npzread(step2_W_path)
+    # Payload slots for the count-distribution Jacobians (Ḡ_s(K), K = 0..3): filled by
+    # `compute_jacobian(G_curve_out=...)` from evaluations it already makes, and read by
+    # `run_profiled_inference` for the delta-method bands on the untargeted panels.
+    gcurve_free_step2  = Ref{Any}(nothing)
+    gcurve_alpha_step2 = Ref{Any}(nothing)
+
     # Jacobian at θ̂_1 — identified parameters only
     J1, J1_elast, J1_sd, J1_elast_sd = compute_jacobian(
         theta_hat_1;
@@ -271,6 +277,11 @@ if run_step2
         # untouched.
         append_N_s    = GRANULAR,
         N_s_base_seed = 7_100_000,   # disjoint from run_profiled_inference's 7_000_000
+        # Differentiate the untargeted count distribution Ḡ_s(K) alongside the moments.
+        # Free: it rides the SAME evaluations and is split off before anything is saved,
+        # so `jacobian_all*.npy` and every consumer that slices by moment index are
+        # unchanged. Needed for the delta-method bands on the K ≥ 1 panels.
+        G_curve_out   = gcurve_free_step2,
         load_existing = load_jacobian
     )
 
@@ -326,6 +337,7 @@ if run_step2
             K             = 50,
             step_rel      = 1e-2,
             base_seed     = 6_000_000,  # disjoint from J1 (2e6), Σ_sim (1:K_sim), step3 (1e6)
+            G_curve_out   = gcurve_alpha_step2,
             load_existing = load_jacobian)
         Sigma_data_s2 = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
         run_profiled_inference(
@@ -343,6 +355,11 @@ if run_step2
             head_labels      = head_labels,
             head_values      = head_values,
             J_free_gb        = J_gb,          # free-parameter FD Jacobian ⇒ T's se_fd
+            # Count-distribution Jacobians. The free one is sliced to the SAME gb
+            # columns as J_free_gb so `T_pos` indexes both identically.
+            G_curve_alpha    = gcurve_alpha_step2[],
+            G_curve_free     = gcurve_free_step2[] === nothing ? nothing :
+                               gcurve_free_step2[][:, gb_cols],
             N_s_base_seed    = 7_000_000)
     else
         inf_res_1 = compute_smm_inference(
@@ -455,6 +472,9 @@ if run_step4
     # at the profiled point — no delta method. Inference is identical to the joint
     # estimator; only the SEARCH that produced θ̂_2 differed.
     println("\nComputing Jacobian at θ̂_2 (base_seed=1_000_000 to avoid collision with Σ_sim seeds)...")
+    gcurve_free_step3  = Ref{Any}(nothing)
+    gcurve_alpha_step3 = Ref{Any}(nothing)
+
     J2, J2_elast, J2_sd, J2_elast_sd = compute_jacobian(
         theta_hat_2;
         param_indices = jacobian_param_indices,
@@ -466,6 +486,11 @@ if run_step4
         base_seed     = 1_000_000,
         append_N_s    = GRANULAR,    # see the Step-2 call: N_s is a parameter too
         N_s_base_seed = 7_200_000,
+        # Differentiate the untargeted count distribution Ḡ_s(K) alongside the moments.
+        # Free: it rides the SAME evaluations and is split off before anything is saved,
+        # so `jacobian_all*.npy` and every consumer that slices by moment index are
+        # unchanged. Needed for the delta-method bands on the K ≥ 1 panels.
+        G_curve_out   = gcurve_free_step3,
         load_existing = load_jacobian
     )
 
@@ -555,6 +580,7 @@ if run_step4
             K             = 50,
             step_rel      = 1e-2,
             base_seed     = 7_000_000,  # disjoint from J2 (1e6), Σ_sim (1:K_sim), step2 (6e6)
+            G_curve_out   = gcurve_alpha_step3,
             load_existing = load_jacobian)
         Sigma_data_s4 = NPZ.npzread(joinpath(output_folder, "step2", "Sigma_data.npy"))
         run_profiled_inference(
@@ -571,6 +597,9 @@ if run_step4
             head_labels      = head_labels,
             head_values      = head_values,
             J_free_gb        = J2_gb,         # free-parameter FD Jacobian ⇒ T's se_fd
+            G_curve_alpha    = gcurve_alpha_step3[],
+            G_curve_free     = gcurve_free_step3[] === nothing ? nothing :
+                               gcurve_free_step3[][:, gb_cols],
             N_s_base_seed    = 7_100_000)
     else
         inf_res = compute_smm_inference(

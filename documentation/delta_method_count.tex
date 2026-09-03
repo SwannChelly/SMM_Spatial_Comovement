@@ -133,12 +133,31 @@ so the Jacobian has rows for $a_s^{K}$ and $b_s^{K}$.
 \texttt{clamped}-keyed switch in \texttt{plot\_count\_curve}.
 \end{enumerate}
 
-\paragraph{One consistency choice to make deliberately.}
-The existing $\Nhat_s$ delta method uses the \emph{analytic} $\partial\Gbar_s(0)/\partial n
-=\overline{(1-\qhat)^{n}\ln(1-\qhat)}$, while \eqref{eq:D} is the unit first difference. They
-agree to $O(\qhat)$ (the gap is already reported), but $D_s^{0}$ appears in both $r_s^{K}$ and
-$\mathrm{Var}(\Nhat_s)$. Using the first difference throughout is the coherent choice --- one
-variety \emph{is} the step --- but it will shift the published $\mathrm{se}_N$ slightly, so
-make the switch explicitly rather than by accident.
+\paragraph{The first difference is used throughout.}
+The $\Nhat_s$ delta method previously divided by the \emph{analytic} slope
+$\overline{(1-\qhat)^{n}\ln(1-\qhat)}$. It now divides by $D_s^{0}$, the same unit first
+difference as everything else in this file: $N_s$ is an integer, one variety \emph{is} the
+step, and $D_s^{0}$ enters both $r_s^{K}$ and $\mathrm{Var}(\Nhat_s)$, so a mixed convention
+would make the two inconsistent. It is evaluated \emph{through} $\mathtt{gbar\_sector}$ ---
+the difference of the same unbiased estimator the bisection matched on, not of a plug-in that
+drifts from it by $O(\qhat)$. The plug-in slope is still printed beside it as a scale check;
+the published $\mathrm{se}_N$ moves slightly as a result.
+
+\section{The empirical variance file}
+
+\texttt{<baseline>/G\_K\_var.csv}, optional, columns \texttt{A129}, \texttt{K}, and either
+\texttt{var} or \texttt{se} --- names matched case-insensitively, as \texttt{G\_K.csv} is.
+It must hold the bootstrap variance of the \textbf{increment} $\hat p_s(K)$, not of the
+cumulative $\Ghat_s(K)$: those coincide only at $K=0$.
+
+That coincidence is a free consistency gate and is checked rather than assumed. Since
+$\hat p_s(0)=\Ghat_s(0)$ is block 6 of the moment vector, its bootstrap variance is already
+the count block of $\Sigma_{\mathrm{data}}$; the loader compares the two and says so when they
+differ by more than 5\%, the most likely cause being a file that tabulates the CDF's variance.
+
+Bootstrap the whole curve in one pass, resampling as the existing $\beta\to\gamma\to G$ block
+does. Only the marginal variance per $(s,K)$ is consumed here --- the cross-covariance
+$\mathrm{Cov}(\hat p_s(K),\Ghat_s(0))$ would be needed only for a band on the model$-$data
+\emph{difference}, and under the increment convention it is second order.
 
 \end{document}
