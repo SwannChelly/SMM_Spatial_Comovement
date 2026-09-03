@@ -199,6 +199,75 @@ ok("S5  at alpha = 0 the market portfolio is the observed expenditure share",
 
 print()
 print("=" * 72)
+print("Section 4.4 -- the link to the distribution of downstream sales")
+print("=" * 72)
+
+Xbar = X / X.sum()
+HX = (Xbar ** 2).sum()
+
+# Proposition 10 -- the access tilt decomposition, eq (17)-(18)
+u = w / Xbar[None, :]                                   # over-weight vs the market portfolio
+ok("P10 the tilt has mean one under Xbar, eq (17)",
+   np.allclose((Xbar[None, :] * u).sum(1), 1))
+_, Phi_ = gamma_phi(T, alpha, wage, d)
+u_struct = (d ** (-THETA * alpha)) / Phi_[None, :]
+u_struct = u_struct / (Xbar[None, :] * u_struct).sum(1, keepdims=True)
+ok("P10 tilt = normalised tau^-theta / Phi, eq (17)", np.allclose(u, u_struct))
+Eu2 = (Xbar[None, :] * u ** 2).sum(1)
+Var_u = Eu2 - 1
+Cov_Xu2 = (Xbar[None, :] ** 2 * u ** 2).sum(1) - HX * Eu2
+ok("P10 H = H^X (1 + Var(u)) + Cov(Xbar, u^2), eq (18)",
+   np.allclose(H(w), HX * (1 + Var_u) + Cov_Xu2))
+ok("P10 the dispersion factor is >= 1, with equality only at u == 1", (Eu2 >= 1 - 1e-12).all())
+w0 = portfolio(T, 0.0, X, wage, d)                      # alpha = 0 nests Proposition 6
+ok("P10 at alpha = 0 the tilt is one and H = H^X",
+   np.allclose(w0, Xbar[None, :]) and np.allclose(H(w0), HX))
+
+# Proposition 10, third bullet -- the individual bound genuinely FAILS
+below, tot, worst = 0, 0, 0.0
+for sd in range(200):
+    Ez = draw(sd, 7, 6)
+    wz = portfolio(Ez["T"], Ez["alpha"], Ez["X"], Ez["wage"], Ez["d"])
+    hxz = ((Ez["X"] / Ez["X"].sum()) ** 2).sum()
+    below += int((H(wz) < hxz).sum()); tot += wz.shape[0]
+    worst = max(worst, (hxz / H(wz)).max())
+print(f"      cells strictly more diversified than the market portfolio: "
+      f"{below}/{tot} ({100 * below / tot:.0f}%), max N/N^X = {worst:.2f}")
+ok("P10 a cell CAN beat the market portfolio (so the cap is not supplier-by-supplier)",
+   below > 0 and worst > 1)
+
+# Proposition 11 -- the market portfolio is the sales-weighted average, and a floor
+S_cell = (g * X[None, :]).sum(1)
+sig_cell = S_cell / S_cell.sum()
+ok("P11 sales-weighted mean portfolio = observed expenditure shares, eq (19)",
+   np.allclose((sig_cell[:, None] * w).sum(0), Xbar))
+Hbar = (sig_cell * H(w)).sum()
+gap = (sig_cell[:, None] * (w - Xbar[None, :]) ** 2).sum()
+ok("P11 Hbar - H^X = weighted dispersion around the market portfolio, eq (20)",
+   np.isclose(Hbar - HX, gap))
+ok("P11 the floor binds on the average, at the ESTIMATED alpha", Hbar >= HX - 1e-12)
+viol = 0
+for sd in range(200):
+    Ez = draw(sd, 7, 6)
+    gz, _ = gamma_phi(Ez["T"], Ez["alpha"], Ez["wage"], Ez["d"])
+    wz = portfolio(Ez["T"], Ez["alpha"], Ez["X"], Ez["wage"], Ez["d"])
+    sz = (gz * Ez["X"][None, :]).sum(1); sz = sz / sz.sum()
+    hxz = ((Ez["X"] / Ez["X"].sum()) ** 2).sum()
+    viol += int((sz * H(wz)).sum() < hxz - 1e-12)
+ok("P11 no violation of the floor in 200 random economies", viol == 0)
+
+# Proposition 11, firm level -- the chain firm >= cell >= market, eq (21)
+rr2 = np.random.default_rng(23)
+A_f = rr2.dirichlet(np.ones(len(X)) * .6, size=12)      # firm portfolios
+s_f = rr2.dirichlet(np.ones(12))                        # firm shares of SECTOR sales
+w_cell = (s_f[:, None] * A_f).sum(0)                    # realised cell/market portfolio
+ok("P11 firm >= cell, eq (21) first inequality",
+   (s_f * H(A_f)).sum() >= H(w_cell) - 1e-12)
+ok("P11 cell >= market when the cells average to the market portfolio",
+   H(w_cell) >= ((w_cell / w_cell.sum()) ** 2).sum() - 1e-12)
+
+print()
+print("=" * 72)
 print("Section 4.3 -- the extensive margin (Monte Carlo)")
 print("=" * 72)
 
@@ -224,16 +293,16 @@ print("=" * 72)
 print("Sections 5 and 6")
 print("=" * 72)
 
-# Proposition 10 -- the tilting identity, and the table of section 5
+# Proposition 12 -- the tilting identity, and the table of section 5
 rr = np.random.default_rng(3)
 nu, av, Lam = rr.random(200) + .2, rr.random(200), rr.random(200)
 den = (nu * av).mean()
-ok("P10 eq (18) tilting identity",
+ok("P12 eq (23) tilting identity",
    np.isclose((nu * av * (Lam + 1 - av)).mean() / den,
               (nu * av * Lam).mean() / den + 1 - (nu * av ** 2).mean() / den))
 a_p = rr.dirichlet(np.ones(6))
 nu_p = rr.random(6) + .2
-ok("A.11 Htilde = H + Cov_p(nu, a) / E_p[nu]",
+ok("A.13 Htilde = H + Cov_p(nu, a) / E_p[nu]",
    np.isclose((nu_p * a_p ** 2).sum() / (nu_p * a_p).sum(),
               (a_p ** 2).sum()
               + ((a_p * nu_p * a_p).sum() - (a_p * nu_p).sum() * (a_p * a_p).sum())
@@ -248,12 +317,12 @@ for lab, ta, dg in rows:
 ok("S5  table reproduces (conversion at mean log d = 5.8)",
    np.isclose(conv(-.166), -0.08457, atol=1e-4) and np.isclose(conv(-.063), -0.04614, atol=1e-4))
 
-# Proposition 11 -- the variance return.  Equation (20) needs a SINGLE upstream sector;
+# Proposition 13 -- the variance return.  Equation (25) needs a SINGLE upstream sector;
 # the general expression is what holds with several.
 om = np.random.default_rng(13).dirichlet(np.ones(len(T)))
 zeta = np.random.default_rng(14).random(len(T)) * .4
 V = lambda T_: (om * (( zeta[:, None] * portfolio(T_, alpha, X, wage, d)) ** 2).sum(1)).sum()
-ok("P11 eq (20) exact when the upstream economy has one sector",
+ok("P13 eq (25) exact when the upstream economy has one sector",
    np.allclose((V(Tp) - V(Tm)) / (2 * h), -2 * (om * zeta ** 2 * covg).sum(), rtol=1e-5))
 
 print()

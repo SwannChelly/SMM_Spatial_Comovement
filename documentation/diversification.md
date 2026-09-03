@@ -10,7 +10,7 @@
 
 We ask how diversified the customer base of an upstream supplier — a firm, or a sector $\times$ region cell — is in the estimated model, and what that diversification is worth. Under the paper's maintained assumption that downstream demand shocks are the only source of fluctuations, and when those shocks are independent across downstream regions, the variance of a supplier's sales growth is *exactly* the Herfindahl index of its customer-sales portfolio, and the covariance between two upstream regions is *exactly* the inner product of their portfolios. Diversification is therefore not a descriptive statistic bolted onto the model: it is the model's own volatility object. We characterise how the portfolio responds to the three primitives the paper estimates — trade costs $\alpha$, comparative advantage $T_{r's}$, and the geography of downstream demand $X_{rs}$ — in closed form, through a single softmax lemma. Two results organise the discussion. First, comparative advantage reaches the *composition* of a portfolio through one channel only — the market access $\Phi_{rs}$ it creates at destinations — and it does so identically whether the origin whose $T$ moves is the supplier's own or a rival's, because the direct, destination-invariant part of own $T$ cancels: $T$ sets the *size* of a cell's sales and touches its *composition* only through competition. Second, the Herfindahl is what the paper's own Appendix B.5 decomposition carries as $1-a$: the untargeted moment satisfies
 $$\frac{\delta}{\gamma} \;=\; -\theta\alpha\,\kappa\,\bigl(\bar\Lambda + 1 - \tilde H\bigr),$$
-so a cross-industry contrast in $\delta/\gamma$ is, holding the other three factors fixed, a contrast in customer diversification. We propose a small set of statistics, all computable from artefacts the estimation already writes, and state the identification and measurement caveats.
+so a cross-industry contrast in $\delta/\gamma$ is, holding the other three factors fixed, a contrast in customer diversification. Third, the Herfindahl is tied to the *distribution of downstream sales* by two exact statements: a supplier's concentration factors into the market portfolio's own Herfindahl $H^X_s$ times a dispersion-of-access term, plus a term measuring whether that access is aligned with buyer size; and because the market portfolio is the sales-weighted average of the suppliers' portfolios, $H^X_s$ is a floor on average supplier concentration at any parameter values — the effective number of downstream buyers caps, on average and not supplier by supplier, the effective number of customers any supplier can have. We propose a small set of statistics, all computable from artefacts the estimation already writes, and state the identification and measurement caveats.
 
 ---
 
@@ -291,6 +291,83 @@ Three implications.
 2. **Comparative advantage does raise firm-level diversification** — through selection, not composition. By (13), $\kappa_{r'rs}$ involves the rivals' $T$ and not the origin's own, so conditionally on $z$ the win probability is free of $T_{r's}$; but $z$ is Fréchet with scale $T_{r's}$, so a higher $T$ first-order stochastically dominates and every $\gamma_{r'rs}$ rises. A strong cell hosts productive firms, and productive firms win more markets. This channel is distinct from the market-access channel of Corollary 5.1 and the two must not be conflated: they can point in opposite directions.
 3. **The product formula is an upper bound, and it is not what the estimator uses.** (16) is the FKG/Harris inequality: positive dependence makes the union *smaller* than under independence. Two consequences for the paper. (a) The main text currently asserts the reverse inequality, $p_{r's} > 1 - \prod_r(1-\gamma_{r'rs})$, while giving positive dependence as the reason; the reason is right and the inequality is backwards. A Monte-Carlo check on a five-destination economy gives $\hat q = 0.416$ against a product formula of $0.737$. (b) The product form survives only on the *analytical/GMM* path (`compute_regression_quadrature`), which the repository already flags as FKG-biased; the $\hat q$ written to disk by the simulated estimator is the exact realised union, so a statistic built on it carries no FKG bias at all.
 
+
+### 4.4 The floor: what the distribution of downstream sales alone implies
+
+Sections 4.1–4.3 hold $X_{rs}$ fixed and vary the model's parameters. This section does the opposite: it fixes nothing and asks how much of a supplier's Herfindahl is already contained in the *distribution of downstream sales* — the vector $X_{\cdot s}$ of purchases of sector-$s$ inputs across buyer regions. The question matters because that vector is data, not model output (§9), and because the paper's verbal argument — motor vehicles has "many hubs", aerospace "two" — is a statement about it and about nothing else.
+
+Write $\bar X_{rs} \equiv X_{rs}/\sum_{r''}X_{r''s}$ for the **market portfolio**, i.e. the portfolio a supplier would hold if it sold to every buyer in proportion to that buyer's size, and
+
+$$
+H^X_s \;\equiv\; \sum_r \bar X_{rs}^2, \qquad N^X_s \;\equiv\; 1/H^X_s ,
+$$
+
+for its Herfindahl and effective number of buyers. In the model each downstream region hosts one representative buyer, so the distribution of $X_{\cdot s}$ across regions *is* the size distribution of downstream customers, and $N^X_s$ is the effective number of customers the industry has to offer. This is the same number as the $\alpha = 0$ benchmark $N^0_s$ of Proposition 6, but it is about to be given a role that does not require the counterfactual: it binds at the *estimated* $\alpha$.
+
+**Proposition 10 (access tilt).** Define the **access tilt** of origin $r'$ at buyer $r$ as its over- or under-weight relative to the market portfolio,
+
+$$
+u_r^{r'} \;\equiv\; \frac{w_r^{sr'd}}{\bar X_{rs}}
+\;=\; \frac{\tau_{r'rs}^{-\theta}/\Phi_{rs}}{\sum_{r''}\bar X_{r''s}\,\tau_{r'r''s}^{-\theta}/\Phi_{r''s}},
+\qquad \mathbb E_{\bar X}\bigl[u^{r'}\bigr] = 1 ,
+\tag{17}
+$$
+
+where $\mathbb E_{\bar X}$, $\operatorname{Var}_{\bar X}$ and $\operatorname{Cov}_{\bar X}$ are taken under the probability $\bar X_{\cdot s}$ over buyer regions. Then, exactly,
+
+$$
+H_{r's}
+\;=\; \underbrace{H^X_s}_{\text{demand geography}}\;\cdot\;
+\underbrace{\bigl(1 + \operatorname{Var}_{\bar X}(u^{r'})\bigr)}_{\text{dispersion of access}}
+\;+\;
+\underbrace{\operatorname{Cov}_{\bar X}\bigl(\bar X_{\cdot s},\, (u^{r'})^2\bigr)}_{\text{alignment of access with size}} .
+\tag{18}
+$$
+
+*Proof: Appendix A.11.*
+
+Equation (18) is the exact decomposition of a supplier's concentration into what the market offers and what its own location does with the offer. The tilt (17) carries both structural forces at once — the trade cost $\tau_{r'rs}^{-\theta}$ and the competition it faces at each destination, $1/\Phi_{rs}$ — and it is the *only* channel through which they reach $H$: given $\bar X$, two origins with the same tilt vector have the same Herfindahl whatever their $T$, their wage, or their sales. Three readings.
+
+- **Dispersion always concentrates.** The second factor is $1 + \operatorname{Var}_{\bar X}(u) \ge 1$ with equality iff $u \equiv 1$. Any access tilt whatsoever — even one uncorrelated with buyer size — raises the Herfindahl above $H^X_s$, because a mean-one multiplicative distortion of a portfolio can only spread its weights further apart. Trade costs never diversify a supplier *relative to the market portfolio* through this term; they can only do so through the second.
+- **The sign lives entirely in the alignment term.** $\operatorname{Cov}_{\bar X}(\bar X, u^2) > 0$ says the supplier's access is best precisely at the large buyers — a Toulouse-based aerospace supplier — and its portfolio is then more concentrated than the market's on both counts. $\operatorname{Cov}_{\bar X}(\bar X, u^2) < 0$ says the supplier is well placed at the *small* buyers, and its tilt then pulls weight away from the hubs: such a supplier can be strictly **more diversified than the market portfolio**. This is not a curiosity: in 200 random economies (7 origins, 6 destinations, $\alpha = 0.35$) 36% of cells had $H_{r's} < H^X_s$, with $N_{r's}/N^X_s$ reaching 1.73. A cap stated supplier by supplier would therefore be false — see Proposition 11 for the statement that is true.
+- **It nests Proposition 6.** At $\alpha = 0$, $\tau \equiv 1$ makes $\Phi_{rs}$ buyer-invariant, so $u \equiv 1$, both correction terms vanish and $H_{r's} = H^X_s$ for every origin. Proposition 6's $\alpha \to 0$ limit is the special case of (18) in which the tilt is switched off.
+
+The individual bound fails, but the *aggregate* one holds without any condition, because the market portfolio is not an arbitrary benchmark: it is the sales-weighted average of the suppliers' own portfolios.
+
+**Proposition 11 (the market portfolio is the sales-weighted average, and hence a floor).** Let $\sigma_{r'} \equiv \bigl(\sum_r \gamma_{r'rs}X_{rs}\bigr)/\sum_l\bigl(\sum_r \gamma_{lrs}X_{rs}\bigr)$ be cell $(r',s)$'s share of the sector's sales to the industry. Then
+
+$$
+\sum_{r'} \sigma_{r'}\, w_r^{sr'd} \;=\; \bar X_{rs} \quad \text{for every } r,
+\tag{19}
+$$
+
+and consequently
+
+$$
+\sum_{r'} \sigma_{r'} H_{r's} \;-\; H^X_s
+\;=\; \sum_{r'}\sigma_{r'}\sum_r \bigl(w_r^{sr'd} - \bar X_{rs}\bigr)^2 \;\ge\; 0 .
+\tag{20}
+$$
+
+The same identity holds one level down, with $\sigma_i$ over firms and the realised portfolios $a_{ir}$ of (2), so that
+
+$$
+\sum_i \sigma_i H_i \;\ge\; \sum_{r'}\sigma_{r'} \hat H_{r's} \;\ge\; H^X_s ,
+\qquad\text{equivalently}\qquad
+\Bigl(\sum_i \sigma_i H_i\Bigr)^{-1} \;\le\; \hat N_s^{\,\text{cell}} \;\le\; N^X_s .
+\tag{21}
+$$
+
+*Proof: Appendix A.12.*
+
+This is Proposition 4's algebra applied one level up, and it is the link the paper's argument needs. Three consequences.
+
+1. **The distribution of downstream sales is a hard cap on average diversification.** The sales-weighted effective number of customers of a sector's suppliers can never exceed the effective number of downstream buyers, at *any* $\alpha$, $T$ or geometry. If aerospace's downstream purchases are effectively spread over two regions, then no configuration of trade costs or comparative advantage can make its suppliers diversified on average — the concentration is in the demand, and the model can only add to it. That is the precise version of the paper's "two hubs versus many hubs" sentence, and (21) says it is a theorem about the *average*, not about each supplier: individual suppliers can and do beat the market portfolio (Proposition 10), and quoting the cap supplier by supplier would overstate it.
+2. **The gap is the angle again.** By (20) the excess of average supplier concentration over demand concentration is exactly the sales-weighted dispersion of portfolios around the market portfolio. A sector in which every supplier holds nearly the market portfolio has a small gap *and*, by Proposition 2, nearly collinear portfolios — so this single number carries both the length and the angle content of §3.2. It is worth reporting for that reason alone.
+3. **It splits the statistic into an observed part and an estimated part.** Writing $\bar H_s \equiv \sum_{r'}\sigma_{r'}H_{r's}$, the decomposition $\bar H_s = H^X_s + \text{gap}_s$ separates a term that needs only `X_rs.npy` from a term that is model output. A cross-industry contrast in $\bar H_s$ should always be reported as a contrast in these two components: if aerospace's higher concentration is entirely $H^X_s$, the model is not doing the work, the data are.
+
+Two caveats on (19), both minor and both worth stating. First, $\sum_{r'}\gamma_{r'rs} = 1$ requires summing over *all* origins; in the estimated model the domestic share is a sector-level constant, so it cancels in the normalisation and (19) holds as written, but if the domestic share were buyer-specific, $\bar X_{rs}$ would have to be replaced by the distribution of *domestically sourced* purchases. Second, (19) is an accounting identity of the realised economy and therefore holds in the granular simulation exactly, not only in expectation — which is why (21) can chain the realised firm-level and cell-level statements.
+
 ---
 
 ## 5. The bridge: diversification *is* the untargeted moment
@@ -300,12 +377,12 @@ Appendix B.5 of the paper derives, for the reduced-form spatial-comovement regre
 $$
 \frac{\delta}{\gamma} \;\simeq\; -\theta\,\mathbb E\!\left[\frac{d\ln\tau}{d\ln d}\right]\cdot
 \frac{\mathbb E\bigl[\nu\, a\,(\Lambda + 1 - a)\bigr]}{\mathbb E[\nu a]\big|_{d=1}},
-\tag{17}
+\tag{22}
 $$
 
 with $\nu \equiv \rho_{r'rs}(z)/\tilde\rho_{r's}(z)$ the selection correction induced by conditioning on $\mathrm{Sup}_i = 1$, and $a \equiv a^D_r(z,d)$. The $(1-a)$ term is described in the paper as the redirection of sales toward the rest of the portfolio. Averaged with the right weights it is a Herfindahl.
 
-**Proposition 10 (the transmission factor).** Define the tilted measure $dP_\nu \propto \nu a\, dP$ and
+**Proposition 12 (the transmission factor).** Define the tilted measure $dP_\nu \propto \nu a\, dP$ and
 
 $$
 \tilde H \equiv \mathbb E_\nu[a] = \frac{\mathbb E[\nu a^2]}{\mathbb E[\nu a]},
@@ -315,37 +392,37 @@ $$
 \kappa \equiv \frac{\mathbb E[\nu a]}{\mathbb E[\nu a]\big|_{d=1}} .
 $$
 
-Then, with $\tau = d^{\alpha}$, (17) is exactly
+Then, with $\tau = d^{\alpha}$, (22) is exactly
 
 $$
 \frac{\delta}{\gamma} = -\theta\alpha\,\kappa\,\bigl(\bar\Lambda + 1 - \tilde H\bigr).
-\tag{18}
+\tag{23}
 $$
 
 If, within a supplier, $\nu$ does not vary across destinations, then $\tilde H$ computed over that supplier's destinations equals its customer Herfindahl $H_i$ of Definition 1.
 
-*Proof: Appendix A.11.*
+*Proof: Appendix A.13.*
 
-Two comments on what (18) does and does not deliver. It is an exact restatement of the paper's own decomposition, so it inherits its approximations — in particular the continuous-distance derivation and the treatment of $\kappa$, which equals one only if the tilted mean share is distance-invariant. And $\tilde H$ is a *tilted* Herfindahl: $\nu$ is larger for near destinations, so $\tilde H$ overweights the nearby (large) shares and $\tilde H \ge H$ in the typical case. Both wedges are measurable in the simulated economy and should be reported rather than assumed away.
+Two comments on what (23) does and does not deliver. It is an exact restatement of the paper's own decomposition, so it inherits its approximations — in particular the continuous-distance derivation and the treatment of $\kappa$, which equals one only if the tilted mean share is distance-invariant. And $\tilde H$ is a *tilted* Herfindahl: $\nu$ is larger for near destinations, so $\tilde H$ overweights the nearby (large) shares and $\tilde H \ge H$ in the typical case. Both wedges are measurable in the simulated economy and should be reported rather than assumed away.
 
-Subject to that, (18) turns the paper's verbal argument into an accounting identity. Define the **transmission factor**
+Subject to that, (23) turns the paper's verbal argument into an accounting identity. Define the **transmission factor**
 
 $$
 TF \;\equiv\; \frac{|\delta/\gamma|}{\theta\alpha} \;=\; \kappa\bigl(\bar\Lambda + 1 - \tilde H\bigr).
-\tag{19}
+\tag{24}
 $$
 
 $\theta\alpha$ is the elasticity the *estimation targets* (the extensive margin); $\delta/\gamma$ is the elasticity it does *not* target. Their ratio is a diversification statistic.
 
-**A scale warning before any number is read.** (17)–(19) are derived for the paper's $\delta/\gamma$, the ratio of two coefficients of a regression that is *linear in the level* of $a_{ir}$ on $\log d$, with the denominator normalised at $d = 1$. The model counterpart the paper reports, $\hat\eta$, comes instead from a PPML *constant-elasticity* fit $\mathbb E[a_{ir}\mid s,r',r] = \exp(\alpha_{rs} + \eta \log \mathrm{Dist})$. These are not the same number. Fitting a constant elasticity in the linear form puts the intercept at $\log d = 0$, so that
+**A scale warning before any number is read.** (22)–(24) are derived for the paper's $\delta/\gamma$, the ratio of two coefficients of a regression that is *linear in the level* of $a_{ir}$ on $\log d$, with the denominator normalised at $d = 1$. The model counterpart the paper reports, $\hat\eta$, comes instead from a PPML *constant-elasticity* fit $\mathbb E[a_{ir}\mid s,r',r] = \exp(\alpha_{rs} + \eta \log \mathrm{Dist})$. These are not the same number. Fitting a constant elasticity in the linear form puts the intercept at $\log d = 0$, so that
 
 $$
 \frac{\delta}{\gamma} \approx \frac{\eta}{1 + |\eta|\,\mathbb E[\log d]},
 $$
 
-with $\mathbb E[\log d]\approx 5.8$ in the estimation sample; the ratio is mechanically compressed, and $|\delta/\gamma|$ is bounded above by $1/\mathbb E[\log d] \approx 0.17$ whatever the true elasticity. Either $\hat\eta$ is converted before entering (19), or the model's $\delta/\gamma$ is re-estimated in the linear form. The table below does the conversion and reports both.
+with $\mathbb E[\log d]\approx 5.8$ in the estimation sample; the ratio is mechanically compressed, and $|\delta/\gamma|$ is bounded above by $1/\mathbb E[\log d] \approx 0.17$ whatever the true elasticity. Either $\hat\eta$ is converted before entering (24), or the model's $\delta/\gamma$ is re-estimated in the linear form. The table below does the conversion and reports both.
 
-**A second warning about the implied column.** From (18), $\tilde H = 1 + \bar\Lambda - TF/\kappa$. Since $\Lambda = -\ln\rho \ge 0$, $\bar\Lambda > 0$ strictly, so setting $\bar\Lambda = 0$ and $\kappa = 1$ returns a *lower* bound on $\tilde H$ and hence an *upper* bound on the effective number of customers. The column is therefore a bound, not an estimate; and since $\tilde H \le 1$, admissibility at $\kappa = 1$ requires $\bar\Lambda \le TF$, which is itself informative about how far $\kappa$ must be from one.
+**A second warning about the implied column.** From (23), $\tilde H = 1 + \bar\Lambda - TF/\kappa$. Since $\Lambda = -\ln\rho \ge 0$, $\bar\Lambda > 0$ strictly, so setting $\bar\Lambda = 0$ and $\kappa = 1$ returns a *lower* bound on $\tilde H$ and hence an *upper* bound on the effective number of customers. The column is therefore a bound, not an estimate; and since $\tilde H \le 1$, admissibility at $\kappa = 1$ requires $\bar\Lambda \le TF$, which is itself informative about how far $\kappa$ must be from one.
 
 |  | $\theta\alpha$ | $\delta/\gamma$ | $TF$ | $\tilde H$ lower bd. | $\tilde N = 1/\tilde H$ upper bd. |
 |---|---|---|---|---|---|
@@ -356,7 +433,7 @@ with $\mathbb E[\log d]\approx 5.8$ in the estimation sample; the ratio is mecha
 
 *(Illustrative: $\theta\alpha$ is read off the current fits, $\hat\eta$ from the paper's untargeted-moment paragraph, and the conversion uses $\mathbb E[\log d] = 5.8$. All four must be recomputed from one and the same run, with $\bar\Lambda$ and $\kappa$ measured rather than set, before the table enters the paper. Note what the conversion costs: on the raw $\hat\eta$ the implied effective numbers would read 2.6 against 1.2; converted, 1.46 against 1.12. The **ranking** is robust across all four rows — motor-vehicle portfolios are the more diversified — the **magnitude** is not.)*
 
-The exercise the paper should run is the **consistency check**: compute $\tilde H$, $\bar\Lambda$ and $\kappa$ directly on the simulated firm-level economy and verify that (18) reproduces the model's own $\delta/\gamma$, estimated in the *linear* form so that the two sides are commensurable. If it does, the diversification statistic is not a new object requiring its own validation — it is the moment the model already matches, read in a different unit. That is the strongest possible warrant for putting it in the paper.
+The exercise the paper should run is the **consistency check**: compute $\tilde H$, $\bar\Lambda$ and $\kappa$ directly on the simulated firm-level economy and verify that (23) reproduces the model's own $\delta/\gamma$, estimated in the *linear* form so that the two sides are commensurable. If it does, the diversification statistic is not a new object requiring its own validation — it is the moment the model already matches, read in a different unit. That is the strongest possible warrant for putting it in the paper.
 
 ---
 
@@ -364,7 +441,7 @@ The exercise the paper should run is the **consistency check**: compute $\tilde 
 
 The paper's cluster-policy proposition rests on $\mathcal V'_{ks} \equiv \partial \mathcal V/\partial\ln T_{ks}$, described as sign-ambiguous — "negative when $k$ is a stabilizing hub, positive when $k$ is a concentrating hub" — but never computed. Under the independence assumption of this note it has a closed form, and the "stabilizing hub" condition becomes a covariance.
 
-**Proposition 11 (variance return).** Let $\mathcal V = \sum_{r'}\omega_{r'}\operatorname{Var}(r')$ for planner weights $\omega$, with $\operatorname{Var}(r')$ as in Proposition 2, and let $\zeta_{r's} \equiv w_s^{r'} w_d^{sr'}$. In the general case, abstracting from cross-sector spillovers so that only sector $s$'s portfolio responds to $T_{ks}$,
+**Proposition 13 (variance return).** Let $\mathcal V = \sum_{r'}\omega_{r'}\operatorname{Var}(r')$ for planner weights $\omega$, with $\operatorname{Var}(r')$ as in Proposition 2, and let $\zeta_{r's} \equiv w_s^{r'} w_d^{sr'}$. In the general case, abstracting from cross-sector spillovers so that only sector $s$'s portfolio responds to $T_{ks}$,
 
 $$
 \frac{\partial \mathcal V}{\partial \ln T_{ks}}
@@ -380,16 +457,16 @@ $$
 \frac{\partial \mathcal V}{\partial \ln T_{ks}}
 = -2\sigma^2 \sum_{r'} \omega_{r'}\,\zeta_{r's}^2\,
 \operatorname{Cov}_{w^{r'}}\bigl(w^{r'}, \gamma_{k\cdot s}\bigr).
-\tag{20}
+\tag{25}
 $$
 
-*Proof: Appendix A.12.*
+*Proof: Appendix A.14.*
 
-The distinction matters: $M_{r'r} = \sum_{s'}\zeta_{r's'} w_r^{s'r'd}$ is *already* the no-cross-sector-spillover object, and (20) additionally requires region $r'$ to host no upstream sector other than $s$. In a three-sector numerical economy the general expression is exact while (20) is off by 68–95%, so it is the general expression that should be computed and (20) that should be read as intuition.
+The distinction matters: $M_{r'r} = \sum_{s'}\zeta_{r's'} w_r^{s'r'd}$ is *already* the no-cross-sector-spillover object, and (25) additionally requires region $r'$ to host no upstream sector other than $s$. In a three-sector numerical economy the general expression is exact while (25) is off by 68–95%, so it is the general expression that should be computed and (25) that should be read as intuition.
 
 Region $k$ is a **stabilizing** target for cluster policy ($\mathcal V' < 0$) iff, averaged over origins with weights $\omega\zeta^2$, it competes at the destinations where existing suppliers are concentrated. This is precisely the "moderately central but currently under-supplied" statement of the paper's cluster proposition (`prop:cluster_policy`), now with a sign test computable for every commuting zone from $\hat\gamma$ and the estimated portfolios, and it enters the planner's first-order condition (`eq:foc`) with no new machinery.
 
-One caveat on the object differentiated. The paper's constraint is the full quadratic form $\Omega\Sigma\Omega'$ (`eq:planner_problem`), which *includes* the cross-region covariances, whereas $\mathcal V = \sum_{r'}\omega_{r'}\operatorname{Var}(r')$ keeps only the diagonal. By Proposition 2 the off-diagonal terms are the portfolio *angles*, and §8 argues that they carry the aggregate contrast — so the diagonal aggregate is the wrong object if the planner cares about comovement rather than about the sum of local variances. Extending (20) is mechanical: replace $M_{r'r}M_{r'r}$ by $\sum_l \Omega_{r'l} M_{lr}$ in the proof.
+One caveat on the object differentiated. The paper's constraint is the full quadratic form $\Omega\Sigma\Omega'$ (`eq:planner_problem`), which *includes* the cross-region covariances, whereas $\mathcal V = \sum_{r'}\omega_{r'}\operatorname{Var}(r')$ keeps only the diagonal. By Proposition 2 the off-diagonal terms are the portfolio *angles*, and §8 argues that they carry the aggregate contrast — so the diagonal aggregate is the wrong object if the planner cares about comovement rather than about the sum of local variances. Extending (25) is mechanical: replace $M_{r'r}M_{r'r}$ by $\sum_l \Omega_{r'l} M_{lr}$ in the proof.
 
 ---
 
@@ -405,14 +482,17 @@ All of the following are computable from artefacts the estimation already writes
 | 2 | Customers served | $n_i$; and $\sum_r \hat\gamma_{r'rs}$, $\sum_r \hat\gamma/\hat q$ in closed form | firm | parquet; $\hat\gamma$, $\hat q$ |
 | 3 | Intensive margin | $CV_i$ from (4) | firm | parquet |
 | 4 | Cell portfolio | $N_{r's} = 1/\sum_r (w_r^{sr'd})^2$ | cell | `w_srd_r.npy`, or $\hat\gamma\times X$ |
-| 5 | **Realised diversification** $\mathcal K$ | $N_{r's}/N^0_s$, $N^0_s \equiv 1/\sum_r \bar m_{rs}^2$ **at $\alpha = 0$** (so $\bar m = \bar X_{\cdot s}$) | cell | `X_rs.npy` |
+| 5 | **Realised diversification** $\mathcal K$ | $N_{r's}/N^X_s$, $N^X_s \equiv 1/\sum_r \bar X_{rs}^2$ (= $N^0_s$, the $\alpha=0$ benchmark) | cell | `X_rs.npy` |
+| 5a | **Effective number of buyers** | $N^X_s$ alone — *observed*, no estimation | sector | `X_rs.npy` |
+| 5b | **Excess concentration** | $\bar H_s - H^X_s = \sum_{r'}\sigma_{r'}\|w^{r'}-\bar X\|^2$, equation (22) | sector | $\hat\gamma$, `X_rs.npy` |
+| 5c | **Access tilt** | $\operatorname{Var}_{\bar X}(u^{r'})$ and $\operatorname{Cov}_{\bar X}(\bar X,(u^{r'})^2)$, the two terms of (18) | cell | $\hat\gamma$, `X_rs.npy` |
 | 6 | Portfolio similarity | $\cos\angle(w^{r'}, w^{l})$, and its distance profile | cell pair | closed form |
 | 7 | Aggregation gain | equation (5) | cell | parquet |
 | 8 | Local volatility | $\zeta_{r'}^2 H^M_{r'}$ | region | $M$ |
-| 9 | Variance return | the general expression of Prop. 11 (not (20) unless single-sector) | policy | closed form |
+| 9 | Variance return | the general expression of Prop. 13 (not (25) unless single-sector) | policy | closed form |
 | 10 | Dual: buyer's supplier base | $1/\sum_{r'} \hat\gamma_{r'rs}^2$ | buyer | $\hat\gamma$ |
 
-Statistic 5 deserves emphasis. Raw effective numbers are **not comparable across industries**: the two samples do not have the same number of downstream regions, nor the same size distribution of buyers, so a difference in $N$ conflates the portfolio choice with the menu. $\mathcal K = N_{r's}/N^0_s$ divides by the diversification the demand geography *offers* — the $\alpha = 0$ benchmark of Proposition 6, in which every origin holds the market portfolio — and is therefore the scale-free statistic for the cross-industry comparison. $N^0_s$ must be evaluated **at $\alpha = 0$**, where $\tau \equiv 1$ makes $\Phi_{rs}$ buyer-invariant and $\bar m$ collapses to the observed expenditure shares $\bar X_{\cdot s}$; evaluated at the estimated $\alpha$ it is a different number (9% away in a numerical example) and forfeits the observability that makes the benchmark useful. Note that $\mathcal K > 1$ is possible: see the counterexample in Appendix A.7. It is not a bounded index, and should not be presented as one.
+Statistic 5 deserves emphasis. Raw effective numbers are **not comparable across industries**: the two samples do not have the same number of downstream regions, nor the same size distribution of buyers, so a difference in $N$ conflates the portfolio choice with the menu. $\mathcal K = N_{r's}/N^X_s$ divides by the diversification the demand geography *offers* — the market portfolio of Proposition 10, which is also the $\alpha = 0$ benchmark of Proposition 6 — and is therefore the scale-free statistic for the cross-industry comparison. $N^X_s$ is read straight off the observed expenditure shares $\bar X_{\cdot s}$; evaluating the benchmark at the estimated $\alpha$ instead gives a different number (9% away in a numerical example) and forfeits the observability that makes it useful. Note that $\mathcal K > 1$ is possible cell by cell — Proposition 10 says exactly when, and Appendix A.7 gives a counterexample — so $\mathcal K$ is not a bounded index and should not be presented as one. What *is* bounded is its sales-weighted harmonic average: by Proposition 11, $\sum_{r'}\sigma_{r'}/\mathcal K_{r'} \ge 1$. Statistics 5a–5c decompose the level accordingly: 5a is the observed floor, 5b the model's contribution to concentration on top of it, and 5c the two channels of (18) through which a single cell departs from the market portfolio.
 
 ### 7.2 Two decompositions to report
 
@@ -420,9 +500,11 @@ Statistic 5 deserves emphasis. Raw effective numbers are **not comparable across
 
 **(b) Firm vs cell.** Report $\sum_i \sigma_i N_i$ and $N_{r's}$ side by side; equation (5) attributes the gap to between-firm portfolio dispersion, which is the granular margin and is industry-specific through $\hat N_s$.
 
+**(c) Model vs demand geography.** Report $\bar H_s = H^X_s + \text{gap}_s$ of equation (22): the first term is observed, the second is what the estimated network adds. Since (22) also equals the sales-weighted dispersion of portfolios around the market portfolio, it is the length-side reading of the collinearity claim of §8 and should be reported beside statistic 6 rather than instead of it.
+
 ### 7.3 Figures
 
-1. The CDF of $N_i$ by industry (model), with the $\alpha = 0$ market-portfolio benchmark $N^0_s$ drawn as a vertical line. One picture carries the whole argument.
+1. The CDF of $N_i$ by industry (model), with the market-portfolio benchmark $N^X_s$ drawn as a vertical line and the sales-weighted mean $1/\sum_i\sigma_i H_i$ marked on the axis. One picture carries the whole argument, and Proposition 11 says exactly what to look at in it: the *weighted mean* must sit at or below the vertical line, while individual suppliers may sit above it.
 2. The counterfactual decomposition of 7.2(a) as a bar panel, per industry.
 3. A map of $N_{r's}$ (or of $\mathcal K$) over commuting zones. The two-hub versus many-hub contrast is a spatial statement and reads best as a map.
 4. Optional: portfolio similarity (statistic 6) against distance, by industry — the *angle* counterpart of the *length* in figures 1–3, and the object that Proposition 2 says drives aggregate comovement.
@@ -433,9 +515,9 @@ Statistic 5 deserves emphasis. Raw effective numbers are **not comparable across
 
 The three forces are separately identified in the estimation and can be signed individually.
 
-**Downstream concentration.** This is the *only* input to the comparison that is directly observed rather than estimated: $X_{rs}$ and the location of downstream plants are data. $N^0_s = 1/\sum_r \bar m_{rs}^2$ is a small number in aerospace (Toulouse and Île-de-France, with Marignane, Nantes and Bordeaux behind) and a substantially larger one in motor vehicles. Proposition 6 says that at $\alpha = 0$ this number *is* every supplier's diversification, so it caps what any supplier in aerospace can achieve. We recommend reporting $N^0_s$ as a descriptive statistic in the data section, before any model output: it carries a large part of the argument on its own.
+**Downstream concentration.** This is the *only* input to the comparison that is directly observed rather than estimated: $X_{rs}$ and the location of downstream plants are data. $N^X_s = 1/\sum_r \bar X_{rs}^2$ — the effective number of downstream buyers, equal to the $\alpha = 0$ benchmark $N^0_s$ of Proposition 6 — is a small number in aerospace (Toulouse and Île-de-France, with Marignane, Nantes and Bordeaux behind) and a substantially larger one in motor vehicles. By Proposition 11 it is a **cap on the sales-weighted average** effective number of customers, at the estimated $\alpha$ and not merely at $\alpha = 0$: no configuration of trade costs or comparative advantage can make a sector's suppliers diversified on average beyond the diversification its buyers offer. The cap is on the average and *not* supplier by supplier — Proposition 10 shows that a supplier well placed at the small buyers is tilted away from the hubs and can beat the market portfolio (36% of cells do, in random economies) — so the claim must be stated in the weighted form or it is false. We recommend reporting $N^X_s$ as a descriptive statistic in the data section, before any model output, together with the gap $\bar H_s - H^X_s$ of (22): the first carries a large part of the argument on its own, and the second is exactly the part the model adds.
 
-**Trade costs.** $\theta\alpha$ is 0.43 in aerospace against 0.27 in motor vehicles. By Proposition 6, aerospace portfolios sit at a "colder" softmax temperature: at equal demand geography they would be more concentrated *provided* $\operatorname{Cov}_w(w,\xi) > 0$ there — which Proposition 6 shows is typical but not universal, and which must therefore be measured rather than assumed. If it holds, the two forces compound rather than offset in aerospace: a candidate mechanical account of why the industry ranking of $\delta/\gamma$ reverses the ranking of the extensive-margin gradient, the paper's puzzle. Note that (19) does not by itself *explain* that reversal — reading a small $(1-\tilde H)$ off a small $|\delta/\gamma|$ and then invoking it to account for the same $|\delta/\gamma|$ is circular. The identity becomes an explanation only once $\tilde H$ is computed independently on the simulated economy, which is exactly the consistency check proposed at the end of §5.
+**Trade costs.** $\theta\alpha$ is 0.43 in aerospace against 0.27 in motor vehicles. By Proposition 6, aerospace portfolios sit at a "colder" softmax temperature: at equal demand geography they would be more concentrated *provided* $\operatorname{Cov}_w(w,\xi) > 0$ there — which Proposition 6 shows is typical but not universal, and which must therefore be measured rather than assumed. If it holds, the two forces compound rather than offset in aerospace: a candidate mechanical account of why the industry ranking of $\delta/\gamma$ reverses the ranking of the extensive-margin gradient, the paper's puzzle. Note that (24) does not by itself *explain* that reversal — reading a small $(1-\tilde H)$ off a small $|\delta/\gamma|$ and then invoking it to account for the same $|\delta/\gamma|$ is circular. The identity becomes an explanation only once $\tilde H$ is computed independently on the simulated economy, which is exactly the consistency check proposed at the end of §5.
 
 **Comparative advantage.** Here the three channels of §4 must be kept apart, because they do not point the same way.
 
@@ -456,7 +538,7 @@ The paper's existing sentence, that hub regions "act as aggregators of network-d
 
 **Independence of downstream shocks.** Proposition 1's identification of variance with the Herfindahl requires $\Sigma_{dd} = \sigma^2 I$. Motor vehicles and aerospace are subject to large industry-wide shocks; with a common factor, every portfolio loads on it and all effective numbers collapse toward 1. The statistics should therefore be presented as applying to the *idiosyncratic regional* component of downstream demand — which is also the component the paper's counterfactual shocks (EV eco-score, military procurement) are designed to isolate. As a robustness exercise, report $a_i'\hat\Sigma a_i$ for an estimated $\hat\Sigma$ beside $\sigma^2 H_i$; Proposition 1's first line is stated for a general $\Sigma_{dd}$ precisely so that this is available.
 
-**$a_{ir}$ is a model object.** The estimation observes the extensive margin at the industry level ($\mathrm{Sup}_i$), the count distribution $G_s(K)$, and the regional sourcing shares $\gamma_{ls}$ aggregated over buyers — not the bilateral supplier $\times$ buyer matrix. The firm-level portfolio is therefore *not* directly measurable in the data, and the diversification statistics are model output. This is exactly why §5 matters: the untargeted moment $\delta/\gamma$ is the observable that disciplines them, and (18) is the map. Statistics that *are* observable should be flagged as such and separated from the rest in the table: $N^0_s$ at $\alpha = 0$ needs only `X_rs.npy`, whereas the buyer dual (statistic 10) needs the estimated $\hat\gamma$ and is model output.
+**$a_{ir}$ is a model object.** The estimation observes the extensive margin at the industry level ($\mathrm{Sup}_i$), the count distribution $G_s(K)$, and the regional sourcing shares $\gamma_{ls}$ aggregated over buyers — not the bilateral supplier $\times$ buyer matrix. The firm-level portfolio is therefore *not* directly measurable in the data, and the diversification statistics are model output. This is exactly why §5 matters: the untargeted moment $\delta/\gamma$ is the observable that disciplines them, and (23) is the map. Statistics that *are* observable should be flagged as such and separated from the rest in the table: $N^X_s$ needs only `X_rs.npy`, whereas the buyer dual (statistic 10) needs the estimated $\hat\gamma$ and is model output. Propositions 10 and 11 are what make that separation useful rather than cosmetic — they express the model output as the observed floor $H^X_s$ plus a residual, so the reader can see how much of a cross-industry contrast is data and how much is estimate.
 
 **Sales outside the industry.** $a_{ir}$ is a portfolio share *within* the modelled downstream industry. A real supplier also sells elsewhere, which is a diversification channel the model does not represent. The reported $N$ therefore *understate* true diversification, in the same direction as the bias the paper already notes on $\delta/\gamma$. If a firm's industry share $\varphi_i$ is available, $H_i^{\text{total}} = \varphi_i^2 H_i + \dots$ bounds the correction; absent that, the statistics are conditional on industry exposure and should be labelled so.
 
@@ -663,7 +745,38 @@ the first inequality by the conditional result and the second by association in 
 
 ### A.11 Proposition 10
 
-Write $\mathbb E$ for the expectation over $(z, r', d)$ in (17) and define the tilted probability $dP_\nu = (\nu a/\mathbb E[\nu a])\,dP$, legitimate because $\nu\ge 0$ and $a\ge 0$. For any $f$, $\mathbb E[\nu a f] = \mathbb E[\nu a]\cdot\mathbb E_\nu[f]$. Applying this to $f = \Lambda + 1 - a$,
+Fix the origin $r'$ and the sector $s$ and drop both indices. By Proposition 5, $w_r \propto m_r\tau_r^{-\theta} = \bar X_r\cdot(\tau_r^{-\theta}/\Phi_r)$ up to a constant, so $u_r \equiv w_r/\bar X_r$ is proportional to $\tau_r^{-\theta}/\Phi_r$; the normalisation in (17) is the one that makes $\sum_r \bar X_r u_r = \sum_r w_r = 1$, i.e. $\mathbb E_{\bar X}[u]=1$. Note that $u$ is defined without reference to the model — it is the portfolio's over-weight relative to the market portfolio — and that (17) merely says what the model makes it equal to.
+
+Now treat the destination index as a random variable drawn under the probability $\bar X$, so that $\bar X_r$ itself and $u_r$ are two random variables on that space. Then
+
+$$
+H = \sum_r w_r^2 = \sum_r \bar X_r\cdot\bigl(\bar X_r u_r^2\bigr) = \mathbb E_{\bar X}\bigl[\bar X u^2\bigr]
+= \mathbb E_{\bar X}[\bar X]\,\mathbb E_{\bar X}[u^2] + \operatorname{Cov}_{\bar X}\bigl(\bar X, u^2\bigr).
+$$
+
+Since $\mathbb E_{\bar X}[\bar X] = \sum_r \bar X_r^2 = H^X$ and $\mathbb E_{\bar X}[u^2] = \operatorname{Var}_{\bar X}(u) + \mathbb E_{\bar X}[u]^2 = 1 + \operatorname{Var}_{\bar X}(u)$, this is (18). The factor $1+\operatorname{Var}_{\bar X}(u)\ge 1$ with equality iff $u$ is $\bar X$-a.s. constant, hence (by $\mathbb E_{\bar X}[u]=1$) iff $u\equiv 1$, i.e. iff $w = \bar X$. At $\alpha = 0$, $\tau\equiv 1$ and $\Phi_r = \sum_l T_l w_l^{-\theta}$ is buyer-invariant, so $u\equiv 1$ and $H = H^X$, which is Proposition 6's partial-regime limit. $\blacksquare$
+
+### A.12 Proposition 11
+
+Cell $(r',s)$'s sales to the downstream industry are $S_{r'} = \sum_r \gamma_{r'rs}X_{rs}$ and its portfolio is $w_r^{sr'd} = \gamma_{r'rs}X_{rs}/S_{r'}$, so $\sigma_{r'}w_r^{sr'd} = \gamma_{r'rs}X_{rs}/\sum_l S_l$. Summing over origins and using $\sum_{r'}\gamma_{r'rs} = 1$,
+
+$$
+\sum_{r'}\sigma_{r'}w_r^{sr'd} = \frac{X_{rs}}{\sum_l S_l} = \frac{X_{rs}}{\sum_l\sum_{r''}\gamma_{lr''s}X_{r''s}} = \frac{X_{rs}}{\sum_{r''}X_{r''s}} = \bar X_{rs},
+$$
+
+which is (19): the market portfolio is the sales-weighted average of the cells' portfolios, i.e. total sales to buyer $r$ are $r$'s purchases. Equation (20) is then the bias–variance identity for a weighted mean: for any weights $\sigma$ summing to one, vectors $w^{r'}$ and their weighted mean $\bar w$,
+
+$$
+\sum_{r'}\sigma_{r'}\|w^{r'}\|^2 - \|\bar w\|^2 = \sum_{r'}\sigma_{r'}\|w^{r'} - \bar w\|^2 \ge 0 ,
+$$
+
+which is A.4's computation with the cell in place of the firm; substituting $\bar w = \bar X_{\cdot s}$ from (19) gives (20). For (21), apply the same identity to the realised firm portfolios within each cell (Proposition 4) and then across cells, the outer weights being each cell's share of sector sales; the two applications compose because the firm weights $\sigma_i$ multiply out to the firms' shares of *sector* sales. The chain requires only that realised sales to buyer $r$ sum to $r$'s realised purchases, which holds by construction in the simulated economy, so (21) is exact there and not merely an expectation. $\blacksquare$
+
+*Remark.* Nothing in the argument uses the Fréchet structure, the softmax form, or the fixed network: (19)–(21) are accounting. They therefore survive every extension of the model that preserves market clearing at the buyer level.
+
+### A.13 Proposition 12
+
+Write $\mathbb E$ for the expectation over $(z, r', d)$ in (22) and define the tilted probability $dP_\nu = (\nu a/\mathbb E[\nu a])\,dP$, legitimate because $\nu\ge 0$ and $a\ge 0$. For any $f$, $\mathbb E[\nu a f] = \mathbb E[\nu a]\cdot\mathbb E_\nu[f]$. Applying this to $f = \Lambda + 1 - a$,
 
 $$
 \mathbb E\bigl[\nu a(\Lambda + 1 - a)\bigr]
@@ -671,7 +784,7 @@ $$
 = \mathbb E[\nu a]\bigl(\bar\Lambda + 1 - \tilde H\bigr).
 $$
 
-With $\tau = d^{\alpha}$ we have $d\ln\tau/d\ln d = \alpha$, so (17) becomes
+With $\tau = d^{\alpha}$ we have $d\ln\tau/d\ln d = \alpha$, so (22) becomes
 
 $$
 \frac{\delta}{\gamma}
@@ -679,7 +792,7 @@ $$
 = -\theta\alpha\,\kappa\bigl(\bar\Lambda + 1 - \tilde H\bigr),
 $$
 
-which is (18). For the last claim, fix a supplier $i$ and take the inner expectation over destinations only. If $\nu_{ir} = \bar\nu_i$ for all $r$, then
+which is (23). For the last claim, fix a supplier $i$ and take the inner expectation over destinations only. If $\nu_{ir} = \bar\nu_i$ for all $r$, then
 
 $$
 \tilde H_i = \frac{\mathbb E[\nu a^2]}{\mathbb E[\nu a]}
@@ -697,7 +810,7 @@ has an $r$-dependent denominator and does not sum to one over $r$ (it also carri
 
 *Remark 2 (the sign of the tilt).* Writing the inner expectation under the probability $p_r = a_{ir}$, $\tilde H_i = H_i + \operatorname{Cov}_p(\nu,a)/\mathbb E_p[\nu]$, so $\tilde H \ge H$ **iff** $\nu$ and $a$ are positively associated across the supplier's destinations. Since $\nu_{ir} = \rho_{r'rs}(z)/\tilde\rho_{r's}(z)$ is decreasing in $d_{r'r}$ and shares are larger nearby, that is the expected configuration — but it is a condition, not a theorem, and random $(\nu, a)$ violates it. The gap, like $\kappa$, is measurable on the simulated economy.
 
-### A.12 Proposition 11
+### A.14 Proposition 13
 
 Let $\zeta_{r's} \equiv w_s^{r'}w_d^{sr'}$ and, abstracting from cross-sector spillovers, $M_{r'r} = \sum_{s'}\zeta_{r's'}w_r^{s'r'd}$. With $\mathcal V = \sum_{r'}\omega_{r'}\operatorname{Var}(r')$ and Proposition 2, $\mathcal V = \sigma^2\sum_{r'}\omega_{r'}\sum_r M_{r'r}^2$, so
 
@@ -719,7 +832,7 @@ $$
 
 using $\operatorname{Cov}_w(w,\gamma) = \sum_r w_r^2\gamma_{krs} - H\,\mathbb E_w[\gamma] = \sum_r w_r^2\gamma_{krs} - H\bar\gamma_k$. $\blacksquare$
 
-*Remark.* This holds $X_{rs}$ and the exposures $\zeta$ fixed, exactly as the paper's `eq:w_elast_tau`–`eq:w_elast_T` do. Letting $\zeta_{r's}$ respond to $T_{ks}$ adds a level term that is first-order in the efficiency channel already priced in the planner's objective. For the paper's full quadratic constraint $\Omega\Sigma\Omega'$, replace $M_{r'r}\cdot M_{r'r}$ in the first display by $\sum_l \Omega_{r'l}M_{lr}$; the covariance form of (20) is then a cross-covariance and no longer collapses to a single $\operatorname{Cov}_w$.
+*Remark.* This holds $X_{rs}$ and the exposures $\zeta$ fixed, exactly as the paper's `eq:w_elast_tau`–`eq:w_elast_T` do. Letting $\zeta_{r's}$ respond to $T_{ks}$ adds a level term that is first-order in the efficiency channel already priced in the planner's objective. For the paper's full quadratic constraint $\Omega\Sigma\Omega'$, replace $M_{r'r}\cdot M_{r'r}$ in the first display by $\sum_l \Omega_{r'l}M_{lr}$; the covariance form of (25) is then a cross-covariance and no longer collapses to a single $\operatorname{Cov}_w$.
 
 ---
 
@@ -732,18 +845,21 @@ using $\operatorname{Cov}_w(w,\gamma) = \sum_r w_r^2\gamma_{krs} - H\,\mathbb E_
 | $\gamma_{r'rs}$ (closed form) | `sourcing_geometry(data)["by_sector"][s]["rho"]` | `psi/tot`, cells $\times$ downstream |
 | $\Phi_{rs}$ | the `tot` array inside `sourcing_geometry` | $m_{rs} = X_{rs}/\texttt{tot}$ is one line — but `tot` sums over that sector's *domestic active cells only*, so if foreign competition belongs in $\Phi$ the discrepancy is buyer-specific and does not cancel in the softmax |
 | $X_{rs}$ | `X_rs.npy` / the downstream purchase column of `suppliers.parquet` | |
+| $\bar X_{\cdot s}$, $H^X_s$, $N^X_s$ | one line from `X_rs.npy` | column-normalise and square; **no estimate enters**, so it can be reported in the data section |
+| tilt $u^{r'}$, equation (17) | `w_srd_r.npy` (or $\hat\gamma\times X$) divided by $\bar X_{\cdot s}$ | the two terms of (18) are then a variance and a covariance under the weights $\bar X_{\cdot s}$ |
+| cell sales weights $\sigma_{r'}$ | row sums of $\hat\gamma\times X$, normalised | needed for (20)–(21); use the *realised* sales if the realised portfolios are used, so that (19) holds exactly |
 | $\hat q_{r's}$ | `granular_diagnostics.npz` (raw diagnostic, alongside the count moment) | needed for (15); it is the **exact** simulated union, not an FKG approximation |
 | $\hat\alpha$, $\hat T$, $\theta$ | `unpack_estimated_T`, `model_theta` | `N_TAU = 1` required for a single $\alpha$ |
 | $\alpha = 0$ / $T$ equalised counterfactuals | `sourcing_geometry(..., alpha=0, equalise_T=True)` | already implemented |
 | distances $d_{r'r}$ | `distances.npy`, model's own $1..R$ indices | diagonal is the positive internal distance |
 
-Two implementation warnings. First, `w_srd_r.npy` holds the *realised* portfolio $\hat w^{sr'd}$ of (2), built from the simulated firm-level economy, whereas $\hat\gamma\times X$ gives the continuum object $w^{sr'd}$ of (1). They are different vectors — Proposition 4 compares their *Herfindahls*, not the vectors themselves — so the two should be reported side by side rather than substituted for one another. Second, `share` in `suppliers.parquet` is a share of the *buyer's unit cost*, so $X_{ir}$ must be formed as `share` $\times$ `downstream_purchase` before any portfolio share is taken — which is what `build_a_ir_panel` does.
+Two implementation warnings. First, `w_srd_r.npy` holds the *realised* portfolio $\hat w^{sr'd}$ of (2), built from the simulated firm-level economy, whereas $\hat\gamma\times X$ gives the continuum object $w^{sr'd}$ of (1). They are different vectors — Proposition 4 compares their *Herfindahls*, not the vectors themselves — so the two should be reported side by side rather than substituted for one another. Second, `share` in `suppliers.parquet` is a share of the *buyer's unit cost*, so $X_{ir}$ must be formed as `share` $\times$ `downstream_purchase` before any portfolio share is taken — which is what `build_a_ir_panel` does. A third, specific to §4.4: equation (19) is an adding-up identity, so it is also a **check on the artefacts** — if $\sum_{r'}\sigma_{r'}w_r^{sr'd}$ does not reproduce $\bar X_{rs}$ to numerical precision, the sales weights and the portfolios have been taken from inconsistent objects (typically continuum $\hat\gamma\times X$ weights against realised `w_srd_r.npy` portfolios), and the floor of Proposition 11 will appear to fail for a purely bookkeeping reason.
 
 ---
 
 ## Appendix C. Verification
 
-Every displayed identity in this note was checked numerically before it was written down, and then re-checked independently. The first pass used finite differences on asymmetric random economies (5 upstream origins $\times$ 4 downstream regions, unequal wages, $\theta = 1.768$) for Lemma 1 and equations (3)–(5), (7)–(12) and (20); Monte-Carlo simulation of the Ricardian assignment ($4\cdot 10^6$ draws) for (14)–(16); symbolic algebra for (18); and exact arithmetic for the counterexample of A.7. That pass is preserved as `test/test_diversification_identities.py`, which reproduces every identity below and fails loudly if one of them is edited into something false. A second, independent pass — different parameterisations, different seeds, `mpmath` at 250 digits for the inclusion–exclusion sum, and 60 random geometries for the monotonicity conjecture of A.10 — reproduced all of them and, in addition, produced the three corrections now incorporated: the own-$T$ channel of Corollary 5.1 (which an earlier draft wrongly declared absent), the champion-versus-arbitrary-firm convention of §4.3, and the single-sector hypothesis of Proposition 11. The $\hat\eta$-to-$\delta/\gamma$ conversion of §5 also comes from that pass.
+Every displayed identity in this note was checked numerically before it was written down, and then re-checked independently. The first pass used finite differences on asymmetric random economies (5 upstream origins $\times$ 4 downstream regions, unequal wages, $\theta = 1.768$) for Lemma 1 and equations (3)–(5), (7)–(12), (17)–(21) and (25); Monte-Carlo simulation of the Ricardian assignment ($4\cdot 10^6$ draws) for (14)–(16); symbolic algebra for (23); and exact arithmetic for the counterexample of A.7. That pass is preserved as `test/test_diversification_identities.py`, which reproduces every identity below and fails loudly if one of them is edited into something false. A second, independent pass — different parameterisations, different seeds, `mpmath` at 250 digits for the inclusion–exclusion sum, and 60 random geometries for the monotonicity conjecture of A.10 — reproduced all of them and, in addition, produced the three corrections now incorporated: the own-$T$ channel of Corollary 5.1 (which an earlier draft wrongly declared absent), the champion-versus-arbitrary-firm convention of §4.3, and the single-sector hypothesis of Proposition 13. The $\hat\eta$-to-$\delta/\gamma$ conversion of §5 also comes from that pass.
 
 Three claims in this note are **not** proved and are flagged where they appear: the monotonicity of (15) in $T_{r's}$ (A.10, Remark — verified in 60 random geometries, no violation); the sign of $\operatorname{Cov}_w(w,\xi)$ in any particular industry (§8); and every statement in §8 about which industry has the shorter or the more collinear portfolios, which are the hypotheses the statistics of §7 are meant to test.
 
