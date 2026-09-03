@@ -473,6 +473,24 @@ def run_checks(ns, ROOT, exp):
     finally:
         open(gkv_path, "w").write(gkv_orig)
 
+    # Sectors are matched by VALUE on the A129 code. A file whose codes do not line up
+    # (a renamed sector, or an int64 column against a string one) would otherwise hand
+    # back an all-NaN band with no complaint.
+    try:
+        wrong = pd.read_csv(io.StringIO(gkv_orig))
+        wrong["A129"] = wrong["A129"].replace({exp["sector_names"][0]: "ZZZZ"})
+        wrong.to_csv(gkv_path, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cc_w = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                     K_values=(0, 1, 2, 3))
+        check("an A129 code absent from G_K_var.csv is named, not silently NaN",
+              "G_K_var.csv has no row for A129" in buf.getvalue() and
+              bool(np.isnan(cc_w["se_empirical"].values.reshape(exp["S"], 4)[0]).all()) and
+              bool(np.isfinite(cc_w["se_empirical"].values.reshape(exp["S"], 4)[1]).all()))
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
     # Absent the optional file, the empirical band must be empty rather than guessed.
     os.rename(gkv_path, gkv_path + ".off")
     try:

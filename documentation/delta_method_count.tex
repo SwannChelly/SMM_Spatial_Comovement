@@ -150,6 +150,12 @@ the published $\mathrm{se}_N$ moves slightly as a result.
 It must hold the bootstrap variance of the \textbf{increment} $\hat p_s(K)$, not of the
 cumulative $\Ghat_s(K)$: those coincide only at $K=0$.
 
+\texttt{A129} holds the sector \textbf{codes}, exactly the values \texttt{G\_K.csv} carries
+(\texttt{C30C}, \texttt{2501}, \dots) --- not a $1\dots S$ index. Sectors are matched by
+value, so row order is irrelevant, but the two files must agree on the code's dtype; the
+loader compares the stripped string form and names any code it could not find rather than
+returning an all-NaN band silently.
+
 That coincidence is a free consistency gate and is checked rather than assumed. Since
 $\hat p_s(0)=\Ghat_s(0)$ is block 6 of the moment vector, its bootstrap variance is already
 the count block of $\Sigma_{\mathrm{data}}$; the loader compares the two and says so when they
