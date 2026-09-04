@@ -986,6 +986,37 @@ def gate_amplification():
     assert np.allclose(got, want, atol=1e-12), np.abs(got - want).max()
     print("counterfactual: support kept, D_r invariant, uniform benchmark exact, "
           "allocation matches the closed form")
+
+    # --- and the section has to run after the LOADER ALONE ----------------------
+    # The counterfactual reaches for the Ricardian geometry, which the comparative-
+    # advantage section also uses. If that helper lived inside THAT section, running
+    # this one on its own would raise NameError on the first counterfactual — which is
+    # exactly what happened once. So rebuild a namespace with every comparative-
+    # advantage cell REMOVED and require the reallocation to come out identical.
+    nb = json.load(open(NB_PATH))
+    ca_cells = ("def ca_distance_equivalence", "def ca_win_margin",
+                "def ca_variance_decomposition", "def ca_covariance_benchmark",
+                "def comparative_advantage_summary", "def plot_ca_distribution")
+    ns_noca = {}
+    for j, cell in enumerate(nb["cells"]):
+        if cell["cell_type"] != "code":
+            continue
+        code = "".join(cell["source"])
+        defines = re.search(r"^(def|class)\s", code, re.M) is not None
+        if code.lstrip().startswith("%") or any(m in code for m in ca_cells) or (
+                not defines and any(m in code for m in RUN_CELL_MARKERS)):
+            continue
+        exec(compile(code, f"<notebook cell {j}>", "exec"), ns_noca)
+    for name, value in (("THETA_DEFAULT", 1.768), ("NU_S_DEFAULT", 1.5),
+                        ("EMPIRICAL_MEAN_LOG_D", 5.8)):
+        ns_noca.setdefault(name, value)
+    assert "ca_win_margin" not in ns_noca, "the comparative-advantage cells were not excluded"
+    alone = ns_noca["counterfactual_frames"](data, diffusion=diff, verbose=False)
+    for lab in frames:
+        assert np.allclose(alone[lab]["upstream_sales"].to_numpy(),
+                           frames[lab]["upstream_sales"].to_numpy()), lab
+    print("the amplification section runs after the loader alone, with no "
+          "comparative-advantage cell executed")
     print(cfs.round(3).to_string())
 
     # the figures
