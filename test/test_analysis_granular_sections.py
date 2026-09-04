@@ -726,26 +726,6 @@ def gate_comparative_advantage():
     assert cb["share_covariance"].notna().all()
     print("\n", cb.round(4).to_string())
 
-    # ------------------------------------------------------------- counterfactuals
-    cf = NS["counterfactual_sourcing"](data)
-    assert set(cf.index.get_level_values("regime").unique()) == set(NS["CF_REGIMES"])
-    for s in sector_names:
-        n = cf.loc[(s, "Neither"), "n_cells"]
-        assert abs(cf.loc[(s, "Neither"), "hhi"] - 1.0 / n) < 1e-9      # uniform benchmark
-        assert abs(cf.loc[(s, "Neither"), "top_cell_share"] - 1.0 / n) < 1e-9
-        # distance pulls sourcing closer than uniform does
-        assert cf.loc[(s, "Distance only"), "mean_distance"] < cf.loc[(s, "Neither"), "mean_distance"]
-    # the planted edge concentrates sector 0 on its top area, far above the uniform
-    # benchmark, and far above the flat sector
-    assert cf.loc[(S0, "Both forces"), "top_area_share"] > \
-        3 * cf.loc[(S0, "Neither"), "top_area_share"]
-    assert cf.loc[(S0, "Both forces"), "top_area_share"] > \
-        2 * cf.loc[(S1, "Both forces"), "top_area_share"]
-    # and switching distance off concentrates it further still (CA is what does the work)
-    assert cf.loc[(S0, "Comparative advantage only"), "top_area_share"] > \
-        cf.loc[(S0, "Both forces"), "top_area_share"]
-    print("\n", cf.round(3).to_string())
-
     # ---------------------------------------------------------------------- output
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
@@ -766,7 +746,6 @@ def gate_comparative_advantage():
     assert "km" in axe.get_xlabel()
     print("\n  test-2 figure: log x, plain km labels", labs[:6])
     NS["plot_ca_win_margin"](data, save_to=str(out / "ca_win_margin.png"))
-    NS["plot_counterfactual_sourcing"](data, save_to=str(out / "ca_cf.png"))
     summ = NS["comparative_advantage_summary"](data)
     print("\n", summ.round(3).to_string())
     assert len(summ) == S
@@ -776,7 +755,6 @@ def gate_comparative_advantage():
     assert list(summ.index) == code_order, list(summ.index)
     assert list(eq.index) == code_order, list(eq.index)
     assert list(vd.index) == code_order, list(vd.index)
-    assert list(dict.fromkeys(cf.index.get_level_values("sector"))) == code_order
     # and the top area is named by its commuting zone, not by its ZE code
     caf = NS["comparative_advantage_frame"](data)
     assert caf["area"].str.startswith("Zone").all(), caf["area"].unique()[:3]
@@ -809,7 +787,10 @@ def gate_comparative_advantage():
 
 
 def gate_amplification():
-    """D_r and the share within a radius: the ratio, the grid and the CDF in d."""
+    """
+    D_r and the share within a radius: the ratio, the grid, the CDF in d — and the same
+    shock propagated with one force switched off.
+    """
     rng = np.random.default_rng(5)
 
     S, R, R_d, N_rho = 3, 20, 6, 40
@@ -850,10 +831,29 @@ def gate_amplification():
     sup = pd.DataFrame(rows)
     sup.to_parquet(folder / "suppliers.parquet")
 
+    # The counterfactual reallocates with the comparative-advantage section's closed-form
+    # win probabilities, so the synthetic tree has to carry the geometry those need: one
+    # attraction area per downstream region, every cell modelled, and a raw best_params
+    # in the layout `unpack_estimated_T` rebuilds.
+    n_AA, n_tau, ALPHA, THETA = R_d, 1, 0.4, 1.768
+    N_down = np.zeros(R); N_down[:R_d] = 1.0            # downstream regions are 1..R_d
+    aa_of_ze = np.argmin(D[:, :R_d], axis=1)            # each ZE to its closest buyer
+    CELL_MASK = np.ones((S, R), dtype=bool)
+    AA_ACTIVE = np.ones((S, n_AA), dtype=bool)
+    T_REF_AA = np.zeros(S, dtype=int)
+    T_true = rng.lognormal(0.0, 0.8, (S, n_AA))         # a real spread, so T does work
+    best_params = np.concatenate([[0.3], rng.uniform(.1, .3, S), rng.uniform(.1, .3, R_d),
+                                  [ALPHA], T_true.ravel()])
+
     data = {"industry": "auto", "mu": 2, "S": S, "R": R, "step_dir": "step3",
             "folder": folder, "input_folder": inp,
             "filter_N_upstream_df": filter_df, "france": france,
-            "suppliers": pd.read_parquet(folder / "suppliers.parquet")}
+            "suppliers": pd.read_parquet(folder / "suppliers.parquet"),
+            "n_AA": n_AA, "n_tau": n_tau, "sector_names": [f"C{s}" for s in range(S)],
+            "aa_names": [codes[a] for a in range(n_AA)], "aa_of_ze": aa_of_ze,
+            "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK, "T_REF_AA": T_REF_AA,
+            "N_downstream": N_down, "best_params": best_params,
+            "coefs": pd.DataFrame({"value": [1.0]})}     # no `theta` entry -> the default
 
     # ------------------------------------------------------------------- the frame
     diff = NS["build_diffusion_frame"](data)
@@ -906,7 +906,25 @@ def gate_amplification():
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_amplification"](data, summary=summ, save_to=str(out / "amp.png"))
-    NS["plot_local_share"](data, radius_km=100, summary=summ, save_to=str(out / "amp_local.png"))
+    # the nested bars: every radius on ONE bar, all opaque, the narrower drawn over the
+    # wider — so a bar reads "this much within 100 km, this much more out to 200 km"
+    axl = NS["plot_local_share"](data, radii=(100, 200), summary=summ,
+                                 save_to=str(out / "amp_local.png"))
+    groups = axl.containers
+    assert len(groups) == 2, [len(g) for g in groups]
+    outer, inner = groups[0], groups[1]                 # widest drawn first
+    assert all(p.get_alpha() in (None, 1.0) for g in groups for p in g), "bars must be opaque"
+    assert outer[0].get_zorder() < inner[0].get_zorder(), "the 100 km bar must be on top"
+    w_out = np.array([p.get_width() for p in outer])
+    w_in = np.array([p.get_width() for p in inner])
+    assert np.allclose(np.sort(w_out), np.sort(summ["share_within_200km"].to_numpy()))
+    assert (w_in <= w_out + 1e-12).all(), "the nested radius must not exceed the wider one"
+    assert np.allclose(np.diff(w_in), np.abs(np.diff(w_in))), "sorted on the headline radius"
+    # the outer ring is blue, the headline radius keeps the section's colour
+    assert tuple(np.round(outer[0].get_facecolor()[:3], 3)) == tuple(np.round(NS["sim_color"], 3))
+    print("nested-radius bars: opaque, nested, 100 km on top of 200 km, outer ring blue")
+    NS["plot_local_share"](data, radius_km=100, summary=summ,
+                           save_to=str(out / "amp_local_single.png"))
     NS["plot_local_share_profile"](data, profile=prof, save_to=str(out / "amp_profile.png"))
     NS["plot_amplification_vs_local"](data, radius_km=100, summary=summ,
                                       save_to=str(out / "amp_scatter.png"))
@@ -918,6 +936,77 @@ def gate_amplification():
     assert "share_within_50km" in s3.columns
     assert s3["share_within_50km"].mean() < summ["share_within_100km"].mean()
     print("\nradius is a free parameter (50 km keeps less than 100 km)")
+
+    # ------------------------------------------------- the shock with a force off
+    # The reallocation keeps the support and the geometry of the base frame and only
+    # moves the euros, so everything but `upstream_sales` must come back untouched.
+    frames = NS["counterfactual_frames"](data, diffusion=diff, verbose=False)
+    assert set(frames) == set(NS["CF_REGIMES"])
+    for lab, f in frames.items():
+        assert len(f) == len(diff), (lab, len(f))
+        merged = diff.merge(f, on=["ze2010_downstream", "ze2010"], suffixes=("", "_cf"))
+        assert len(merged) == len(diff)
+        assert np.allclose(merged["distance"], merged["distance_cf"]), lab
+        assert (f["upstream_sales"] >= -1e-15).all(), lab
+
+    # D_r cannot move: sum_l rho = 1 per (sector, buyer), so every regime redistributes
+    # exactly the euros the realised economy sent upstream. This is the claim the whole
+    # counterfactual rests on, so it is checked to machine precision.
+    det = NS["counterfactual_amplification"](data, radii=(100, 200), diffusion=diff,
+                                             frames=frames, verbose=False)
+    amp = det["amplification"].unstack("regime")
+    assert np.allclose(amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-12), amp
+    assert "Realised" in amp.columns and set(NS["CF_REGIMES"]) <= set(amp.columns)
+
+    # "Neither" is the uniform benchmark: every modelled cell of the sector equally
+    # likely, and here every cell is modelled, so each region receives total/R exactly
+    nei = frames["Neither"]
+    tot_cf = nei.groupby("ze2010_downstream")["upstream_sales"].transform("sum")
+    assert np.allclose(nei["upstream_sales"] / tot_cf, 1.0 / R, atol=1e-12)
+
+    # gravity alone strictly pulls sourcing closer than the uniform benchmark does
+    cfs = NS["counterfactual_summary"](data, radii=(100, 200), detail=det)
+    assert (cfs.loc["Distance only", "mean_upstream_distance"]
+            < cfs.loc["Neither", "mean_upstream_distance"])
+    assert (cfs.loc["Distance only", "share_within_100km"]
+            > cfs.loc["Neither", "share_within_100km"])
+    assert np.allclose(cfs["amplification"].to_numpy(), 1.0 + TOTAL_INPUT_SHARE)
+
+    # and the allocation itself is the closed form, recomputed here from T and D without
+    # going through `sourcing_geometry` — the independent path
+    est = NS["unpack_estimated_T"](data)
+    spend = (data["suppliers"].assign(_s=data["suppliers"]["A129"].astype(int) - 1)
+             .groupby(["ze2010_downstream", "_s"])["share"].sum())
+    want = np.zeros((R, R_d))
+    for (rd, sec), tot in spend.items():
+        psi = est["T"][sec, aa_of_ze] * np.maximum(D[:, rd - 1], 1.0) ** (-THETA * ALPHA)
+        want[:, rd - 1] += tot * psi / psi.sum()
+    got = frames["Both forces"].pivot(index="ze2010", columns="ze2010_downstream",
+                                      values="upstream_sales").to_numpy()
+    assert np.allclose(got, want, atol=1e-12), np.abs(got - want).max()
+    print("counterfactual: support kept, D_r invariant, uniform benchmark exact, "
+          "allocation matches the closed form")
+    print(cfs.round(3).to_string())
+
+    # the figures
+    NS["plot_counterfactual_local_share"](data, radius_km=100, detail=det,
+                                          save_to=str(out / "amp_cf_local.png"))
+    NS["plot_counterfactual_profile"](data, frames=frames, diffusion=diff, mark=(100, 200),
+                                      radii=(50, 100, 200, 400),
+                                      save_to=str(out / "amp_cf_profile.png"))
+
+    # the parquet's A129 is the model index 1..S; a file written with real CODES has to
+    # map through `sector_names`, and anything else must be named rather than guessed
+    sup_codes = data["suppliers"].assign(
+        A129=lambda d: pd.Series([f"C{v - 1}" for v in d["A129"]], index=d.index))
+    assert np.array_equal(NS["_parquet_sector_index"](data, sup_codes),
+                          data["suppliers"]["A129"].to_numpy() - 1)
+    try:
+        NS["_parquet_sector_index"](data, data["suppliers"].assign(A129="ZZZ"))
+    except ValueError as e:
+        print("expected on an unmappable sector column:", str(e)[:60], "...")
+    else:
+        raise AssertionError("should have raised")
 
     # a missing artefact must say what is missing, and a wrong column too
     for kw, exc in ((dict(suppliers=None), FileNotFoundError),):
