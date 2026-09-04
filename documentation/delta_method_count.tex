@@ -1,0 +1,178 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,hyperref}
+\newcommand{\Gbar}{\bar{G}}
+\newcommand{\Ghat}{\hat{G}}
+\newcommand{\ahat}{\hat{\alpha}}
+\newcommand{\ghat}{\hat{\gamma}}
+\newcommand{\Nhat}{\hat{N}}
+\newcommand{\qhat}{\hat{q}}
+\title{Standard errors for the supplier-count distribution $\Gbar_s(K)$}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Definition}
+
+Throughout, $\Gbar_s(K)$ is the \textbf{increment}, not the CDF:
+\begin{equation}
+\Gbar_s(K)\;=\;\frac{1}{|L_s|}\sum_{l\in L_s}\Pr\!\big[K_{ls}=K\big]
+\;=\;\frac{1}{|L_s|}\sum_{l\in L_s}\binom{N_s}{K} q_l^{K}(1-q_l)^{N_s-K},
+\end{equation}
+the share of cells in sector $s$ hosting \emph{exactly} $K$ suppliers, with
+$K_{ls}\sim\mathrm{Bin}(N_s,q_{ls})$. At $K=0$ this coincides with the CDF, so the
+targeted moment $\Gbar_s(0)=\overline{(1-q)^{N_s}}$ and the calibration of $\Nhat_s$ are
+unchanged; only the $K\ge1$ panels are redefined.
+
+\paragraph{Why increments and not the CDF.}
+$\Nhat_s$ is calibrated as the integer solving $\Gbar_s(0;n)=\Ghat_s(0)$, so the $K=0$ level
+is fit essentially by construction. Under the CDF convention every panel
+$\Pr[K_{ls}\le K]$ \emph{contains} that fitted level, and the untargeted panels re-test what
+is already targeted. The increments isolate the free content --- the \emph{shape} of the
+count distribution, which is what gate V8 asks about --- and, as shown below, the $\Ghat(0)$
+noise largely cancels out of them.
+
+\paragraph{Data side.}
+\texttt{G\_K.csv} stores the cumulative $G=\Pr[K_{ls}\le K]$. The empirical increment is the
+difference of consecutive columns, $\hat p_s(K)=\Ghat_s(K)-\Ghat_s(K-1)$.
+
+\section{The derivative in $n$: one line, exact}
+
+$N_s$ is an integer, so the relevant derivative is the unit first difference. From
+$\mathrm{Bin}(n+1,q)=\mathrm{Bin}(n,q)+\mathrm{Bern}(q)$,
+\begin{equation}
+\Pr[\mathrm{Bin}(n+1,q)=K]=(1-q)\Pr[\mathrm{Bin}(n,q)=K]+q\Pr[\mathrm{Bin}(n,q)=K-1],
+\end{equation}
+hence
+\begin{equation}
+\boxed{\;
+D_s^{K}\;\equiv\;\Gbar_s(K;n+1)-\Gbar_s(K;n)
+=\frac{1}{|L_s|}\sum_{l\in L_s} q_l\Big(\Pr[\mathrm{Bin}(n,q_l)=K-1]-\Pr[\mathrm{Bin}(n,q_l)=K]\Big)\;}
+\label{eq:D}
+\end{equation}
+with the first term absent at $K=0$, where \eqref{eq:D} collapses to
+$D_s^{0}=-\overline{q(1-q)^{n}}$ --- verbatim the quantity already computed beside the
+analytic derivative in \texttt{tools.jl}. So $D_s^{K}$ needs only $\qhat$ and $\Nhat_s$: no
+new simulation, no digamma, no continuum relaxation.
+
+\section{Variance of the fitted increment}
+
+Let $a_s^{K}=\partial\Gbar_s(K)/\partial\alpha$ (total, along the profiled manifold) and
+$b_s^{K}=\big(\partial\Gbar_s(K)/\partial T\big)f_\gamma$. The calibration at $K=0$ gives, by
+the implicit function theorem,
+\begin{equation}
+dN_s=\frac{d\Ghat_s(0)-a_s^{0}d\ahat-b_s^{0}d\ghat}{D_s^{0}} .
+\end{equation}
+Substituting into $d\Gbar_s(K)=a_s^{K}d\ahat+b_s^{K}d\ghat+D_s^{K}dN_s$ and writing
+$r_s^{K}=D_s^{K}/D_s^{0}$,
+\begin{equation}
+\boxed{\;
+d\Gbar_s(K)=r_s^{K}\,d\Ghat_s(0)
++\big(a_s^{K}-r_s^{K}a_s^{0}\big)d\ahat
++\big(b_s^{K}-r_s^{K}b_s^{0}\big)d\ghat \;}
+\label{eq:main}
+\end{equation}
+Each structural channel enters \emph{residualized against its $K=0$ direction}: only the part
+of the $\alpha$ (resp.\ $\gamma$) response that $\Nhat_s$ cannot absorb survives. Then
+$\mathrm{Var}=L\,\mathcal{J}\,L'$ with $L$ read off \eqref{eq:main} and $\mathcal{J}$ the joint
+covariance already assembled for the $\Nhat_s$ delta method,
+\begin{equation}
+\mathcal{J}=
+\begin{pmatrix}
+\Sigma_{\Ghat\Ghat} & \mathrm{Cov}(\ahat,\Ghat)' & \Sigma_{\gamma\Ghat}'\\
+\mathrm{Cov}(\ahat,\Ghat) & \mathrm{Var}_{\mathrm{sw}}(\ahat) & \mathrm{Cov}(\ahat,\ghat)\\
+\Sigma_{\gamma\Ghat} & \mathrm{Cov}(\ahat,\ghat)' & \Sigma_{\gamma\gamma}
+\end{pmatrix},
+\qquad
+\mathrm{Cov}(\ahat,\Ghat)=P\,\Sigma_{\mathrm{data}}[:,G],
+\end{equation}
+PSD by construction, as for $V_T$. \textbf{The only empirical input is $\Ghat_s(0)$} --- the
+one number the calibration consumed --- so the $K\ge1$ bands need no new bootstrap on the data
+side.
+
+\paragraph{Two limits worth checking.}
+\begin{itemize}
+\item $K=0$: $r_s^{0}=1$ and both residuals vanish, leaving
+$\mathrm{Var}[\Gbar_s(0)]=\mathrm{Var}(\Ghat_s(0))=[\Sigma_{\mathrm{data}}]_{G_sG_s}$. The
+$\alpha$ and target channels do not add, they \emph{cancel}: the fitted moment \emph{is} the
+target, so the current bar --- the $\alpha$ channel alone,
+$\sqrt{a_s^{0\prime}\mathrm{Var}_{\mathrm{sw}}(\ahat)a_s^{0}}$ --- double counts.
+\item \textbf{Clamped sector}: $\Nhat_s$ sits at a bound, $dN_s=0$, and the identity flips to
+$d\Gbar_s(K)=a_s^{K}d\ahat+b_s^{K}d\ghat$ for every $K$, target channel absent. So the band
+is a per-sector switch keyed on \texttt{clamped} --- the same distinction the figure already
+stars.
+\end{itemize}
+
+\section{The empirical band}
+
+For a bar on the \emph{data} increments, $\Sigma_{\mathrm{data}}$ must be extended: its count
+block is $S$ rows at $K=0$ and carries nothing for $K\ge1$. A bar there today would be
+invented, which is why SEs are currently drawn on the $K=0$ panel only. That is a
+data-pipeline change (bootstrap $\hat p_s(K)$ alongside $\Ghat_s(0)$), outside this repo, and
+\texttt{reconcile\_sigma\_data} must learn the wider block.
+
+A marginal variance per $(s,K)$ suffices for two bands read side by side. The cross-covariance
+$\mathrm{Cov}(\hat p_s(K),\Ghat_s(0))$ is needed only for a band on the model$-$data
+\emph{difference}; under the increment convention it is second-order, which is a further
+reason to prefer increments over the CDF, where it is $\approx\mathrm{Var}(\Ghat_s(0))$ and
+cannot be ignored.
+
+\section{Implementation}
+
+\begin{enumerate}
+\item \texttt{model\_CP.jl}: \texttt{gbar\_sector\_K}, the exact-$K$ analogue of
+\texttt{gbar\_sector}. Keep the unbiased convention --- with the $\Nhat_s$ varieties taken as
+a sample without replacement from the $m$ simulated draws, the hypergeometric expectation
+$\mathbb{E}\big[\binom{k}{j}\binom{m-k}{n-j}/\binom{m}{n}\big]$ is the Binomial pmf
+\emph{exactly} for every $j$, so the estimator is unbiased at every $K$, not only at $K=0$.
+\item $\Gbar_s(K)$ as a diagnostic block in \texttt{compute\_moments} (\emph{not} a moment),
+so the Jacobian has rows for $a_s^{K}$ and $b_s^{K}$.
+\item $D_s^{K}$ from \eqref{eq:D}, beside the existing \texttt{D\_firstdiff}.
+\item \texttt{var\_G\_curve\_delta.npy} from the existing \texttt{Joint}; the
+\texttt{clamped}-keyed switch in \texttt{plot\_count\_curve}.
+\end{enumerate}
+
+\paragraph{The first difference is used throughout.}
+The $\Nhat_s$ delta method previously divided by the \emph{analytic} slope
+$\overline{(1-\qhat)^{n}\ln(1-\qhat)}$. It now divides by $D_s^{0}$, the same unit first
+difference as everything else in this file: $N_s$ is an integer, one variety \emph{is} the
+step, and $D_s^{0}$ enters both $r_s^{K}$ and $\mathrm{Var}(\Nhat_s)$, so a mixed convention
+would make the two inconsistent. It is evaluated \emph{through} $\mathtt{gbar\_sector}$ ---
+the difference of the same unbiased estimator the bisection matched on, not of a plug-in that
+drifts from it by $O(\qhat)$. The plug-in slope is still printed beside it as a scale check;
+the published $\mathrm{se}_N$ moves slightly as a result.
+
+\section{The empirical variance file}
+
+\texttt{<baseline>/G\_K\_var.csv}, optional, columns \texttt{A129}, \texttt{K}, and either
+\texttt{var} or \texttt{se} --- names matched case-insensitively, as \texttt{G\_K.csv} is.
+It must hold the bootstrap variance of the \textbf{increment} $\hat p_s(K)$, not of the
+cumulative $\Ghat_s(K)$: those coincide only at $K=0$.
+
+The value column is found by name (\texttt{var}/\texttt{variance}, else
+\texttt{se}/\texttt{sd}/\texttt{std}); a file written off \texttt{G\_K.csv}'s own schema
+often keeps it called \texttt{G}, which names the object measured rather than the statistic,
+so whatever single column remains beside \texttt{A129} and \texttt{K} is read as a variance
+and the choice is announced. Two spare columns are refused rather than guessed.
+
+Only $K\le\texttt{COUNT\_CURVE\_K\_MAX}$ is kept, from this file and from
+\texttt{G\_K.csv} alike, so the variance file need only cover the low $K$ actually plotted.
+
+\texttt{A129} holds the sector \textbf{codes}, exactly the values \texttt{G\_K.csv} carries
+(\texttt{C30C}, \texttt{2501}, \dots) --- not a $1\dots S$ index. Sectors are matched by
+value, so row order is irrelevant, but the two files must agree on the code's dtype; the
+loader compares the stripped string form and names any code it could not find rather than
+returning an all-NaN band silently.
+
+That coincidence is a free consistency gate and is checked rather than assumed. Since
+$\hat p_s(0)=\Ghat_s(0)$ is block 6 of the moment vector, its bootstrap variance is already
+the count block of $\Sigma_{\mathrm{data}}$; the loader compares the two and says so when they
+differ by more than 5\%, the most likely cause being a file that tabulates the CDF's variance.
+
+Bootstrap the whole curve in one pass, resampling as the existing $\beta\to\gamma\to G$ block
+does. Only the marginal variance per $(s,K)$ is consumed here --- the cross-covariance
+$\mathrm{Cov}(\hat p_s(K),\Ghat_s(0))$ would be needed only for a band on the model$-$data
+\emph{difference}, and under the increment convention it is second order.
+
+\end{document}

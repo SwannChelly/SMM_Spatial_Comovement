@@ -14,7 +14,7 @@ reconstruction in the gamma panel, and the LaTeX table's contents.
 Runs every gate, prints PASS/FAIL per gate and exits non-zero if any failed.
 Print-only otherwise; nothing in the estimation pipeline is touched.
 """
-import io, json, os, sys, tempfile, warnings
+import contextlib, io, json, os, sys, tempfile, warnings
 
 import matplotlib
 matplotlib.use("Agg")
@@ -135,6 +135,16 @@ def _build_industry(ROOT, industry, sectors):
                          "K": k, "N_supplier_s": N_sup[s]})
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
 
+    # ---- G_K_var.csv: bootstrap variance of the INCREMENTS p_s(K) --------------
+    # Optional file. Its K = 0 column is the SAME object as the G block of Sigma_data
+    # (p_s(0) = G_s(0)), which is what makes it a free consistency check rather than an
+    # extra assumption — planted consistent here, and deliberately broken in one gate.
+    G_pmf_emp = np.diff(G_curve_emp, axis=1, prepend=0.0)
+    G_pmf_se  = np.array([0.03, 0.05, 0.02, 0.04])[:, None] * (1.0 + 0.2 * np.arange(K_ROWS))
+    pd.DataFrame([{"A129": sectors[s], "K": k, "var": G_pmf_se[s, k] ** 2}
+                  for s in range(S) for k in range(K_ROWS)]
+                 ).to_csv(f"{BASE}/G_K_var.csv", index=False)
+
     # ---- the model-side structures the loader must rebuild ---------------------
     supplier = (filter_N == 1) & (X_rs > 0)
     AA_ACTIVE = np.zeros((S, R_D), dtype=bool)
@@ -249,10 +259,26 @@ def _build_industry(ROOT, industry, sectors):
                  q_hat=q_hat_plant,
                  b_logz=np.array([-1.768]), EK=RNG.uniform(0.1, 3, S))
 
+    # ---- the count-distribution band written by compute_profiled_T_inference ----
+    # A FREE sector's K = 0 entry equals the bootstrap SE of the target (N_hat_s is
+    # calibrated to make the fitted moment EQUAL it, so the two channels cancel rather
+    # than add); a CLAMPED sector's does not (dN_s = 0, the target channel drops out).
+    # Planted that way so the notebook is checked against the structure, not a blob.
+    se_G0_boot = np.sqrt(np.diag(Sigma_data))[-S:]
+    se_curve = np.column_stack([se_G0_boot] +
+                               [se_G0_boot * (0.6 + 0.2 * k) for k in range(1, K_ROWS)])
+    se_curve[3, 0] = 0.777                      # sector 3 is clamped (:lo above)
+    for st in ("step2", "step3"):
+        np.save(f"{RUN}/{st}/inference/se_G_curve_delta.npy", se_curve)
+        np.save(f"{RUN}/{st}/inference/count_curve_K.npy",
+                np.arange(K_ROWS, dtype=float))
+
     # ---- the expectations the test checks against ----------------------------
     expected = {
         "S": S, "R": R, "n_AA": R_D, "n_coef": N_REG, "n_gb": n_gb,
         "G_curve_emp": G_curve_emp.tolist(), "K_rows": list(range(K_ROWS)),
+        "G_pmf_emp": G_pmf_emp.tolist(), "G_pmf_se": G_pmf_se.tolist(),
+        "se_curve": se_curve.tolist(), "se_G0_boot": se_G0_boot.tolist(),
         "N_hat": N_HAT.tolist(), "n_rho": N_RHO,
         "aa_names": [ze[i] for i in down_idx],
         "sector_names": sectors,
@@ -371,9 +397,12 @@ def run_checks(ns, ROOT, exp):
     cc = ns["count_curve"](d2, K_values=(0, 1, 2, 3))
     check("curve is indexed by (sector, K)", list(cc.index.names) == ["A129", "K"] and
           len(cc) == exp["S"] * 4)
-    check("empirical curve is the rest of G_K.csv",
+    # The panels are INCREMENTS: p_s(K) = Pr[K_ls = K] = G(K) - G(K-1). G_K.csv stores
+    # the CDF, so the empirical series must be its first difference, with p_s(0) = G(0)
+    # — the targeted moment is the same number under either convention.
+    check("empirical curve is the INCREMENT of G_K.csv, p_s(K) = G(K) - G(K-1)",
           close(cc["empirical"].values.reshape(exp["S"], 4),
-                np.array(exp["G_curve_emp"])))
+                np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)))
     check("the unbiased estimator was used (no fallback)",
           cc.attrs["estimator"].startswith("unbiased"))
     check("N_rho recovered from N_HI as load_parameters.jl fixes it",
@@ -384,16 +413,188 @@ def run_checks(ns, ROOT, exp):
     check("K = 0 gap is reported and is machine zero",
           cc.attrs["K0_gap_vs_moment_vector"] <= 1e-12)
     sim_w = cc["simulated"].values.reshape(exp["S"], 4)
-    check("simulated curve is a CDF: non-decreasing in K",
-          bool((np.diff(sim_w, axis=1) >= -1e-12).all()))
+    # A pmf, not a CDF: no monotonicity to check, but the panels must still be
+    # probabilities and their partial sums must not exceed one.
     check("simulated curve stays in [0, 1]",
           bool((sim_w >= -1e-12).all() and (sim_w <= 1 + 1e-12).all()))
+    check("the increments are a sub-probability: cumulative sum <= 1",
+          bool((np.cumsum(sim_w, axis=1) <= 1 + 1e-9).all()))
     check("only K = 0 is flagged as targeted",
           list(cc["targeted"].values.reshape(exp["S"], 4)[0]) == [True, False, False, False])
     check("N_hat carried through per sector",
           close(cc.xs(0, level="K")["N_hat"].values, exp["N_hat"]))
     check("residual is simulated - empirical",
           close(cc["residual"].values, cc["simulated"].values - cc["empirical"].values))
+    # ---- standard errors on both series -------------------------------------
+    # The simulated band is Julia's delta method (se_G_curve_delta.npy); the empirical
+    # band is the bootstrap variance of the increments (G_K_var.csv). Neither is
+    # invented: absent its file, the corresponding column must come back all-NaN so the
+    # plot draws bare points rather than a fabricated bar.
+    check("simulated SE read from the delta-method file, per (sector, K)",
+          close(cc["se_simulated"].values.reshape(exp["S"], 4),
+                np.array(exp["se_curve"])))
+    check("empirical SE read from G_K_var.csv as sqrt(var)",
+          close(cc["se_empirical"].values.reshape(exp["S"], 4),
+                np.array(exp["G_pmf_se"])))
+    # The structural claim the band encodes: N_hat_s is calibrated on K = 0, so for a
+    # FREE sector the fitted moment IS the target and the band collapses to the target's
+    # own bootstrap SE — the K = 0 fit carries no information. A CLAMPED sector cannot
+    # move N_hat_s, the target channel drops out, and its band is something else.
+    se0_sim = cc.xs(0, level="K")["se_simulated"].values
+    boot0 = np.array(exp["se_G0_boot"])
+    free = ~cc.xs(0, level="K")["clamped"].values
+    check("at K = 0 a FREE sector's simulated band is the target's bootstrap SE",
+          close(se0_sim[free], boot0[free]))
+    check("at K = 0 the CLAMPED sector's band is NOT the target's bootstrap SE",
+          bool(np.all(np.abs(se0_sim[~free] - boot0[~free]) > 1e-6)))
+    check("the clamp flag is carried onto every K of that sector",
+          bool((cc["clamped"].values.reshape(exp["S"], 4)[3]).all()) and
+          not bool((cc["clamped"].values.reshape(exp["S"], 4)[0]).any()))
+    check("plot_count_curve draws both bands",
+          ns["plot_count_curve"](d2, K_values=(0, 1, 2, 3),
+                                 save_to=os.path.join(ROOT, "cc.pdf")) is not None
+          and os.path.exists(os.path.join(ROOT, "cc.pdf")))
+
+    # p_s(0) = G_s(0), so a G_K_var.csv whose K = 0 column disagrees with the G block of
+    # Sigma_data is measuring a different object — most likely the CDF's variance. That
+    # must be SAID, not silently plotted.
+    gkv_path = os.path.join(ROOT, "baseline_test", "G_K_var.csv")
+    gkv_orig = open(gkv_path).read()
+
+    # A sector whose bootstrap variance is 0 (or missing) must keep its POINT and simply
+    # lose its bar: the value is known, only its uncertainty is not. Drawing it through
+    # errorbar with a zero yerr would put a bare cap on the marker; a NaN yerr drops the
+    # point entirely. Both are wrong, and the second is what makes a point look absent.
+    try:
+        z = pd.read_csv(io.StringIO(gkv_orig))
+        z.loc[z["K"] == 2, "var"] = 0.0
+        z.to_csv(gkv_path, index=False)
+        d_z = ns["load_granular_data"]("test", mu=2, base=ROOT)
+        cc_z = ns["count_curve"](d_z, K_values=(0, 1, 2, 3))
+        check("a zero bootstrap variance keeps the empirical VALUE",
+              bool(np.isfinite(cc_z.xs(2, level="K")["empirical"].values).all()) and
+              close(cc_z.xs(2, level="K")["se_empirical"].values, np.zeros(exp["S"])))
+        axs_z = ns["plot_count_curve"](d_z, K_values=(0, 1, 2, 3))
+        ax_k2 = axs_z[1][0]            # ncols=2 => K=2 is the second row, first column
+        emp = [c for c in ax_k2.containers if c.get_label() == "Empirical"]
+        n_pts = sum(len(c[0].get_xdata()) for c in emp)
+        check("every sector is still plotted at K = 2 despite a zero variance",
+              n_pts == exp["S"])
+        check("and none of them carries an error bar",
+              not any(getattr(c, "has_yerr", False) for c in emp))
+        # the K = 0 panel, where the variances are nonzero, must still show bars
+        emp0 = [c for c in axs_z[0][0].containers if c.get_label() == "Empirical"]
+        check("a panel with nonzero variances still draws its bars",
+              any(getattr(c, "has_yerr", False) for c in emp0))
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    try:
+        bad = pd.read_csv(io.StringIO(gkv_orig))
+        bad.loc[bad["K"] == 0, "var"] *= 9.0          # 3x the SE
+        bad.to_csv(gkv_path, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                              K_values=(0, 1, 2, 3))
+        check("a K = 0 bootstrap variance inconsistent with Sigma_data is flagged",
+              "disagrees with diag(Sigma_data)" in buf.getvalue())
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    # A G_K_var.csv written off G_K.csv's own schema keeps the value column called `G`,
+    # which names the object measured, not the statistic. It must still be read, as a
+    # variance, and the fallback must SAY so rather than guess silently.
+    try:
+        gcol = pd.read_csv(io.StringIO(gkv_orig)).rename(columns={"var": "G"})
+        gcol.to_csv(gkv_path, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cc_g = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                     K_values=(0, 1, 2, 3))
+        check("a value column named `G` is read as the variance, and the choice announced",
+              "as the VARIANCE" in buf.getvalue() and
+              close(cc_g["se_empirical"].values.reshape(exp["S"], 4),
+                    np.array(exp["G_pmf_se"])))
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    # An ambiguous file (two spare columns) must refuse rather than pick one.
+    try:
+        amb = pd.read_csv(io.StringIO(gkv_orig)).rename(columns={"var": "G"})
+        amb["other"] = 1.0
+        amb.to_csv(gkv_path, index=False)
+        raised = False
+        try:
+            ns["load_granular_data"]("test", mu=2, base=ROOT)
+        except KeyError as e:
+            raised = "cannot tell which column holds the variance" in str(e)
+        check("an ambiguous G_K_var.csv is refused, not guessed", raised)
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    # k_max truncates every count-curve input at once, so raising the constant is the
+    # single place that widens the reporting.
+    d_k1 = ns["load_granular_data"]("test", mu=2, base=ROOT, k_max=1)
+    check("k_max truncates the empirical curve and its bootstrap SE together",
+          d_k1["G_curve_K"] == [0, 1] and d_k1["G_pmf"].shape[1] == 2
+          and d_k1["G_pmf_se"].shape[1] == 2)
+    check("k_max leaves G_target (the K = 0 targeted moment) untouched",
+          close(d_k1["G_target"], d2["G_target"]))
+
+    # Sectors are matched by VALUE on the A129 code. A file whose codes do not line up
+    # (a renamed sector, or an int64 column against a string one) would otherwise hand
+    # back an all-NaN band with no complaint.
+    try:
+        wrong = pd.read_csv(io.StringIO(gkv_orig))
+        wrong["A129"] = wrong["A129"].replace({exp["sector_names"][0]: "ZZZZ"})
+        wrong.to_csv(gkv_path, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cc_w = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                     K_values=(0, 1, 2, 3))
+        check("an A129 code absent from G_K_var.csv is named, not silently NaN",
+              "G_K_var.csv has no row for A129" in buf.getvalue() and
+              bool(np.isnan(cc_w["se_empirical"].values.reshape(exp["S"], 4)[0]).all()) and
+              bool(np.isfinite(cc_w["se_empirical"].values.reshape(exp["S"], 4)[1]).all()))
+    finally:
+        open(gkv_path, "w").write(gkv_orig)
+
+    # Absent the optional file, the empirical band must be empty rather than guessed.
+    os.rename(gkv_path, gkv_path + ".off")
+    try:
+        cc_nb = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                  K_values=(0, 1, 2, 3))
+        check("no G_K_var.csv => empirical SE is all NaN, never invented",
+              bool(np.isnan(cc_nb["se_empirical"].values).all()))
+    finally:
+        os.rename(gkv_path + ".off", gkv_path)
+
+    # G is CUMULATIVE, so a (sector, K) row absent from G_K.csv means no mass was added
+    # there, not that the level is unknown. Differencing a NaN would poison TWO
+    # increments (K and K+1) and erase two empirical points from the figure.
+    gk_path2 = os.path.join(ROOT, "baseline_test", "G_K.csv")
+    gk_orig2 = open(gk_path2).read()
+    try:
+        g = pd.read_csv(io.StringIO(gk_orig2))
+        g = g[~((g["K"] == 2) & (g["A129"] == exp["sector_names"][0]))]
+        g.to_csv(gk_path2, index=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cc_gap = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
+                                       K_values=(0, 1, 2, 3))
+        emp_gap = cc_gap["empirical"].values.reshape(exp["S"], 4)
+        ref = np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)
+        check("a missing K row is read as a flat CDF (increment 0), not two NaNs",
+              bool(np.isfinite(emp_gap).all()) and abs(emp_gap[0, 2]) < 1e-12
+              and abs(emp_gap[0, 3] - (ref[0, 2] + ref[0, 3])) < 1e-12)
+        check("and the fill is announced rather than silent",
+              "the CDF is flat there" in buf.getvalue())
+        check("other sectors are untouched by one sector's gap",
+              close(emp_gap[1:], ref[1:]))
+    finally:
+        open(gk_path2, "w").write(gk_orig2)
+
     # A K the data pipeline never tabulated must leave the panel's empirical series
     # empty rather than silently borrowing a neighbouring K.
     cc9 = ns["count_curve"](d2, K_values=(0, 9))

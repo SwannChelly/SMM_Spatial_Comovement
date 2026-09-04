@@ -1515,12 +1515,23 @@ function compute_jacobian(theta::Vector{Float64};
                           append_N_s::Bool = false,
                           N_s_K::Int = 10,
                           N_s_base_seed::Int = 7_000_000,
-                          draw_method::Symbol = INFERENCE_DRAW_METHOD)
+                          draw_method::Symbol = INFERENCE_DRAW_METHOD,
+                          G_curve_out::Union{Nothing, Base.RefValue{Any}} = nothing)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
     # Columns the returned Jacobian will carry: the perturbed θ coordinates, plus the
     # S variety counts when they are appended (see the `append_N_s` block below).
     n_cols_out = n_perturb + (append_N_s && GRANULAR && !analytical ? S : 0)
+
+    # ── Optional: differentiate the count DISTRIBUTION alongside the moments ────
+    # Ḡ_s(K) = mean_l Pr[K_ls = K] is a diagnostic, not a moment, so it has no row in
+    # the Jacobian — but its α and T derivatives are exactly what the delta-method band
+    # on the untargeted K ≥ 1 panels needs. Rather than pay for a second FD sweep, the
+    # curve is APPENDED as extra rows to the vector `eval_one` returns, ridden through
+    # the same central differences, and split off again below. Zero extra simulation:
+    # every evaluation already solved the network the curve is read from.
+    want_curve   = G_curve_out !== nothing && GRANULAR && !analytical
+    n_curve_rows = want_curve ? S * length(COUNT_CURVE_K) : 0
 
     # Fail here, not deep inside the AD tape: the analytical moment vector has no
     # block 6, so under GRANULAR it is one block short of MOMENT_MASK.
@@ -1615,6 +1626,10 @@ function compute_jacobian(theta::Vector{Float64};
                           "requested; using the loaded Jacobian as-is (columns assumed aligned)."
             end
             println("Loaded Jacobian from $jpath ($(size(J,1))×$(size(J,2))) — skipping recomputation.")
+            G_curve_out === nothing || @warn "compute_jacobian(load_existing): the " *
+                "count-curve Jacobian is NOT stored on disk, so `G_curve_out` stays " *
+                "empty and the Ḡ_s(K) bands will be skipped. Delete $jpath (or pass " *
+                "load_existing=false) to recompute it."
             return J, J_elast, J_sd, J_elast_sd
         else
             @warn "compute_jacobian(load_existing=true) but $jpath not found — computing from scratch."
@@ -1734,8 +1749,9 @@ function compute_jacobian(theta::Vector{Float64};
                 # Under profiling, reconstruct T = T*(α,Ω,A) before evaluating, so a
                 # perturbation of α/head moves T accordingly (total derivative).
                 p_eval = profile_T ? profiled_theta(p) : p
-                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k, N_fixed=N_fixed)
-                moments_to_vec(m)
+                _, m = full_SMM(p_eval; u_draws=u_k, sample_weights=w_k, N_fixed=N_fixed,
+                                return_full=want_curve)
+                want_curve ? vcat(moments_to_vec(m), vec(m.G_curve)) : moments_to_vec(m)
             end
         end
 
@@ -1938,6 +1954,25 @@ function compute_jacobian(theta::Vector{Float64};
     # evaluated at the SAME pinned N̂_s the rest of this Jacobian holds fixed, so the
     # matrix is internally consistent (the inference file `jacobian_N_s.npy` pins N̂_s
     # at its own θ̂ evaluation and can differ by a variety).
+    # ── Split the appended count-curve rows back off ────────────────────────────
+    # Done AFTER the symmetry/Richardson diagnostics (which compare against the
+    # full-height J_sd) and BEFORE `append_N_s` (whose hcat and elasticity loop must see
+    # the moment rows only), so the saved `jacobian*.npy` and every consumer that slices
+    # by moment index are untouched. `vec(G_curve)` is column-major over (S, |K|), so
+    # the extracted rows run sector-fastest within each K.
+    if want_curve
+        n_mom_true    = N_moments - n_curve_rows
+        G_curve_out[] = J[(n_mom_true + 1):end, :]
+        J             = J[1:n_mom_true, :]
+        J_elast       = J_elast[1:n_mom_true, :]
+        J_sd          = J_sd[1:n_mom_true, :]
+        J_elast_sd    = J_elast_sd[1:n_mom_true, :]
+        m0_bar        = m0_bar[1:n_mom_true]
+        N_moments     = n_mom_true
+        println("  count-curve rows split off: $(size(G_curve_out[],1))×$(size(G_curve_out[],2)) " *
+                "(S = $S sectors × K ∈ $(collect(COUNT_CURVE_K)))")
+    end
+
     n_N_cols = 0
     if append_N_s && GRANULAR && !analytical
         println("\nAppending the variety-count columns to the Jacobian " *
@@ -2974,7 +3009,19 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
                                       N_hat::Union{Nothing,Vector{Int}} = nothing,
                                       se_N_naive::Union{Nothing,Vector{Float64}} = nothing,
                                       q_hat::Union{Nothing,Vector{Float64}} = nothing,
-                                      J_free_gb::Union{Nothing,AbstractMatrix} = nothing)
+                                      J_free_gb::Union{Nothing,AbstractMatrix} = nothing,
+                                      # Count-DISTRIBUTION section: the untargeted
+                                      # Ḡ_s(K) = mean_l Pr[K_ls = K] panels, K ≥ 1.
+                                      # `k_counts`/`n_draw` are the (wins, draws) pair the
+                                      # unbiased `gbar_sector_K` needs; the two curve
+                                      # Jacobians come free with the α and free-parameter
+                                      # Jacobians (`compute_jacobian(G_curve_out=...)`).
+                                      k_counts::Union{Nothing,Vector{Int}} = nothing,
+                                      n_draw::Int = 0,
+                                      clamped::Union{Nothing,Vector{Symbol}} = nothing,
+                                      G_curve_alpha::Union{Nothing,AbstractMatrix} = nothing,
+                                      G_curve_free::Union{Nothing,AbstractMatrix} = nothing,
+                                      G_curve_hat::Union{Nothing,AbstractMatrix} = nothing)
     inf_dir = joinpath(output_folder, "inference")
     mkpath(inf_dir)
 
@@ -3155,6 +3202,16 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
             # (they agree to O(q̂); the first difference is the integer-step scale).
             D_analytic  = zeros(S)
             D_firstdiff = zeros(S)
+            # `D_analytic` is the plug-in continuum slope, kept only as the printed
+            # comparison. The FIRST DIFFERENCE is what enters every formula below:
+            # N_s is an INTEGER, so one variety IS the step, and it is the convention
+            # every other derivative of N_s in this file already uses. It is evaluated
+            # through `gbar_sector` when the win counts are available, so it is the
+            # difference of the SAME unbiased estimator the bisection matched on rather
+            # than of a plug-in that would drift from it by O(q̂).
+            have_counts = k_counts !== nothing && n_draw > 0 &&
+                          length(k_counts) == n_good
+            lg_fd = have_counts ? gbar_logfact_table(n_draw) : Float64[]
             for s in 1:S
                 cells = CELLS_OF_SECTOR[s]
                 isempty(cells) && continue
@@ -3163,10 +3220,13 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
                     q  = q_hat[g]
                     pw = (1.0 - q)^N_hat[s]
                     acc_d += pw * log(max(1.0 - q, 1e-300))
-                    acc_f += -q * pw                       # Ḡ(n+1) − Ḡ(n)
+                    acc_f += -q * pw                       # plug-in Ḡ(n+1) − Ḡ(n)
                 end
                 D_analytic[s]  = acc_d / length(cells)
-                D_firstdiff[s] = acc_f / length(cells)
+                D_firstdiff[s] = have_counts ?
+                    (gbar_sector(cells, k_counts, n_draw, N_hat[s] + 1, lg_fd) -
+                     gbar_sector(cells, k_counts, n_draw, N_hat[s],     lg_fd)) :
+                    acc_f / length(cells)
             end
 
             A_mat = Matrix{Float64}(G_alpha[G0_rng, :])                      # S × N_TAU
@@ -3175,7 +3235,7 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
             Cov_aG = P * Sigma_data[:, G0_rng]                               # N_TAU × S
             Sig_gG = Sigma_data[gam_rng, G0_rng]                             # n_gam × S
 
-            Dinv = Diagonal([abs(D_analytic[s]) > 1e-14 ? 1.0 / D_analytic[s] : 0.0
+            Dinv = Diagonal([abs(D_firstdiff[s]) > 1e-14 ? 1.0 / D_firstdiff[s] : 0.0
                              for s in 1:S])
             L = hcat(Matrix(Dinv), -(Dinv * A_mat), -(Dinv * B_mat))         # S × (S+N_TAU+n_gam)
             Joint = [ Sig_GG        Cov_aG'          Sig_gG';
@@ -3196,6 +3256,105 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
             NPZ.npzwrite(joinpath(inf_dir, "jacobian_N_s_wrt_alpha.npy"), A_mat)
             NPZ.npzwrite(joinpath(inf_dir, "jacobian_N_s_wrt_gamma.npy"), B_mat)
             NPZ.npzwrite(joinpath(inf_dir, "dGbar_dn.npy"), D_analytic)
+            NPZ.npzwrite(joinpath(inf_dir, "dGbar_dn_firstdiff.npy"), D_firstdiff)
+
+            # ── The untargeted panels: Ḡ_s(K) = mean_l Pr[K_ls = K], K ≥ 1 ──────
+            # Same delta method, one row of loadings per (sector, K). Writing
+            # D_s^K = Ḡ_s(K; N̂+1) − Ḡ_s(K; N̂) and r_s^K = D_s^K / D_s^0, substituting
+            # the calibration differential dN_s = [dĜ_s − a_s^0 dα̂ − b_s^0 dγ̂]/D_s^0
+            # into dḠ_s(K) = a_s^K dα̂ + b_s^K dγ̂ + D_s^K dN_s gives
+            #
+            #   dḠ_s(K) = r_s^K dĜ_s + (a_s^K − r_s^K a_s^0) dα̂ + (b_s^K − r_s^K b_s^0) dγ̂
+            #
+            # so the empirical-target variance enters SCALED by r_s^K and each structural
+            # loading enters RESIDUALIZED against its K = 0 direction — only the part of
+            # the α (resp. γ) response that N̂_s cannot absorb survives.
+            #
+            # A CLAMPED sector sets r_s^K = 0: N̂_s sits at a bound, dN_s = 0, the target
+            # channel drops out and the raw α + γ propagation is the whole variance. One
+            # formula covers both regimes.
+            #
+            # Two limits are worth checking in the output: at K = 0 a free sector has
+            # r = 1 and both residuals vanish, so the band collapses to the bootstrap SE
+            # of the target — the count moment is fit by construction, so its "fit" is
+            # not evidence; at K = 0 a clamped sector keeps the α + γ propagation.
+            if G_curve_alpha !== nothing && G_curve_free !== nothing && have_counts
+                Ks = collect(COUNT_CURVE_K); nK = length(Ks)
+                rows(i) = ((i - 1) * S + 1):(i * S)      # vec() is column-major over (S,nK)
+                if size(G_curve_alpha, 1) == S * nK && size(G_curve_free, 1) == S * nK &&
+                   size(G_curve_free, 2) == length(param_labels_gb)
+                    lg_c = gbar_logfact_table(n_draw)
+                    D_curve = zeros(S, nK)
+                    for s in 1:S
+                        cells = CELLS_OF_SECTOR[s]
+                        isempty(cells) && continue
+                        for (i, KK) in enumerate(Ks)
+                            D_curve[s, i] =
+                                gbar_sector_K(cells, k_counts, n_draw, N_hat[s] + 1, KK, lg_c) -
+                                gbar_sector_K(cells, k_counts, n_draw, N_hat[s],     KK, lg_c)
+                        end
+                    end
+                    i0 = findfirst(==(0), Ks)
+                    A0 = Matrix{Float64}(G_curve_alpha[rows(i0), :])
+                    B0 = Matrix{Float64}(G_curve_free[rows(i0), T_pos]) * f_gamma
+                    # The curve's own K = 0 loading must be the block-6 row of the moment
+                    # Jacobian — same estimator, same evaluations. A gap is a wiring bug.
+                    a0_gap = maximum(abs.(A0 .- A_mat))
+                    a0_gap > 1e-8 * max(1.0, maximum(abs.(A_mat))) &&
+                        @warn "count curve: ∂Ḡ_s(0)/∂α from the curve rows differs from " *
+                              "the block-6 moment row by $(a0_gap) — check that both " *
+                              "Jacobians were evaluated at the same θ̂ and pinned N̂_s."
+
+                    r_curve  = zeros(S, nK)
+                    se_curve = zeros(S, nK)
+                    V_curve  = zeros(S, S, nK)
+                    for i in 1:nK
+                        for s in 1:S
+                            free = clamped === nothing || clamped[s] == :none
+                            r_curve[s, i] = (free && abs(D_firstdiff[s]) > 1e-14) ?
+                                            D_curve[s, i] / D_firstdiff[s] : 0.0
+                        end
+                        Rd  = Diagonal(r_curve[:, i])
+                        AK  = Matrix{Float64}(G_curve_alpha[rows(i), :])
+                        BK  = Matrix{Float64}(G_curve_free[rows(i), T_pos]) * f_gamma
+                        L_K = hcat(Matrix(Rd), AK .- Rd * A0, BK .- Rd * B0)
+                        V   = L_K * Joint * L_K'; V = (V .+ V') ./ 2
+                        V_curve[:, :, i] = V
+                        se_curve[:, i]   = sqrt.(max.(diag(V), 0.0))
+                    end
+
+                    NPZ.npzwrite(joinpath(inf_dir, "se_G_curve_delta.npy"),  se_curve)
+                    NPZ.npzwrite(joinpath(inf_dir, "var_G_curve_delta.npy"), V_curve)
+                    NPZ.npzwrite(joinpath(inf_dir, "dGbar_dn_curve.npy"),    D_curve)
+                    NPZ.npzwrite(joinpath(inf_dir, "r_curve.npy"),           r_curve)
+                    NPZ.npzwrite(joinpath(inf_dir, "count_curve_K.npy"),     Float64.(Ks))
+                    G_curve_hat !== nothing && size(G_curve_hat) == (S, nK) &&
+                        NPZ.npzwrite(joinpath(inf_dir, "G_curve_fitted.npy"),
+                                     Matrix{Float64}(G_curve_hat))
+
+                    println("\n  Count distribution Ḡ_s(K) = share of cells with EXACTLY K " *
+                            "suppliers — delta-method SE")
+                    println("  (K = 0 is the targeted moment; K ≥ 1 is the untargeted shape check)")
+                    @printf("  %-8s %-7s", "sector", "clamp")
+                    for KK in Ks; @printf(" %10s", "K=$KK"); end
+                    println()
+                    for s in 1:S
+                        @printf("  %-8d %-7s", s,
+                                clamped === nothing ? "?" : string(clamped[s]))
+                        for i in 1:nK
+                            v = G_curve_hat !== nothing && size(G_curve_hat) == (S, nK) ?
+                                G_curve_hat[s, i] : NaN
+                            @printf(" %5.3f±%.3f", v, se_curve[s, i])
+                        end
+                        println()
+                    end
+                else
+                    @warn "count curve: Jacobian shapes do not match S × |K| rows " *
+                          "($(size(G_curve_alpha)) / $(size(G_curve_free)) against " *
+                          "$(S * nK) rows, $(length(param_labels_gb)) gb columns) — " *
+                          "skipping the Ḡ_s(K) bands."
+                end
+            end
         end
     end
 
@@ -3324,15 +3483,18 @@ function compute_profiled_T_inference(theta_hat::Vector{Float64},
             println(io, "  varieties. A small |D_s| means the count moment barely moves with one")
             println(io, "  more variety there, so N̂_s is weakly identified in that sector.")
             @printf(io, "  %-18s  %-16s  %-16s  %-10s\n",
-                    "sector", "D_s (exact)", "Ḡ(n+1)−Ḡ(n)", "gap")
+                    "sector", "plug-in slope", "D_s = Ḡ(n+1)−Ḡ(n)", "gap")
             for s in 1:S
                 gap = abs(D_analytic[s]) > 1e-14 ?
                       abs(D_firstdiff[s] - D_analytic[s]) / abs(D_analytic[s]) : NaN
                 @printf(io, "  %-18d  %-16.6e  %-16.6e  %-10.4f\n",
                         s, D_analytic[s], D_firstdiff[s], isnan(gap) ? -999.0 : gap)
             end
-            println(io, "  (the two agree to O(q̂); the first difference is the integer-step scale,")
-            println(io, "   the exact derivative is the implicit-function object used above.)")
+            println(io, "  (D_s — the FIRST DIFFERENCE — is what every formula above uses: N_s is an")
+            println(io, "   integer, so one variety IS the step, and it is the convention every other")
+            println(io, "   derivative of N_s in this file already takes. The plug-in continuum slope")
+            println(io, "   mean_l (1−q̂)^n ln(1−q̂) is shown only as a scale check; the two agree to")
+            println(io, "   O(q̂), and a large gap means q̂ is not small in that sector.)")
             println(io, "\n  N.B. the CI is continuous; N_s is an integer, so read it as the set of")
             println(io, "  integer counts the count moment cannot distinguish at 95%.")
         end
@@ -3431,7 +3593,15 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                                 # N_s first-difference Jacobian settings (GRANULAR only).
                                 N_s_K::Int = 10,
                                 N_s_base_seed::Int = 7_000_000,
-                                draw_method::Symbol = INFERENCE_DRAW_METHOD)
+                                draw_method::Symbol = INFERENCE_DRAW_METHOD,
+                                # Count-DISTRIBUTION bands (GRANULAR only). Both come free
+                                # with the Jacobians already computed — pass the
+                                # `G_curve_out` Ref payload of the PROFILED α Jacobian and
+                                # of the FREE Jacobian (the latter sliced to the same gb
+                                # columns as `J_free_gb`). Absent ⇒ the Ḡ_s(K) section is
+                                # simply not written.
+                                G_curve_alpha::Union{Nothing,AbstractMatrix} = nothing,
+                                G_curve_free::Union{Nothing,AbstractMatrix} = nothing)
     # ── ∂T*/∂α (identified T × N_TAU) + α/T column bookkeeping ──────────────────
     dTa = _dTstar_dalpha(theta_hat, gb_param_idx, param_labels_gb;
                          step_rel=step_rel, target=target)
@@ -3467,6 +3637,7 @@ function run_profiled_inference(theta_hat::Vector{Float64},
     end
 
     N_hat_v, se_N_naive, q_hat_v = nothing, nothing, nothing
+    k_counts_v, n_draw_v, clamped_v, G_curve_hat_v = nothing, 0, nothing, nothing
     G_N_gb = nothing
     if GRANULAR
         # The GRANULAR block below writes into <output_folder>/inference/ BEFORE
@@ -3475,7 +3646,11 @@ function run_profiled_inference(theta_hat::Vector{Float64},
         mkpath(joinpath(output_folder, "inference"))
         gr = granular_report(profiled_theta(theta_hat);
                              u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
-        q_hat_v = gr.q_hat
+        q_hat_v       = gr.q_hat
+        k_counts_v    = gr.k_counts
+        n_draw_v      = gr.n_draw
+        clamped_v     = gr.clamped
+        G_curve_hat_v = gr.G_curve
         G_N, G_N_sd, N_hat_v, _ = compute_N_s_jacobian(
             theta_hat; N_hat=gr.N_hat, K=N_s_K, base_seed=N_s_base_seed,
             draw_method=draw_method, profile_T=true)
@@ -3550,7 +3725,13 @@ function run_profiled_inference(theta_hat::Vector{Float64},
                 collect(sfd[end-length(N_hat_v)+1:end]) : se_N_naive
         end,
         q_hat         = q_hat_v,
-        J_free_gb     = J_free_ok ? J_free_gb : nothing)
+        J_free_gb     = J_free_ok ? J_free_gb : nothing,
+        k_counts      = k_counts_v,
+        n_draw        = n_draw_v,
+        clamped       = clamped_v,
+        G_curve_alpha = G_curve_alpha,
+        G_curve_free  = G_curve_free,
+        G_curve_hat   = G_curve_hat_v)
 
     return inf_alpha, inf_T
 end
