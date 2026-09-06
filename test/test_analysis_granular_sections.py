@@ -736,7 +736,24 @@ def gate_comparative_advantage():
     # (those belong to test 3, which does the comparison buyer by buyer).
     assert axe.get_xscale() == "log"
     assert len(axe.collections) == 0, "the geography benchmark markers should be gone"
-    assert len(axe.patches) >= S, "one bar per sector"
+    # POINTS, not bars: the quantity is a ratio on a log axis, where a bar's origin — and
+    # so its length — is set by wherever the axis happens to start
+    assert len(axe.patches) == 0, "the bars should be gone"
+    pts = [ln for ln in axe.lines if ln.get_marker() not in ("", "None", None)]
+    assert len(pts) == 1 and len(pts[0].get_xdata()) == S, \
+        f"one point per sector, got {[len(p.get_xdata()) for p in pts]}"
+    assert pts[0].get_linestyle() in ("None", "none", " ", ""), "points must not be joined"
+    # each row names its sector AND the top area, so the figure says whose the edge is
+    ticks = [t.get_text() for t in axe.get_yticklabels()]
+    top_areas = set(NS["ca_distance_equivalence"](data)["top_area"].astype(str))
+    assert len(ticks) == S and all("\n" in t for t in ticks), ticks
+    assert {t.split("\n")[0] for t in ticks} == set(sector_names), ticks
+    assert {t.split("\n")[1] for t in ticks} <= top_areas, (ticks, top_areas)
+    assert all(t.split("\n")[1].startswith("Zone") for t in ticks), ticks
+    # the paper takes this figure as it stands: no title, and a plain distance label
+    assert axe.get_title() == "", axe.get_title()
+    assert axe.get_xlabel() == "Distance (km)", axe.get_xlabel()
+    print("\n  test-2 figure: one point per sector, rows named by top area, no title")
     axe.figure.canvas.draw()
     labs = [t.get_text() for t in axe.get_xticklabels() if t.get_text()]
     assert labs and not any(("e" in l.lower() or "\u00d7" in l) for l in labs), \
