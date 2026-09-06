@@ -743,17 +743,26 @@ def gate_comparative_advantage():
     assert len(pts) == 1 and len(pts[0].get_xdata()) == S, \
         f"one point per sector, got {[len(p.get_xdata()) for p in pts]}"
     assert pts[0].get_linestyle() in ("None", "none", " ", ""), "points must not be joined"
-    # each row names its sector AND the top area, so the figure says whose the edge is
+    # the y axis is a plain list of sectors, and each POINT is named with its top area
+    # beside the mark — test 1's form (annotate, offset (6, 4), fontsize 8, ref colour)
     ticks = [t.get_text() for t in axe.get_yticklabels()]
-    top_areas = set(NS["ca_distance_equivalence"](data)["top_area"].astype(str))
-    assert len(ticks) == S and all("\n" in t for t in ticks), ticks
-    assert {t.split("\n")[0] for t in ticks} == set(sector_names), ticks
-    assert {t.split("\n")[1] for t in ticks} <= top_areas, (ticks, top_areas)
-    assert all(t.split("\n")[1].startswith("Zone") for t in ticks), ticks
+    assert set(ticks) == set(sector_names) and len(ticks) == S, ticks
+    eq_df = NS["ca_distance_equivalence"](data)
+    named = [t for t in axe.texts if hasattr(t, "xy")]          # Annotation, not Text
+    assert len(named) == S, [t.get_text() for t in named]
+    # the name must sit on ITS OWN point: row i of the plotted frame, which is the
+    # sector table reversed, at y = i
+    want = list(eq_df["top_area"].astype(str))[::-1]
+    assert [t.get_text() for t in named] == want, ([t.get_text() for t in named], want)
+    assert [t.xy[1] for t in named] == list(range(S)), [t.xy for t in named]
+    assert all(t.get_text().startswith("Zone") for t in named), want
+    assert all(t.get_fontsize() == 8 for t in named)
+    assert all(tuple(np.round(t.get_position(), 6)) == (6.0, 4.0) for t in named), \
+        [t.get_position() for t in named]
     # the paper takes this figure as it stands: no title, and a plain distance label
     assert axe.get_title() == "", axe.get_title()
     assert axe.get_xlabel() == "Distance (km)", axe.get_xlabel()
-    print("\n  test-2 figure: one point per sector, rows named by top area, no title")
+    print("\n  test-2 figure: one point per sector, each named with its top area, no title")
     axe.figure.canvas.draw()
     labs = [t.get_text() for t in axe.get_xticklabels() if t.get_text()]
     assert labs and not any(("e" in l.lower() or "\u00d7" in l) for l in labs), \
