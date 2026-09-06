@@ -450,10 +450,26 @@ def run_checks(ns, ROOT, exp):
     check("the clamp flag is carried onto every K of that sector",
           bool((cc["clamped"].values.reshape(exp["S"], 4)[3]).all()) and
           not bool((cc["clamped"].values.reshape(exp["S"], 4)[0]).any()))
-    check("plot_count_curve draws both bands",
-          ns["plot_count_curve"](d2, K_values=(0, 1, 2, 3),
-                                 save_to=os.path.join(ROOT, "cc.pdf")) is not None
-          and os.path.exists(os.path.join(ROOT, "cc.pdf")))
+    # one INDEPENDENT figure per K, each in its own file: `save_to` is a stem and K is
+    # appended before the extension, so nothing overwrites anything
+    cc_axes = ns["plot_count_curve"](d2, K_values=(0, 1, 2, 3),
+                                     save_to=os.path.join(ROOT, "cc.pdf"))
+    check("plot_count_curve draws one figure per K",
+          isinstance(cc_axes, dict) and sorted(cc_axes) == [0, 1, 2, 3]
+          and len({id(a.figure) for a in cc_axes.values()}) == 4)
+    check("each K is written to its own file",
+          all(os.path.exists(os.path.join(ROOT, f"cc_K{K}.pdf")) for K in (0, 1, 2, 3))
+          and not os.path.exists(os.path.join(ROOT, "cc.pdf")))
+    # the y label names the K, since there is no title to tell the figures apart
+    check("the y label carries the value of K, and there is no title",
+          all(cc_axes[K].get_ylabel() == rf"$\bar{{G}}_s({K})$" for K in (0, 1, 2, 3))
+          and not any(cc_axes[K].get_title() for K in (0, 1, 2, 3)))
+    # and a K the curve does not carry must be named, not silently dropped
+    try:
+        ns["plot_count_curve"](d2, df=ns["count_curve"](d2, K_values=(0, 1)), K_values=(7,))
+        check("an absent K raises", False, "no exception")
+    except KeyError as e:
+        check("an absent K raises", "7" in str(e))
 
     # p_s(0) = G_s(0), so a G_K_var.csv whose K = 0 column disagrees with the G block of
     # Sigma_data is measuring a different object — most likely the CDF's variance. That
@@ -475,7 +491,7 @@ def run_checks(ns, ROOT, exp):
               bool(np.isfinite(cc_z.xs(2, level="K")["empirical"].values).all()) and
               close(cc_z.xs(2, level="K")["se_empirical"].values, np.zeros(exp["S"])))
         axs_z = ns["plot_count_curve"](d_z, K_values=(0, 1, 2, 3))
-        ax_k2 = axs_z[1][0]            # ncols=2 => K=2 is the second row, first column
+        ax_k2 = axs_z[2]               # one figure per K, keyed by K
         emp = [c for c in ax_k2.containers if c.get_label() == "Empirical"]
         n_pts = sum(len(c[0].get_xdata()) for c in emp)
         check("every sector is still plotted at K = 2 despite a zero variance",
@@ -483,7 +499,7 @@ def run_checks(ns, ROOT, exp):
         check("and none of them carries an error bar",
               not any(getattr(c, "has_yerr", False) for c in emp))
         # the K = 0 panel, where the variances are nonzero, must still show bars
-        emp0 = [c for c in axs_z[0][0].containers if c.get_label() == "Empirical"]
+        emp0 = [c for c in axs_z[0].containers if c.get_label() == "Empirical"]
         check("a panel with nonzero variances still draws its bars",
               any(getattr(c, "has_yerr", False) for c in emp0))
     finally:
@@ -693,7 +709,10 @@ def run_checks(ns, ROOT, exp):
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
                 ax = ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"), **kw)
-            made = os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0
+            # plot_count_curve treats save_to as a stem and writes one file per K
+            written = (os.path.join(outdir, f"{fn}_K0.pdf")
+                       if fn == "plot_count_curve" else os.path.join(outdir, f"{fn}.pdf"))
+            made = os.path.getsize(written) > 0
             check(f"{fn} -> pdf", made)
         except Exception as e:
             check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
