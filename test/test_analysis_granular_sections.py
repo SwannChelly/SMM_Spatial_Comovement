@@ -1127,6 +1127,92 @@ def gate_amplification():
             raise AssertionError("should have raised")
         print(f"map: {n_shocked} shocked zones coloured out of {R}, scale pinned")
 
+    # ---------------------------------------------- the finite-variety economy
+    # The model has N_s varieties, not N_rho draws, so the post-hoc parquet carries
+    # `n_rep` independent realisations of an N_hat_s-variety economy plus the
+    # infinite-variety benchmark beside it. Three things are gated: the averaged frame
+    # is the MEAN economy (not the pooled one, which would be n_rep times too big),
+    # the variety-count check passes on a well-formed parquet and FAILS on one written
+    # over draws, and granularity comes out as the gap between the two economies.
+    B, N_HAT = 4, np.array([3, 4, 5])
+    rep_rows = []
+    rng2 = np.random.default_rng(11)
+    siren_map = {}
+    for b in range(1, B + 1):
+        for r in downstream:
+            w = np.exp(-np.maximum(D[:, r - 1], 1.0) / 120.0)
+            w /= w.sum()
+            for s in range(1, S + 1):
+                for rho in range(1, int(N_HAT[s - 1]) + 1):
+                    l = int(rng2.choice(np.arange(1, R + 1), p=w))
+                    # keyed as main.jl keys it: one variety winning the same cell for two
+                    # buyers is ONE firm, which is what bounds firms per variety by R_d
+                    siren = siren_map.setdefault((b, l, s, rho), len(siren_map) + 1)
+                    rep_rows.append({"SIREN": siren, "A129": s, "ze2010": l,
+                                     "ze2010_downstream": int(r),
+                                     "share": TOTAL_INPUT_SHARE / (S * N_HAT[s - 1]),
+                                     "downstream_purchase": 2.0,
+                                     "intermediate_derivative": 0.0,
+                                     "productivity": 1.0,
+                                     "sample_weight": 1.0 / N_HAT[s - 1],
+                                     "variety": rho, "replication": b})
+    gran = pd.DataFrame(rep_rows)
+    np.save(folder / "step3" / "post_hoc_N_hat.npy", N_HAT)
+    gdata = dict(data, suppliers=gran, post_hoc_N_hat=N_HAT,
+                 suppliers_continuum=data["suppliers"])
+
+    # the averaged frame is ONE economy: every region still spends exactly its share
+    gdiff = NS["build_diffusion_frame"](gdata)
+    gtot = gdiff.groupby("ze2010_downstream")["upstream_sales"].sum()
+    assert np.allclose(gtot.to_numpy(), TOTAL_INPUT_SHARE), gtot
+    assert len(gdiff) == R_d * R, len(gdiff)
+    # ... while the per-replication frame keeps them apart, each one whole
+    pdiff = NS["build_diffusion_frame"](gdata, per_replication=True)
+    assert len(pdiff) == B * R_d * R, (len(pdiff), B * R_d * R)
+    ptot = pdiff.groupby(["replication", "ze2010_downstream"])["upstream_sales"].sum()
+    assert np.allclose(ptot.to_numpy(), TOTAL_INPUT_SHARE), ptot
+
+    chk = NS["supplier_count_check"](gdata, verbose=False)
+    assert chk.attrs["exact"] and "varieties_in_parquet" in chk.columns
+    assert (chk["N_hat"].to_numpy() == N_HAT).all()
+    assert chk["n_replications"].iloc[0] == B
+    # the exact test: distinct variety indices per (sector, replication) IS N_hat_s
+    assert np.allclose(chk["ratio"].to_numpy(), 1.0), chk["ratio"].tolist()
+    # the same check on the DRAW-count parquet (no `replication`, no `variety`, N_rho
+    # rows per cell) must exceed the firms-per-variety bound R_d -- the diagnosis this
+    # function exists to make on a tree written before the economy was drawn
+    bad = NS["supplier_count_check"](dict(gdata, suppliers=data["suppliers"]), verbose=False)
+    assert not bad.attrs["exact"]
+    assert bad["ratio"].max() > R_d, (bad["ratio"].tolist(), R_d)
+    # and it must NOT cry wolf on a variety economy whose parquet predates the column.
+    # ONE realisation, because that is what such a tree holds: without a `replication`
+    # column B economies are indistinguishable from one, and the bound is per economy.
+    legacy = NS["supplier_count_check"](
+        dict(gdata, suppliers=gran.query("replication == 1")
+                                  .drop(columns=["variety", "replication"])), verbose=False)
+    assert legacy["ratio"].max() <= R_d, legacy["ratio"].tolist()
+
+    per = NS["replication_summaries"](gdata, radii=(100, 200))
+    assert per.index.get_level_values("replication").nunique() == B
+    assert np.allclose(per["amplification"].to_numpy(), 1.0 + TOTAL_INPUT_SHARE)
+    band = NS["granular_band"](gdata, radii=(100, 200))
+    assert (band["n_replications"] == B).all()
+    # D_r is linear in the euros, so it cannot move across realisations; the local share
+    # is a ratio of a finite number of draws and must
+    assert np.allclose(band["amplification_sd"].to_numpy(), 0.0, atol=1e-12)
+    assert band["share_within_100km_sd"].max() > 0.0
+
+    rep = NS["granularity_report"](gdata, radii=(100, 200), verbose=False)
+    assert set(rep.columns) >= {"granular_mean", "sd_across_draws", "continuum",
+                                "granularity"}
+    assert np.isclose(rep.loc["amplification", "granularity"], 0.0, atol=1e-12)
+    # the extensive margin is where granularity bites: N_hat_s varieties cannot reach
+    # as many origins as N_rho draws do
+    assert rep.loc["supplier_cells", "granularity"] < 0.0, rep.loc["supplier_cells"]
+    print(f"finite-variety economy: {B} realisations averaged, count check passes and "
+          f"catches a draw-count parquet, granularity on supplier_cells = "
+          f"{rep.loc['supplier_cells', 'granularity']:.1f} origins")
+
     print("\nALL OK")
 
 

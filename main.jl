@@ -710,12 +710,149 @@ end
 # an ordinary local update — at top level that same line is soft scope and silently
 # binds a fresh local instead of advancing the counter.
 # ─────────────────────────────────────────────────────────────────────────────
-function write_post_hoc(params::Vector{Float64}, dest::AbstractString; label::AbstractString="")
+# Independent realisations of the finite-variety economy written by `write_post_hoc`.
+# The economy is a RANDOM object once N_s is finite, so one draw is not a result; the
+# reporting averages over these and reads their dispersion as the granular uncertainty.
+# Each costs a `solve_network` at max_s N̂_s rows against N_rho for the reference solve,
+# i.e. a few percent of one — 50 of them is of the order of two ordinary evaluations.
+const POST_HOC_REPLICATIONS = 50
+
+"""
+    _firm_level_rows!(cols, network, siren_map, rep) -> n_pushed
+
+Append one row per realised (variety, cell, sector, downstream region) linkage of
+`network` to the column vectors in `cols`.
+
+Rows whose expenditure share is exactly zero are DROPPED. Under the granular solve a
+variety index beyond a sector's `N̂_s` carries weight zero by construction, so it
+contributes nothing to any price index or expenditure share; it would otherwise appear
+in the parquet as a supplier that supplies nothing. Zero is exact there (the weight is
+a literal `0.0` factor), so the test is exact and can never discard a real linkage.
+
+`siren_map` is keyed on `(rep, cell, sector, variety)`, so a firm identifier is unique
+ACROSS replications: two replications are two independent economies, not the same firms
+observed twice, and anything that groups by `SIREN` must treat them as distinct.
+
+The `variety` column is the variety index itself. It is what makes the variety COUNT
+directly checkable: distinct `variety` within a (sector, replication) must be exactly
+`N_hat_s`. Counting distinct firms instead cannot do it — one variety is won by
+different cells for different buyers, so it yields between one and `R_downstream`
+firms, and that range overlaps the draw count the economy must not have been built on.
+"""
+function _firm_level_rows!(cols, network,
+                           siren_map::Dict{NTuple{4,Int},Int}, rep::Int)
+    mu = network.mu; Y_r = network.Y_r
+    pushed = 0
+    for i in 1:length(network.firm_exp_rho)
+        val = network.firm_exp_val[i]
+        val == 0.0 && continue
+        rho = network.firm_exp_rho[i]; s = network.firm_exp_s[i]
+        g   = network.firm_exp_g[i];   l = GOOD_R[g]
+        r   = network.firm_exp_r[i]
+        key = (rep, l, s, rho)
+        id  = get!(siren_map, key, length(siren_map) + 1)
+        push!(cols.sirens, id);                 push!(cols.sectors, s)
+        push!(cols.ze2010, l);                  push!(cols.ze2010_downstream, r)
+        push!(cols.share, val)
+        push!(cols.downstream_purchase, Y_r[r] * mu)
+        push!(cols.intermediate_derivative, network.firm_deriv_val[i])
+        push!(cols.productivity, network.z_flat[rho, g])
+        push!(cols.sample_weight, network.sample_weights[rho, g])
+        push!(cols.variety, rho)
+        push!(cols.replication, rep)
+        pushed += 1
+    end
+    return pushed
+end
+
+_empty_firm_cols() = (sirens = Int[], sectors = Int[], ze2010 = Int[],
+                      ze2010_downstream = Int[], share = Float64[],
+                      downstream_purchase = Float64[],
+                      intermediate_derivative = Float64[], productivity = Float64[],
+                      sample_weight = Float64[], variety = Int[], replication = Int[])
+
+_firm_cols_frame(c) = DataFrame(SIREN=c.sirens, A129=c.sectors, ze2010=c.ze2010,
+                                ze2010_downstream=c.ze2010_downstream, share=c.share,
+                                downstream_purchase=c.downstream_purchase,
+                                intermediate_derivative=c.intermediate_derivative,
+                                productivity=c.productivity,
+                                sample_weight=c.sample_weight, variety=c.variety,
+                                replication=c.replication)
+
+"""
+    granular_variety_weights(N_hat, N_rows) -> Matrix{Float64}
+
+The `sample_weights` matrix of an economy with `N_hat[s]` varieties in sector `s`.
+
+The model's within-sector aggregator is an AVERAGE over the sector's varieties
+(`ap_structural…tex`, "the integral over a continuum of varieties is replaced by an
+average over the N_s varieties" — that normalisation is what sets the love-of-variety
+level to one), so the weight of every variety of sector `s` is `1/N̂_s` and the weight
+of a row beyond `N̂_s` is zero. `solve_network` weights each variety by the weight of
+the good pair that WON it, and every cell of a sector shares that sector's `N̂_s`, so
+masking by row is exactly the per-sector count.
+"""
+function granular_variety_weights(N_hat::Vector{Int}, N_rows::Int)
+    W = zeros(N_rows, n_good)
+    for g in 1:n_good
+        n = N_hat[GOOD_S[g]]
+        n <= 0 && continue
+        w = 1.0 / n
+        for rho in 1:min(n, N_rows)
+            W[rho, g] = w
+        end
+    end
+    return W
+end
+
+"""
+    write_post_hoc(params, dest; label="", n_rep=POST_HOC_REPLICATIONS)
+
+The firm-level economy the reporting reads, at `params`.
+
+**Under `GRANULAR` this writes TWO economies, and the difference between them is what
+granularity means.** The model gives sector `s` a finite number of varieties `N_s`, so
+the economy is a RANDOM object: which cell wins each of the `N̂_s` varieties, and at
+what price, are draws.
+
+  * `suppliers.parquet` — `n_rep` INDEPENDENT realisations of the `N̂_s`-variety
+    economy, stacked, distinguished by a `replication` column. This is the model's own
+    economy. The reporting averages over the column, and the spread across it is the
+    granular uncertainty, not a numerical error to be minimised away.
+  * `suppliers_continuum.parquet` — one solve on the estimation draws, `N_rho` per
+    sector. `N_rho = max(100, maximum(N_HI))` is a DRAW COUNT integrating over the
+    variety continuum, not a variety count, and it is one to two orders of magnitude
+    above `N̂_s`; with flat `1/N_rho` weights that solve is the Monte-Carlo evaluation
+    of the `N_s → ∞` limit. It is therefore the INFINITE-VARIETY BENCHMARK.
+
+The gap between the two is not sampling noise around a common value. The within-sector
+index `p_{rs} = [N_s^{-1} Σ_ρ p_ρ^{1-ν_s}]^{1/(1-ν_s)}` is a nonlinear function of the
+draws, so its EXPECTATION moves with `N_s`; `D_r = 1 + (1-Ω_L)(P_r/c_r)^{1-λ}` inherits
+that shift, and with `λ < 1` a higher intermediate price index raises the intermediate
+share. That is the price-index channel the reporting reports separately.
+
+`N̂_s` is recomputed here from the reference solve by the SAME route `compute_moments`
+uses — the column sums of `linkages_flat` through `concentrate_N_s` — rather than read
+from `granular_diagnostics.npz`, which is written only when its own step runs and can
+therefore be stale relative to `params`.
+
+The replication draws are plain Monte Carlo, NOT `DRAW_METHOD`. The object being
+measured here is the sampling distribution of a finite-variety economy; a stratified or
+QMC design across `ρ` is built to suppress exactly that dispersion, and would report a
+granularity smaller than the model's.
+
+`w_srd_r.npy` and `suppliers.npy` are written from the reference solve and are
+unchanged, so every existing consumer of those two files reads what it always did.
+"""
+function write_post_hoc(params::Vector{Float64}, dest::AbstractString;
+                        label::AbstractString="", n_rep::Int=POST_HOC_REPLICATIONS,
+                        base_seed::Int=8_100_000)
     mkpath(dest)
     println("\n" * "-"^70)
     println("Post-hoc firm-level artefacts $(isempty(label) ? "" : "at $label ")-> $dest")
     println("-"^70)
 
+    # ── the reference (infinite-variety) solve ───────────────────────────────
     network = solve_network(params, return_firm_level=true,
                             u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS)
 
@@ -742,7 +879,7 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString; label::Ab
     end
     npzwrite(joinpath(dest, "w_srd_r.npy"), w_srd_r)
 
-    N_rho_out = size(network.linkages_flat, 1)   # pool width under GRANULAR, N_rho otherwise
+    N_rho_out = size(network.linkages_flat, 1)   # the DRAW count, not the variety count
     suppliers = zeros(Bool, S, N_rho_out, R)
     for g in 1:n_good
         s = GOOD_S[g]; r = GOOD_R[g]
@@ -754,42 +891,69 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString; label::Ab
     end
     npzwrite(joinpath(dest, "suppliers.npy"), suppliers)
 
-    sirens = Int[]; sectors = Int[]; ze2010 = Int[]; ze2010_downstream = Int[]
-    share = Float64[]; downstream_purchase = Float64[]
-    intermediate_derivative = Float64[]; productivity = Float64[]; sample_weight_vec = Float64[]
-    siren_map = Dict{Tuple{Int,Int,Int}, Int}()
-    siren_counter = 0
+    ref_cols = _empty_firm_cols()
+    _firm_level_rows!(ref_cols, network, Dict{NTuple{4,Int},Int}(), 0)
+    ref_df = _firm_cols_frame(ref_cols)
+
+    if !GRANULAR
+        # The continuum model: there is no finite variety count, so the reference solve
+        # IS the economy and it keeps the name the reporting reads.
+        Parquet.write_parquet(joinpath(dest, "suppliers.parquet"), ref_df)
+        println("  $(nrow(ref_df)) linkages, $(N_rho_out) draws per cell (continuum model)")
+        return ref_df
+    end
+
+    Parquet.write_parquet(joinpath(dest, "suppliers_continuum.parquet"), ref_df)
+
+    # ── the variety count, by the estimator's own route ──────────────────────
+    k_counts = Vector{Int}(undef, n_good)
     for g in 1:n_good
-        l = GOOD_R[g]; s = GOOD_S[g]
+        acc = 0
         for rho in 1:N_rho_out
-            key = (l, s, rho)
-            if !haskey(siren_map, key)
-                siren_counter += 1
-                siren_map[key] = siren_counter
-            end
+            acc += network.linkages_flat[rho, g] != 0
         end
+        k_counts[g] = acc
     end
-    for i in 1:n_entries
-        rho = network.firm_exp_rho[i]; s = network.firm_exp_s[i]
-        g   = network.firm_exp_g[i];   l = GOOD_R[g]
-        r   = network.firm_exp_r[i]
-        push!(sirens, siren_map[(l, s, rho)]); push!(sectors, s)
-        push!(ze2010, l); push!(ze2010_downstream, r)
-        push!(share, network.firm_exp_val[i])
-        push!(downstream_purchase, Y_r[r] * mu)
-        push!(intermediate_derivative, network.firm_deriv_val[i])
-        push!(productivity, network.z_flat[rho, g])
-        push!(sample_weight_vec, network.sample_weights[rho, g])
+    N_hat, clamped = concentrate_N_s(k_counts, N_rho_out)
+    # A sector with no varieties would give every one of its cells weight zero and
+    # send its CES index to infinity. `concentrate_N_s` floors at `N_LO >= 1`, so this
+    # cannot fire; it is here because the failure downstream would be silent.
+    @assert minimum(N_hat) >= 1 "a sector was profiled to zero varieties: $(N_hat)"
+    N_max = maximum(N_hat)
+    npzwrite(joinpath(dest, "post_hoc_N_hat.npy"), N_hat)
+    @printf("  N̂_s per sector: min %d, median %d, max %d  (%d clamped)\n",
+            minimum(N_hat), round(Int, median(N_hat)), N_max, count(!=(:none), clamped))
+    @printf("  reference solve carries %d draws per cell — the infinite-variety benchmark\n",
+            N_rho_out)
+
+    # ── n_rep realisations of the N̂_s-variety economy ────────────────────────
+    W_gran = granular_variety_weights(N_hat, N_max)
+    cols = _empty_firm_cols()
+    siren_map = Dict{NTuple{4,Int},Int}()
+    for b in 1:n_rep
+        u = generate_draws(N_max, n_good, :mc;
+                           randomise = true, rng = MersenneTwister(base_seed + b))[1]
+        # A row past a sector's N̂_s carries weight zero, so its price never reaches a
+        # moment — but 0 * Inf is NaN, and a draw at the very edge of (0,1) can make a
+        # price non-finite. Clamping the padded draws keeps every product finite, and
+        # touches nothing that carries weight.
+        for g in 1:n_good, rho in (N_hat[GOOD_S[g]] + 1):N_max
+            u[rho, g] = 0.5
+        end
+        net_b = solve_network(params, return_firm_level=true,
+                              u_draws = u, sample_weights = W_gran)
+        @assert all(isfinite, net_b.firm_exp_val) "replication $b produced a non-finite expenditure share"
+        _firm_level_rows!(cols, net_b, siren_map, b)
     end
-    df = DataFrame(SIREN=sirens, A129=sectors, ze2010=ze2010,
-                   ze2010_downstream=ze2010_downstream, share=share,
-                   downstream_purchase=downstream_purchase,
-                   intermediate_derivative=intermediate_derivative,
-                   productivity=productivity, sample_weight=sample_weight_vec)
+    df = _firm_cols_frame(cols)
     Parquet.write_parquet(joinpath(dest, "suppliers.parquet"), df)
 
-    println("  $(nrow(df)) linkages, $(siren_counter) simulated firms, " *
-            "$(N_rho_out) varieties per cell")
+    d_ref  = 1.0 + sum(ref_cols.share) / R_downstream
+    d_gran = 1.0 + sum(cols.share) / (R_downstream * n_rep)
+    println("  $(nrow(df)) linkages over $n_rep realisations of the N̂_s-variety economy, " *
+            "$(length(siren_map)) simulated firms")
+    @printf("  mean D_r: %.4f granular vs %.4f infinite-variety (granularity %+.4f)\n",
+            d_gran, d_ref, d_gran - d_ref)
     return df
 end
 
