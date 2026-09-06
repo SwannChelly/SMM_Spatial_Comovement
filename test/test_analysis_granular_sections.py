@@ -945,7 +945,16 @@ def gate_amplification():
     w_in = np.array([p.get_width() for p in inner])
     assert np.allclose(np.sort(w_out), np.sort(summ["share_within_200km"].to_numpy()))
     assert (w_in <= w_out + 1e-12).all(), "the nested radius must not exceed the wider one"
-    assert np.allclose(np.diff(w_in), np.abs(np.diff(w_in))), "sorted on the headline radius"
+    # `sort_by` names the column the rows are ordered on, and which one that should be
+    # is an editorial choice the default has gone back and forth on: sorting on the
+    # inner radius makes the staircase, sorting on the outer one separates a region that
+    # holds nothing within 100 km but a great deal in the 100-200 km ring. So the
+    # KWARG is gated, on both columns, rather than whichever the default happens to be.
+    for k, col in ((1, "share_within_100km"), (0, "share_within_200km")):
+        axs = NS["plot_local_share"](data, radii=(100, 200), summary=summ, sort_by=col)
+        w = np.array([p.get_width() for p in axs.containers[k]])
+        assert np.allclose(np.diff(w), np.abs(np.diff(w))), f"rows must be sorted on {col}"
+        NS["plt"].close(axs.figure)
     # the outer ring is blue, the headline radius keeps the section's colour
     assert tuple(np.round(outer[0].get_facecolor()[:3], 3)) == tuple(np.round(NS["sim_color"], 3))
     print("nested-radius bars: opaque, nested, 100 km on top of 200 km, outer ring blue")
@@ -1079,6 +1088,44 @@ def gate_amplification():
         print("expected on a bad value column:", str(e)[:50], "...")
     else:
         raise AssertionError("should have raised")
+
+    # ------------------------------------------------------- the map of L_r(100 km)
+    # The map is the paper's figure, so it is gated as a figure: the SHOCKED zones and
+    # only those carry a colour, the pinned scale is the one that gets used (both
+    # panels must share it or the cross-industry contrast is rescaled away), and a
+    # `france` without geometry degrades to the same FileNotFoundError the loader's
+    # missing-file path raises rather than to a matplotlib error deep inside.
+    try:
+        import geopandas as gpd
+        from shapely.geometry import box
+    except ImportError:
+        print("map gate skipped: geopandas/shapely not installed")
+    else:
+        geo = gpd.GeoDataFrame(
+            {"ze2010": codes, "ze2010_name": [f"Zone {c}" for c in codes]},
+            geometry=[box(i * 0.5, 44 + i * 0.2, i * 0.5 + 0.4, 44 + i * 0.2 + 0.4)
+                      for i in range(R)], crs="EPSG:4326")
+        ax = NS["plot_local_share_map"](dict(data, france=geo), radius_km=100,
+                                        summary=summ, vlim=(0.0, 1.0))
+        # exactly two polygon collections: the unshocked ground and the shocked values
+        colls = [c for c in ax.collections if hasattr(c, "get_paths")]
+        n_shocked = len(summ)
+        assert sum(len(c.get_paths()) for c in colls) == R, [len(c.get_paths()) for c in colls]
+        vals = [c for c in colls if c.get_array() is not None]
+        assert len(vals) == 1 and len(vals[0].get_array()) == n_shocked, \
+            [len(v.get_array()) for v in vals]
+        assert np.allclose(np.sort(np.asarray(vals[0].get_array(), dtype=float)),
+                           np.sort(summ["share_within_100km"].to_numpy()))
+        assert (vals[0].norm.vmin, vals[0].norm.vmax) == (0.0, 1.0)     # the pin holds
+        assert ax.get_xlim() == (-5, 10) and ax.get_ylim() == (42, 52)
+        NS["plt"].close(ax.figure)
+        try:
+            NS["plot_local_share_map"](data, radius_km=100, summary=summ)   # no geometry
+        except FileNotFoundError as e:
+            print("expected without geometry:", str(e)[:60], "...")
+        else:
+            raise AssertionError("should have raised")
+        print(f"map: {n_shocked} shocked zones coloured out of {R}, scale pinned")
 
     print("\nALL OK")
 
