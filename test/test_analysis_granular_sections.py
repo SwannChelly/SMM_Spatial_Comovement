@@ -272,6 +272,63 @@ def gate_untargeted():
     assert res_auto["eta"] < 0, res_auto["eta"]
     print(f"planted eta = {ETA_PLANT} (plus the extensive margin, so |eta| should exceed it)")
 
+    # ------------------------------------------- the finite-variety parquet ----
+    # The post-hoc economy is now `n_rep` independent realisations with `replication`
+    # and `variety` columns. Three things must hold, and the second is the one that
+    # would fail silently: pooling varieties into multi-variety firms must NOT pool
+    # across economies, or the ladder rung reports a firm with n_rep times as many
+    # varieties as the model gives it and a correspondingly flatter profile.
+    B_REP = 3
+    rng_rep = np.random.default_rng(23)
+    sup_rep = pd.concat(
+        [sup.assign(SIREN=sup["SIREN"].astype(str) + f"-r{b}",
+                    variety=lambda d: d.groupby(["ze2010", "A129"]).cumcount() + 1,
+                    replication=b,
+                    # the realisations must genuinely DIFFER, or the dispersion this
+                    # block is about is zero by construction and asserts nothing
+                    share=lambda d, _b=b: d["share"].to_numpy()
+                          * np.exp(rng_rep.normal(0, 0.35, len(d))))
+         for b in range(1, B_REP + 1)], ignore_index=True)
+    data_rep = dict(data, suppliers=sup_rep)
+
+    # (a) one realisation is exactly the original panel's shape
+    p1 = NS["build_a_ir_panel"](data_rep, replication=1)
+    assert p1.attrs["n_replications"] == 1 and p1.attrs["replication"] == 1
+    assert len(p1) == n_firms * R_d, (len(p1), n_firms * R_d)
+    assert np.allclose(p1.groupby("SIREN")["a_ir"].sum().to_numpy(), 1.0)
+
+    # (b) pooled: firms stay distinct across economies under the default key ...
+    p_all = NS["build_a_ir_panel"](data_rep)
+    assert p_all.attrs["n_replications"] == B_REP
+    assert p_all["SIREN"].nunique() == B_REP * n_firms, p_all["SIREN"].nunique()
+    assert np.allclose(p_all.groupby("SIREN")["a_ir"].sum().to_numpy(), 1.0)
+    # ... AND under an aggregating key, which must silently carry `replication`
+    p_pool = NS["build_a_ir_panel"](data_rep, firm_key=("ze2010", "A129"))
+    p_one = NS["build_a_ir_panel"](data_rep, firm_key=("ze2010", "A129"), replication=1)
+    assert p_pool["SIREN"].nunique() == B_REP * p_one["SIREN"].nunique(), \
+        "an aggregating firm_key merged economies into one firm"
+    assert np.allclose(p_pool.groupby("SIREN")["a_ir"].sum().to_numpy(), 1.0)
+
+    # (c) the across-replication estimate: one row per economy, and the pooled interval
+    #     is the tighter one — which is exactly why it is not the one to report
+    per = NS["untargeted_across_replications"](data_rep, verbose=False)
+    assert len(per) == B_REP and (per["eta"] < 0).all(), per
+    assert per.attrs["pooled_se"] < per["se_within"].mean(), \
+        "pooling economies must tighten the clustered se — that is the defect being flagged"
+    assert per.attrs["sd_across"] > 0.0, "the realisations must differ for this to bite"
+    # a parquet with no `replication` column is one economy and must still work
+    solo = NS["untargeted_across_replications"](data, verbose=False)
+    assert len(solo) == 1 and solo.index[0] is None
+    try:
+        NS["build_a_ir_panel"](data, replication=1)
+    except KeyError as e:
+        print("expected on a tree with no replication column:", str(e)[:60], "...")
+    else:
+        raise AssertionError("should have raised")
+    print(f"finite-variety panel: {B_REP} economies kept distinct, aggregating firm_key "
+          f"does not merge them, pooled se {per.attrs['pooled_se']:.4f} vs sd across "
+          f"draws {per.attrs['sd_across']:.4f}")
+
     # ---------------------------------------------------------------------------
     #    The STRUCTURAL moment: Lambda, the closed-form margins, and the gap. These
     #    replace the estimated decomposition, so what is gated is the arithmetic of
@@ -1201,6 +1258,16 @@ def gate_amplification():
     # is a ratio of a finite number of draws and must
     assert np.allclose(band["amplification_sd"].to_numpy(), 0.0, atol=1e-12)
     assert band["share_within_100km_sd"].max() > 0.0
+
+    # the counterfactual reallocates the sector spend read off the parquet, which pools
+    # n_rep economies: unless that spend is averaged, every regime allocates n_rep euros
+    # where the base frame allocates one. D_r is linear in them and catches it; L_r(d) is
+    # a ratio within a regime and would not, which is why D_r is what is asserted here.
+    gdet = NS["counterfactual_amplification"](gdata, radii=(100,), verbose=False)
+    g_amp = gdet["amplification"].unstack("regime")
+    assert np.allclose(g_amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-9), \
+        g_amp.describe()
+    print("counterfactual on the replicated parquet: D_r matches the realised economy")
 
     rep = NS["granularity_report"](gdata, radii=(100, 200), verbose=False)
     assert set(rep.columns) >= {"granular_mean", "sd_across_draws", "continuum",

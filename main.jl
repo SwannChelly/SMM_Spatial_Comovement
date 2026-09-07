@@ -948,6 +948,61 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString;
     df = _firm_cols_frame(cols)
     Parquet.write_parquet(joinpath(dest, "suppliers.parquet"), df)
 
+    # ── is the finite-variety economy consistent with the calibration? ───────
+    #
+    # θ̂ was chosen so that the CONTINUUM economy matches the targets: the estimator
+    # evaluates the value blocks on `N_rho` draws with flat weights, which is the
+    # `N_s → ∞` limit of the model's own average-over-varieties aggregator (design D2
+    # in `granular_validation.md`). At the SAME θ̂ the finite-variety economy does NOT
+    # reproduce those targets, and not because of sampling noise: the within-sector
+    # index `p_{rs} = [N_s^{-1} Σ_ρ p_ρ^{1-ν_s}]^{1/(1-ν_s)}` is nonlinear in the draws,
+    # so its EXPECTATION moves with `N_s`, and with `λ < 1` a higher intermediate index
+    # raises the intermediate share.
+    #
+    # That gap is the size of the approximation the estimator makes, so it is MEASURED
+    # here rather than assumed small. Nothing in the estimation reads this — the whole
+    # post-hoc block runs after Step 4 — but a large gap means θ̂ fits an economy the
+    # reporting no longer simulates, and the reader is entitled to the number.
+    #
+    # Blocks 4 and 6 are excluded, and the reason is mechanical rather than a judgement:
+    # both read `linkages_flat`, which marks a winner on EVERY row, including the rows
+    # past `N̂_s` that carry weight zero. The value blocks are built from expenditure and
+    # prices, where a zero weight contributes exactly zero, so they are unaffected.
+    try
+        emp_vec = vec(empirical_moments)
+        _, sim_ref = full_SMM(params; u_draws = U_DRAWS, sample_weights = SAMPLE_WEIGHTS)
+        v_ref = moments_to_vec(sim_ref)
+        n_chk = min(n_rep, 5)
+        v_gran = zeros(length(v_ref))
+        for b in 1:n_chk
+            u = generate_draws(N_max, n_good, :mc;
+                               randomise = true, rng = MersenneTwister(base_seed + b))[1]
+            for g in 1:n_good, rho in (N_hat[GOOD_S[g]] + 1):N_max
+                u[rho, g] = 0.5
+            end
+            _, sim_b = full_SMM(params; u_draws = u, sample_weights = W_gran,
+                                N_fixed = N_hat)
+            v_gran .+= moments_to_vec(sim_b) ./ n_chk
+        end
+        println("\n  calibration consistency — relative fit of the VALUE blocks at θ̂,")
+        println("  continuum (what the estimator targeted) vs finite-variety ($n_chk draws):")
+        @printf("    %-22s %12s %12s %10s\n", "block", "continuum", "granular", "ratio")
+        for b in (1, 2, 3, 5)
+            b > length(BLOCK_RANGES) && continue
+            rg = BLOCK_RANGES[b]
+            scale = max(norm(emp_vec[rg]), eps())
+            e_ref  = norm(v_ref[rg]  .- emp_vec[rg]) / scale
+            e_gran = norm(v_gran[rg] .- emp_vec[rg]) / scale
+            @printf("    %-22s %12.5f %12.5f %10.2f\n", BLOCK_NAMES[b], e_ref, e_gran,
+                    e_ref > 0 ? e_gran / e_ref : NaN)
+        end
+        println("    (relative L2 residual against the empirical target; blocks 4 and 6 " *
+                "read linkages_flat,\n     which counts the zero-weight rows past N̂_s, " *
+                "so they are not comparable here)")
+    catch e
+        @warn "calibration-consistency check skipped: $e"
+    end
+
     d_ref  = 1.0 + sum(ref_cols.share) / R_downstream
     d_gran = 1.0 + sum(cols.share) / (R_downstream * n_rep)
     println("  $(nrow(df)) linkages over $n_rep realisations of the N̂_s-variety economy, " *
