@@ -1050,18 +1050,26 @@ def gate_amplification():
     assert np.allclose(amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-12), amp
     assert "Realised" in amp.columns and set(NS["CF_REGIMES"]) <= set(amp.columns)
 
-    # "Neither" is the uniform benchmark: every modelled cell of the sector equally
-    # likely, and here every cell is modelled, so each region receives total/R exactly
-    nei = frames["Neither"]
+    # Both switches at once is the uniform 1/n draw. It is no longer a REPORTED regime —
+    # `CF_REGIMES` carries the two single switches — but it is still what pins the closed
+    # form exactly, so the gate asks for it explicitly rather than reading the reported
+    # set: with every cell modelled, each region must receive total/R to machine precision.
+    UNIFORM = {"Neither": dict(equalise_T=True, alpha=0.0)}
+    assert "Neither" not in NS["CF_REGIMES"], "the uniform draw is not a reported regime"
+    nei = NS["counterfactual_frames"](data, regimes=UNIFORM, diffusion=diff)["Neither"]
     tot_cf = nei.groupby("ze2010_downstream")["upstream_sales"].transform("sum")
     assert np.allclose(nei["upstream_sales"] / tot_cf, 1.0 / R, atol=1e-12)
 
     # gravity alone strictly pulls sourcing closer than the uniform benchmark does
     cfs = NS["counterfactual_summary"](data, radii=(100, 200), detail=det)
+    uni = NS["counterfactual_summary"](
+        data, regimes=UNIFORM, radii=(100, 200),
+        detail=NS["counterfactual_amplification"](data, regimes=UNIFORM, radii=(100, 200),
+                                                  diffusion=diff, verbose=False))
     assert (cfs.loc["Distance only", "mean_upstream_distance"]
-            < cfs.loc["Neither", "mean_upstream_distance"])
+            < uni.loc["Neither", "mean_upstream_distance"])
     assert (cfs.loc["Distance only", "share_within_100km"]
-            > cfs.loc["Neither", "share_within_100km"])
+            > uni.loc["Neither", "share_within_100km"])
     assert np.allclose(cfs["amplification"].to_numpy(), 1.0 + TOTAL_INPUT_SHARE)
 
     # and the allocation itself is the closed form, recomputed here from T and D without
@@ -1175,7 +1183,14 @@ def gate_amplification():
                            np.sort(summ["share_within_100km"].to_numpy()))
         assert (vals[0].norm.vmin, vals[0].norm.vmax) == (0.0, 1.0)     # the pin holds
         assert ax.get_xlim() == (-5, 10) and ax.get_ylim() == (42, 52)
+        # no zone is NAMED by default: the content is the shape of the colour field, and
+        # a name pinned to the brightest patch turns the pair into a ranking of places
+        assert not ax.texts, [t.get_text() for t in ax.texts]
         NS["plt"].close(ax.figure)
+        named = NS["plot_local_share_map"](dict(data, france=geo), radius_km=100,
+                                           summary=summ, vlim=(0.0, 1.0), n_label=2)
+        assert len(named.texts) == 2, "n_label must still name that many when asked"
+        NS["plt"].close(named.figure)
         try:
             NS["plot_local_share_map"](data, radius_km=100, summary=summ)   # no geometry
         except FileNotFoundError as e:
@@ -1268,6 +1283,14 @@ def gate_amplification():
     assert np.allclose(g_amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-9), \
         g_amp.describe()
     print("counterfactual on the replicated parquet: D_r matches the realised economy")
+
+    # neither counterfactual figure carries a title: both go into the paper under its own
+    # caption, and an in-panel "auto, mu_2, one force off" duplicates it in a smaller font
+    for fn, kw in (("plot_counterfactual_profile", dict(frames=frames, diffusion=diff)),
+                   ("plot_counterfactual_local_share", dict(detail=det, radius_km=100))):
+        axf = NS[fn](data, **kw)
+        assert axf.get_title() == "" and axf.get_title(loc="right") == "", (fn, axf.get_title(loc="right"))
+        NS["plt"].close(axf.figure)
 
     rep = NS["granularity_report"](gdata, radii=(100, 200), verbose=False)
     assert set(rep.columns) >= {"granular_mean", "sd_across_draws", "continuum",
