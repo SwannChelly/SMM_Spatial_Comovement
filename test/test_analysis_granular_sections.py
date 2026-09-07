@@ -822,12 +822,16 @@ def gate_comparative_advantage():
     print("\n  test-2 figure: one point per sector, each named with its top area, no title")
     axe.figure.canvas.draw()
     labs = [t.get_text() for t in axe.get_xticklabels() if t.get_text()]
-    assert labs and not any(("e" in l.lower() or "\u00d7" in l) for l in labs), \
-        f"x tick labels must be plain numbers, got {labs}"
-    assert all(l.replace(",", "").replace(".", "").isdigit() for l in labs), \
-        f"x tick labels must be full numbers in km, got {labs}"
+    # The axis is LOG and its labels are decades: the quantity spans orders of magnitude,
+    # so what is gated is that every label is a power of ten (either the mathtext form
+    # `LogFormatterSciNotation` writes, or a plain number), never an unlabelled axis.
+    assert axe.get_xscale() == "log", axe.get_xscale()
+    dec = re.compile(r"^\$?\\?mathdefault?\{?10\^\{?-?\d+\}?\}?\$?$")
+    ok = [bool(dec.match(l.replace("\\mathdefault", "mathdefault")))
+          or l.replace(",", "").replace(".", "").isdigit() for l in labs]
+    assert labs and all(ok), f"x tick labels must be decades in km, got {labs}"
     assert "km" in axe.get_xlabel()
-    print("\n  test-2 figure: log x, plain km labels", labs[:6])
+    print("\n  test-2 figure: log x, decade labels", labs[:6])
     NS["plot_ca_win_margin"](data, save_to=str(out / "ca_win_margin.png"))
     summ = NS["comparative_advantage_summary"](data)
     print("\n", summ.round(3).to_string())
