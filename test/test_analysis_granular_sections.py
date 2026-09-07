@@ -860,6 +860,46 @@ def gate_comparative_advantage():
         set(gloss.index) - set(summ.columns)
     print("every summary column is documented in comparative_advantage_glossary()")
 
+    # --- Figure 6: where comparative advantage pulls sourcing -------------------
+    # The picture's whole content is a WEIGHTED covariance, so the gate is the identity
+    # that makes the eye's slope the reported number: both coordinates are deviations
+    # from their rho-weighted sector mean (so each sector's weighted means are zero),
+    # and the pooled weighted covariance is the sector-average of the within-sector
+    # ones, recomputed here from the geometry rather than read back off the frame.
+    geom_al = NS["sourcing_geometry"](data)
+    b_idx = NS["_representative_buyer"](data)
+    al = NS["spatial_alignment_frame"](data, buyer=b_idx)
+    assert np.isclose(al["weight"].sum(), 1.0), al["weight"].sum()
+    blocks_al = {k: v for k, v in geom_al["by_sector"].items() if v["cells"].size >= 2}
+    covs, n_pts = [], 0
+    for sec, blk in blocks_al.items():
+        p = blk["rho"][:, b_idx]; p = p / p.sum()
+        ld = np.log(blk["distance"][:, b_idx])
+        lt = np.log(np.maximum(blk["T_cell"], 1e-300))
+        covs.append(float(p @ ((ld - p @ ld) * (lt - p @ lt))))
+        n_pts += blk["cells"].size
+        sub = al[al["sector"] == data["sector_names"][sec]]
+        w = sub["weight"].to_numpy() * len(blocks_al)          # back to the within-sector rho
+        assert abs(float(w @ sub["log_d_dev"].to_numpy())) < 1e-12
+        assert abs(float(w @ sub["log_T_dev"].to_numpy())) < 1e-12
+    assert len(al) == n_pts, (len(al), n_pts)
+    assert np.isclose(np.mean(covs), al.attrs["cov"], atol=1e-12), (np.mean(covs), al.attrs["cov"])
+    assert abs(al.attrs["corr"]) <= 1.0 + 1e-12
+    # the representative buyer is of MEDIAN reach, so it is neither the nearest- nor the
+    # furthest-sourcing one -- a figure drawn for an extreme buyer is not representative
+    reach = np.mean([(b["rho"] * np.log(b["distance"])).sum(axis=0)
+                     for b in blocks_al.values()], axis=0)
+    assert (reach < reach[b_idx]).any() and (reach > reach[b_idx]).any(), reach
+    ax_al = NS["plot_spatial_alignment"](data, buyer=b_idx, n_label=3)
+    tx = [t.get_text() for t in ax_al.texts]
+    assert len(tx) == 4 and sum(t.startswith("$") for t in tx) == 1, tx
+    assert sum(1 for t in tx if str(t).startswith("Zone")) == 3, tx
+    assert len(ax_al.collections) == 1                      # one scatter, not one per sector
+    assert ax_al.get_title() == "" and "log" in ax_al.get_xlabel()
+    NS["plt"].close(ax_al.figure)
+    print(f"spatial-alignment figure: weighted covariance {al.attrs['cov']:+.4f} matches "
+          f"the sector average, corr {al.attrs['corr']:+.3f}, hubs named")
+
     # a binned trade cost has no single elasticity and must say so
     try:
         bad = dict(data, n_tau=2,
@@ -1295,6 +1335,30 @@ def gate_amplification():
         axf = NS[fn](data, **kw)
         assert axf.get_title() == "" and axf.get_title(loc="right") == "", (fn, axf.get_title(loc="right"))
         NS["plt"].close(axf.figure)
+
+    # --- the distribution of sourcing distance, regime by regime ----------------
+    # The mean distance and the local share are two readings of the same reallocation,
+    # so the gate is that the distribution is exactly the per-region column of the
+    # counterfactual detail -- not a re-derivation that could drift from it -- and that
+    # every regime reaches the figure as its own step curve with a median marker.
+    dd = NS["distance_distribution"](data, detail=det)
+    assert list(dd.columns) == list(det.index.get_level_values("regime").categories), dd.columns
+    for lab in dd.columns:
+        want = det.xs(lab, level="regime")["mean_upstream_distance"]
+        assert np.allclose(dd[lab].to_numpy(), want.reindex(dd.index).to_numpy(),
+                           equal_nan=True), lab
+    ax_dd = NS["plot_distance_distribution"](data, detail=det)
+    steps = [ln for ln in ax_dd.lines if ln.get_drawstyle() != "default"]
+    marks = [ln for ln in ax_dd.lines if ln.get_marker() == "o"]
+    assert len(steps) == len(dd.columns), (len(steps), len(dd.columns))
+    assert len(marks) == len(dd.columns)
+    assert all(abs(m.get_ydata()[0] - 0.5) < 1e-12 for m in marks)
+    for m, lab in zip(marks, dd.columns):
+        assert np.isclose(m.get_xdata()[0], float(np.median(dd[lab].dropna())))
+    assert ax_dd.get_title() == "" and "km" in ax_dd.get_xlabel()
+    NS["plt"].close(ax_dd.figure)
+    print(f"distance distribution: {len(dd.columns)} regimes, medians "
+          + ", ".join(f"{lab} {np.median(dd[lab].dropna()):.0f} km" for lab in dd.columns))
 
     rep = NS["granularity_report"](gdata, radii=(100, 200), verbose=False)
     assert set(rep.columns) >= {"granular_mean", "sd_across_draws", "continuum",
