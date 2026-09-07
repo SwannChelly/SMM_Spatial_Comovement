@@ -861,80 +861,88 @@ def gate_comparative_advantage():
     print("every summary column is documented in comparative_advantage_glossary()")
 
     # --- Figure 6: where comparative advantage pulls sourcing -------------------
-    # The picture's whole content is a WEIGHTED covariance, so the gate is the identity
-    # that makes the eye's slope the reported number: both coordinates are deviations
-    # from their rho-weighted sector mean (so each sector's weighted means are zero),
-    # and the pooled weighted covariance is the sector-average of the within-sector
-    # ones, recomputed here from the geometry rather than read back off the frame.
+    # Everything in this section is about ONE object: `d_rs`, the average sourcing
+    # distance IN KILOMETRES. The gates therefore drive the panel, the regression and
+    # the counterfactual against each other in those units.
     geom_al = NS["sourcing_geometry"](data)
-    b_idx = NS["_representative_buyer"](data)
-    al = NS["spatial_alignment_frame"](data, buyer=b_idx)
-    assert np.isclose(al["weight"].sum(), 1.0), al["weight"].sum()
     blocks_al = {k: v for k, v in geom_al["by_sector"].items() if v["cells"].size >= 2}
-    covs, n_pts = [], 0
-    for sec, blk in blocks_al.items():
-        p = blk["rho"][:, b_idx]; p = p / p.sum()
-        ld = np.log(blk["distance"][:, b_idx])
-        lt = np.log(np.maximum(blk["T_cell"], 1e-300))
-        covs.append(float(p @ ((ld - p @ ld) * (lt - p @ lt))))
-        n_pts += blk["cells"].size
-        sub = al[al["sector"] == data["sector_names"][sec]]
-        w = sub["weight"].to_numpy() * len(blocks_al)          # back to the within-sector rho
-        assert abs(float(w @ sub["log_d_dev"].to_numpy())) < 1e-12
-        assert abs(float(w @ sub["log_T_dev"].to_numpy())) < 1e-12
-    assert len(al) == n_pts, (len(al), n_pts)
-    assert np.isclose(np.mean(covs), al.attrs["cov"], atol=1e-12), (np.mean(covs), al.attrs["cov"])
-    assert abs(al.attrs["corr"]) <= 1.0 + 1e-12
-    # the representative buyer is of MEDIAN reach, so it is neither the nearest- nor the
-    # furthest-sourcing one -- a figure drawn for an extreme buyer is not representative
-    reach = np.mean([(b["rho"] * np.log(b["distance"])).sum(axis=0)
-                     for b in blocks_al.values()], axis=0)
-    assert (reach < reach[b_idx]).any() and (reach > reach[b_idx]).any(), reach
-    # The same covariance stated as a REGRESSION: a WLS of log T on log d with a
-    # (sector x buyer) fixed effect and rho weights. The gate is that the closed form
-    # reproduces an EXPLICIT-DUMMY WLS -- otherwise the paper's specification sentence
-    # would not describe the number it reports -- and that the slope is the covariance
-    # divided by Var_rho(log d), never the covariance itself.
-    areg = NS["alignment_regression"](data)
-    Xr, Yr, Wr, Gr = [], [], [], []
     bw = NS["_buyer_weights"](data)
-    for sec, blk in blocks_al.items():
-        for rr in range(blk["rho"].shape[1]):
-            p = blk["rho"][:, rr]
-            Xr += list(np.log(blk["distance"][:, rr]))
-            Yr += list(np.log(np.maximum(blk["T_cell"], 1e-300)))
-            Wr += list(p * bw[rr])
-            Gr += [f"{sec}_{rr}"] * blk["cells"].size
-    Xr, Yr, Wr = np.asarray(Xr), np.asarray(Yr), np.asarray(Wr)
-    D = pd.get_dummies(np.asarray(Gr)).to_numpy(float)
-    rt = np.sqrt(Wr)
-    b_hat = np.linalg.lstsq(np.column_stack([Xr, D]) * rt[:, None], Yr * rt, rcond=None)[0][0]
-    assert np.isclose(b_hat, areg["slope_logT_on_logd"], atol=1e-10), \
-        (b_hat, areg["slope_logT_on_logd"])
-    assert np.isclose(areg["cov_rho_T_d"],
-                      areg["slope_logT_on_logd"] * areg["sd_rho_logd"] ** 2, atol=1e-12)
-    assert abs(areg["corr_rho_T_d"]) <= 1.0 + 1e-12
-    assert areg["n_obs"] == sum(b["cells"].size * b["rho"].shape[1]
-                                for b in blocks_al.values())
-    # a sector weighting that names nothing must refuse rather than silently return zeros
-    try:
-        NS["alignment_regression"](data, sector_weights=pd.Series({"NOPE": 1.0}))
-    except ValueError as e:
-        pass
-    else:
-        raise AssertionError("unmatched sector_weights should raise")
-    print(f"alignment regression: slope {areg['slope_logT_on_logd']:+.4f} reproduces an "
-          f"explicit-dummy WLS, cov {areg['cov_rho_T_d']:+.4f}")
+    b_idx = NS["_representative_buyer"](data)
+    # the representative buyer is of MEDIAN reach, so it is neither the nearest- nor the
+    # furthest-sourcing one -- a figure drawn for an extreme buyer is not representative,
+    # and reach is measured in km, not in log km
+    reach = np.mean([(b["rho"] * b["distance"]).sum(axis=0) for b in blocks_al.values()],
+                    axis=0)
+    assert (reach < reach[b_idx]).any() and (reach > reach[b_idx]).any(), reach
 
+    # the panel is the model's own allocation: one row per (sector, buyer, competing
+    # cell), distance in KILOMETRES, and the weight is rho times the buyer's purchase
+    # weight, so it sums to one over the whole panel
+    fr_all = NS["alignment_frame"](data)
+    n_pairs = sum(b["cells"].size * b["rho"].shape[1] for b in blocks_al.values())
+    assert len(fr_all) == n_pairs, (len(fr_all), n_pairs)
+    assert np.isclose(fr_all["weight"].sum(), 1.0), fr_all["weight"].sum()
+    assert (fr_all["distance_km"] > 0).all()
+    one = NS["alignment_frame"](data, buyer=b_idx)
+    assert len(one) == sum(b["cells"].size for b in blocks_al.values())
+    for sec, blk in blocks_al.items():
+        sub = one[one["sector"] == data["sector_names"][sec]]
+        assert np.allclose(np.sort(sub["distance_km"].to_numpy()),
+                           np.sort(blk["distance"][:, b_idx])), sec
+
+    # the regression IS pyfixest, and its slope is in km per log point: check it against
+    # an explicit-dummy WLS on the same panel, which is the only way the paper's
+    # specification sentence can be said to describe the number it reports
+    areg = NS["alignment_regression"](data, frame=fr_all, cluster=None)
+    D = pd.get_dummies(fr_all["group"].to_numpy()).to_numpy(float)
+    rt = np.sqrt(fr_all["weight"].to_numpy(float))
+    b_hat = np.linalg.lstsq(np.column_stack([fr_all["log_T"].to_numpy(float), D]) * rt[:, None],
+                            fr_all["distance_km"].to_numpy(float) * rt, rcond=None)[0][0]
+    assert np.isclose(b_hat, areg["slope_km_per_logT"], rtol=1e-8), \
+        (b_hat, areg["slope_km_per_logT"])
+    assert areg["n_obs"] == n_pairs
+
+    # the counterfactual, in km, and the identity that produces it
+    lev = NS["ca_distance_leverage"](data)
+    assert np.allclose(lev["delta_km"], lev["d_km_no_CA"] - lev["d_km"], atol=1e-10)
+    scale = max(float(np.abs(lev["delta_km"]).max()), 1e-9)
+    assert float(np.abs(lev["check_identity"]).max()) / scale < 1e-5, \
+        lev["check_identity"].abs().max()
+    # d_rs is a convex combination of that sector's distances, so it lies inside them
+    for sec, blk in blocks_al.items():
+        name = data["sector_names"][sec]
+        if name not in lev.index:
+            continue
+        lo, hi = float(blk["distance"].min()), float(blk["distance"].max())
+        assert lo - 1e-9 <= lev.loc[name, "d_km"] <= hi + 1e-9, (name, lev.loc[name, "d_km"])
+        assert lo - 1e-9 <= lev.loc[name, "d_km_no_CA"] <= hi + 1e-9, name
+    # the per-sector slope on the table is the per-sector pyfixest fit, not the pooled one
+    reg_s = NS["alignment_regression"](data, frame=fr_all, by_sector=True)
+    assert np.allclose(pd.to_numeric(reg_s["slope_km_per_logT"]).reindex(lev.index),
+                       lev["slope_km_per_logT"], equal_nan=True)
+    print(f"alignment: d_rs median {lev['d_km'].median():.1f} km, equalising T moves it "
+          f"{lev['delta_km'].median():+.1f} km; pooled slope "
+          f"{areg['slope_km_per_logT']:+.1f} km per log point (matches an explicit-dummy WLS)")
+
+    # the figure draws THAT buyer's fit, so the slope the eye reads is the number on the
+    # panel -- the annotation must carry the same value the regression on this frame gives
     ax_al = NS["plot_spatial_alignment"](data, buyer=b_idx, n_label=3)
     tx = [t.get_text() for t in ax_al.texts]
-    assert len(tx) == 4 and sum(t.startswith("$") for t in tx) == 1, tx
+    assert len(tx) == 4, tx
     assert sum(1 for t in tx if str(t).startswith("Zone")) == 3, tx
+    b_one = NS["alignment_regression"](data, frame=one, cluster=None)["slope_km_per_logT"]
+    lab = [t for t in tx if "km per log point" in t]
+    assert len(lab) == 1, tx
+    assert abs(float(lab[0].split()[0].strip("$")) - round(float(b_one))) < 1.0, (lab, b_one)
+    line = [ln for ln in ax_al.lines if ln.get_linewidth() > 1.0]
+    assert len(line) == 1
+    xs, ys = line[0].get_xdata(), line[0].get_ydata()
+    assert np.isclose((ys[1] - ys[0]) / (xs[1] - xs[0]), b_one, rtol=1e-8)
     assert len(ax_al.collections) == 1                      # one scatter, not one per sector
-    assert ax_al.get_title() == "" and "log" in ax_al.get_xlabel()
+    assert ax_al.get_title() == ""
+    assert "km" in ax_al.get_ylabel() and "log" in ax_al.get_xlabel()
     NS["plt"].close(ax_al.figure)
-    print(f"spatial-alignment figure: weighted covariance {al.attrs['cov']:+.4f} matches "
-          f"the sector average, corr {al.attrs['corr']:+.3f}, hubs named")
+    print("spatial-alignment figure: the drawn line IS the reported slope, hubs named")
 
     # a binned trade cost has no single elasticity and must say so
     try:
