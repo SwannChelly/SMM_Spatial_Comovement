@@ -890,6 +890,42 @@ def gate_comparative_advantage():
     reach = np.mean([(b["rho"] * np.log(b["distance"])).sum(axis=0)
                      for b in blocks_al.values()], axis=0)
     assert (reach < reach[b_idx]).any() and (reach > reach[b_idx]).any(), reach
+    # The same covariance stated as a REGRESSION: a WLS of log T on log d with a
+    # (sector x buyer) fixed effect and rho weights. The gate is that the closed form
+    # reproduces an EXPLICIT-DUMMY WLS -- otherwise the paper's specification sentence
+    # would not describe the number it reports -- and that the slope is the covariance
+    # divided by Var_rho(log d), never the covariance itself.
+    areg = NS["alignment_regression"](data)
+    Xr, Yr, Wr, Gr = [], [], [], []
+    bw = NS["_buyer_weights"](data)
+    for sec, blk in blocks_al.items():
+        for rr in range(blk["rho"].shape[1]):
+            p = blk["rho"][:, rr]
+            Xr += list(np.log(blk["distance"][:, rr]))
+            Yr += list(np.log(np.maximum(blk["T_cell"], 1e-300)))
+            Wr += list(p * bw[rr])
+            Gr += [f"{sec}_{rr}"] * blk["cells"].size
+    Xr, Yr, Wr = np.asarray(Xr), np.asarray(Yr), np.asarray(Wr)
+    D = pd.get_dummies(np.asarray(Gr)).to_numpy(float)
+    rt = np.sqrt(Wr)
+    b_hat = np.linalg.lstsq(np.column_stack([Xr, D]) * rt[:, None], Yr * rt, rcond=None)[0][0]
+    assert np.isclose(b_hat, areg["slope_logT_on_logd"], atol=1e-10), \
+        (b_hat, areg["slope_logT_on_logd"])
+    assert np.isclose(areg["cov_rho_T_d"],
+                      areg["slope_logT_on_logd"] * areg["sd_rho_logd"] ** 2, atol=1e-12)
+    assert abs(areg["corr_rho_T_d"]) <= 1.0 + 1e-12
+    assert areg["n_obs"] == sum(b["cells"].size * b["rho"].shape[1]
+                                for b in blocks_al.values())
+    # a sector weighting that names nothing must refuse rather than silently return zeros
+    try:
+        NS["alignment_regression"](data, sector_weights=pd.Series({"NOPE": 1.0}))
+    except ValueError as e:
+        pass
+    else:
+        raise AssertionError("unmatched sector_weights should raise")
+    print(f"alignment regression: slope {areg['slope_logT_on_logd']:+.4f} reproduces an "
+          f"explicit-dummy WLS, cov {areg['cov_rho_T_d']:+.4f}")
+
     ax_al = NS["plot_spatial_alignment"](data, buyer=b_idx, n_label=3)
     tx = [t.get_text() for t in ax_al.texts]
     assert len(tx) == 4 and sum(t.startswith("$") for t in tx) == 1, tx
