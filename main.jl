@@ -79,10 +79,10 @@ optimizer_backend = length(ARGS) >= 6 && !isempty(strip(ARGS[6])) ? Symbol(strip
 
 K = 20
 
-run_step1 = true#true
-run_step2 = true
-run_step3 = true
-run_step4 = true
+run_step1 = false#true
+run_step2 = false
+run_step3 = false
+run_step4 = false
 
 # Reuse a previously-saved Jacobian instead of recomputing it (the expensive
 # K×(2p+1) FD evaluations). When true, the Step-2 (step2/jacobian_all.npy) and
