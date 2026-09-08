@@ -1,0 +1,9 @@
+PWD /home/onyxia/work/SMM_Spatial_Comovement/documentation/paper
+INPUT /home/onyxia/.TinyTeX/texmf.cnf
+INPUT /home/onyxia/.TinyTeX/texmf-dist/web2c/texmf.cnf
+INPUT /home/onyxia/.TinyTeX/texmf-var/web2c/pdftex/pdflatex.fmt
+INPUT /home/onyxia/work/SMM_Spatial_Comovement/documentation/paper/structural_2026_endogeneous.tex
+OUTPUT structural_2026_endogeneous.log
+INPUT /home/onyxia/.TinyTeX/texmf-dist/fonts/tfm/public/cm/cmbx10.tfm
+OUTPUT structural_2026_endogeneous.pdf
+INPUT /home/onyxia/.TinyTeX/texmf-var/fonts/map/pdftex/updmap/pdftex.map

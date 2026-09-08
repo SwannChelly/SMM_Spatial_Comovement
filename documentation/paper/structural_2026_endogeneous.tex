@@ -137,66 +137,47 @@ In the top panel of Figure~\ref{fig:emp_sim_gamma_coef_G0} we report the compari
 
 This Ricardian model has a novel property, the fixed number of varieties per sector, that we disciplined using the count moment $G_s(0)$. To provide additional evidence of the quality of our estimation, we provide in Appendix Figure~\ref{app:untargeted_count} the fit of higher order count moment $G_s(K)$ for $K \in \{1,2,3\}$. Compared to the data, the model is good at reproducing the share of region with 2 or 3 suppliers but overstate those with exactly one supplier. 
 
-\paragraph{Trade cost and comparative advantages.} The estimated model attributes the geography of sourcing to two forces: comparative advantage across upstream regions and the cost of trading across distance. Together, they determine which regions supply downstream buyers and hence shape the production network. For a downstream buyer in $r$, the probability that a given variety is supplied from upstream region $l$ is $\rho_{lrs} \propto T_{a(l)s}\,d_{lr}^{-\alpha\theta}$ so comparative advantage and proximity are additive and directly commensurable in logs. Figure~\ref{fig:emp_sim_gamma_coef_G0} shows that this allocation reproduces the observed regional sourcing structure.
 
-Disentangling the two forces from sourcing patterns alone is difficult: a region may be a large supplier because it is particularly productive or because it is close to demand. The two are observationally similar unless the trade-cost elasticity $\alpha\theta$ is identified separately. This is precisely what the estimation delivers, allowing us to assess which force drives sourcing.
+\paragraph{Trade costs, comparative advantage, and spatial sorting.}
+The estimated model attributes the geography of sourcing to two forces: comparative advantage across upstream regions and the cost of trading across distance. Disentangling the two from sourcing patterns alone is difficult because a region may be a large supplier either because it is particularly productive or because it is close to demand. The two forces are observationally similar unless the trade-cost elasticity $\alpha\theta$ is identified separately. This is precisely what the estimation delivers, allowing us to assess both the relative strength of the two forces and their spatial alignment.
 
-A first comparison is the dispersion of comparative advantage. Averaged across sectors, the within-sector standard deviation of $\log \hat T_{as}$ is nearly identical across the two industries: 0.91 in motor vehicles and 0.96 in aerospace. By this measure, comparative advantage is equally dispersed.
+A first comparison concerns the dispersion of comparative advantage. Averaged across sectors, the within-sector standard deviation of $\log \hat T_{as}$ is nearly identical across the two industries: 0.91 in motor vehicles and 0.96 in aerospace. The industries therefore exhibit similar heterogeneity in comparative advantage. They differ instead in how strongly sourcing responds to distance: the estimated trade-cost elasticity is $\alpha\hat\theta=0.23$ in motor vehicles and $0.46$ in aerospace. Thus, conditional on the same distribution of distances, geography generates substantially more dispersion in sourcing attractiveness in aerospace. A comparative-advantage gap $\Delta$ is offset by a distance ratio $\exp(\Delta/\alpha\theta)$, so a smaller $\alpha\theta$ requires a larger distance difference to offset a given productivity advantage. In this sense, an identical comparative-advantage gap has a stronger effect on sourcing in motor vehicles than in aerospace.
 
-The key difference lies instead in how industries price distance. The estimated trade-cost elasticity is $\alpha\hat\theta=0.23$ in motor vehicles versus $0.46$ in aerospace, twice as large. A comparative-advantage gap $\Delta$ is offset by a distance ratio $\exp(\Delta/\alpha\theta)$: when $\alpha\theta$ is smaller, larger distances are required to offset a given productivity advantage. Thus, an identical comparative-advantage gap shifts sourcing roughly twice as much in motor vehicles as in aerospace. Comparative advantage is therefore of similar strength across industries, but operates against substantially stronger trade-cost frictions in aerospace. Trade costs consequently constrain sourcing more tightly there, whereas comparative advantage has greater scope to override proximity in motor vehicles.
+The previous comparison considers the two forces separately. To assess how they jointly shape the allocation of sourcing across competing locations, consider the sourcing index $\log\psi_{lrs} = \log T_{a(l)s}-\alpha\theta\log d_{lr}.$ For each sector $s$ and buyer $r$, we compute the variance of $\log\psi_{lrs}$ across the supplier cells $l$ competing for that buyer. The variance admits the exact decomposition:
 
-This comparison, however, treats the two forces as if they were laid out independently in space, so that only their relative strength mattered. They are not. Selection among the cells competing to supply a buyer operates on $\log\psi_{lrs}=\log T_{a(l)s}-\alpha\theta\log d_{lr}$, whose dispersion decomposes exactly into three terms,
-\begin{equation}
-\operatorname{Var}(\log\psi)=\operatorname{Var}(\log T)+(\alpha\theta)^{2}\operatorname{Var}(\log d)-2\alpha\theta\operatorname{Cov}(\log T,\log d).
-\label{eq:psi_decomposition}
-\end{equation}
-The third term is the co-location of capability and demand: it is positive precisely when productive suppliers sit close to the buyers, in which case the two forces do not compete but reinforce one another, and a given dispersion of $\hat T$ produces a sharper selection than either force could deliver alone.
-
-Measured at the estimates, this term is where the two industries part company, and it qualifies the reading of the previous paragraph. Comparative advantage accounts for a similar share of $\operatorname{Var}(\log\psi)$ in both industries (87\% in motor vehicles, 86\% in aerospace, at the sector median). Geography on its own accounts for little in either, and for three times more in aerospace (7\% against 2\%), as the larger $\alpha\theta$ requires. The co-location term contributes 11\% in motor vehicles against 9\% in aerospace, and the informative comparison is with the pure-geography term beside it: in motor vehicles co-location shapes the allocation \emph{five times} more than geography does on its own, whereas in aerospace the two are of the same order. Equivalently, the correlation between $\log \hat T$ and log distance to the buyer is $-0.47$ at the median motor-vehicle sector against $-0.17$ in aerospace. In motor vehicles capability and proximity are close to being the same variable; in aerospace they are close to orthogonal. The geography of the production network is therefore not settled by the tension between the two forces alone --- it is settled by where capability happens to sit relative to demand, and that is what we measure next.
-
-
-\paragraph{Where comparative advantage pulls sourcing.} The comparison above measures the \emph{strength} of comparative advantage relative to geography. It says nothing about its \emph{direction}, and it is the direction that governs the geography of shock propagation: what matters is not how unequal comparative advantage is, but where it is located relative to downstream demand. Write $d_{rs}=\sum_{l}\rho_{lrs}\,d_{lr}$ for the average distance an euro spent by a buyer in $r$ on product $s$ travels upstream. Dialling comparative advantage down from its estimate towards a common value along $\rho_{lr}(t)\propto T_{a(l)}^{\,t}\,d_{lr}^{-\alpha\theta}$ moves that distance at the rate
-\begin{equation}
-\frac{d}{dt}\,\mathbb{E}_{\rho_{r}(t)}\!\left[d_{lr}\right] \;=\; \operatorname{Cov}_{\rho_{r}(t)}\!\left(\log T_{a(l)},\,d_{lr}\right),
-\label{eq:alignment}
-\end{equation}
-an exact property of the Ricardian allocation: along that path the sourcing probabilities form an exponential family in $t$ whose sufficient statistic is $\log T$. What moves sourcing in space is therefore the \emph{covariance} between capability and distance to the buyer, measured in kilometres, and not the dispersion of capability: a $\hat T$ that varies widely but is uncorrelated with the geography of demand reallocates sourcing across regions without sending the euro one kilometre further. Dispersion only bounds that covariance, $|\operatorname{Cov}|\le \operatorname{sd}(\log T)\,\operatorname{sd}(d)$.
-
-Equation~\eqref{eq:alignment} also fixes how the covariance must be measured. It holds for one sector and one buyer at a time, so the estimand is a within-(sector $\times$ downstream region) object, and it is taken under the sourcing probabilities rather than over regions counted equally --- what matters is where the buyer's euro comes from, not which places could in principle have supplied it. Equivalently, we run
 $$
-d_{lr} \;=\; a_{sr} \;+\; b\,\log \hat T_{a(l)s} \;+\; \varepsilon_{lrs},
-\qquad \text{weights } \rho_{lrs},
+\operatorname{Var}_l(\log\psi_{lrs}) = \operatorname{Var}_l(\log T_{a(l)s}) + (\alpha\theta)^2\operatorname{Var}_l(\log d_{lr}) - 2\alpha\theta\operatorname{Cov}_l(\log T_{a(l)s},\log d_{lr}).
 $$
-a weighted least squares with a sector $\times$ downstream-region fixed effect. Its slope is in kilometres per log point of comparative advantage: how much closer to the buyer a supplier sits, per unit of the capability that wins it the sale. The regression is a way of displaying the covariance in \eqref{eq:alignment}, not an estimate of an unknown: $\hat T$ and $d$ are model objects rather than a sample, so the dispersion around the line carries no sampling interpretation and we read the sign and the implied movement in $d_{rs}$ rather than a confidence interval.
 
-Figure~\ref{fig:spatial_alignment} shows the cloud behind \eqref{eq:alignment} for a representative buyer in each industry: one dot per competing upstream commuting zone, its comparative advantage against its distance to that buyer, with the area of the dot given by the sourcing probability $\rho_{lr}$. The two industries are opposed, and they differ in kind rather than in degree. In motor vehicles the fitted line slopes downward in \emph{every} sector: the productive suppliers are the ones close to the assembly plants, so comparative advantage and proximity pull in the same direction, and integrating \eqref{eq:alignment} to a common $\hat T$ sends the average euro 65~km further --- a movement in $d_{rs}$ of the same order as the width of a French region. In aerospace the same operation moves it by 32~km at the median sector, and one sector has a line that slopes the \emph{wrong} way: capability there is concentrated in a small number of hubs --- Toulouse and Île-de-France --- that are not close to most of the demand, so the productivity premium of those hubs is paid for in kilometres by every buyer except the ones next to them, and equalising $\hat T$ brings sourcing no closer. The aerospace median overstates what happens to the industry as a whole, and for a reason that is itself the point: the sector carrying 56\% of its intermediate purchases --- other transport equipment --- is exactly the misaligned one, with a distance effect of 3~km, so the spend-weighted aggregate of the next section sits far below the median sector. In motor vehicles no sector plays that role and the two coincide.\footnote{$\hat T$ is the Sinkhorn image of the observed sourcing shares, so this covariance is model-implied rather than read directly off the data. Writing $\log \hat T = \log \hat\gamma^{\,emp} - \log M(\alpha)$, it splits into the gradient of the observed shares and minus that of market access. In aerospace the two contribute about equally. In motor vehicles the observed shares are, if anything, slightly increasing in distance, and the whole of the negative alignment comes from the market-access term: areas far from a given buyer tend to be centrally located overall, so the sales they are observed to make require less comparative advantage to rationalise.}
+The first term measures dispersion in comparative advantage across potential suppliers, the second measures the dispersion generated by distance alone, and the third captures their spatial alignment. In particular, when high-$T$ suppliers tend to be closer to the buyer, $\operatorname{Cov}(\log T,\log d)<0$, so the covariance term is positive: comparative advantage and proximity reinforce one another rather than offsetting each other. For each sector, we aggregate these buyer-specific variances using the buyer's purchase weights. The percentages in Table~\ref{tab:variance_decomposition} therefore describe the contribution of each component to the estimated cross-supplier dispersion in $\log\psi$, after accounting for the sourcing weights of buyers and the distribution of sectors.
 
-This distinction is what carries into the propagation of shocks. Where productive suppliers sit close to downstream demand, comparative advantage reinforces the local incidence that trade costs already generate; where they are concentrated in a few hubs, comparative advantage instead redirects shocks towards those hubs and away from the regions in which they originate. The next section quantifies that incidence by propagating an actual shock with each force switched off in turn.
+\begin{table}[htbp]
+\centering
+\caption{Variance decomposition of the sourcing index}
+\label{tab:variance_decomposition}
+\begin{tabular}{lcc}
+\toprule
+& Motor vehicles & Aerospace \\
+\midrule
+Comparative advantage
+& 87\% & 86\% \\
+Distance
+& 2\% & 7\% \\
+Co-location
+& 11\% & 9\% \\
+\midrule
+\bottomrule
+\end{tabular}
+\begin{flushleft}
+\footnotesize
+\emph{Notes:} The decomposition is computed across competing supplier cells for each buyer and sector. Buyer-specific variances are aggregated using purchase weights and then averaged across sectors. The comparative-advantage component is $\operatorname{Var}(\log \hat T)$, the distance component is $(\alpha\hat\theta)^2\operatorname{Var}(\log d)$, and the co-location component is $-2\alpha\hat\theta\operatorname{Cov}(\log \hat T,\log d)$. Percentages are normalized by the corresponding variance of $\log\hat\psi$.
+\end{flushleft}
+\end{table}
 
-\begin{figure}[H]
-    \centering
-\caption{Where comparative advantage pulls sourcing\label{fig:spatial_alignment}}
-    \begin{tabular}{cc}
-    Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/spatial_alignment_auto_mu2.pdf} &
-        \includegraphics[width = 0.5\linewidth]{figures/spatial_alignment_aero_mu2.pdf}
-    \end{tabular}
-    \caption*{\footnotesize \emph{Notes}: Each dot is an upstream commuting zone competing to supply one representative downstream buyer --- the buyer whose average sourcing distance is of median length. The horizontal axis is its estimated comparative advantage $\log \hat T_{a(l)s}$ and the vertical axis its distance to that buyer in kilometres, both measured as deviations from their sourcing-weighted sector mean, since $\hat T$ is identified only up to a per-sector scale. The area of each dot is the sourcing probability $\rho_{lr}$, and the line is the sourcing-weighted fit with a sector $\times$ buyer fixed effect, whose slope --- annotated on each panel --- is in kilometres of sourcing distance per log point of comparative advantage. The most heavily sourced areas are named. A downward line means the buyer's euro comes from places that are both productive and close, so equalising comparative advantage would push sourcing outward; a flat line means comparative advantage is orthogonal to the buyer's geography and equalising it would move the euro nowhere.}
-\end{figure}
+The decomposition yields two main conclusions. First, comparative advantage is by far the dominant source of dispersion in sourcing attractiveness in both industries: it accounts for 87\% of the variance in motor vehicles and 86\% in aerospace. The industries therefore do not differ primarily in the amount of comparative-advantage heterogeneity. Second, the role of geography depends importantly on its spatial alignment with comparative advantage. The pure distance component accounts for only 2\% of the variance in motor vehicles and 7\% in aerospace, consistent with the substantially larger trade-cost elasticity in aerospace. But in motor vehicles, the co-location component contributes an additional 11\%, more than five times the contribution of distance alone. This reflects a strong negative correlation between comparative advantage and distance: at the median sector, $\operatorname{Corr}(\log\hat T,\log d)=-0.47$. Productive suppliers tend to be located close to buyers, so proximity amplifies the sourcing advantage of high-$T$ locations.
 
-\swann{ }
+In aerospace, by contrast, the co-location component is 9\%, only modestly larger than the 7\% contribution of distance alone, and the corresponding correlation is much weaker, at $-0.17$. Comparative advantage and proximity are therefore substantially less aligned. The relevant distinction across industries is thus not the dispersion of comparative advantage itself, nor simply the strength of distance costs, but the extent to which productive capacity is spatially concentrated near demand. In motor vehicles, comparative advantage and proximity largely reinforce one another; in aerospace, they operate more nearly as separate sources of sourcing variation.
 
-
-\begin{figure}[H]
-    \centering
-    \caption{Distance equivalent of comparative advantage\label{fig:ca_distance_equivalence}}
-    \begin{tabular}{cc}
-    Motor vehicles & Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/ca_distance_equivalence_auto_mu2.pdf}&\includegraphics[width = 0.5\linewidth]{figures/ca_distance_equivalence_aero_mu2.pdf}\\ \vspace{1em}\\
-    \end{tabular}
-    \caption*{\footnotesize \emph{Notes}: For each sector, the bar reports the distance (in km) that would generate the same sourcing-probability gap as the observed comparative-advantage gap between the most productive region and the median region, holding all else equal. The dotted line represent the median bilateral distance observed in the data between upstream and downstream regions. 
-    }
-\end{figure}
 
 
 \begin{comment}
