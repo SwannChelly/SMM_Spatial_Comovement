@@ -272,6 +272,63 @@ def gate_untargeted():
     assert res_auto["eta"] < 0, res_auto["eta"]
     print(f"planted eta = {ETA_PLANT} (plus the extensive margin, so |eta| should exceed it)")
 
+    # ------------------------------------------- the finite-variety parquet ----
+    # The post-hoc economy is now `n_rep` independent realisations with `replication`
+    # and `variety` columns. Three things must hold, and the second is the one that
+    # would fail silently: pooling varieties into multi-variety firms must NOT pool
+    # across economies, or the ladder rung reports a firm with n_rep times as many
+    # varieties as the model gives it and a correspondingly flatter profile.
+    B_REP = 3
+    rng_rep = np.random.default_rng(23)
+    sup_rep = pd.concat(
+        [sup.assign(SIREN=sup["SIREN"].astype(str) + f"-r{b}",
+                    variety=lambda d: d.groupby(["ze2010", "A129"]).cumcount() + 1,
+                    replication=b,
+                    # the realisations must genuinely DIFFER, or the dispersion this
+                    # block is about is zero by construction and asserts nothing
+                    share=lambda d, _b=b: d["share"].to_numpy()
+                          * np.exp(rng_rep.normal(0, 0.35, len(d))))
+         for b in range(1, B_REP + 1)], ignore_index=True)
+    data_rep = dict(data, suppliers=sup_rep)
+
+    # (a) one realisation is exactly the original panel's shape
+    p1 = NS["build_a_ir_panel"](data_rep, replication=1)
+    assert p1.attrs["n_replications"] == 1 and p1.attrs["replication"] == 1
+    assert len(p1) == n_firms * R_d, (len(p1), n_firms * R_d)
+    assert np.allclose(p1.groupby("SIREN")["a_ir"].sum().to_numpy(), 1.0)
+
+    # (b) pooled: firms stay distinct across economies under the default key ...
+    p_all = NS["build_a_ir_panel"](data_rep)
+    assert p_all.attrs["n_replications"] == B_REP
+    assert p_all["SIREN"].nunique() == B_REP * n_firms, p_all["SIREN"].nunique()
+    assert np.allclose(p_all.groupby("SIREN")["a_ir"].sum().to_numpy(), 1.0)
+    # ... AND under an aggregating key, which must silently carry `replication`
+    p_pool = NS["build_a_ir_panel"](data_rep, firm_key=("ze2010", "A129"))
+    p_one = NS["build_a_ir_panel"](data_rep, firm_key=("ze2010", "A129"), replication=1)
+    assert p_pool["SIREN"].nunique() == B_REP * p_one["SIREN"].nunique(), \
+        "an aggregating firm_key merged economies into one firm"
+    assert np.allclose(p_pool.groupby("SIREN")["a_ir"].sum().to_numpy(), 1.0)
+
+    # (c) the across-replication estimate: one row per economy, and the pooled interval
+    #     is the tighter one — which is exactly why it is not the one to report
+    per = NS["untargeted_across_replications"](data_rep, verbose=False)
+    assert len(per) == B_REP and (per["eta"] < 0).all(), per
+    assert per.attrs["pooled_se"] < per["se_within"].mean(), \
+        "pooling economies must tighten the clustered se — that is the defect being flagged"
+    assert per.attrs["sd_across"] > 0.0, "the realisations must differ for this to bite"
+    # a parquet with no `replication` column is one economy and must still work
+    solo = NS["untargeted_across_replications"](data, verbose=False)
+    assert len(solo) == 1 and solo.index[0] is None
+    try:
+        NS["build_a_ir_panel"](data, replication=1)
+    except KeyError as e:
+        print("expected on a tree with no replication column:", str(e)[:60], "...")
+    else:
+        raise AssertionError("should have raised")
+    print(f"finite-variety panel: {B_REP} economies kept distinct, aggregating firm_key "
+          f"does not merge them, pooled se {per.attrs['pooled_se']:.4f} vs sd across "
+          f"draws {per.attrs['sd_across']:.4f}")
+
     # ---------------------------------------------------------------------------
     #    The STRUCTURAL moment: Lambda, the closed-form margins, and the gap. These
     #    replace the estimated decomposition, so what is gated is the arithmetic of
@@ -726,26 +783,6 @@ def gate_comparative_advantage():
     assert cb["share_covariance"].notna().all()
     print("\n", cb.round(4).to_string())
 
-    # ------------------------------------------------------------- counterfactuals
-    cf = NS["counterfactual_sourcing"](data)
-    assert set(cf.index.get_level_values("regime").unique()) == set(NS["CF_REGIMES"])
-    for s in sector_names:
-        n = cf.loc[(s, "Neither"), "n_cells"]
-        assert abs(cf.loc[(s, "Neither"), "hhi"] - 1.0 / n) < 1e-9      # uniform benchmark
-        assert abs(cf.loc[(s, "Neither"), "top_cell_share"] - 1.0 / n) < 1e-9
-        # distance pulls sourcing closer than uniform does
-        assert cf.loc[(s, "Distance only"), "mean_distance"] < cf.loc[(s, "Neither"), "mean_distance"]
-    # the planted edge concentrates sector 0 on its top area, far above the uniform
-    # benchmark, and far above the flat sector
-    assert cf.loc[(S0, "Both forces"), "top_area_share"] > \
-        3 * cf.loc[(S0, "Neither"), "top_area_share"]
-    assert cf.loc[(S0, "Both forces"), "top_area_share"] > \
-        2 * cf.loc[(S1, "Both forces"), "top_area_share"]
-    # and switching distance off concentrates it further still (CA is what does the work)
-    assert cf.loc[(S0, "Comparative advantage only"), "top_area_share"] > \
-        cf.loc[(S0, "Both forces"), "top_area_share"]
-    print("\n", cf.round(3).to_string())
-
     # ---------------------------------------------------------------------- output
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
@@ -756,17 +793,46 @@ def gate_comparative_advantage():
     # (those belong to test 3, which does the comparison buyer by buyer).
     assert axe.get_xscale() == "log"
     assert len(axe.collections) == 0, "the geography benchmark markers should be gone"
-    assert len(axe.patches) >= S, "one bar per sector"
+    # POINTS, not bars: the quantity is a ratio on a log axis, where a bar's origin — and
+    # so its length — is set by wherever the axis happens to start
+    assert len(axe.patches) == 0, "the bars should be gone"
+    pts = [ln for ln in axe.lines if ln.get_marker() not in ("", "None", None)]
+    assert len(pts) == 1 and len(pts[0].get_xdata()) == S, \
+        f"one point per sector, got {[len(p.get_xdata()) for p in pts]}"
+    assert pts[0].get_linestyle() in ("None", "none", " ", ""), "points must not be joined"
+    # the y axis is a plain list of sectors, and each POINT is named with its top area
+    # beside the mark — test 1's form (annotate, offset (6, 4), fontsize 8, ref colour)
+    ticks = [t.get_text() for t in axe.get_yticklabels()]
+    assert set(ticks) == set(sector_names) and len(ticks) == S, ticks
+    eq_df = NS["ca_distance_equivalence"](data)
+    named = [t for t in axe.texts if hasattr(t, "xy")]          # Annotation, not Text
+    assert len(named) == S, [t.get_text() for t in named]
+    # the name must sit on ITS OWN point: row i of the plotted frame, which is the
+    # sector table reversed, at y = i
+    want = list(eq_df["top_area"].astype(str))[::-1]
+    assert [t.get_text() for t in named] == want, ([t.get_text() for t in named], want)
+    assert [t.xy[1] for t in named] == list(range(S)), [t.xy for t in named]
+    assert all(t.get_text().startswith("Zone") for t in named), want
+    assert all(t.get_fontsize() == 8 for t in named)
+    assert all(tuple(np.round(t.get_position(), 6)) == (6.0, 4.0) for t in named), \
+        [t.get_position() for t in named]
+    # the paper takes this figure as it stands: no title, and a plain distance label
+    assert axe.get_title() == "", axe.get_title()
+    assert axe.get_xlabel() == "Distance (km)", axe.get_xlabel()
+    print("\n  test-2 figure: one point per sector, each named with its top area, no title")
     axe.figure.canvas.draw()
     labs = [t.get_text() for t in axe.get_xticklabels() if t.get_text()]
-    assert labs and not any(("e" in l.lower() or "\u00d7" in l) for l in labs), \
-        f"x tick labels must be plain numbers, got {labs}"
-    assert all(l.replace(",", "").replace(".", "").isdigit() for l in labs), \
-        f"x tick labels must be full numbers in km, got {labs}"
+    # The axis is LOG and its labels are decades: the quantity spans orders of magnitude,
+    # so what is gated is that every label is a power of ten (either the mathtext form
+    # `LogFormatterSciNotation` writes, or a plain number), never an unlabelled axis.
+    assert axe.get_xscale() == "log", axe.get_xscale()
+    dec = re.compile(r"^\$?\\?mathdefault?\{?10\^\{?-?\d+\}?\}?\$?$")
+    ok = [bool(dec.match(l.replace("\\mathdefault", "mathdefault")))
+          or l.replace(",", "").replace(".", "").isdigit() for l in labs]
+    assert labs and all(ok), f"x tick labels must be decades in km, got {labs}"
     assert "km" in axe.get_xlabel()
-    print("\n  test-2 figure: log x, plain km labels", labs[:6])
+    print("\n  test-2 figure: log x, decade labels", labs[:6])
     NS["plot_ca_win_margin"](data, save_to=str(out / "ca_win_margin.png"))
-    NS["plot_counterfactual_sourcing"](data, save_to=str(out / "ca_cf.png"))
     summ = NS["comparative_advantage_summary"](data)
     print("\n", summ.round(3).to_string())
     assert len(summ) == S
@@ -776,7 +842,6 @@ def gate_comparative_advantage():
     assert list(summ.index) == code_order, list(summ.index)
     assert list(eq.index) == code_order, list(eq.index)
     assert list(vd.index) == code_order, list(vd.index)
-    assert list(dict.fromkeys(cf.index.get_level_values("sector"))) == code_order
     # and the top area is named by its commuting zone, not by its ZE code
     caf = NS["comparative_advantage_frame"](data)
     assert caf["area"].str.startswith("Zone").all(), caf["area"].unique()[:3]
@@ -795,6 +860,90 @@ def gate_comparative_advantage():
         set(gloss.index) - set(summ.columns)
     print("every summary column is documented in comparative_advantage_glossary()")
 
+    # --- Figure 6: where comparative advantage pulls sourcing -------------------
+    # Everything in this section is about ONE object: `d_rs`, the average sourcing
+    # distance IN KILOMETRES. The gates therefore drive the panel, the regression and
+    # the counterfactual against each other in those units.
+    geom_al = NS["sourcing_geometry"](data)
+    blocks_al = {k: v for k, v in geom_al["by_sector"].items() if v["cells"].size >= 2}
+    bw = NS["_buyer_weights"](data)
+    b_idx = NS["_representative_buyer"](data)
+    # the representative buyer is of MEDIAN reach, so it is neither the nearest- nor the
+    # furthest-sourcing one -- a figure drawn for an extreme buyer is not representative,
+    # and reach is measured in km, not in log km
+    reach = np.mean([(b["rho"] * b["distance"]).sum(axis=0) for b in blocks_al.values()],
+                    axis=0)
+    assert (reach < reach[b_idx]).any() and (reach > reach[b_idx]).any(), reach
+
+    # the panel is the model's own allocation: one row per (sector, buyer, competing
+    # cell), distance in KILOMETRES, and the weight is rho times the buyer's purchase
+    # weight, so it sums to one over the whole panel
+    fr_all = NS["alignment_frame"](data)
+    n_pairs = sum(b["cells"].size * b["rho"].shape[1] for b in blocks_al.values())
+    assert len(fr_all) == n_pairs, (len(fr_all), n_pairs)
+    assert np.isclose(fr_all["weight"].sum(), 1.0), fr_all["weight"].sum()
+    assert (fr_all["distance_km"] > 0).all()
+    one = NS["alignment_frame"](data, buyer=b_idx)
+    assert len(one) == sum(b["cells"].size for b in blocks_al.values())
+    for sec, blk in blocks_al.items():
+        sub = one[one["sector"] == data["sector_names"][sec]]
+        assert np.allclose(np.sort(sub["distance_km"].to_numpy()),
+                           np.sort(blk["distance"][:, b_idx])), sec
+
+    # the regression IS pyfixest, and its slope is in km per log point: check it against
+    # an explicit-dummy WLS on the same panel, which is the only way the paper's
+    # specification sentence can be said to describe the number it reports
+    areg = NS["alignment_regression"](data, frame=fr_all, cluster=None)
+    D = pd.get_dummies(fr_all["group"].to_numpy()).to_numpy(float)
+    rt = np.sqrt(fr_all["weight"].to_numpy(float))
+    b_hat = np.linalg.lstsq(np.column_stack([fr_all["log_T"].to_numpy(float), D]) * rt[:, None],
+                            fr_all["distance_km"].to_numpy(float) * rt, rcond=None)[0][0]
+    assert np.isclose(b_hat, areg["slope_km_per_logT"], rtol=1e-8), \
+        (b_hat, areg["slope_km_per_logT"])
+    assert areg["n_obs"] == n_pairs
+
+    # the counterfactual, in km, and the identity that produces it
+    lev = NS["ca_distance_leverage"](data)
+    assert np.allclose(lev["delta_km"], lev["d_km_no_CA"] - lev["d_km"], atol=1e-10)
+    scale = max(float(np.abs(lev["delta_km"]).max()), 1e-9)
+    assert float(np.abs(lev["check_identity"]).max()) / scale < 1e-5, \
+        lev["check_identity"].abs().max()
+    # d_rs is a convex combination of that sector's distances, so it lies inside them
+    for sec, blk in blocks_al.items():
+        name = data["sector_names"][sec]
+        if name not in lev.index:
+            continue
+        lo, hi = float(blk["distance"].min()), float(blk["distance"].max())
+        assert lo - 1e-9 <= lev.loc[name, "d_km"] <= hi + 1e-9, (name, lev.loc[name, "d_km"])
+        assert lo - 1e-9 <= lev.loc[name, "d_km_no_CA"] <= hi + 1e-9, name
+    # the per-sector slope on the table is the per-sector pyfixest fit, not the pooled one
+    reg_s = NS["alignment_regression"](data, frame=fr_all, by_sector=True)
+    assert np.allclose(pd.to_numeric(reg_s["slope_km_per_logT"]).reindex(lev.index),
+                       lev["slope_km_per_logT"], equal_nan=True)
+    print(f"alignment: d_rs median {lev['d_km'].median():.1f} km, equalising T moves it "
+          f"{lev['delta_km'].median():+.1f} km; pooled slope "
+          f"{areg['slope_km_per_logT']:+.1f} km per log point (matches an explicit-dummy WLS)")
+
+    # the figure draws THAT buyer's fit, so the slope the eye reads is the number on the
+    # panel -- the annotation must carry the same value the regression on this frame gives
+    ax_al = NS["plot_spatial_alignment"](data, buyer=b_idx, n_label=3)
+    tx = [t.get_text() for t in ax_al.texts]
+    assert len(tx) == 4, tx
+    assert sum(1 for t in tx if str(t).startswith("Zone")) == 3, tx
+    b_one = NS["alignment_regression"](data, frame=one, cluster=None)["slope_km_per_logT"]
+    lab = [t for t in tx if "km per log point" in t]
+    assert len(lab) == 1, tx
+    assert abs(float(lab[0].split()[0].strip("$")) - round(float(b_one))) < 1.0, (lab, b_one)
+    line = [ln for ln in ax_al.lines if ln.get_linewidth() > 1.0]
+    assert len(line) == 1
+    xs, ys = line[0].get_xdata(), line[0].get_ydata()
+    assert np.isclose((ys[1] - ys[0]) / (xs[1] - xs[0]), b_one, rtol=1e-8)
+    assert len(ax_al.collections) == 1                      # one scatter, not one per sector
+    assert ax_al.get_title() == ""
+    assert "km" in ax_al.get_ylabel() and "log" in ax_al.get_xlabel()
+    NS["plt"].close(ax_al.figure)
+    print("spatial-alignment figure: the drawn line IS the reported slope, hubs named")
+
     # a binned trade cost has no single elasticity and must say so
     try:
         bad = dict(data, n_tau=2,
@@ -809,7 +958,10 @@ def gate_comparative_advantage():
 
 
 def gate_amplification():
-    """D_r and the share within a radius: the ratio, the grid and the CDF in d."""
+    """
+    D_r and the share within a radius: the ratio, the grid, the CDF in d — and the same
+    shock propagated with one force switched off.
+    """
     rng = np.random.default_rng(5)
 
     S, R, R_d, N_rho = 3, 20, 6, 40
@@ -850,10 +1002,29 @@ def gate_amplification():
     sup = pd.DataFrame(rows)
     sup.to_parquet(folder / "suppliers.parquet")
 
+    # The counterfactual reallocates with the comparative-advantage section's closed-form
+    # win probabilities, so the synthetic tree has to carry the geometry those need: one
+    # attraction area per downstream region, every cell modelled, and a raw best_params
+    # in the layout `unpack_estimated_T` rebuilds.
+    n_AA, n_tau, ALPHA, THETA = R_d, 1, 0.4, 1.768
+    N_down = np.zeros(R); N_down[:R_d] = 1.0            # downstream regions are 1..R_d
+    aa_of_ze = np.argmin(D[:, :R_d], axis=1)            # each ZE to its closest buyer
+    CELL_MASK = np.ones((S, R), dtype=bool)
+    AA_ACTIVE = np.ones((S, n_AA), dtype=bool)
+    T_REF_AA = np.zeros(S, dtype=int)
+    T_true = rng.lognormal(0.0, 0.8, (S, n_AA))         # a real spread, so T does work
+    best_params = np.concatenate([[0.3], rng.uniform(.1, .3, S), rng.uniform(.1, .3, R_d),
+                                  [ALPHA], T_true.ravel()])
+
     data = {"industry": "auto", "mu": 2, "S": S, "R": R, "step_dir": "step3",
             "folder": folder, "input_folder": inp,
             "filter_N_upstream_df": filter_df, "france": france,
-            "suppliers": pd.read_parquet(folder / "suppliers.parquet")}
+            "suppliers": pd.read_parquet(folder / "suppliers.parquet"),
+            "n_AA": n_AA, "n_tau": n_tau, "sector_names": [f"C{s}" for s in range(S)],
+            "aa_names": [codes[a] for a in range(n_AA)], "aa_of_ze": aa_of_ze,
+            "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK, "T_REF_AA": T_REF_AA,
+            "N_downstream": N_down, "best_params": best_params,
+            "coefs": pd.DataFrame({"value": [1.0]})}     # no `theta` entry -> the default
 
     # ------------------------------------------------------------------- the frame
     diff = NS["build_diffusion_frame"](data)
@@ -906,7 +1077,34 @@ def gate_amplification():
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
     NS["plot_amplification"](data, summary=summ, save_to=str(out / "amp.png"))
-    NS["plot_local_share"](data, radius_km=100, summary=summ, save_to=str(out / "amp_local.png"))
+    # the nested bars: every radius on ONE bar, all opaque, the narrower drawn over the
+    # wider — so a bar reads "this much within 100 km, this much more out to 200 km"
+    axl = NS["plot_local_share"](data, radii=(100, 200), summary=summ,
+                                 save_to=str(out / "amp_local.png"))
+    groups = axl.containers
+    assert len(groups) == 2, [len(g) for g in groups]
+    outer, inner = groups[0], groups[1]                 # widest drawn first
+    assert all(p.get_alpha() in (None, 1.0) for g in groups for p in g), "bars must be opaque"
+    assert outer[0].get_zorder() < inner[0].get_zorder(), "the 100 km bar must be on top"
+    w_out = np.array([p.get_width() for p in outer])
+    w_in = np.array([p.get_width() for p in inner])
+    assert np.allclose(np.sort(w_out), np.sort(summ["share_within_200km"].to_numpy()))
+    assert (w_in <= w_out + 1e-12).all(), "the nested radius must not exceed the wider one"
+    # `sort_by` names the column the rows are ordered on, and which one that should be
+    # is an editorial choice the default has gone back and forth on: sorting on the
+    # inner radius makes the staircase, sorting on the outer one separates a region that
+    # holds nothing within 100 km but a great deal in the 100-200 km ring. So the
+    # KWARG is gated, on both columns, rather than whichever the default happens to be.
+    for k, col in ((1, "share_within_100km"), (0, "share_within_200km")):
+        axs = NS["plot_local_share"](data, radii=(100, 200), summary=summ, sort_by=col)
+        w = np.array([p.get_width() for p in axs.containers[k]])
+        assert np.allclose(np.diff(w), np.abs(np.diff(w))), f"rows must be sorted on {col}"
+        NS["plt"].close(axs.figure)
+    # the outer ring is blue, the headline radius keeps the section's colour
+    assert tuple(np.round(outer[0].get_facecolor()[:3], 3)) == tuple(np.round(NS["sim_color"], 3))
+    print("nested-radius bars: opaque, nested, 100 km on top of 200 km, outer ring blue")
+    NS["plot_local_share"](data, radius_km=100, summary=summ,
+                           save_to=str(out / "amp_local_single.png"))
     NS["plot_local_share_profile"](data, profile=prof, save_to=str(out / "amp_profile.png"))
     NS["plot_amplification_vs_local"](data, radius_km=100, summary=summ,
                                       save_to=str(out / "amp_scatter.png"))
@@ -918,6 +1116,116 @@ def gate_amplification():
     assert "share_within_50km" in s3.columns
     assert s3["share_within_50km"].mean() < summ["share_within_100km"].mean()
     print("\nradius is a free parameter (50 km keeps less than 100 km)")
+
+    # ------------------------------------------------- the shock with a force off
+    # The reallocation keeps the support and the geometry of the base frame and only
+    # moves the euros, so everything but `upstream_sales` must come back untouched.
+    frames = NS["counterfactual_frames"](data, diffusion=diff, verbose=False)
+    assert set(frames) == set(NS["CF_REGIMES"])
+    for lab, f in frames.items():
+        assert len(f) == len(diff), (lab, len(f))
+        merged = diff.merge(f, on=["ze2010_downstream", "ze2010"], suffixes=("", "_cf"))
+        assert len(merged) == len(diff)
+        assert np.allclose(merged["distance"], merged["distance_cf"]), lab
+        assert (f["upstream_sales"] >= -1e-15).all(), lab
+
+    # D_r cannot move: sum_l rho = 1 per (sector, buyer), so every regime redistributes
+    # exactly the euros the realised economy sent upstream. This is the claim the whole
+    # counterfactual rests on, so it is checked to machine precision.
+    det = NS["counterfactual_amplification"](data, radii=(100, 200), diffusion=diff,
+                                             frames=frames, verbose=False)
+    amp = det["amplification"].unstack("regime")
+    assert np.allclose(amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-12), amp
+    assert "Realised" in amp.columns and set(NS["CF_REGIMES"]) <= set(amp.columns)
+
+    # Both switches at once is the uniform 1/n draw. It is no longer a REPORTED regime —
+    # `CF_REGIMES` carries the two single switches — but it is still what pins the closed
+    # form exactly, so the gate asks for it explicitly rather than reading the reported
+    # set: with every cell modelled, each region must receive total/R to machine precision.
+    UNIFORM = {"Neither": dict(equalise_T=True, alpha=0.0)}
+    assert "Neither" not in NS["CF_REGIMES"], "the uniform draw is not a reported regime"
+    nei = NS["counterfactual_frames"](data, regimes=UNIFORM, diffusion=diff)["Neither"]
+    tot_cf = nei.groupby("ze2010_downstream")["upstream_sales"].transform("sum")
+    assert np.allclose(nei["upstream_sales"] / tot_cf, 1.0 / R, atol=1e-12)
+
+    # gravity alone strictly pulls sourcing closer than the uniform benchmark does
+    cfs = NS["counterfactual_summary"](data, radii=(100, 200), detail=det)
+    uni = NS["counterfactual_summary"](
+        data, regimes=UNIFORM, radii=(100, 200),
+        detail=NS["counterfactual_amplification"](data, regimes=UNIFORM, radii=(100, 200),
+                                                  diffusion=diff, verbose=False))
+    assert (cfs.loc["Distance only", "mean_upstream_distance"]
+            < uni.loc["Neither", "mean_upstream_distance"])
+    assert (cfs.loc["Distance only", "share_within_100km"]
+            > uni.loc["Neither", "share_within_100km"])
+    assert np.allclose(cfs["amplification"].to_numpy(), 1.0 + TOTAL_INPUT_SHARE)
+
+    # and the allocation itself is the closed form, recomputed here from T and D without
+    # going through `sourcing_geometry` — the independent path
+    est = NS["unpack_estimated_T"](data)
+    spend = (data["suppliers"].assign(_s=data["suppliers"]["A129"].astype(int) - 1)
+             .groupby(["ze2010_downstream", "_s"])["share"].sum())
+    want = np.zeros((R, R_d))
+    for (rd, sec), tot in spend.items():
+        psi = est["T"][sec, aa_of_ze] * np.maximum(D[:, rd - 1], 1.0) ** (-THETA * ALPHA)
+        want[:, rd - 1] += tot * psi / psi.sum()
+    got = frames["Both forces"].pivot(index="ze2010", columns="ze2010_downstream",
+                                      values="upstream_sales").to_numpy()
+    assert np.allclose(got, want, atol=1e-12), np.abs(got - want).max()
+    print("counterfactual: support kept, D_r invariant, uniform benchmark exact, "
+          "allocation matches the closed form")
+
+    # --- and the section has to run after the LOADER ALONE ----------------------
+    # The counterfactual reaches for the Ricardian geometry, which the comparative-
+    # advantage section also uses. If that helper lived inside THAT section, running
+    # this one on its own would raise NameError on the first counterfactual — which is
+    # exactly what happened once. So rebuild a namespace with every comparative-
+    # advantage cell REMOVED and require the reallocation to come out identical.
+    nb = json.load(open(NB_PATH))
+    ca_cells = ("def ca_distance_equivalence", "def ca_win_margin",
+                "def ca_variance_decomposition", "def ca_covariance_benchmark",
+                "def comparative_advantage_summary", "def plot_ca_distribution")
+    ns_noca = {}
+    for j, cell in enumerate(nb["cells"]):
+        if cell["cell_type"] != "code":
+            continue
+        code = "".join(cell["source"])
+        defines = re.search(r"^(def|class)\s", code, re.M) is not None
+        if code.lstrip().startswith("%") or any(m in code for m in ca_cells) or (
+                not defines and any(m in code for m in RUN_CELL_MARKERS)):
+            continue
+        exec(compile(code, f"<notebook cell {j}>", "exec"), ns_noca)
+    for name, value in (("THETA_DEFAULT", 1.768), ("NU_S_DEFAULT", 1.5),
+                        ("EMPIRICAL_MEAN_LOG_D", 5.8)):
+        ns_noca.setdefault(name, value)
+    assert "ca_win_margin" not in ns_noca, "the comparative-advantage cells were not excluded"
+    alone = ns_noca["counterfactual_frames"](data, diffusion=diff, verbose=False)
+    for lab in frames:
+        assert np.allclose(alone[lab]["upstream_sales"].to_numpy(),
+                           frames[lab]["upstream_sales"].to_numpy()), lab
+    print("the amplification section runs after the loader alone, with no "
+          "comparative-advantage cell executed")
+    print(cfs.round(3).to_string())
+
+    # the figures
+    NS["plot_counterfactual_local_share"](data, radius_km=100, detail=det,
+                                          save_to=str(out / "amp_cf_local.png"))
+    NS["plot_counterfactual_profile"](data, frames=frames, diffusion=diff, mark=(100, 200),
+                                      radii=(50, 100, 200, 400),
+                                      save_to=str(out / "amp_cf_profile.png"))
+
+    # the parquet's A129 is the model index 1..S; a file written with real CODES has to
+    # map through `sector_names`, and anything else must be named rather than guessed
+    sup_codes = data["suppliers"].assign(
+        A129=lambda d: pd.Series([f"C{v - 1}" for v in d["A129"]], index=d.index))
+    assert np.array_equal(NS["_parquet_sector_index"](data, sup_codes),
+                          data["suppliers"]["A129"].to_numpy() - 1)
+    try:
+        NS["_parquet_sector_index"](data, data["suppliers"].assign(A129="ZZZ"))
+    except ValueError as e:
+        print("expected on an unmappable sector column:", str(e)[:60], "...")
+    else:
+        raise AssertionError("should have raised")
 
     # a missing artefact must say what is missing, and a wrong column too
     for kw, exc in ((dict(suppliers=None), FileNotFoundError),):
@@ -933,6 +1241,179 @@ def gate_amplification():
         print("expected on a bad value column:", str(e)[:50], "...")
     else:
         raise AssertionError("should have raised")
+
+    # ------------------------------------------------------- the map of L_r(100 km)
+    # The map is the paper's figure, so it is gated as a figure: the SHOCKED zones and
+    # only those carry a colour, the pinned scale is the one that gets used (both
+    # panels must share it or the cross-industry contrast is rescaled away), and a
+    # `france` without geometry degrades to the same FileNotFoundError the loader's
+    # missing-file path raises rather than to a matplotlib error deep inside.
+    try:
+        import geopandas as gpd
+        from shapely.geometry import box
+    except ImportError:
+        print("map gate skipped: geopandas/shapely not installed")
+    else:
+        geo = gpd.GeoDataFrame(
+            {"ze2010": codes, "ze2010_name": [f"Zone {c}" for c in codes]},
+            geometry=[box(i * 0.5, 44 + i * 0.2, i * 0.5 + 0.4, 44 + i * 0.2 + 0.4)
+                      for i in range(R)], crs="EPSG:4326")
+        ax = NS["plot_local_share_map"](dict(data, france=geo), radius_km=100,
+                                        summary=summ, vlim=(0.0, 1.0))
+        # exactly two polygon collections: the unshocked ground and the shocked values
+        colls = [c for c in ax.collections if hasattr(c, "get_paths")]
+        n_shocked = len(summ)
+        assert sum(len(c.get_paths()) for c in colls) == R, [len(c.get_paths()) for c in colls]
+        vals = [c for c in colls if c.get_array() is not None]
+        assert len(vals) == 1 and len(vals[0].get_array()) == n_shocked, \
+            [len(v.get_array()) for v in vals]
+        assert np.allclose(np.sort(np.asarray(vals[0].get_array(), dtype=float)),
+                           np.sort(summ["share_within_100km"].to_numpy()))
+        assert (vals[0].norm.vmin, vals[0].norm.vmax) == (0.0, 1.0)     # the pin holds
+        assert ax.get_xlim() == (-5, 10) and ax.get_ylim() == (42, 52)
+        # no zone is NAMED by default: the content is the shape of the colour field, and
+        # a name pinned to the brightest patch turns the pair into a ranking of places
+        assert not ax.texts, [t.get_text() for t in ax.texts]
+        NS["plt"].close(ax.figure)
+        named = NS["plot_local_share_map"](dict(data, france=geo), radius_km=100,
+                                           summary=summ, vlim=(0.0, 1.0), n_label=2)
+        assert len(named.texts) == 2, "n_label must still name that many when asked"
+        NS["plt"].close(named.figure)
+        try:
+            NS["plot_local_share_map"](data, radius_km=100, summary=summ)   # no geometry
+        except FileNotFoundError as e:
+            print("expected without geometry:", str(e)[:60], "...")
+        else:
+            raise AssertionError("should have raised")
+        print(f"map: {n_shocked} shocked zones coloured out of {R}, scale pinned")
+
+    # ---------------------------------------------- the finite-variety economy
+    # The model has N_s varieties, not N_rho draws, so the post-hoc parquet carries
+    # `n_rep` independent realisations of an N_hat_s-variety economy plus the
+    # infinite-variety benchmark beside it. Three things are gated: the averaged frame
+    # is the MEAN economy (not the pooled one, which would be n_rep times too big),
+    # the variety-count check passes on a well-formed parquet and FAILS on one written
+    # over draws, and granularity comes out as the gap between the two economies.
+    B, N_HAT = 4, np.array([3, 4, 5])
+    rep_rows = []
+    rng2 = np.random.default_rng(11)
+    siren_map = {}
+    for b in range(1, B + 1):
+        for r in downstream:
+            w = np.exp(-np.maximum(D[:, r - 1], 1.0) / 120.0)
+            w /= w.sum()
+            for s in range(1, S + 1):
+                for rho in range(1, int(N_HAT[s - 1]) + 1):
+                    l = int(rng2.choice(np.arange(1, R + 1), p=w))
+                    # keyed as main.jl keys it: one variety winning the same cell for two
+                    # buyers is ONE firm, which is what bounds firms per variety by R_d
+                    siren = siren_map.setdefault((b, l, s, rho), len(siren_map) + 1)
+                    rep_rows.append({"SIREN": siren, "A129": s, "ze2010": l,
+                                     "ze2010_downstream": int(r),
+                                     "share": TOTAL_INPUT_SHARE / (S * N_HAT[s - 1]),
+                                     "downstream_purchase": 2.0,
+                                     "intermediate_derivative": 0.0,
+                                     "productivity": 1.0,
+                                     "sample_weight": 1.0 / N_HAT[s - 1],
+                                     "variety": rho, "replication": b})
+    gran = pd.DataFrame(rep_rows)
+    np.save(folder / "step3" / "post_hoc_N_hat.npy", N_HAT)
+    gdata = dict(data, suppliers=gran, post_hoc_N_hat=N_HAT,
+                 suppliers_continuum=data["suppliers"])
+
+    # the averaged frame is ONE economy: every region still spends exactly its share
+    gdiff = NS["build_diffusion_frame"](gdata)
+    gtot = gdiff.groupby("ze2010_downstream")["upstream_sales"].sum()
+    assert np.allclose(gtot.to_numpy(), TOTAL_INPUT_SHARE), gtot
+    assert len(gdiff) == R_d * R, len(gdiff)
+    # ... while the per-replication frame keeps them apart, each one whole
+    pdiff = NS["build_diffusion_frame"](gdata, per_replication=True)
+    assert len(pdiff) == B * R_d * R, (len(pdiff), B * R_d * R)
+    ptot = pdiff.groupby(["replication", "ze2010_downstream"])["upstream_sales"].sum()
+    assert np.allclose(ptot.to_numpy(), TOTAL_INPUT_SHARE), ptot
+
+    chk = NS["supplier_count_check"](gdata, verbose=False)
+    assert chk.attrs["exact"] and "varieties_in_parquet" in chk.columns
+    assert (chk["N_hat"].to_numpy() == N_HAT).all()
+    assert chk["n_replications"].iloc[0] == B
+    # the exact test: distinct variety indices per (sector, replication) IS N_hat_s
+    assert np.allclose(chk["ratio"].to_numpy(), 1.0), chk["ratio"].tolist()
+    # the same check on the DRAW-count parquet (no `replication`, no `variety`, N_rho
+    # rows per cell) must exceed the firms-per-variety bound R_d -- the diagnosis this
+    # function exists to make on a tree written before the economy was drawn
+    bad = NS["supplier_count_check"](dict(gdata, suppliers=data["suppliers"]), verbose=False)
+    assert not bad.attrs["exact"]
+    assert bad["ratio"].max() > R_d, (bad["ratio"].tolist(), R_d)
+    # and it must NOT cry wolf on a variety economy whose parquet predates the column.
+    # ONE realisation, because that is what such a tree holds: without a `replication`
+    # column B economies are indistinguishable from one, and the bound is per economy.
+    legacy = NS["supplier_count_check"](
+        dict(gdata, suppliers=gran.query("replication == 1")
+                                  .drop(columns=["variety", "replication"])), verbose=False)
+    assert legacy["ratio"].max() <= R_d, legacy["ratio"].tolist()
+
+    per = NS["replication_summaries"](gdata, radii=(100, 200))
+    assert per.index.get_level_values("replication").nunique() == B
+    assert np.allclose(per["amplification"].to_numpy(), 1.0 + TOTAL_INPUT_SHARE)
+    band = NS["granular_band"](gdata, radii=(100, 200))
+    assert (band["n_replications"] == B).all()
+    # D_r is linear in the euros, so it cannot move across realisations; the local share
+    # is a ratio of a finite number of draws and must
+    assert np.allclose(band["amplification_sd"].to_numpy(), 0.0, atol=1e-12)
+    assert band["share_within_100km_sd"].max() > 0.0
+
+    # the counterfactual reallocates the sector spend read off the parquet, which pools
+    # n_rep economies: unless that spend is averaged, every regime allocates n_rep euros
+    # where the base frame allocates one. D_r is linear in them and catches it; L_r(d) is
+    # a ratio within a regime and would not, which is why D_r is what is asserted here.
+    gdet = NS["counterfactual_amplification"](gdata, radii=(100,), verbose=False)
+    g_amp = gdet["amplification"].unstack("regime")
+    assert np.allclose(g_amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-9), \
+        g_amp.describe()
+    print("counterfactual on the replicated parquet: D_r matches the realised economy")
+
+    # neither counterfactual figure carries a title: both go into the paper under its own
+    # caption, and an in-panel "auto, mu_2, one force off" duplicates it in a smaller font
+    for fn, kw in (("plot_counterfactual_profile", dict(frames=frames, diffusion=diff)),
+                   ("plot_counterfactual_local_share", dict(detail=det, radius_km=100))):
+        axf = NS[fn](data, **kw)
+        assert axf.get_title() == "" and axf.get_title(loc="right") == "", (fn, axf.get_title(loc="right"))
+        NS["plt"].close(axf.figure)
+
+    # --- the distribution of sourcing distance, regime by regime ----------------
+    # The mean distance and the local share are two readings of the same reallocation,
+    # so the gate is that the distribution is exactly the per-region column of the
+    # counterfactual detail -- not a re-derivation that could drift from it -- and that
+    # every regime reaches the figure as its own step curve with a median marker.
+    dd = NS["distance_distribution"](data, detail=det)
+    assert list(dd.columns) == list(det.index.get_level_values("regime").categories), dd.columns
+    for lab in dd.columns:
+        want = det.xs(lab, level="regime")["mean_upstream_distance"]
+        assert np.allclose(dd[lab].to_numpy(), want.reindex(dd.index).to_numpy(),
+                           equal_nan=True), lab
+    ax_dd = NS["plot_distance_distribution"](data, detail=det)
+    steps = [ln for ln in ax_dd.lines if ln.get_drawstyle() != "default"]
+    marks = [ln for ln in ax_dd.lines if ln.get_marker() == "o"]
+    assert len(steps) == len(dd.columns), (len(steps), len(dd.columns))
+    assert len(marks) == len(dd.columns)
+    assert all(abs(m.get_ydata()[0] - 0.5) < 1e-12 for m in marks)
+    for m, lab in zip(marks, dd.columns):
+        assert np.isclose(m.get_xdata()[0], float(np.median(dd[lab].dropna())))
+    assert ax_dd.get_title() == "" and "km" in ax_dd.get_xlabel()
+    NS["plt"].close(ax_dd.figure)
+    print(f"distance distribution: {len(dd.columns)} regimes, medians "
+          + ", ".join(f"{lab} {np.median(dd[lab].dropna()):.0f} km" for lab in dd.columns))
+
+    rep = NS["granularity_report"](gdata, radii=(100, 200), verbose=False)
+    assert set(rep.columns) >= {"granular_mean", "sd_across_draws", "continuum",
+                                "granularity"}
+    assert np.isclose(rep.loc["amplification", "granularity"], 0.0, atol=1e-12)
+    # the extensive margin is where granularity bites: N_hat_s varieties cannot reach
+    # as many origins as N_rho draws do
+    assert rep.loc["supplier_cells", "granularity"] < 0.0, rep.loc["supplier_cells"]
+    print(f"finite-variety economy: {B} realisations averaged, count check passes and "
+          f"catches a draw-count parquet, granularity on supplier_cells = "
+          f"{rep.loc['supplier_cells', 'granularity']:.1f} origins")
 
     print("\nALL OK")
 
