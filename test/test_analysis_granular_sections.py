@@ -1287,6 +1287,104 @@ def gate_amplification():
             raise AssertionError("should have raised")
         print(f"map: {n_shocked} shocked zones coloured out of {R}, scale pinned")
 
+        # the barycentre arrows, as a figure: ONE quiver artist carrying one arrow per
+        # placeable shocked zone, drawn at true scale (`scale == 1` in data units, so an
+        # arrow's length is the displacement the table reports), and the 4 x 2 panel
+        # with a row per scenario and a column per industry. The arrow scale is gated
+        # because an exaggeration factor would turn a diffuse sourcing field into a hub.
+        gdata = dict(data, france=geo)
+        co = NS["_zone_coordinates"](gdata, crs=None)
+        assert co.index.tolist() == list(range(1, R + 1))
+        assert co["x"].notna().all() and co["y"].notna().all()
+        bax = NS["plot_sourcing_barycentre"](gdata, diffusion=diff, crs=None,
+                                             save_to=str(out / "barycentre.png"))
+        quivs = [c for c in bax.collections if hasattr(c, "U")]
+        assert len(quivs) == 1, len(quivs)
+        nb_ = NS["sourcing_barycentre"](gdata, diffusion=diff, crs=None)
+        assert len(quivs[0].U) == int(nb_["bary_x"].notna().sum())
+        assert quivs[0].scale == 1.0 and quivs[0].angles == "xy"
+        assert bax.get_aspect() in (1.0, "equal")
+        NS["plt"].close(bax.figure)
+
+        fig, barys = NS["barycentre_panel"]([("Motor Vehicles", gdata),
+                                             ("Aerospace", gdata)], crs=None,
+                                            save_to=str(out / "barycentre_panel.png"))
+        assert np.array(fig.axes).size == 4 * 2, len(fig.axes)
+        assert set(barys) == {(n, r) for n in ("Motor Vehicles", "Aerospace")
+                              for r in ["Realised"] + list(NS["CF_REGIMES"])}
+        # every panel is drawn in the same window and at the same true scale, which is
+        # the only thing that makes a grid of maps comparable panel to panel
+        lims = {(tuple(np.round(a.get_xlim(), 6)), tuple(np.round(a.get_ylim(), 6)))
+                for a in fig.axes}
+        assert len(lims) == 1, lims
+        assert all(q.scale == 1.0 for a in fig.axes for q in a.collections
+                   if hasattr(q, "U"))
+        # the realised row must be the realised economy, not a regime redrawn
+        assert np.allclose(barys[("Aerospace", "Realised")]["bary_x"].to_numpy(),
+                           nb_["bary_x"].to_numpy(), equal_nan=True)
+        NS["plt"].close(fig)
+        print("barycentre figure: one quiver at true scale, 4 x 2 panel on one window")
+
+
+
+    # ------------------------------------------------ the sourcing barycentre
+    # The barycentre is a weighted mean of POSITIONS, so it is gated against an
+    # independent recomputation from the same weights and coordinates, and against two
+    # planted configurations whose answer is known without any arithmetic: sourcing
+    # split symmetrically about a region must give a barycentre ON that region (zero
+    # displacement over a strictly positive mean distance — the case the mean distance
+    # alone cannot distinguish from proximity), and sourcing sent entirely to one place
+    # must give a displacement equal to the distance to it. The coordinate frame is
+    # passed EXPLICITLY here, so the numerical half of the figure is gated even where
+    # geopandas is absent.
+    coords = pd.DataFrame({
+        "ze2010": codes,
+        "ze2010_name": [f"Zone {c}" for c in codes],
+        "x": np.arange(R, dtype=float) * 10_000.0,      # a line of zones, 10 km apart
+        "y": np.zeros(R),
+    }, index=pd.Index(np.arange(1, R + 1), name="index"))
+
+    bary = NS["sourcing_barycentre"](data, diffusion=diff, coords=coords)
+    w = diff.pivot(index="ze2010_downstream", columns="ze2010",
+                   values="upstream_sales").reindex(columns=np.arange(1, R + 1)).fillna(0.0)
+    want_x = (w.to_numpy() @ coords["x"].to_numpy()) / w.to_numpy().sum(axis=1)
+    assert np.allclose(bary["bary_x"].to_numpy(), want_x), \
+        np.abs(bary["bary_x"].to_numpy() - want_x).max()
+    assert np.allclose(bary["bary_y"].to_numpy(), 0.0)
+    assert np.allclose(bary["displacement_km"].to_numpy(),
+                       np.abs(bary["bary_x"] - bary["origin_x"]).to_numpy() / 1000.0)
+    # the mean of the lengths bounds the length of the mean: concentration lives in [0,1]
+    assert (bary["concentration"].dropna() <= 1.0 + 1e-12).all(), \
+        bary["concentration"].max()
+    assert np.allclose(bary["weight_covered"].to_numpy(), 1.0)
+
+    # symmetric sourcing: barycentre on the shocked region, mean distance strictly positive
+    # a shocked region with a neighbour on each side — only downstream zones originate
+    # a shock, so the planted configuration has to be built on one of those
+    shocked_ids = sorted(int(v) for v in diff["ze2010_downstream"].unique()
+                         if 1 < int(v) < R)
+    mid = shocked_ids[len(shocked_ids) // 2]
+    sym = diff.copy()
+    sym["upstream_sales"] = 0.0
+    sym.loc[(sym["ze2010_downstream"] == mid) & (sym["ze2010"] == mid - 1),
+            "upstream_sales"] = 1.0
+    sym.loc[(sym["ze2010_downstream"] == mid) & (sym["ze2010"] == mid + 1),
+            "upstream_sales"] = 1.0
+    bsym = NS["sourcing_barycentre"](data, diffusion=sym, coords=coords).loc[mid]
+    assert abs(bsym["displacement_km"]) < 1e-9, bsym["displacement_km"]
+    assert bsym["mean_distance_km"] > 0 and abs(bsym["concentration"]) < 1e-9
+
+    # one-sided sourcing: the arrow is the whole distance to where the euros went
+    one = diff.copy()
+    one["upstream_sales"] = 0.0
+    one.loc[(one["ze2010_downstream"] == mid) & (one["ze2010"] == R), "upstream_sales"] = 1.0
+    bone = NS["sourcing_barycentre"](data, diffusion=one, coords=coords).loc[mid]
+    assert np.isclose(bone["displacement_km"], (R - mid) * 10.0), bone["displacement_km"]
+    assert np.isclose(bone["concentration"], 1.0) or np.isnan(bone["concentration"])
+    print(f"barycentre: median pull {bary['displacement_km'].median():.1f} km, "
+          f"symmetric sourcing gives a zero arrow over a "
+          f"{bsym['mean_distance_km']:.0f} km mean distance")
+
     # ---------------------------------------------- the finite-variety economy
     # The model has N_s varieties, not N_rho draws, so the post-hoc parquet carries
     # `n_rep` independent realisations of an N_hat_s-variety economy plus the
