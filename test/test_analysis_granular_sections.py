@@ -1385,6 +1385,62 @@ def gate_amplification():
           f"symmetric sourcing gives a zero arrow over a "
           f"{bsym['mean_distance_km']:.0f} km mean distance")
 
+
+    # ------------------------------------------- does the barycentre follow the buyer
+    # The shrinkage regression is the number that replaces "are the arrowheads
+    # clustered?", so it is gated on three planted configurations whose slope is known
+    # without any arithmetic: a barycentre sitting ON its buyer must give 1, a
+    # barycentre common to every buyer must give 0, and a barycentre shrunk a third of
+    # the way from a fixed point towards its buyer must give exactly that third. The
+    # regression is fed frames built by hand rather than by `sourcing_barycentre`, so a
+    # bug in one cannot mask a bug in the other.
+    coords2 = coords.copy()
+    coords2["y"] = (np.arange(R, dtype=float) % 5) * 7_000.0      # genuinely 2-D
+    b2 = NS["sourcing_barycentre"](data, diffusion=diff, coords=coords2)
+    shr = NS["barycentre_shrinkage"](b2).iloc[0]
+    assert 0.0 <= shr["dispersion_ratio"] and shr["n"] == len(b2.dropna(subset=["bary_x"]))
+    # |slope| can never exceed the dispersion ratio: the fitted part of the
+    # barycentre's variation is a component of all of it
+    assert abs(shr["slope"]) <= shr["dispersion_ratio"] + 1e-9, shr.to_dict()
+
+    planted = b2.copy()
+    cx, cy = 123_000.0, 45_000.0
+    for lam in (1.0, 0.0, 1.0 / 3.0):
+        planted["bary_x"] = cx * (1 - lam) + lam * planted["origin_x"]
+        planted["bary_y"] = cy * (1 - lam) + lam * planted["origin_y"]
+        got = NS["barycentre_shrinkage"](planted).iloc[0]
+        assert np.isclose(got["slope"], lam), (lam, got["slope"])
+        assert np.isclose(got["slope_x"], lam) and np.isclose(got["slope_y"], lam)
+        # a barycentre common to every buyer (lam = 0) has NO variation to explain,
+        # so r2 is undefined there rather than one — the degenerate case, gated as such
+        assert (np.isclose(got["r2"], 1.0) if lam > 0 else np.isnan(got["r2"])), got["r2"]
+        assert np.isclose(got["dispersion_ratio"], lam), got["dispersion_ratio"]
+    # a barycentre that is pure noise about a common point still returns slope ~ 0
+    # while its dispersion ratio does NOT vanish — that gap is the whole reason both
+    # are reported
+    rng_s = np.random.default_rng(7)
+    planted["bary_x"] = cx + rng_s.normal(0, 5e4, len(planted))
+    planted["bary_y"] = cy + rng_s.normal(0, 5e4, len(planted))
+    noisy = NS["barycentre_shrinkage"](planted).iloc[0]
+    # (no bound is put on the noisy slope itself: with a handful of shocked regions a
+    # pure-noise draw can fit any slope. The claim being gated is the INEQUALITY —
+    # the fitted part is only a component of the barycentre's variation.)
+    assert noisy["dispersion_ratio"] > abs(noisy["slope"]), noisy.to_dict()
+
+    # the dict form keys one row per (industry, regime) and is what the report prints
+    tab = NS["barycentre_shrinkage"]({("auto", "Both forces"): b2,
+                                      ("auto", "Realised"): planted})
+    assert tab.shape[0] == 2 and isinstance(tab.index, pd.MultiIndex)
+    # too few placeable regions must say so rather than return a slope off two points
+    try:
+        NS["barycentre_shrinkage"](b2.iloc[:2])
+    except ValueError as e:
+        print("expected on too few regions:", str(e)[:50], "...")
+    else:
+        raise AssertionError("should have raised")
+    print(f"shrinkage: planted lambdas recovered exactly; on the synthetic economy "
+          f"slope = {shr['slope']:.3f}, dispersion ratio = {shr['dispersion_ratio']:.3f}")
+
     # ---------------------------------------------- the finite-variety economy
     # The model has N_s varieties, not N_rho draws, so the post-hoc parquet carries
     # `n_rep` independent realisations of an N_hat_s-variety economy plus the
