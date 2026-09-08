@@ -783,9 +783,59 @@ def gate_comparative_advantage():
     assert cb["share_covariance"].notna().all()
     print("\n", cb.round(4).to_string())
 
-    # ---------------------------------------------------------------------- output
+
+    # ------------------------------------------- the alignment, buyer by buyer
+    # This frame is the DISTRIBUTION behind the decomposition's co-location term, so
+    # the binding gate is that it aggregates back to that term exactly: the
+    # purchase-weighted mean of its covariances must reproduce, sector by sector,
+    # the covariance implied by `share_covariance` and `sd_log_psi`. Anything that
+    # drifted between the two -- a different cell set, a different weighting, logs
+    # against kilometres -- breaks that identity rather than merely shifting a
+    # picture, which is why the figure is gated through the table and not on its own.
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
+    R_d = len(geom["downstream"])
+    ac = NS["alignment_correlation"](data)
+    assert set(ac.columns) >= {"sector", "buyer", "cov", "corr", "sd_logT", "sd_logd",
+                               "buyer_weight", "n_cells"}
+    n_expect = sum(1 for s in range(S) if geom["by_sector"][s]["cells"].size >= 2) * R_d
+    assert len(ac) == n_expect, (len(ac), n_expect)
+    assert (ac["corr"].abs() <= 1.0 + 1e-12).all(), ac["corr"].abs().max()
+    assert np.isclose(ac.groupby("sector")["buyer_weight"].sum().min(), 1.0)
+    for name, sub in ac.groupby("sector"):
+        w = sub["buyer_weight"].to_numpy()
+        cov_bar = float(sub["cov"].to_numpy() @ w / w.sum())
+        want = -vd.loc[name, "share_covariance"] * vd.loc[name, "sd_log_psi"] ** 2 / (2 * ta)
+        assert abs(cov_bar - want) < 1e-12, (name, cov_bar, want)
+    # the rho-weighted variant is a DIFFERENT statistic and must not silently coincide
+    ac_rho = NS["alignment_correlation"](data, weights="rho")
+    assert ac_rho.attrs["weights"] == "rho" and len(ac_rho) == len(ac)
+    assert not np.allclose(ac_rho["corr"].to_numpy(), ac["corr"].to_numpy())
+    try:
+        NS["alignment_correlation"](data, weights="nope")
+    except ValueError as e:
+        print("expected on a bad weighting:", str(e)[:50], "...")
+    else:
+        raise AssertionError("should have raised")
+
+    # the figure: one step outline per industry on ONE shared bin grid, medians ruled,
+    # zero marked. Two datasets are passed (the same one twice is enough to gate the
+    # mechanics; the industries differ only in their values).
+    axc, frs = NS["plot_alignment_correlation"](
+        [("Motor vehicles", data), ("Aerospace", data)],
+        save_to=str(out / "alignment_corr.png"))
+    assert len(frs) == 2
+    hists = [c for c in axc.get_children() if type(c).__name__ == "Polygon"]
+    assert len(hists) == 2, len(hists)                       # one outline per industry
+    grids = {tuple(np.round(h.get_xy()[:, 0], 9)) for h in hists}
+    assert len(grids) == 1, "the two industries must share one bin grid"
+    assert len(axc.texts) == 1                               # the share-positive block
+    NS["plt"].close(axc.figure)
+    print(f"alignment correlation: {len(ac)} (sector, buyer) pairs, median "
+          f"{ac['corr'].median():+.3f}, {float((ac['corr'] > 0).mean()):.0%} positive; "
+          "aggregates back to the decomposition's co-location term")
+
+    # ---------------------------------------------------------------------- output
     NS["plot_ca_distribution"](data, save_to=str(out / "ca_dist.png"))
     axe = NS["plot_ca_distance_equivalence"](data, save_to=str(out / "ca_equiv.png"))
     # Test 2's figure reports the distance EQUIVALENCE alone, in kilometres, on a log x
