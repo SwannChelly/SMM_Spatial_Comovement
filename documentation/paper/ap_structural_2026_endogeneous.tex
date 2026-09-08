@@ -778,19 +778,26 @@ draws the displacements behind it.
 \begin{table}[H]
     \centering
     \caption{Does a buyer's sourcing follow the buyer? The shrinkage coefficient $\lambda$\label{tab:barycentre_shrinkage}}
-    \begin{tabular}{llccc}
+    \begin{tabular}{llccccc}
     \hline\hline
-    Industry & Regime & $\hat\lambda$ & s.e. & $R^{2}$ \\
+    Industry & Regime & $\hat\lambda$ & s.e. & 95\% CI & $R^{2}$ & $n$ \\
     \hline
-    Motor vehicles & Both forces               & 0.065 &  & 0.96 \\
-                   & Distance only             & 0.069 &  & \\
-                   & Comparative advantage only & $-0.003$ &  & \\
-    Aerospace      & Both forces               & 0.080 &  & 0.85 \\
-                   & Distance only             & 0.121 &  & \\
-                   & Comparative advantage only & $-0.023$ &  & \\
+    Motor vehicles & Both forces                & $0.065$    & $0.002$ & $[\,0.062,\ 0.069\,]$   & 0.96 & 22 \\
+                   & Distance only              & $0.069$    & $0.004$ & $[\,0.062,\ 0.075\,]$   & 0.96 & 22 \\
+                   & Comparative advantage only & $-0.003$   & $0.000$ & $[-0.003,\ -0.002\,]$   & 0.83 & 22 \\[0.4em]
+    Aerospace      & Both forces                & $0.080$    & $0.009$ & $[\,0.062,\ 0.098\,]$   & 0.85 & 18 \\
+                   & Distance only              & $0.121$    & $0.014$ & $[\,0.094,\ 0.148\,]$   & 0.87 & 18 \\
+                   & Comparative advantage only & $-0.023$   & $0.007$ & $[-0.036,\ -0.009\,]$   & 0.37 & 18 \\
+    \hline
+    \multicolumn{7}{l}{\emph{Differences}} \\
+    Aerospace $-$ motor vehicles & Both forces  & $-0.015$ & $0.009$ & $[-0.033,\ 0.003\,]$ & & \\
+    Distance only $-$ both forces & Motor vehicles & $0.003$ & $0.004$ & $[-0.005,\ 0.011\,]$ & & \\
+                                  & Aerospace     & $0.041$ & $0.016$ & $[\,0.009,\ 0.073\,]$ & & \\
+    $\alpha=0$ $-$ both forces & Motor vehicles   & $-0.068$ & $0.002$ & $[-0.072,\ -0.064\,]$ & & \\
+                               & Aerospace        & $-0.103$ & $0.011$ & $[-0.125,\ -0.081\,]$ & & \\
     \hline\hline
     \end{tabular}
-    \caption*{\footnotesize \emph{Notes}: $\lambda$ from the weighted regression through the origin of the sourcing barycentre on the buyer's own position, $b_{r}=(1-\lambda)c+\lambda x_{r}+\varepsilon_{r}$, pooled over both projected coordinates so that the estimate does not depend on the orientation of the map. One observation per shocked commuting zone; standard errors are clustered on the region, so the two coordinates of one buyer are one observation. \emph{Distance only} equalises $\hat T$ across attraction areas, \emph{Comparative advantage only} sets $\alpha=0$ --- the internal control, since $\lambda$ must vanish once the only buyer-specific term of the sourcing probability is removed. What the standard errors measure is the cross-sectional agreement of buyers on a common shrinkage, not the precision with which the model's parameters are estimated. \swann{Les erreurs-types et le test de la difference entre industries sortent de \texttt{barycentre\_shrinkage\_report} / \texttt{barycentre\_shrinkage\_contrast} dans \texttt{analysis\_granular.ipynb} --- a remplir apres le re-run.}}
+    \caption*{\footnotesize \emph{Notes}: $\lambda$ from the weighted regression through the origin of the sourcing barycentre on the buyer's own position, $b_{r}=(1-\lambda)c+\lambda x_{r}+\varepsilon_{r}$, pooled over both projected coordinates so that the estimate does not depend on the orientation of the map. One observation per shocked commuting zone; standard errors are clustered on the region, so the two coordinates of one buyer count once. Differences are taken with the independent-sum standard error $\sqrt{s^{2}_{a}+s^{2}_{b}}$, which is conservative here: the regimes are the same geometry with one force switched off and the two industries share commuting zones, so the two estimates are if anything positively correlated. \emph{Distance only} equalises $\hat T$ across attraction areas; \emph{Comparative advantage only} sets $\alpha=0$ --- the internal control, since $\lambda$ must vanish once the only buyer-specific term of the sourcing probability is removed. What the standard errors measure is the cross-sectional agreement of buyers on a common shrinkage, not the precision with which the model's parameters are estimated.}
 \end{table}
 
 \begin{figure}[H]
