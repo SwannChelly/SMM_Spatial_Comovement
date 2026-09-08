@@ -1264,6 +1264,37 @@ def gate_amplification():
                                       radii=(50, 100, 200, 400),
                                       save_to=str(out / "amp_cf_profile.png"))
 
+    # The distance figure is drawn as a PERCENTAGE deviation from the baseline regime,
+    # because in kilometres the whole counterfactual sits in the last sixth of the axis
+    # and the eye reads the level rather than the movement. Three things carry that:
+    # the baseline is dropped (it is exactly zero by construction, so it is the zero
+    # rule and not a series), the values ARE the percentage deviations, and the level
+    # is still on the figure as one kilometre annotation per row.
+    axp = NS["plot_counterfactual_distance"](data, detail=det, units="pct",
+                                             save_to=str(out / "amp_cf_dist_pct.png"))
+    wide_km = det["mean_upstream_distance"].unstack("regime")
+    drawn = {c.get_label() for c in axp.containers}
+    assert "Both forces" not in drawn, drawn
+    assert drawn <= set(wide_km.columns), drawn
+    n_rows = len(axp.get_yticklabels())
+    for lab in drawn:
+        want = 100.0 * (wide_km[lab] - wide_km["Both forces"]) / wide_km["Both forces"]
+        got = np.array([p.get_width() for p in
+                        axp.containers[[c.get_label() for c in axp.containers].index(lab)]])
+        assert np.allclose(np.sort(got), np.sort(want.to_numpy())), lab
+    kms = [t for t in axp.texts if t.get_text().endswith(" km")]
+    assert len(kms) == n_rows, (len(kms), n_rows)
+    assert any(np.isclose(l.get_xdata()[0], 0.0) for l in axp.lines) or \
+        any(np.isclose(getattr(l, "get_xdata", lambda: [np.nan])()[0], 0.0)
+            for l in axp.get_children() if hasattr(l, "get_xdata"))
+    # the kilometre figure is retained and does keep the honest zero origin
+    axk = NS["plot_counterfactual_distance"](data, detail=det, units="km", kind="bar",
+                                             save_to=str(out / "amp_cf_dist_km.png"))
+    assert axk.get_xlim()[0] == 0.0, axk.get_xlim()
+    assert "Both forces" in {c.get_label() for c in axk.containers}
+    print(f"counterfactual distance: {len(drawn)} regimes drawn as % of the baseline, "
+          f"{len(kms)} kilometre annotations, km variant keeps a zero origin")
+
     # the parquet's A129 is the model index 1..S; a file written with real CODES has to
     # map through `sector_names`, and anything else must be named rather than guessed
     sup_codes = data["suppliers"].assign(
@@ -1490,6 +1521,39 @@ def gate_amplification():
         raise AssertionError("should have raised")
     print(f"shrinkage: planted lambdas recovered exactly; on the synthetic economy "
           f"slope = {shr['slope']:.3f}, dispersion ratio = {shr['dispersion_ratio']:.3f}")
+
+    # The slope is unreadable without a standard error, so the error is gated on the
+    # two configurations whose answer is known: an EXACTLY planted shrinkage leaves no
+    # residual, hence a zero score and se = 0; a pure-noise barycentre does not.
+    for lam in (1.0, 1.0 / 3.0):
+        planted["bary_x"] = cx * (1 - lam) + lam * planted["origin_x"]
+        planted["bary_y"] = cy * (1 - lam) + lam * planted["origin_y"]
+        got = NS["barycentre_shrinkage"](planted).iloc[0]
+        assert abs(got["se"]) < 1e-9, (lam, got["se"])
+    planted["bary_x"] = cx + rng_s.normal(0, 5e4, len(planted))
+    planted["bary_y"] = cy + rng_s.normal(0, 5e4, len(planted))
+    noisy = NS["barycentre_shrinkage"](planted).iloc[0]
+    assert noisy["se"] > 0, noisy.to_dict()
+    # t and the interval must be the arithmetic of the slope and its se, not a second
+    # opinion on them
+    assert np.isclose(noisy["t"], noisy["slope"] / noisy["se"])
+    assert np.isclose(noisy["ci_lo"], noisy["slope"] - 1.96 * noisy["se"])
+    assert np.isclose(noisy["ci_hi"], noisy["slope"] + 1.96 * noisy["se"])
+
+    # the contrast is the difference of two rows with the independent-sum se
+    tab2 = NS["barycentre_shrinkage"]({("auto", "Both forces"): b2,
+                                       ("aero", "Both forces"): planted})
+    con = NS["barycentre_shrinkage_contrast"](tab2)
+    assert len(con) >= 1
+    row = con.iloc[0]
+    a_lam = float(tab2.loc[("aero", "Both forces"), "slope"])
+    b_lam = float(tab2.loc[("auto", "Both forces"), "slope"])
+    assert np.isclose(abs(row["diff"]), abs(a_lam - b_lam)), (row["diff"], a_lam - b_lam)
+    se_sum = np.sqrt(float(tab2.loc[("aero", "Both forces"), "se"]) ** 2
+                     + float(tab2.loc[("auto", "Both forces"), "se"]) ** 2)
+    assert np.isclose(row["se"], se_sum), (row["se"], se_sum)
+    print(f"shrinkage se: exact planting gives se = 0, noise gives "
+          f"{noisy['se']:.4f}; the contrast differences two rows")
 
     # ---------------------------------------------- the finite-variety economy
     # The model has N_s varieties, not N_rho draws, so the post-hoc parquet carries
