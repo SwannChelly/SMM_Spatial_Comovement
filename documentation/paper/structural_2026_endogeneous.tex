@@ -143,7 +143,7 @@ The estimated model attributes the geography of sourcing to two forces: comparat
 
 A first comparison concerns the dispersion of comparative advantage. Averaged across sectors, the within-sector standard deviation of $\log \hat T_{as}$ is nearly identical across the two industries: 0.91 in motor vehicles and 0.96 in aerospace. The industries therefore exhibit similar heterogeneity in comparative advantage. They differ instead in how strongly sourcing responds to distance: the estimated trade-cost elasticity is $\alpha\hat\theta=0.23$ in motor vehicles and $0.46$ in aerospace. Thus, conditional on the same distribution of distances, geography generates substantially more dispersion in sourcing attractiveness in aerospace. A comparative-advantage gap $\Delta$ is offset by a distance ratio $\exp(\Delta/\alpha\theta)$, so a smaller $\alpha\theta$ requires a larger distance difference to offset a given productivity advantage. In this sense, an identical comparative-advantage gap has a stronger effect on sourcing in motor vehicles than in aerospace.
 
-The previous comparison considers the two forces separately. To assess how they jointly shape the allocation of sourcing across competing locations, consider the sourcing index $\log\psi_{lrs} = \log T_{a(l)s}-\alpha\theta\log d_{lr}.$ For each sector $s$ and buyer $r$, we compute the variance of $\log\psi_{lrs}$ across the supplier cells $l$ competing for that buyer. The variance admits the exact decomposition:
+The previous comparison considers the two forces separately. To assess how they jointly shape the allocation of sourcing across competing locations, consider the sourcing index $\log\psi_{lrs} = \log T_{a(l)s}-\alpha\theta\log d_{lr}.$ For each sector $s$ and buyer $r$, we compute the variance of $\log\psi_{lrs}$ across the supplier cells $l$ competing for that buyer, namely:
 
 $$
 \operatorname{Var}_l(\log\psi_{lrs}) = \operatorname{Var}_l(\log T_{a(l)s}) + (\alpha\theta)^2\operatorname{Var}_l(\log d_{lr}) - 2\alpha\theta\operatorname{Cov}_l(\log T_{a(l)s},\log d_{lr}).
@@ -168,28 +168,23 @@ Co-location
 \midrule
 \bottomrule
 \end{tabular}
-\begin{flushleft}
-\footnotesize
-\emph{Notes:} The decomposition is computed across competing supplier cells for each buyer and sector. Buyer-specific variances are aggregated using purchase weights and then averaged across sectors. The comparative-advantage component is $\operatorname{Var}(\log \hat T)$, the distance component is $(\alpha\hat\theta)^2\operatorname{Var}(\log d)$, and the co-location component is $-2\alpha\hat\theta\operatorname{Cov}(\log \hat T,\log d)$. Percentages are normalized by the corresponding variance of $\log\hat\psi$.
-\end{flushleft}
+\caption*{\emph{Notes:} The decomposition is computed across competing supplier cells for each buyer and sector. Buyer-specific variances are aggregated using purchase weights and then averaged across sectors. The comparative-advantage component is $\operatorname{Var}(\log \hat T)$, the distance component is $(\alpha\hat\theta)^2\operatorname{Var}(\log d)$, and the co-location component is $-2\alpha\hat\theta\operatorname{Cov}(\log \hat T,\log d)$. Percentages are normalized by the corresponding variance of $\log\hat\psi$.}
 \end{table}
 
 The decomposition yields three conclusions. First, comparative advantage is by far the dominant source of dispersion in sourcing attractiveness in both industries: it accounts for 87\% of the variance in motor vehicles and 86\% in aerospace. The industries do not differ in how unequal capability is, in its dispersion or in its weight in the allocation.
 
-Second, they separate on the \emph{alignment} term rather than on distance. The pure distance component accounts for 2\% of the variance in motor vehicles and 7\% in aerospace --- the ordering $\alpha\hat\theta$ requires --- but the co-location component contributes 11\% in motor vehicles, more than five times the contribution of distance alone, against 9\% in aerospace, only modestly above the 7\% distance already carries. Productive suppliers sit close to buyers in motor vehicles; in aerospace the average alignment is much weaker.\footnote{Restricting the calculation to attraction areas with observed sourcing, as in the estimator's own decomposition of the covariance, gives sector-median correlations of $-0.47$ and $-0.17$ rather than the $-0.34$ and $-0.11$ reported below. The two differ in the cell set and in the weighting, not in what they measure; the numbers quoted in the text are those of the distribution in Figure~\ref{fig:alignment_correlation}, which is the object whose purchase-weighted average is exactly the co-location term of Table~\ref{tab:variance_decomposition}.}
+Second, they separate on the \emph{alignment} term rather than on distance. The pure distance component accounts for 2\% of the variance in motor vehicles and 7\% in aerospace --- the ordering $\alpha\hat\theta$ requires --- but the co-location component contributes 11\% in motor vehicles, more than five times the contribution of distance alone, against 9\% in aerospace, only modestly above the 7\% distance already carries. Scale-free, the same statement is $\operatorname{Corr}_l(\log\hat T,\log d)=-0.47$ at the median motor-vehicle sector against $-0.17$ in aerospace. Productive suppliers sit close to buyers in motor vehicles; in aerospace comparative advantage and proximity are much closer to being independent sources of sourcing variation.
 
-Third --- and this is what a median cannot show --- the two industries differ in \emph{where} that alignment sits, not in how dispersed it is. Figure~\ref{fig:alignment_correlation} reports the distribution of $\rho_{rs}=\operatorname{Corr}_l(\log\hat T_{a(l)s},\log d_{lr})$ across all (sector, buyer) pairs. The two distributions have comparable spread --- both run from roughly $-0.7$ to $+0.7$, and neither is concentrated at any single value --- and they are displaced relative to one another: motor vehicles sits to the left, with a median of $-0.34$ and only 19\% of pairs positive, while aerospace is centred close to zero, with a median of $-0.11$ and 30\% of pairs positive.
-
-The reading this forces is not that capability and proximity are unrelated in aerospace. Almost no buyer there faces a geography in which they are unrelated: individual correlations of $\pm0.4$ and beyond are common, as they are in motor vehicles. What is near zero in aerospace is the \emph{average}, because the alignment points in opposite directions for different buyers and sectors --- other transport equipment, which alone carries 56\% of the industry's modelled intermediate purchases, has a positive sourcing-weighted covariance of $+44$~km against a sector median of $-14$~km. In motor vehicles the displacement is systematic: every sector's sourcing-weighted covariance is negative (between $-6$ and $-116$~km per log point, median $-54$), so an average taken over buyers describes most of them.\footnote{A negative covariance in every sector is consistent with the 19\% of positive \emph{pairs}: the sector-level statistic averages over buyers with their purchase weights, and the buyers for whom the sign flips are small ones.} A weak average alignment and no alignment are therefore different economies, and they predict different counterfactuals: the first cancels in the aggregate while moving individual buyers a great deal, the second moves nobody. Section~\ref{subsec:diffusion} shows the aerospace aggregate is the first of the two.
+Third --- and this is what a median cannot show --- the two industries differ in the \emph{uniformity} of that alignment, not only in its strength. Figure~\ref{fig:alignment_correlation} reports the distribution of $\rho_{rs}=\operatorname{Corr}_l(\log\hat T_{a(l)s},\log d_{lr})$ across all (sector, buyer) pairs. In motor vehicles the sourcing-weighted covariance is negative in every sector, between $-6$ and $-116$~km per log point with a median of $-54$; no buyer faces a geography in which capability and proximity pull apart. In aerospace the median is $-14$~km and the sign is not even common across sectors: other transport equipment, which alone carries 56\% of the industry's modelled intermediate purchases, has a \emph{positive} covariance of $+44$~km. A sector median of $-0.17$ there is an average over buyers pulled in opposite directions, not a mild version of the motor-vehicle case; the two are different economies, and they will predict different counterfactuals.
 
 \begin{figure}[H]
     \centering
 \caption{The alignment between comparative advantage and distance, buyer by buyer\label{fig:alignment_correlation}}
-    \includegraphics[width = 0.65\linewidth]{figures/alignment_correlation_mu1.pdf}
+    \includegraphics[width = 0.65\linewidth]{figures/alignment_correlation_mu2.pdf}
     \caption*{\footnotesize \emph{Notes}: Distribution across (sector, downstream buyer) pairs of $\rho_{rs}=\operatorname{Corr}_l(\log \hat T_{a(l)s},\log d_{lr})$, the correlation between comparative advantage and distance taken across the supplier cells $l$ competing for that buyer --- the object whose purchase-weighted average is the co-location term of Table~\ref{tab:variance_decomposition}. Densities, on a common set of bins; the dotted rule marks each industry's median and the solid rule marks zero. Mass to the left of zero is capability located near demand.}
 \end{figure}
 
-Two consequences of the estimated $\alpha\hat\theta$ are worth stating before the counterfactuals, because they govern how the geography of sourcing can differ across the two industries at all. The distance factor $d_{lr}^{-\alpha\theta}$ is the \emph{only} term in the sourcing probability that varies with the identity of the buyer: comparative advantage is a property of the supplier's area alone. A low $\alpha\hat\theta$ therefore makes sourcing less buyer-specific --- over the range of French bilateral distances, the most remote supplier is only $2.4$ times less attractive than the closest one in motor vehicles, against $5.7$ times in aerospace --- so buyers in motor vehicles draw from close to a common national distribution while aerospace buyers tilt sharply towards their own neighbourhood. And a negative $\operatorname{Cov}(\log T,\log d)$ says capability sits near demand, but it does not say whether that capability is one mass placed inside the demand distribution or many pockets each serving its own buyers: both satisfy the same covariance at every buyer. Section~\ref{subsec:diffusion} settles which of the two the estimates describe, by propagating an actual shock through the estimated allocation.
+Two consequences of the estimated $\alpha\hat\theta$ are worth stating before the counterfactuals, because they govern how the geography of sourcing can differ across the two industries at all. The distance factor $d_{lr}^{-\alpha\theta}$ is the \emph{only} term in the sourcing probability that varies with the identity of the buyer: comparative advantage is a property of the supplier's area alone. A low $\alpha\hat\theta$ therefore makes sourcing less buyer-specific --- over the range of French bilateral distances, the most remote supplier is only $2.4$ times less attractive than the closest one in motor vehicles, against $5.7$ times in aerospace --- so buyers in motor vehicles draw from close to a common national distribution while aerospace buyers tilt sharply towards their own neighbourhood. And a negative $\operatorname{Cov}(\log T,\log d)$ says capability sits near demand, but it does not say whether that capability is one mass placed inside the demand distribution or many pockets each serving its own buyers: both satisfy the same covariance at every buyer. Section~\ref{subsec:counterfactuals} settles which of the two the estimates describe, by propagating an actual shock through the estimated allocation.
 
 
 
@@ -241,23 +236,13 @@ We organize this section around two exercises:
 
 \swann{A réécrire. }
 \end{comment}
-\subsection{Spatial diffusion of downstream shocks.}\label{subsec:diffusion}
+\subsection{Spatial diffusion of downstream shocks.}
 
 
 
 \paragraph{Amplification.} We first quantify how much production linkages amplify a demand shock. The amplification coefficient $D_{r}$ is the aggregate increase in sales generated by one additional euro of final demand in a given downstream region. In our framework it has a closed form,
 $$D_{r}=1+(1-\Omega^{L})\left(P_{r}/c_{r}\right)^{1-\lambda},$$
-that is, the euro itself plus the share of the downstream unit cost spent on domestic suppliers. One euro of final demand generates 85 cents of additional upstream sales in motor vehicles and 87 cents in aerospace, with almost no spatial variation. The homogeneity is mechanical. Technical input shares are common within a downstream industry, and neither comparative advantage nor trade costs enter $D_{r}$; the only regional term is local access to cheap inputs, through $P_{r}/c_{r}$. \isa{Would it be possible to compare with all sectors (eg in appendix), using solely the IO coefficients? if it is not too difficult, that would help say something about the scale: Is 1.5 high or not? How big is it compared to the aggregate effect, which can be recovered from the Leontief inverse? The simple IO case is described in details in Acemoglu et al (2016): \url{https://www.journals.uchicago.edu/doi/epdf/10.1086/685961} Note that they also have a section on the local diffusion of shocks, which we should cite} \isa{is it true? My intuition would be that a relatively difficult access to low price suppliers generates i) lower input purchases (substitution to labor) and ii) more input purchases to non-French firms. Both channels should reduce the multiplier. However, I find it surprising that we find among the lowest amplification multiplier terms a region like Toulouse which should in principle get good access to local inputs. Is the reason to be found in low elasticities of substitution, that generate a positive impact of relatively expansive input purchases? }
-
-\begin{figure}[H]
-    \centering
-\caption{Amplification of shocks along vertical production linkages\label{fig:amplification}}
-    \begin{tabular}{cc}
-    Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/amplification_auto_mu1.pdf} & \includegraphics[width = 0.5\linewidth]{figures/amplification_aero_mu1.pdf}
-    \end{tabular}
-    \caption*{\footnotesize \emph{Notes}: Amplification of shocks affecting individual commuting zones in the motor vehicles (left panel) and aerospace (right panel) industries. The amplification coefficient $D_{r}$ is the additional sales generated by one unit of demand in the downstream industry, aggregated across downstream firms and their domestic suppliers.}
-\end{figure}
+that is, the euro itself plus the share of the downstream unit cost spent on domestic suppliers. One euro of final demand generates 84 cents of additional upstream sales in motor vehicles and 86 cents in aerospace, with almost no spatial variation. The homogeneity is mechanical. Technical input shares are common within a downstream industry, and neither comparative advantage nor trade costs enter $D_{r}$; the only regional term is local access to cheap inputs, through $P_{r}/c_{r}$. \isa{Would it be possible to compare with all sectors (eg in appendix), using solely the IO coefficients? if it is not too difficult, that would help say something about the scale: Is 1.5 high or not? How big is it compared to the aggregate effect, which can be recovered from the Leontief inverse? The simple IO case is described in details in Acemoglu et al (2016): \url{https://www.journals.uchicago.edu/doi/epdf/10.1086/685961} Note that they also have a section on the local diffusion of shocks, which we should cite} \isa{is it true? My intuition would be that a relatively difficult access to low price suppliers generates i) lower input purchases (substitution to labor) and ii) more input purchases to non-French firms. Both channels should reduce the multiplier. However, I find it surprising that we find among the lowest amplification multiplier terms a region like Toulouse which should in principle get good access to local inputs. Is the reason to be found in low elasticities of substitution, that generate a positive impact of relatively expansive input purchases? }
 
 \paragraph{Diffusion.} Amplification says how large the upstream response is, not where it lands, and it is the second object that is specific to a model with endogenous linkages. We measure where it lands by the distance the response travels. Writing $X_{r'r}$ for the upstream sales that a demand shock in downstream region $r$ generates in upstream region $r'$, the \emph{average sourcing distance} of a shock originating in $r$ is
 \begin{equation}
@@ -282,8 +267,8 @@ The distance a buyer's euro travels moves at the rate of the alignment of Sectio
 \caption{How far the shock travels, with one force switched off\label{fig:counterfactual_distance}}
     \begin{tabular}{cc}
     Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_auto_mu1.pdf} &
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_aero_mu1.pdf}
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_aero_mu2.pdf}
     \end{tabular}
     \caption*{\footnotesize \emph{Notes}: Empirical cumulative distribution, across shocked downstream commuting zones, of the average sourcing distance $d_{r}$ defined in \eqref{eq:sourcing_distance} --- the share of shocked regions whose upstream euro travels no further than the distance on the horizontal axis. One curve per regime, with the median of each marked. \emph{Distance only} equalises comparative advantage $\hat T$ across attraction areas; \emph{Comparative advantage only} sets $\alpha=0$; \emph{Both forces} is the estimated allocation. The realised curve is one finite-variety draw of the estimated economy and its distance from \emph{Both forces} is granularity, not a force: the two differ by 0.3~km in motor vehicles and 1.3~km in aerospace. A curve lying to the right of \emph{Both forces} means the shock travels further once that force is removed.}
 \end{figure}
@@ -297,8 +282,8 @@ The shapes of the curves confirm that this is \eqref{eq:alignment} at work rathe
 \caption{How far the euro travels, region by region\label{fig:counterfactual_distance_region}}
     \begin{tabular}{cc}
     Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_region_auto_mu1.pdf} &
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_region_aero_mu1.pdf}
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_region_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_distance_region_aero_mu2.pdf}
     \end{tabular}
     \caption*{\footnotesize \emph{Notes}: The average sourcing distance $d_{r}$ of each shocked commuting zone under each counterfactual regime, expressed as a percentage deviation from \emph{Both forces}, the estimated allocation; the level it is taken against is printed in kilometres beside each row. Percentages rather than kilometres because every $d_{r}$ lies between roughly 250 and 450 km, so on a kilometre axis the level --- which is common across regions and carries no information --- crowds out the movement, which is the whole content. Regions are in the order of Figure~\ref{fig:counterfactual_local_share}, so the two figures are read row for row.}
 \end{figure}
@@ -352,7 +337,7 @@ The reading that survives is this. Motor-vehicle capability is one broadly centr
 \begin{figure}[H]
     \centering
 \caption{Where the sourcing sits: origin to barycentre\label{fig:sourcing_barycentre}}
-    \includegraphics[width = 0.85\linewidth]{figures/sourcing_barycentre_panel_mu1.pdf}
+    \includegraphics[width = 0.85\linewidth]{figures/sourcing_barycentre_panel_mu2.pdf}
     \caption*{\footnotesize \emph{Notes}: One arrow per shocked downstream commuting zone, from its own centre to the barycentre $b_{r}$ of the sourcing its shock generates, drawn at true scale in Lambert-93 --- there is deliberately no exaggeration factor, since stretching the arrows would manufacture the very hub structure the figure exists to test. One row per regime --- the realised draw, the estimated allocation, and the two counterfactuals of Figure~\ref{fig:counterfactual_distance} --- and one column per industry. The arrows are short in every panel, which is the figure's content: it is the visual form of $\lambda\approx0.07$, a sourcing pattern that is very nearly buyer-independent in both industries. Note that the arrow measures the mean \emph{displacement} and the average sourcing distance $d_{r}$ the mean \emph{length}: a buyer sourcing symmetrically about itself has a short arrow and a long $d_{r}$.}
 \end{figure}
 
@@ -365,8 +350,8 @@ be the share of the upstream response accruing within $d$ kilometres of the orig
 \caption{Where a downstream shock lands\label{fig:local_share_map}}
     \begin{tabular}{cc}
     Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_auto_mu1.pdf} &
-        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_aero_mu1.pdf}
+        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_aero_mu2.pdf}
     \end{tabular}
     \caption*{\footnotesize \emph{Notes}: Each shocked downstream commuting zone is coloured by $L_{r}(200)$, the share of the upstream sales generated by a demand shock in that zone that accrues within 200 km of it. Commuting zones hosting no downstream producer are shaded in grey: they originate no shock. Both panels use the same colour scale. Figure~\ref{fig:counterfactual_local_share} reports the same statistic region by region under each counterfactual regime.}
 \end{figure}
@@ -380,8 +365,8 @@ Which force produces that retention is the counterfactual again, and it separate
 \caption{Local incidence with one force switched off\label{fig:counterfactual_local_share}}
     \begin{tabular}{cc}
     Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_local_share200km_auto_mu1.pdf} &
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_local_share200km_aero_mu1.pdf}
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_local_share200km_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_local_share200km_aero_mu2.pdf}
     \end{tabular}
     \caption*{\footnotesize \emph{Notes}: $L_{r}(200)$, the share of the upstream response accruing within 200 km of the origin of the shock, one group of bars per shocked commuting zone, ordered by the realised local share. Regimes as in Figure~\ref{fig:counterfactual_distance}.}
 \end{figure}
@@ -391,8 +376,8 @@ Which force produces that retention is the counterfactual again, and it separate
 \caption{The whole diffusion profile under each regime\label{fig:diffusion_profile}}
     \begin{tabular}{cc}
     Motor vehicles&Aerospace\\
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_auto_mu1.pdf} &
-        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_aero_mu1.pdf}
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_aero_mu2.pdf}
     \end{tabular}
     \caption*{\footnotesize \emph{Notes}: $L_{r}(d)$ against $d$ for the median shocked region, under the estimated allocation and under the two counterfactual regimes of Figure~\ref{fig:counterfactual_distance}. A single radius can flatter a regime that crosses it steeply; the curves say whether a gap at 100~km is a level difference that persists or a crossing that closes further out.}
 \end{figure}
@@ -402,7 +387,6 @@ This is the efficiency--stability trade-off of the introduction, made quantitati
 
 
 The above results imply that (i) production linkages generate sizable amplification of demand shocks, and (ii) the spatial structure of that diffusion differs sharply across industries. In the next section, we use these patterns to analyze the spatial propagation of recent shocks affecting both industries.
-
 %More than fifty percent of the amplification of shocks hitting downstream firms around Toulouse stays within the Toulouse area. Although less extreme, the  than those arising in downstream regions located in the North-East of France. However, this difference remains modest compared to the motor vehicles industry, where Toulouse and Île-de-France constitute two major hubs. In this sector, shocks originating in peripheral regions diffuse more broadly across space and are disproportionately transmitted toward these two hubs.
 
 
