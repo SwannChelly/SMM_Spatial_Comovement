@@ -783,9 +783,59 @@ def gate_comparative_advantage():
     assert cb["share_covariance"].notna().all()
     print("\n", cb.round(4).to_string())
 
-    # ---------------------------------------------------------------------- output
+
+    # ------------------------------------------- the alignment, buyer by buyer
+    # This frame is the DISTRIBUTION behind the decomposition's co-location term, so
+    # the binding gate is that it aggregates back to that term exactly: the
+    # purchase-weighted mean of its covariances must reproduce, sector by sector,
+    # the covariance implied by `share_covariance` and `sd_log_psi`. Anything that
+    # drifted between the two -- a different cell set, a different weighting, logs
+    # against kilometres -- breaks that identity rather than merely shifting a
+    # picture, which is why the figure is gated through the table and not on its own.
     out = TMP / "figs"
     out.mkdir(exist_ok=True)
+    R_d = len(geom["downstream"])
+    ac = NS["alignment_correlation"](data)
+    assert set(ac.columns) >= {"sector", "buyer", "cov", "corr", "sd_logT", "sd_logd",
+                               "buyer_weight", "n_cells"}
+    n_expect = sum(1 for s in range(S) if geom["by_sector"][s]["cells"].size >= 2) * R_d
+    assert len(ac) == n_expect, (len(ac), n_expect)
+    assert (ac["corr"].abs() <= 1.0 + 1e-12).all(), ac["corr"].abs().max()
+    assert np.isclose(ac.groupby("sector")["buyer_weight"].sum().min(), 1.0)
+    for name, sub in ac.groupby("sector"):
+        w = sub["buyer_weight"].to_numpy()
+        cov_bar = float(sub["cov"].to_numpy() @ w / w.sum())
+        want = -vd.loc[name, "share_covariance"] * vd.loc[name, "sd_log_psi"] ** 2 / (2 * ta)
+        assert abs(cov_bar - want) < 1e-12, (name, cov_bar, want)
+    # the rho-weighted variant is a DIFFERENT statistic and must not silently coincide
+    ac_rho = NS["alignment_correlation"](data, weights="rho")
+    assert ac_rho.attrs["weights"] == "rho" and len(ac_rho) == len(ac)
+    assert not np.allclose(ac_rho["corr"].to_numpy(), ac["corr"].to_numpy())
+    try:
+        NS["alignment_correlation"](data, weights="nope")
+    except ValueError as e:
+        print("expected on a bad weighting:", str(e)[:50], "...")
+    else:
+        raise AssertionError("should have raised")
+
+    # the figure: one step outline per industry on ONE shared bin grid, medians ruled,
+    # zero marked. Two datasets are passed (the same one twice is enough to gate the
+    # mechanics; the industries differ only in their values).
+    axc, frs = NS["plot_alignment_correlation"](
+        [("Motor vehicles", data), ("Aerospace", data)],
+        save_to=str(out / "alignment_corr.png"))
+    assert len(frs) == 2
+    hists = [c for c in axc.get_children() if type(c).__name__ == "Polygon"]
+    assert len(hists) == 2, len(hists)                       # one outline per industry
+    grids = {tuple(np.round(h.get_xy()[:, 0], 9)) for h in hists}
+    assert len(grids) == 1, "the two industries must share one bin grid"
+    assert len(axc.texts) == 1                               # the share-positive block
+    NS["plt"].close(axc.figure)
+    print(f"alignment correlation: {len(ac)} (sector, buyer) pairs, median "
+          f"{ac['corr'].median():+.3f}, {float((ac['corr'] > 0).mean()):.0%} positive; "
+          "aggregates back to the decomposition's co-location term")
+
+    # ---------------------------------------------------------------------- output
     NS["plot_ca_distribution"](data, save_to=str(out / "ca_dist.png"))
     axe = NS["plot_ca_distance_equivalence"](data, save_to=str(out / "ca_equiv.png"))
     # Test 2's figure reports the distance EQUIVALENCE alone, in kilometres, on a log x
@@ -1214,6 +1264,37 @@ def gate_amplification():
                                       radii=(50, 100, 200, 400),
                                       save_to=str(out / "amp_cf_profile.png"))
 
+    # The distance figure is drawn as a PERCENTAGE deviation from the baseline regime,
+    # because in kilometres the whole counterfactual sits in the last sixth of the axis
+    # and the eye reads the level rather than the movement. Three things carry that:
+    # the baseline is dropped (it is exactly zero by construction, so it is the zero
+    # rule and not a series), the values ARE the percentage deviations, and the level
+    # is still on the figure as one kilometre annotation per row.
+    axp = NS["plot_counterfactual_distance"](data, detail=det, units="pct",
+                                             save_to=str(out / "amp_cf_dist_pct.png"))
+    wide_km = det["mean_upstream_distance"].unstack("regime")
+    drawn = {c.get_label() for c in axp.containers}
+    assert "Both forces" not in drawn, drawn
+    assert drawn <= set(wide_km.columns), drawn
+    n_rows = len(axp.get_yticklabels())
+    for lab in drawn:
+        want = 100.0 * (wide_km[lab] - wide_km["Both forces"]) / wide_km["Both forces"]
+        got = np.array([p.get_width() for p in
+                        axp.containers[[c.get_label() for c in axp.containers].index(lab)]])
+        assert np.allclose(np.sort(got), np.sort(want.to_numpy())), lab
+    kms = [t for t in axp.texts if t.get_text().endswith(" km")]
+    assert len(kms) == n_rows, (len(kms), n_rows)
+    assert any(np.isclose(l.get_xdata()[0], 0.0) for l in axp.lines) or \
+        any(np.isclose(getattr(l, "get_xdata", lambda: [np.nan])()[0], 0.0)
+            for l in axp.get_children() if hasattr(l, "get_xdata"))
+    # the kilometre figure is retained and does keep the honest zero origin
+    axk = NS["plot_counterfactual_distance"](data, detail=det, units="km", kind="bar",
+                                             save_to=str(out / "amp_cf_dist_km.png"))
+    assert axk.get_xlim()[0] == 0.0, axk.get_xlim()
+    assert "Both forces" in {c.get_label() for c in axk.containers}
+    print(f"counterfactual distance: {len(drawn)} regimes drawn as % of the baseline, "
+          f"{len(kms)} kilometre annotations, km variant keeps a zero origin")
+
     # the parquet's A129 is the model index 1..S; a file written with real CODES has to
     # map through `sector_names`, and anything else must be named rather than guessed
     sup_codes = data["suppliers"].assign(
@@ -1286,6 +1367,193 @@ def gate_amplification():
         else:
             raise AssertionError("should have raised")
         print(f"map: {n_shocked} shocked zones coloured out of {R}, scale pinned")
+
+        # the barycentre arrows, as a figure: ONE quiver artist carrying one arrow per
+        # placeable shocked zone, drawn at true scale (`scale == 1` in data units, so an
+        # arrow's length is the displacement the table reports), and the 4 x 2 panel
+        # with a row per scenario and a column per industry. The arrow scale is gated
+        # because an exaggeration factor would turn a diffuse sourcing field into a hub.
+        gdata = dict(data, france=geo)
+        co = NS["_zone_coordinates"](gdata, crs=None)
+        assert co.index.tolist() == list(range(1, R + 1))
+        assert co["x"].notna().all() and co["y"].notna().all()
+        bax = NS["plot_sourcing_barycentre"](gdata, diffusion=diff, crs=None,
+                                             save_to=str(out / "barycentre.png"))
+        quivs = [c for c in bax.collections if hasattr(c, "U")]
+        assert len(quivs) == 1, len(quivs)
+        nb_ = NS["sourcing_barycentre"](gdata, diffusion=diff, crs=None)
+        assert len(quivs[0].U) == int(nb_["bary_x"].notna().sum())
+        assert quivs[0].scale == 1.0 and quivs[0].angles == "xy"
+        assert bax.get_aspect() in (1.0, "equal")
+        NS["plt"].close(bax.figure)
+
+        fig, barys = NS["barycentre_panel"]([("Motor Vehicles", gdata),
+                                             ("Aerospace", gdata)], crs=None,
+                                            save_to=str(out / "barycentre_panel.png"))
+        assert np.array(fig.axes).size == 4 * 2, len(fig.axes)
+        assert set(barys) == {(n, r) for n in ("Motor Vehicles", "Aerospace")
+                              for r in ["Realised"] + list(NS["CF_REGIMES"])}
+        # every panel is drawn in the same window and at the same true scale, which is
+        # the only thing that makes a grid of maps comparable panel to panel
+        lims = {(tuple(np.round(a.get_xlim(), 6)), tuple(np.round(a.get_ylim(), 6)))
+                for a in fig.axes}
+        assert len(lims) == 1, lims
+        assert all(q.scale == 1.0 for a in fig.axes for q in a.collections
+                   if hasattr(q, "U"))
+        # the realised row must be the realised economy, not a regime redrawn
+        assert np.allclose(barys[("Aerospace", "Realised")]["bary_x"].to_numpy(),
+                           nb_["bary_x"].to_numpy(), equal_nan=True)
+        NS["plt"].close(fig)
+        print("barycentre figure: one quiver at true scale, 4 x 2 panel on one window")
+
+
+
+    # ------------------------------------------------ the sourcing barycentre
+    # The barycentre is a weighted mean of POSITIONS, so it is gated against an
+    # independent recomputation from the same weights and coordinates, and against two
+    # planted configurations whose answer is known without any arithmetic: sourcing
+    # split symmetrically about a region must give a barycentre ON that region (zero
+    # displacement over a strictly positive mean distance — the case the mean distance
+    # alone cannot distinguish from proximity), and sourcing sent entirely to one place
+    # must give a displacement equal to the distance to it. The coordinate frame is
+    # passed EXPLICITLY here, so the numerical half of the figure is gated even where
+    # geopandas is absent.
+    coords = pd.DataFrame({
+        "ze2010": codes,
+        "ze2010_name": [f"Zone {c}" for c in codes],
+        "x": np.arange(R, dtype=float) * 10_000.0,      # a line of zones, 10 km apart
+        "y": np.zeros(R),
+    }, index=pd.Index(np.arange(1, R + 1), name="index"))
+
+    bary = NS["sourcing_barycentre"](data, diffusion=diff, coords=coords)
+    w = diff.pivot(index="ze2010_downstream", columns="ze2010",
+                   values="upstream_sales").reindex(columns=np.arange(1, R + 1)).fillna(0.0)
+    want_x = (w.to_numpy() @ coords["x"].to_numpy()) / w.to_numpy().sum(axis=1)
+    assert np.allclose(bary["bary_x"].to_numpy(), want_x), \
+        np.abs(bary["bary_x"].to_numpy() - want_x).max()
+    assert np.allclose(bary["bary_y"].to_numpy(), 0.0)
+    assert np.allclose(bary["displacement_km"].to_numpy(),
+                       np.abs(bary["bary_x"] - bary["origin_x"]).to_numpy() / 1000.0)
+    # the mean of the lengths bounds the length of the mean: concentration lives in [0,1]
+    assert (bary["concentration"].dropna() <= 1.0 + 1e-12).all(), \
+        bary["concentration"].max()
+    assert np.allclose(bary["weight_covered"].to_numpy(), 1.0)
+
+    # symmetric sourcing: barycentre on the shocked region, mean distance strictly positive
+    # a shocked region with a neighbour on each side — only downstream zones originate
+    # a shock, so the planted configuration has to be built on one of those
+    shocked_ids = sorted(int(v) for v in diff["ze2010_downstream"].unique()
+                         if 1 < int(v) < R)
+    mid = shocked_ids[len(shocked_ids) // 2]
+    sym = diff.copy()
+    sym["upstream_sales"] = 0.0
+    sym.loc[(sym["ze2010_downstream"] == mid) & (sym["ze2010"] == mid - 1),
+            "upstream_sales"] = 1.0
+    sym.loc[(sym["ze2010_downstream"] == mid) & (sym["ze2010"] == mid + 1),
+            "upstream_sales"] = 1.0
+    bsym = NS["sourcing_barycentre"](data, diffusion=sym, coords=coords).loc[mid]
+    assert abs(bsym["displacement_km"]) < 1e-9, bsym["displacement_km"]
+    assert bsym["mean_distance_km"] > 0 and abs(bsym["concentration"]) < 1e-9
+
+    # one-sided sourcing: the arrow is the whole distance to where the euros went
+    one = diff.copy()
+    one["upstream_sales"] = 0.0
+    one.loc[(one["ze2010_downstream"] == mid) & (one["ze2010"] == R), "upstream_sales"] = 1.0
+    bone = NS["sourcing_barycentre"](data, diffusion=one, coords=coords).loc[mid]
+    assert np.isclose(bone["displacement_km"], (R - mid) * 10.0), bone["displacement_km"]
+    assert np.isclose(bone["concentration"], 1.0) or np.isnan(bone["concentration"])
+    print(f"barycentre: median pull {bary['displacement_km'].median():.1f} km, "
+          f"symmetric sourcing gives a zero arrow over a "
+          f"{bsym['mean_distance_km']:.0f} km mean distance")
+
+
+    # ------------------------------------------- does the barycentre follow the buyer
+    # The shrinkage regression is the number that replaces "are the arrowheads
+    # clustered?", so it is gated on three planted configurations whose slope is known
+    # without any arithmetic: a barycentre sitting ON its buyer must give 1, a
+    # barycentre common to every buyer must give 0, and a barycentre shrunk a third of
+    # the way from a fixed point towards its buyer must give exactly that third. The
+    # regression is fed frames built by hand rather than by `sourcing_barycentre`, so a
+    # bug in one cannot mask a bug in the other.
+    coords2 = coords.copy()
+    coords2["y"] = (np.arange(R, dtype=float) % 5) * 7_000.0      # genuinely 2-D
+    b2 = NS["sourcing_barycentre"](data, diffusion=diff, coords=coords2)
+    shr = NS["barycentre_shrinkage"](b2).iloc[0]
+    assert 0.0 <= shr["dispersion_ratio"] and shr["n"] == len(b2.dropna(subset=["bary_x"]))
+    # |slope| can never exceed the dispersion ratio: the fitted part of the
+    # barycentre's variation is a component of all of it
+    assert abs(shr["slope"]) <= shr["dispersion_ratio"] + 1e-9, shr.to_dict()
+
+    planted = b2.copy()
+    cx, cy = 123_000.0, 45_000.0
+    for lam in (1.0, 0.0, 1.0 / 3.0):
+        planted["bary_x"] = cx * (1 - lam) + lam * planted["origin_x"]
+        planted["bary_y"] = cy * (1 - lam) + lam * planted["origin_y"]
+        got = NS["barycentre_shrinkage"](planted).iloc[0]
+        assert np.isclose(got["slope"], lam), (lam, got["slope"])
+        assert np.isclose(got["slope_x"], lam) and np.isclose(got["slope_y"], lam)
+        # a barycentre common to every buyer (lam = 0) has NO variation to explain,
+        # so r2 is undefined there rather than one — the degenerate case, gated as such
+        assert (np.isclose(got["r2"], 1.0) if lam > 0 else np.isnan(got["r2"])), got["r2"]
+        assert np.isclose(got["dispersion_ratio"], lam), got["dispersion_ratio"]
+    # a barycentre that is pure noise about a common point still returns slope ~ 0
+    # while its dispersion ratio does NOT vanish — that gap is the whole reason both
+    # are reported
+    rng_s = np.random.default_rng(7)
+    planted["bary_x"] = cx + rng_s.normal(0, 5e4, len(planted))
+    planted["bary_y"] = cy + rng_s.normal(0, 5e4, len(planted))
+    noisy = NS["barycentre_shrinkage"](planted).iloc[0]
+    # (no bound is put on the noisy slope itself: with a handful of shocked regions a
+    # pure-noise draw can fit any slope. The claim being gated is the INEQUALITY —
+    # the fitted part is only a component of the barycentre's variation.)
+    assert noisy["dispersion_ratio"] > abs(noisy["slope"]), noisy.to_dict()
+
+    # the dict form keys one row per (industry, regime) and is what the report prints
+    tab = NS["barycentre_shrinkage"]({("auto", "Both forces"): b2,
+                                      ("auto", "Realised"): planted})
+    assert tab.shape[0] == 2 and isinstance(tab.index, pd.MultiIndex)
+    # too few placeable regions must say so rather than return a slope off two points
+    try:
+        NS["barycentre_shrinkage"](b2.iloc[:2])
+    except ValueError as e:
+        print("expected on too few regions:", str(e)[:50], "...")
+    else:
+        raise AssertionError("should have raised")
+    print(f"shrinkage: planted lambdas recovered exactly; on the synthetic economy "
+          f"slope = {shr['slope']:.3f}, dispersion ratio = {shr['dispersion_ratio']:.3f}")
+
+    # The slope is unreadable without a standard error, so the error is gated on the
+    # two configurations whose answer is known: an EXACTLY planted shrinkage leaves no
+    # residual, hence a zero score and se = 0; a pure-noise barycentre does not.
+    for lam in (1.0, 1.0 / 3.0):
+        planted["bary_x"] = cx * (1 - lam) + lam * planted["origin_x"]
+        planted["bary_y"] = cy * (1 - lam) + lam * planted["origin_y"]
+        got = NS["barycentre_shrinkage"](planted).iloc[0]
+        assert abs(got["se"]) < 1e-9, (lam, got["se"])
+    planted["bary_x"] = cx + rng_s.normal(0, 5e4, len(planted))
+    planted["bary_y"] = cy + rng_s.normal(0, 5e4, len(planted))
+    noisy = NS["barycentre_shrinkage"](planted).iloc[0]
+    assert noisy["se"] > 0, noisy.to_dict()
+    # t and the interval must be the arithmetic of the slope and its se, not a second
+    # opinion on them
+    assert np.isclose(noisy["t"], noisy["slope"] / noisy["se"])
+    assert np.isclose(noisy["ci_lo"], noisy["slope"] - 1.96 * noisy["se"])
+    assert np.isclose(noisy["ci_hi"], noisy["slope"] + 1.96 * noisy["se"])
+
+    # the contrast is the difference of two rows with the independent-sum se
+    tab2 = NS["barycentre_shrinkage"]({("auto", "Both forces"): b2,
+                                       ("aero", "Both forces"): planted})
+    con = NS["barycentre_shrinkage_contrast"](tab2)
+    assert len(con) >= 1
+    row = con.iloc[0]
+    a_lam = float(tab2.loc[("aero", "Both forces"), "slope"])
+    b_lam = float(tab2.loc[("auto", "Both forces"), "slope"])
+    assert np.isclose(abs(row["diff"]), abs(a_lam - b_lam)), (row["diff"], a_lam - b_lam)
+    se_sum = np.sqrt(float(tab2.loc[("aero", "Both forces"), "se"]) ** 2
+                     + float(tab2.loc[("auto", "Both forces"), "se"]) ** 2)
+    assert np.isclose(row["se"], se_sum), (row["se"], se_sum)
+    print(f"shrinkage se: exact planting gives se = 0, noise gives "
+          f"{noisy['se']:.4f}; the contrast differences two rows")
 
     # ---------------------------------------------- the finite-variety economy
     # The model has N_s varieties, not N_rho draws, so the post-hoc parquet carries
