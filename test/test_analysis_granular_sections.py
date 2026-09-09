@@ -1801,12 +1801,67 @@ def gate_amplification():
     assert len(ax_c.get_yticklabels()) == len(comp)
     NS["plt"].close(ax_c.figure)
 
-    ax_p = NS["plot_incidence_plane"]([("auto", inc), ("aero", inc)])
-    assert len(ax_p.collections) == 4          # one cloud + one median marker per series
+    # --- the incidence plane: two regimes only, and a displacement per buyer ------
+    # The crossing counter is gated first, on two configurations whose answer needs no
+    # geometry: parallel arrows never cross, and two arrows swapping endpoints cross once.
+    xc = NS["incidence_plane_crossings"]
+    assert xc([(0.0, 0.0, 1.0, 0.0), (0.0, 1.0, 1.0, 1.0)]) == 0
+    assert xc([(0.0, 0.0, 1.0, 1.0), (0.0, 1.0, 1.0, 0.0)]) == 1
+
+    ax_p = NS["plot_incidence_plane"]([("auto", inc), ("aero", inc)], layout="single")
+    # two industries x two regimes = four clouds, plus one median marker per (industry,
+    # regime): the estimate is FILLED and the counterfactual HOLLOW, which is what makes
+    # the four clouds read as two contrasts.
+    assert len(ax_p.collections) == 8
+    filled = [c for c in ax_p.collections if len(c.get_facecolor()) and
+              c.get_facecolor()[0][3] > 0]
+    assert len(filled) == 6, len(filled)        # 2 clouds + 4 medians are filled
+    n_buyer = len(inc.xs("Both forces", level="regime"))
+    arrows = [a for a in ax_p.texts if a.arrow_patch is not None]
+    assert len(arrows) == 2 * n_buyer, (len(arrows), n_buyer)
+    # the arrows are true-scale displacements between the two regimes, not a rescaled
+    # field: a stretched arrow would turn a small reallocation into a large one
+    a0 = inc.xs("Both forces", level="regime")
+    a1 = inc.xs("Distance only", level="regime")
+    tail, head = arrows[0].xyann, arrows[0].xy
+    b = a0.index[0]
+    assert np.allclose(tail, (a0.loc[b, "n_eff_ratio"], a0.loc[b, "tv_common"]))
+    assert np.allclose(head, (a1.loc[b, "n_eff_ratio"], a1.loc[b, "tv_common"]))
+    # the uniform benchmark is the DENOMINATOR of the x axis and the alpha = 0 regime is
+    # an identity on y, so neither may be drawn as a cloud -- the benchmark is the pair
+    # of reference rules at x = 1 and y = 0 instead.
+    rules = [(l.get_xdata()[0], l.get_ydata()[0]) for l in ax_p.lines]
+    assert any(abs(x - 1.0) < 1e-12 for x, _ in rules)
+    assert any(abs(y) < 1e-12 for _, y in rules)
     assert "buyer-specific" in ax_p.get_ylabel()
     NS["plt"].close(ax_p.figure)
+
+    # exactly two regimes, and both must exist in the table
+    for bad in (("Both forces",), ("Both forces", "Distance only", "Neither")):
+        try:
+            NS["plot_incidence_plane"]([("auto", inc)], regimes=bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"regimes={bad} should have been refused")
+    try:
+        NS["plot_incidence_plane"]([("auto", inc)], regimes=("Both forces", "nope"))
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("an absent regime should raise")
+
+    # the two-panel fallback shares ONE window, which is the only thing that keeps the
+    # panels comparable
+    axs = NS["plot_incidence_plane"]([("auto", inc), ("aero", inc)], layout="panels")
+    assert len(axs) == 2
+    assert axs[0].get_xlim() == axs[1].get_xlim()
+    assert axs[0].get_ylim() == axs[1].get_ylim()
+    NS["plt"].close(axs[0].figure)
     print(f"destination composition: own + {len(comp.attrs['hub_names'])} hubs "
-          f"({', '.join(comp.attrs['hub_names'])}) + rest, sums to one; plane renders")
+          f"({', '.join(comp.attrs['hub_names'])}) + rest, sums to one")
+    print("incidence plane: two regimes, one true-scale arrow per buyer, benchmark drawn "
+          "as the reference corner; the two-panel fallback shares one window")
 
     print("\nALL OK")
 
