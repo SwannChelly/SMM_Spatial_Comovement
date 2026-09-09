@@ -588,6 +588,66 @@ Two implementation notes. The block refinement inside Step~1 exists because the 
 
 
 \subsection{Additional materials}
+\paragraph{Spatial diffusion: additional exhibits}\label{apsec:diffusion_extra}
+
+This appendix collects three exhibits from Section~\ref{subsec:diffusion} that are not needed to follow its argument. The first two are the barycentre diagnostic, which is reported for completeness and because its \emph{failure} is informative: the shrinkage coefficient $\lambda$ in $b_{r}=(1-\lambda)c+\lambda x_{r}+\varepsilon_{r}$ is precisely estimated and small in both industries ($0.065$ and $0.080$), so sourcing is very nearly buyer-independent everywhere --- but a barycentre is a first moment, and a first moment cannot distinguish a dispersed common pool from a pair of hubs, which is why the main text characterises the destination distribution by its concentration and its commonality instead. The $\alpha=0$ row is an internal control rather than an economic counterfactual: setting $\alpha=0$ removes the only buyer-specific term of the sourcing probability, so $\lambda$ must vanish there by construction. The last two exhibits are the map of $L_{r}(200)$ and the whole diffusion profile $L_{r}(d)$, the latter answering whether the 200~km comparison is a level difference that persists or a crossing that closes further out.
+
+\begin{table}[H]
+    \centering
+    \caption{Does a buyer's sourcing follow the buyer? The shrinkage coefficient $\lambda$\label{tab:barycentre_shrinkage}}
+    \begin{tabular}{llccccc}
+    \hline\hline
+    Industry & Regime & $\hat\lambda$ & s.e. & 95\% CI & $R^{2}$ & $n$ \\
+    \hline
+    Motor vehicles & Both forces                & $0.065$    & $0.002$ & $[\,0.062,\ 0.069\,]$   & 0.96 & 22 \\
+                   & Distance only              & $0.069$    & $0.004$ & $[\,0.062,\ 0.075\,]$   & 0.96 & 22 \\
+                   & Comparative advantage only & $-0.003$   & $0.000$ & $[-0.003,\ -0.002\,]$   & 0.83 & 22 \\[0.4em]
+    Aerospace      & Both forces                & $0.080$    & $0.009$ & $[\,0.062,\ 0.098\,]$   & 0.85 & 18 \\
+                   & Distance only              & $0.121$    & $0.014$ & $[\,0.094,\ 0.148\,]$   & 0.87 & 18 \\
+                   & Comparative advantage only & $-0.023$   & $0.007$ & $[-0.036,\ -0.009\,]$   & 0.37 & 18 \\
+    \hline
+    \multicolumn{7}{l}{\emph{Differences}} \\
+    Aerospace $-$ motor vehicles & Both forces  & $-0.015$ & $0.009$ & $[-0.033,\ 0.003\,]$ & & \\
+    Distance only $-$ both forces & Motor vehicles & $0.003$ & $0.004$ & $[-0.005,\ 0.011\,]$ & & \\
+                                  & Aerospace     & $0.041$ & $0.016$ & $[\,0.009,\ 0.073\,]$ & & \\
+    $\alpha=0$ $-$ both forces & Motor vehicles   & $-0.068$ & $0.002$ & $[-0.072,\ -0.064\,]$ & & \\
+                               & Aerospace        & $-0.103$ & $0.011$ & $[-0.125,\ -0.081\,]$ & & \\
+    \hline\hline
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: $\lambda$ from the weighted regression through the origin of the sourcing barycentre on the buyer's own position, $b_{r}=(1-\lambda)c+\lambda x_{r}+\varepsilon_{r}$, pooled over both projected coordinates so that the estimate does not depend on the orientation of the map. One observation per shocked commuting zone; standard errors are clustered on the region, so the two coordinates of one buyer count once. Differences are taken with the independent-sum standard error $\sqrt{s^{2}_{a}+s^{2}_{b}}$, which is conservative here: the regimes are the same geometry with one force switched off and the two industries share commuting zones, so the two estimates are if anything positively correlated. \emph{Distance only} equalises $\hat T$ across attraction areas; \emph{Comparative advantage only} sets $\alpha=0$ --- the internal control, since $\lambda$ must vanish once the only buyer-specific term of the sourcing probability is removed. What the standard errors measure is the cross-sectional agreement of buyers on a common shrinkage, not the precision with which the model's parameters are estimated.}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+\caption{Where the sourcing sits: origin to barycentre\label{fig:sourcing_barycentre}}
+    \includegraphics[width = 0.85\linewidth]{figures/sourcing_barycentre_panel_mu2.pdf}
+    \caption*{\footnotesize \emph{Notes}: One arrow per shocked downstream commuting zone, from its own centre to the barycentre $b_{r}$ of the sourcing its shock generates, drawn at true scale in Lambert-93 --- there is deliberately no exaggeration factor, since stretching the arrows would manufacture the very hub structure the figure exists to test. One row per regime --- the realised draw, the estimated allocation, and the two counterfactuals of Figure~\ref{fig:counterfactual_distance} --- and one column per industry. The arrows are short in every panel, which is the figure's content: it is the visual form of $\lambda\approx0.07$, a sourcing pattern that is very nearly buyer-independent in both industries. Note that the arrow measures the mean \emph{displacement} and the average sourcing distance $d_{r}$ the mean \emph{length}: a buyer sourcing symmetrically about itself has a short arrow and a long $d_{r}$.}
+\end{figure}
+
+
+\begin{figure}[H]
+    \centering
+\caption{Where a downstream shock lands\label{fig:local_share_map}}
+    \begin{tabular}{cc}
+    Motor vehicles&Aerospace\\
+        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_aero_mu2.pdf}
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: Each shocked downstream commuting zone is coloured by $L_{r}(200)$, the share of the upstream sales generated by a demand shock in that zone that accrues within 200 km of it. Commuting zones hosting no downstream producer are shaded in grey: they originate no shock. Both panels use the same colour scale. Figure~\ref{fig:counterfactual_local_share} reports the same statistic region by region under each counterfactual regime.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+\caption{The whole diffusion profile under each regime\label{fig:diffusion_profile}}
+    \begin{tabular}{cc}
+    Motor vehicles&Aerospace\\
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_aero_mu2.pdf}
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: $L_{r}(d)$ against $d$ for the median shocked region, under the estimated allocation and under the two counterfactual regimes of Figure~\ref{fig:counterfactual_distance}. A single radius can flatter a regime that crosses it steeply; the curves say whether a gap at 100~km is a level difference that persists or a crossing that closes further out.}
+\end{figure}
+
+
 \paragraph{Untargeted moment: derivation}\label{apsec:untargeted_moments}
 
 In the model, sales' growth of a supplier $i$ in $(r',s)$ of productivity $z$ is:
