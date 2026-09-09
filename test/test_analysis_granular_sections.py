@@ -1683,6 +1683,131 @@ def gate_amplification():
           f"catches a draw-count parquet, granularity on supplier_cells = "
           f"{rep.loc['supplier_cells', 'granularity']:.1f} origins")
 
+    # --- the incidence vector: concentration and commonality --------------------
+    # The barycentre is a FIRST MOMENT and cannot separate one dispersed pool from two
+    # hubs, so these two statistics replace it. They are gated on planted incidence
+    # matrices built BY HAND -- not through `build_diffusion_frame` -- so a bug in the
+    # frame cannot mask a bug in the arithmetic, and every planted answer is known
+    # without doing any: an incidence on ONE region must give n_eff = 1 exactly, one
+    # spread evenly over k regions must give exactly k, buyers with identical incidence
+    # must give tv_common = 0 exactly, and two disjoint halves must give 1/2 each.
+    def _W(rows):
+        return pd.DataFrame(rows, columns=np.arange(1, R + 1),
+                            index=pd.Index(downstream, name="ze2010_downstream"))
+
+    one = np.zeros((R_d, R)); one[:, 0] = 1.0                     # everyone on region 1
+    st = NS["incidence_stats"](_W(one))
+    assert np.allclose(st["n_eff"], 1.0) and np.allclose(st["top1"], 1.0)
+    assert np.allclose(st["tv_common"], 0.0, atol=1e-12)          # identical => no deficit
+    assert np.allclose(st["cos_common"], 1.0)
+
+    k = 5
+    ev = np.zeros((R_d, R)); ev[:, :k] = 1.0 / k                  # evenly over k regions
+    st = NS["incidence_stats"](_W(ev))
+    assert np.allclose(st["n_eff"], float(k)), st["n_eff"].to_numpy()
+    assert np.allclose(st["hhi"], 1.0 / k)
+    assert np.allclose(st["tv_common"], 0.0, atol=1e-12)
+
+    split = np.zeros((R_d, R))                                    # two disjoint halves
+    half = R_d // 2
+    split[:half, 0] = 1.0
+    split[half:, 1] = 1.0
+    st = NS["incidence_stats"](_W(split))
+    assert np.allclose(st["tv_common"], 0.5), st["tv_common"].to_numpy()
+    pc, pt = NS["_pairwise_overlap"](_W(split))
+    assert np.isclose(pt, 1.0) and np.isclose(pc, 0.0)     # across-group pairs dominate
+    pc, pt = NS["_pairwise_overlap"](_W(ev))
+    assert np.isclose(pt, 0.0, atol=1e-12) and np.isclose(pc, 1.0)
+    # a buyer with no upstream sales at all is dropped, not counted as fully dispersed
+    bad = ev.copy(); bad[0] = np.nan
+    st = NS["incidence_stats"](_W(bad))
+    assert np.isnan(st["n_eff"].iloc[0]) and np.allclose(st["n_eff"].iloc[1:], float(k))
+    print("incidence stats: n_eff exact on planted matrices, tv_common exact at 0 and 1/2")
+
+    # --- the same statistics through the model's own frames ---------------------
+    inc = NS["incidence_concentration_overlap"](data, frames=frames, diffusion=diff)
+    regs = list(inc.index.get_level_values("regime").unique())
+    assert NS["UNIFORM_REGIME"] in regs, regs        # the benchmark is built when absent
+    # the incidence matrix is a distribution over the FULL upstream support
+    for lab, W in inc.attrs["omega"].items():
+        assert list(W.columns) == list(range(1, R + 1)), lab
+        assert np.allclose(W.sum(axis=1).dropna(), 1.0), lab
+    # the benchmark is its own reference, so its ratio is exactly one
+    assert np.allclose(inc.loc[NS["UNIFORM_REGIME"], "n_eff_ratio"], 1.0)
+    assert ((inc["hhi"] > 0) & (inc["hhi"] <= 1 + 1e-12)).all()
+    assert ((inc["tv_common"] >= -1e-12) & (inc["tv_common"] <= 1 + 1e-12)).all()
+    assert (inc["top1"] <= inc["top2"] + 1e-12).all() and (inc["top2"] <= inc["top3"] + 1e-12).all()
+    # switching BOTH forces off must reproduce the benchmark exactly -- it is the same
+    # regime reached by two different routes, which is what pins the plumbing
+    inc_n = NS["incidence_concentration_overlap"](
+        data, regimes={"Neither": dict(alpha=0.0, equalise_T=True)},
+        frames=None, diffusion=diff, include_realised=False)
+    assert np.allclose(inc_n.loc["Neither", "n_eff"].to_numpy(),
+                       inc_n.loc[NS["UNIFORM_REGIME"], "n_eff"].to_numpy())
+    # the sales weighting is a DIFFERENT question and must not silently coincide. It
+    # cannot be tested on this synthetic economy -- every buyer there spends exactly
+    # TOTAL_INPUT_SHARE, so the two weightings ARE the same and an assertion here would
+    # pass or fail for a reason that has nothing to do with the code. It is tested on a
+    # planted matrix where the buyers genuinely differ in size instead.
+    inc_w = NS["incidence_concentration_overlap"](data, frames=frames, diffusion=diff,
+                                                  weights="sales")
+    assert np.allclose(inc_w["tv_common"].to_numpy(), inc["tv_common"].to_numpy())
+    big = np.zeros((R_d, R)); big[0, 0] = 1.0; big[1:, 1] = 1.0
+    st_eq = NS["incidence_stats"](_W(big))
+    st_wt = NS["incidence_stats"](_W(big), weights=np.r_[100.0, np.ones(R_d - 1)])
+    # equal weights put the common vector near the majority, so the lone buyer carries
+    # almost all the deficit; weighting by size moves the common vector onto it and the
+    # deficit changes hands. A weighting that did nothing would leave both rows alone.
+    assert st_eq["tv_common"].iloc[0] > st_eq["tv_common"].iloc[1]
+    assert st_wt["tv_common"].iloc[0] < st_wt["tv_common"].iloc[1]
+    summ_i = NS["incidence_summary"](inc, verbose=False)
+    assert set(summ_i.columns) >= {"n_eff", "n_eff_ratio", "tv_common", "pairwise_cos",
+                                   "pairwise_tv"}
+    assert (summ_i["pairwise_cos"].dropna() <= 1 + 1e-12).all()
+    print("incidence table: full support, benchmark self-consistent, size weighting "
+          "moves the common vector")
+    print(summ_i.round(3).to_string())
+
+    # --- d_r purged of the country's shape --------------------------------------
+    dn = NS["distance_normalisation"](data, detail=det, diffusion=diff, verbose=False)
+    assert np.allclose(dn["mean_upstream_distance"] / dn["uniform_distance"],
+                       dn["distance_ratio"], equal_nan=True)
+    # the uniform allocation IS the reference, so a regime equal to it ratios to one
+    dn_u = NS["distance_normalisation"](
+        data, regimes={"Neither": dict(alpha=0.0, equalise_T=True)},
+        diffusion=diff, verbose=False)
+    # `distance_normalisation` inherits the counterfactual detail's (buyer, regime)
+    # index, which is the opposite order to the incidence table's -- so the regime is
+    # selected with `xs`, and a `.loc` here would silently look up a buyer.
+    assert np.allclose(dn_u.xs("Neither", level="regime")["distance_ratio"], 1.0)
+    print("distance normalisation: ratio is d_r / d_r^uniform, and the benchmark is 1.0")
+
+    # --- the destination composition, and the figure that replaces the arrows ----
+    comp = NS["destination_composition"](data, diffusion=diff, n_hub=2)
+    seg = [c for c in comp.columns if c != "region"]
+    assert len(seg) == 4, seg                    # own + 2 hubs + rest
+    assert np.allclose(comp[seg].sum(axis=1), 1.0), comp[seg].sum(axis=1)
+    assert (comp[seg] >= -1e-12).all().all()     # no double counting => no negative rest
+    # a buyer that IS a hub must have that hub column at zero: its own sourcing is
+    # already in the own-zone block, and counting it twice would push `rest` negative
+    for h, col in zip(comp.attrs["hubs"], comp.attrs["hub_names"]):
+        if h in comp.index:
+            assert comp.loc[h, col] == 0.0, (h, col, comp.loc[h])
+    ax_c = NS["plot_destination_composition"](data, composition=comp)
+    bars = [p for p in ax_c.patches]
+    assert len(bars) == len(seg) * len(comp), (len(bars), len(seg) * len(comp))
+    assert abs(ax_c.get_xlim()[0]) < 1e-12 and abs(ax_c.get_xlim()[1] - 1.0) < 1e-12
+    assert ax_c.get_title() == "" and ax_c.get_title(loc="right") == ""
+    assert len(ax_c.get_yticklabels()) == len(comp)
+    NS["plt"].close(ax_c.figure)
+
+    ax_p = NS["plot_incidence_plane"]([("auto", inc), ("aero", inc)])
+    assert len(ax_p.collections) == 4          # one cloud + one median marker per series
+    assert "buyer-specific" in ax_p.get_ylabel()
+    NS["plt"].close(ax_p.figure)
+    print(f"destination composition: own + {len(comp.attrs['hub_names'])} hubs "
+          f"({', '.join(comp.attrs['hub_names'])}) + rest, sums to one; plane renders")
+
     print("\nALL OK")
 
 
