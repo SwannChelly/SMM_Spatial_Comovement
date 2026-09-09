@@ -301,7 +301,39 @@ What makes other transport equipment inert is geography rather than weak compara
 
 \paragraph{Where does the response land?} The counterfactual says capability sits near demand in motor vehicles. It does not say whether that capability is one broad mass placed inside the demand distribution, a set of local pockets, or a small number of hubs --- and those are three different economies. The first sends every buyer to the same wide set of suppliers, the second gives each buyer its own, the third sends every buyer to the same few places. Only the third is a hub-and-spoke network, and it is the configuration the introduction's efficiency--stability trade-off is about.
 
-The natural summary of ``where'' is the barycentre of a buyer's sourcing, and it cannot make that distinction. A barycentre is the \emph{first moment} of the destination distribution, and a dispersed central pool and a pair of distant hubs have nearly the same first moment: both sit near the national centre of mass, since with four fifths of the euros spread nationally the mean is pinned there however concentrated the remaining fifth is. This is not a hypothetical in either industry. In aerospace every displacement points south-east, including from buyers as remote as Brest, while the arrowheads land in the centre of the country --- Ussel, Tulle and Gu\'eret collect more than half of them --- some 250~km short of Toulouse. In motor vehicles $86$\% of the arrowheads land on a single commuting zone, Cosne-Clamecy, which is close to the geographic centre of France and is not a supplier hub in any sense the model recognises. The map records a \emph{tilt}, not a destination. The same degeneracy afflicts any scalar built on that first moment: Appendix~\ref{apsec:diffusion_extra} reports the regression of the barycentre on the buyer's own position, and the shrinkage coefficient is below $0.12$ in both industries and does not separate them.
+The natural summary of ``where'' is the barycentre of a buyer's sourcing, and it cannot make that distinction. A barycentre is the \emph{first moment} of the destination distribution, and a dispersed central pool and a pair of distant hubs have nearly the same first moment: both sit near the national centre of mass, since with four fifths of the euros spread nationally the mean is pinned there however concentrated the remaining fifth is. This is not a hypothetical in either industry. In aerospace every displacement points south-east, including from buyers as remote as Brest, while the arrowheads land in the centre of the country --- Ussel, Tulle and Gu\'eret collect more than half of them --- some 250~km short of Toulouse. In motor vehicles $86$\% of the arrowheads land on a single commuting zone, Cosne-Clamecy, which is close to the geographic centre of France and is not a supplier hub in any sense the model recognises. The map records a \emph{tilt}, not a destination. The same degeneracy afflicts any scalar built on that first moment. Table~\ref{tab:barycentre_shrinkage} reports the regression of the barycentre on the buyer's own position, $b_{r}=(1-\lambda)c+\lambda x_{r}+\varepsilon_{r}$, and Figure~\ref{fig:sourcing_barycentre} draws the displacements themselves. The shrinkage coefficient is precisely estimated and small in both industries --- $\hat\lambda=0.065$ (s.e.\ 0.002) in motor vehicles and $0.080$ (s.e.\ 0.009) in aerospace, against a tight fit ($R^{2}=0.96$ and $0.85$) --- so sourcing is very nearly buyer-independent everywhere, which is a real fact and the one the rest of this paragraph makes precise. What it cannot do is separate the industries: the difference is $-0.015$ with a standard error of $0.009$. Both exhibits are reported because that failure is informative, and because the $\alpha=0$ row is the one internal control available here: setting $\alpha=0$ removes the only buyer-specific term of the sourcing probability, so $\lambda$ must collapse there by construction, and it does ($-0.068$, t $=-36$, and $-0.103$, t $=-9$).
+
+\begin{table}[H]
+    \centering
+    \caption{Does a buyer's sourcing follow the buyer? The shrinkage coefficient $\lambda$\label{tab:barycentre_shrinkage}}
+    \begin{tabular}{llccccc}
+    \hline\hline
+    Industry & Regime & $\hat\lambda$ & s.e. & 95\% CI & $R^{2}$ & $n$ \\
+    \hline
+    Motor vehicles & Both forces                & $0.065$    & $0.002$ & $[\,0.062,\ 0.069\,]$   & 0.96 & 22 \\
+                   & Distance only              & $0.069$    & $0.004$ & $[\,0.062,\ 0.075\,]$   & 0.96 & 22 \\
+                   & Comparative advantage only & $-0.003$   & $0.000$ & $[-0.003,\ -0.002\,]$   & 0.83 & 22 \\[0.4em]
+    Aerospace      & Both forces                & $0.080$    & $0.009$ & $[\,0.062,\ 0.098\,]$   & 0.85 & 18 \\
+                   & Distance only              & $0.121$    & $0.014$ & $[\,0.094,\ 0.148\,]$   & 0.87 & 18 \\
+                   & Comparative advantage only & $-0.023$   & $0.007$ & $[-0.036,\ -0.009\,]$   & 0.37 & 18 \\
+    \hline
+    \multicolumn{7}{l}{\emph{Differences}} \\
+    Aerospace $-$ motor vehicles & Both forces  & $-0.015$ & $0.009$ & $[-0.033,\ 0.003\,]$ & & \\
+    Distance only $-$ both forces & Motor vehicles & $0.003$ & $0.004$ & $[-0.005,\ 0.011\,]$ & & \\
+                                  & Aerospace     & $0.041$ & $0.016$ & $[\,0.009,\ 0.073\,]$ & & \\
+    $\alpha=0$ $-$ both forces & Motor vehicles   & $-0.068$ & $0.002$ & $[-0.072,\ -0.064\,]$ & & \\
+                               & Aerospace        & $-0.103$ & $0.011$ & $[-0.125,\ -0.081\,]$ & & \\
+    \hline\hline
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: $\lambda$ from the weighted regression through the origin of the sourcing barycentre on the buyer's own position, $b_{r}=(1-\lambda)c+\lambda x_{r}+\varepsilon_{r}$, pooled over both projected coordinates so that the estimate does not depend on the orientation of the map. One observation per shocked commuting zone; standard errors are clustered on the region, so the two coordinates of one buyer count once. Differences are taken with the independent-sum standard error $\sqrt{s^{2}_{a}+s^{2}_{b}}$, which is conservative here: the regimes are the same geometry with one force switched off and the two industries share commuting zones, so the two estimates are if anything positively correlated. \emph{Distance only} equalises $\hat T$ across attraction areas; \emph{Comparative advantage only} sets $\alpha=0$ --- the internal control, since $\lambda$ must vanish once the only buyer-specific term of the sourcing probability is removed. What the standard errors measure is the cross-sectional agreement of buyers on a common shrinkage, not the precision with which the model's parameters are estimated.}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+\caption{Where the sourcing sits: origin to barycentre\label{fig:sourcing_barycentre}}
+    \includegraphics[width = 0.85\linewidth]{figures/sourcing_barycentre_panel_mu2.pdf}
+    \caption*{\footnotesize \emph{Notes}: One arrow per shocked downstream commuting zone, from its own centre to the barycentre $b_{r}$ of the sourcing its shock generates, drawn at true scale in Lambert-93 --- there is deliberately no exaggeration factor, since stretching the arrows would manufacture the very hub structure the figure exists to test. One row per regime --- the realised draw, the estimated allocation, and the two counterfactuals of Figure~\ref{fig:counterfactual_distance} --- and one column per industry. The arrows are short in every panel, which is the figure's content: it is the visual form of $\lambda\approx0.07$, a sourcing pattern that is very nearly buyer-independent in both industries. Note that the arrow measures the mean \emph{displacement} and the average sourcing distance $d_{r}$ the mean \emph{length}: a buyer sourcing symmetrically about itself has a short arrow and a long $d_{r}$.}
+\end{figure}
 
 What does separate them are two features of the \emph{incidence vector} itself,
 $$\omega_{r}=\left(\frac{X_{lr}}{\sum_{l}X_{lr}}\right)_{l},$$
@@ -359,7 +391,7 @@ Figure~\ref{fig:destination_composition} shows the same fact without any statist
 
 \paragraph{How much of the shock does the region keep?} How far the euro travels is not the same question as how much of it the shocked region retains, and it is the second that the empirical part of this paper measures. Let
 $$L_{r}(d)=\frac{\sum_{r':\,d_{r'r}\le d} X_{r'r}}{\sum_{r'} X_{r'r}}$$
-be the share of the upstream response accruing within $d$ kilometres of the origin of the shock. We report it at $d=200$~km, the radius at which the reduced-form evidence of Section~\ref{sec:reduced_form_evidence} is measured. Figure~\ref{fig:counterfactual_local_share} gives it region by region under each regime; Appendix~\ref{apsec:diffusion_extra} maps it and reports the whole profile $L_{r}(d)$.
+be the share of the upstream response accruing within $d$ kilometres of the origin of the shock. We report it at $d=200$~km, the radius at which the reduced-form evidence of Section~\ref{sec:reduced_form_evidence} is measured. Figure~\ref{fig:counterfactual_local_share} gives it region by region under each regime, Figure~\ref{fig:local_share_map} maps it --- $L_{r}(d)$ is a number attached to a \emph{place}, and a bar chart sorted by value destroys the geography the result is about --- and Figure~\ref{fig:diffusion_profile} reports the whole profile, which says whether the 200~km comparison is a level difference that persists or a crossing that closes further out.
 
 This is where the two industries separate most sharply, and the sign of the separation is the section's main result. In motor vehicles the two forces \emph{reinforce} each other: the local share falls from 23.8\% to 18.2\% when $\hat T$ is equalised and to 19.4\% when $\alpha=0$, so removing either disperses the shock, and comparative advantage is marginally the more important of the two. In aerospace they work \emph{against} each other. Switching off distance costs 6.7 percentage points (21.4\% to 14.7\%), so proximity is what keeps an aerospace shock local, as it was what kept the euro close; but equalising $\hat T$ \emph{raises} the local share, from 21.4\% to 24.5\%. Comparative advantage in aerospace is not a localising force at all: it takes the response away from the region in which the shock originates and sends it to the hubs. Each aerospace region retains about three percentage points less of its own shock than it would in an economy with no capability differences whatsoever --- and that is the co-location term of Table~\ref{tab:variance_decomposition} arriving where it can be seen, on the euros a region keeps.
 
@@ -378,7 +410,29 @@ The medians of $L_{r}(200)$ are, by contrast, indistinguishable --- the median s
     \caption*{\footnotesize \emph{Notes}: $L_{r}(200)$, the share of the upstream response accruing within 200 km of the origin of the shock, one group of bars per shocked commuting zone, ordered by the realised local share. Regimes as in Figure~\ref{fig:counterfactual_distance}.}
 \end{figure}
 
-\paragraph{Uncertainty.} The counterfactual quantities above are reported as point estimates. They are functions of $\hat\alpha\hat\theta$ and $\hat T$, so they inherit the sampling uncertainty of the estimation, and the standard errors reported in Appendix~\ref{apsec:diffusion_extra} are not that: they measure the cross-sectional agreement of buyers on a common value, holding the parameters fixed at their estimates. \swann{A parametric bootstrap over $(\hat\alpha,\hat T)$, redrawing from the estimated sampling distribution and recomputing each counterfactual, is the standard way to attach an interval to these numbers and is not yet run.}
+\begin{figure}[H]
+    \centering
+\caption{Where a downstream shock lands\label{fig:local_share_map}}
+    \begin{tabular}{cc}
+    Motor vehicles&Aerospace\\
+        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/local_share_map200km_aero_mu2.pdf}
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: Each shocked downstream commuting zone is coloured by $L_{r}(200)$, the share of the upstream sales generated by a demand shock in that zone that accrues within 200 km of it. Commuting zones hosting no downstream producer are shaded in grey: they originate no shock. Both panels use the same colour scale. Figure~\ref{fig:counterfactual_local_share} reports the same statistic region by region under each counterfactual regime.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+\caption{The whole diffusion profile under each regime\label{fig:diffusion_profile}}
+    \begin{tabular}{cc}
+    Motor vehicles&Aerospace\\
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_auto_mu2.pdf} &
+        \includegraphics[width = 0.5\linewidth]{figures/counterfactual_profile_aero_mu2.pdf}
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: $L_{r}(d)$ against $d$ for the median shocked region, under the estimated allocation and under the two counterfactual regimes of Figure~\ref{fig:counterfactual_distance}. A single radius can flatter a regime that crosses it steeply; the curves say whether a gap at 100~km is a level difference that persists or a crossing that closes further out.}
+\end{figure}
+
+\paragraph{Uncertainty.} The counterfactual quantities above are reported as point estimates. They are functions of $\hat\alpha\hat\theta$ and $\hat T$, so they inherit the sampling uncertainty of the estimation, and the standard errors of Table~\ref{tab:barycentre_shrinkage} are not that: they measure the cross-sectional agreement of buyers on a common value, holding the parameters fixed at their estimates. \swann{A parametric bootstrap over $(\hat\alpha,\hat T)$, redrawing from the estimated sampling distribution and recomputing each counterfactual, is the standard way to attach an interval to these numbers and is not yet run.}
 
 \paragraph{Taking stock.} This is the efficiency--stability trade-off of the introduction, made quantitative, and the two industries sit on opposite sides of it. The concentration of high-productivity aerospace suppliers around Toulouse and Paris raises the competitiveness of the downstream industry, but it also means that a shock originating anywhere in the industry converges on those same two areas --- an aerospace shock reaches an effective 31 commuting zones against 107 in motor vehicles, and nine tenths of where it lands is common to every buyer in the industry. It does not travel further than it otherwise would --- the hub sits at about the distance the euro would cover anyway, so $d_{r}$ barely registers the concentration --- it travels to the same place, whoever is hit, and the regions in which it originates retain three percentage points less of it than they would in an economy with no capability differences at all. Motor vehicles, whose upstream capability is co-located with a more dispersed set of downstream producers, buys a 65~km shorter supply chain with that co-location and leaves no region without a local response.
 
