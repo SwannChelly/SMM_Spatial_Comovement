@@ -1638,6 +1638,33 @@ def gate_amplification():
     g_amp = gdet["amplification"].unstack("regime")
     assert np.allclose(g_amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-9), \
         g_amp.describe()
+    # --- the realised (finite-variety) incidence, and the Jensen directions -------
+    # These are gated as INEQUALITIES with a known sign, not as numbers: n_eff is
+    # 1/sum(omega^2), convex in omega, so averaging the realisations of a mean-preserving
+    # draw can only RAISE the Herfindahl and lower n_eff; tv_common is convex too and
+    # can only rise. A gate on the values would be a gate on the synthetic economy.
+    real = NS["realised_incidence"](gdata, verbose=False)
+    assert len(real) == R_d, (len(real), R_d)
+    fin = real[["n_eff_realised", "n_eff_pooled",
+                "tv_common_realised", "tv_common_pooled"]].dropna()
+    assert len(fin), "every buyer came back NaN"
+    # against the POOLED frame -- the empirical mean of exactly these realisations --
+    # the two inequalities are identities of the data, so they must hold on any fixture.
+    assert (fin["n_eff_realised"] <= fin["n_eff_pooled"] + 1e-9).all(), \
+        fin[fin["n_eff_realised"] > fin["n_eff_pooled"] + 1e-9]
+    assert (fin["tv_common_realised"] >= fin["tv_common_pooled"] - 1e-9).all(), \
+        fin[fin["tv_common_realised"] < fin["tv_common_pooled"] - 1e-9]
+    assert (real["n_eff_gap"].dropna() <= 1 + 1e-9).all()
+    # the realised incidence cannot reach more origins than there are varieties
+    ceil_ = real.attrs["variety_ceiling"]
+    if np.isfinite(ceil_):
+        assert (fin["n_eff_realised"] <= ceil_ + 1e-9).all(), (ceil_, fin)
+    assert real.attrs["n_replications"] == \
+        int(gran["replication"].nunique())
+    assert "replication" in real.attrs["per_replication"].columns
+    print(f"realised incidence: n_eff falls and tv_common rises as Jensen requires; "
+          f"ceiling sum_s N_hat_s = {ceil_:.0f}")
+
     print("counterfactual on the replicated parquet: D_r matches the realised economy")
 
     # neither counterfactual figure carries a title: both go into the paper under its own
@@ -1800,6 +1827,14 @@ def gate_amplification():
     assert ax_c.get_title() == "" and ax_c.get_title(loc="right") == ""
     assert len(ax_c.get_yticklabels()) == len(comp)
     NS["plt"].close(ax_c.figure)
+
+    # an averaged frame carries no realisations, so it must refuse rather than pretend
+    try:
+        NS["realised_incidence"](data, diffusion=diff, verbose=False)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("realised_incidence should refuse an averaged frame")
 
     # --- the incidence plane: two regimes only, and a displacement per buyer ------
     # The crossing counter is gated first, on two configurations whose answer needs no
