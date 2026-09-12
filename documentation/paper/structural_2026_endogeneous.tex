@@ -290,38 +290,45 @@ and we take it sector by sector, because a buyer's shock hits every one of its i
 \paragraph{One identity, four terms.}
 Two averages stand between a single realised network and the industry-level number, and each of them splits that number exactly. Taking them in turn is what makes clear where granularity enters.
 
-\emph{Across buyers.} Let $\bar\omega_{s}=\sum_{r}(X_{rs}/X_{\cdot s})\,\omega_{rs}$ be the incidence of a shock to the industry as a whole. Averaging $H$ over buyers and completing the square gives
+\emph{Across buyers.} Write $\mathbb{E}_{r}[\cdot]$ for the average over buyers weighted by their share $X_{rs}/X_{\cdot s}$ of the sector's purchases, and let $\bar\omega_{s}=\mathbb{E}_{r}[\omega_{rs}]$ be the incidence of a shock to the industry as a whole. Averaging $H$ over buyers and completing the square gives
 \begin{equation}
-\bar H_{s}\;=\;H(\bar\omega_{s})\;+\;M_{s},
+\bar H_{s}\;=\;\big\|\bar\omega_{s}\big\|^{2}\;+\;M_{s},
 \qquad
-M_{s}=\sum_{r'}\operatorname{Var}\!\big(\omega_{r'rs}\big)\;\ge 0,
+M_{s}=\mathbb{E}_{r}\big\|\omega_{rs}-\bar\omega_{s}\big\|^{2}\;\ge 0,
 \label{eq:incidence_identity}
 \end{equation}
+where $\|\cdot\|$ is the Euclidean norm over supplier regions, so that $\|\omega_{rs}\|^{2}=H_{rs}$.\footnote{$\bar H_s=\mathbb{E}_r\|\omega_{rs}\|^2=\|\bar\omega_s\|^2+\mathbb{E}_r\|\omega_{rs}-\bar\omega_s\|^2$, the usual variance decomposition applied coordinate by coordinate. It holds for the weighted mean that defines $\bar\omega_s$ and for no other aggregator, so every average in this section is purchase-weighted, and $H$ is averaged before being inverted into an effective number, since $1/H$ is convex. The cross-buyer distributions behind these means are in Appendix~\ref{app:incidence_buyer}.} A shock to one buyer lands with concentration $\bar H_{s}$; a shock to the whole industry lands with $\|\bar\omega_{s}\|^{2}$, which is smaller exactly to the extent that buyers send their euros to different places. The first term is therefore the \emph{common} part of a buyer's exposure and $M_{s}$ the \emph{buyer-specific} part.
 
-\swann{I prefer the definition with the norm explicited. Also it should be buyer specific and there is not r index here. }
-the variance being taken across buyers with the same weights.\footnote{$\bar H_s=\sum_r (X_{rs}/X_{\cdot s})\sum_{r'}\omega_{r'rs}^2=\sum_{r'}[\operatorname{Var}(\omega_{r'rs})+\bar\omega_{r's}^2]$. The identity holds for the weighted mean that defines $\bar\omega_s$ and for no other aggregator, so every average in this section is purchase-weighted, and $H$ is averaged before being inverted into an effective number, since $1/H$ is convex. The cross-buyer distributions behind these means are in Appendix~\ref{app:incidence_buyer}.} A shock to one buyer lands with concentration $\bar H_{s}$; a shock to the whole industry lands with $H(\bar\omega_{s})$, which is smaller exactly to the extent that buyers send their euros to different places. The first term is therefore the \emph{common} part of a buyer's exposure and $M_{s}$ the \emph{buyer-specific} part.
+\emph{Across varieties.} The second split is the realised-against-average distinction of Section~\ref{subsec:diffusion}, now applied to a quadratic statistic, where it does not vanish. Since $\mathbb{E}[\omega_{rs}]=\gamma_{rs}$,
+\begin{equation}
+\mathbb{E}\big\|\omega_{rs}\big\|^{2}=\underbrace{\big\|\gamma_{rs}\big\|^{2}}_{\text{structural}}+\underbrace{\mathbb{E}\big\|\omega_{rs}-\gamma_{rs}\big\|^{2}}_{\text{granular}} ,
+\label{eq:variety_split}
+\end{equation}
+the concentration of the expected network plus the dispersion of a realisation around it. Granularity is therefore not a caveat on $H$ but a term of it, and the term is strictly positive whenever $N_{s}$ is finite: each of a sector's $N_{s}$ varieties is won by exactly one region, so a realised incidence vector has at most $N_{s}$ non-zero entries however diffuse $\gamma_{rs}$ is.
 
-\emph{Across varieties.} \swann{I have already introduced in the begining of section 5, the idea of realised vs average network. You can shorten the paragraph here. }A realised network is not the expected one. Each of a sector's $N_{s}$ varieties is won by exactly one region, so a realised incidence vector has at most $N_{s}$ non-zero entries however diffuse the expected network is. Write $\omega_{r'rs}=\sum_{j}v_{jrs}\mathbf{1}\{r'\text{ wins }j\}$, with $v_{jrs}$ the share of buyer $r$'s spending on sector $s$ going to variety $j$. Under Fr\'echet the identity of a variety's winner is independent of the price at which it is won, so expenditure weights and win locations are independent and, for \emph{any} pair of buyers,
+The two splits commute --- \eqref{eq:incidence_identity} is an average over buyers, \eqref{eq:variety_split} an expectation over draws --- so applying both gives four additive terms, each a squared norm:
+\begin{equation}
+\mathbb{E}\big[\bar H_{s}\big]
+=\underbrace{\big\|\bar\gamma_{s}\big\|^{2}}_{\text{(i) structural, common}}
++\underbrace{\mathbb{E}_{r}\big\|\gamma_{rs}-\bar\gamma_{s}\big\|^{2}}_{\text{(ii) structural, specific}}
++\underbrace{\mathbb{E}\big\|\bar\omega_{s}-\bar\gamma_{s}\big\|^{2}}_{\text{(iii) granular, common}}
++\underbrace{\Big[\mathbb{E}\,\mathbb{E}_{r}\big\|\omega_{rs}-\gamma_{rs}\big\|^{2}-\text{(iii)}\Big]}_{\text{(iv) granular, specific}} .
+\label{eq:four_cells}
+\end{equation}
+Each term reads as a variance, and that is what makes the split economic rather than accounting. Cell (iii) is the variance of the \emph{industry-level} incidence: the part of chance that survives aggregation over buyers, because the same varieties happen to be won for everyone. Cell (iv) is the average variance minus the variance of the average --- the part that diversifies away when the industry is aggregated --- and is non-negative by convexity, with equality only if every buyer's realised deviation is the same vector.\footnote{Both terms are evaluated from the variety kernel \eqref{eq:variety_kernel} below. Cell (iii) $=\sum_{r,r''}\tfrac{X_{rs}}{X_{\cdot s}}\tfrac{X_{r''s}}{X_{\cdot s}}\operatorname{Cov}(\omega_{rs},\omega_{r''s})$, and $\operatorname{Cov}(\omega_{rs},\omega_{r''s})=\mathbb{E}[\omega_{rs}\!\cdot\!\omega_{r''s}]-\gamma_{rs}\!\cdot\!\gamma_{r''s}=\mathcal V_{rr''s}(Q_{rr''s}-\Gamma_{rr''s})$, since $\gamma_{rs}\!\cdot\!\gamma_{r''s}=\Gamma_{rr''s}$ by definition. The total granular term is the same expression restricted to $r''=r$ and averaged, $\mathbb{E}_r[\mathcal V_{rs}(1-H(\gamma_{rs}))]$, using $Q_{rr}=1$; cell (iv) is the difference. Non-negativity of (iv) is $\mathbb{E}_r\|x_r\|^2\ge\|\mathbb{E}_r x_r\|^2$ at $x_r=\omega_{rs}-\gamma_{rs}$.}
+
+The two granular cells are covariances between buyers' realised incidence, and evaluating them needs one object. Write $\omega_{r'rs}=\sum_{j}v_{jrs}\mathbf{1}\{r'\text{ wins }j\}$, with $v_{jrs}$ the share of buyer $r$'s spending on sector $s$ going to variety $j$. Under Fr\'echet the identity of a variety's winner is independent of the price at which it is won, so expenditure weights and win locations are independent and, for \emph{any} pair of buyers,
 \begin{equation}
 \mathbb{E}\big[\omega_{rs}\!\cdot\!\omega_{r''s}\big]
 =\underbrace{\mathcal{V}_{rr''s}\,Q_{rr''s}}_{\text{same variety}}
 +\underbrace{\big(1-\mathcal{V}_{rr''s}\big)\,\Gamma_{rr''s}}_{\text{different varieties}},
 \qquad
-\Gamma_{rr''s}=\sum_{r'}\gamma_{r'rs}\,\gamma_{r'r''s}.
+\Gamma_{rr''s}=\gamma_{rs}\!\cdot\!\gamma_{r''s},
 \label{eq:variety_kernel}
 \end{equation}
-Here $\mathcal{V}_{rr''s}=\mathbb{E}[\sum_{j}v_{jrs}v_{jr''s}]$ is the \emph{effective number of varieties}, $Q_{rr''s}$ the probability that the two buyers win the same variety in the same region, and $\Gamma_{rr''s}$ the probability that they land in the same region through different varieties --- the overlap that the sourcing shares $\gamma_{r'rs}$ of \eqref{eq:gamma_rrs} already imply. Setting $r''=r$ gives $\mathbb{E}[H_{rs}]=\mathcal{V}_{rs}+(1-\mathcal{V}_{rs})H(\gamma_{rs})$: chance concentrates a shock, and $\mathcal{V}$ says by how much.\footnote{Squaring $\omega_{r'rs}$ and taking expectations, $\mathbb{E}[H]=\mathbb{E}\sum_j v_j^2+\mathbb{E}\sum_{j\neq j'}v_jv_{j'}\mathbf{1}\{\text{same winner}\}$, and under the independence above the second term is $(1-\mathcal V)H(\gamma)$. The familiar $1/N_s$ is the special case of equal expenditure shares across varieties; by Cauchy--Schwarz $\mathcal{V}_{rs}\ge 1/N_{s}$ always, so reading granularity as a multinomial count \emph{understates} it.}
+where $\mathcal{V}_{rr''s}=\mathbb{E}[\sum_{j}v_{jrs}v_{jr''s}]$ is the \emph{effective number of varieties}, $Q_{rr''s}$ the probability that the two buyers win the same variety in the same region, and $\Gamma_{rr''s}$ the probability that they land in the same region through different varieties --- the overlap that the sourcing shares $\gamma_{r'rs}$ of \eqref{eq:gamma_rrs} already imply.\footnote{Squaring and taking expectations, $\mathbb{E}[\omega_{rs}\!\cdot\!\omega_{r''s}]=\mathbb{E}\sum_j v_{jrs}v_{jr''s}\mathbf{1}\{\text{same winner}\}+\mathbb{E}\sum_{j\neq j'}v_{jrs}v_{j'r''s}\mathbf{1}\{\text{same region}\}$, and under the independence above the two terms are $\mathcal V Q$ and $(1-\mathcal V)\Gamma$. Setting $r''=r$ gives $\mathbb{E}[H_{rs}]=\mathcal V_{rs}+(1-\mathcal V_{rs})H(\gamma_{rs})$. The familiar $1/N_s$ is the special case of equal expenditure shares across varieties; by Cauchy--Schwarz $\mathcal{V}_{rs}\ge 1/N_{s}$ always, so reading granularity as a multinomial count \emph{understates} it.}
 
-Substituting \eqref{eq:variety_kernel} into \eqref{eq:incidence_identity} \swann{I think it is more interesting to speak using conditional variance here. Please add the demonstration in a footnote. } splits the expected concentration of a realised shock into four additive terms:
-\begin{equation}
-\mathbb{E}\big[\bar H_{s}\big]
-=\underbrace{H(\bar\gamma_{s})}_{\text{(i) structural, common}}
-+\underbrace{\textstyle\sum_{r'}\operatorname{Var}(\gamma_{r'rs})}_{\text{(ii) structural, buyer-specific}}
-+\underbrace{\textstyle\sum_{r,r''}\tfrac{X_{rs}}{X_{\cdot s}}\tfrac{X_{r''s}}{X_{\cdot s}}\mathcal{V}_{rr''s}\big(Q_{rr''s}-\Gamma_{rr''s}\big)}_{\text{(iii) granular, common}}
-+\underbrace{\big[\,\textstyle\sum_{r}\tfrac{X_{rs}}{X_{\cdot s}}\mathcal{V}_{rs}\big(1-H(\gamma_{rs})\big)-\text{(iii)}\,\big]}_{\text{(iv) granular, buyer-specific}}.
-\label{eq:four_cells}
-\end{equation}
-The decomposition is exact, and it isolates where the finite number of varieties enters: through \textbf{two objects and no others}. $\mathcal{V}$ governs \emph{how much} chance concentrates a shock, and the excess co-sourcing $Q-\Gamma$ governs \emph{whether that concentration is shared} across buyers. Independent win events across buyers would set $Q=\Gamma$ and leave cell (iii) at zero, so that granularity would be purely idiosyncratic and would diversify the industry's exposure; $Q>\Gamma$ is positive dependence, and it compounds it instead.
+This isolates where the finite number of varieties enters: through \textbf{two objects and no others}. $\mathcal{V}$ governs \emph{how much} chance concentrates a shock, and the excess co-sourcing $Q-\Gamma$ governs \emph{whether that concentration is shared} across buyers. Independent win events across buyers would set $Q=\Gamma$, so every cross-buyer covariance would vanish and cell (iii) with it: granularity would be purely idiosyncratic and would diversify the industry's exposure. $Q>\Gamma$ is positive dependence, and it compounds it instead.
 
 Two ratios summarise \eqref{eq:four_cells}. $C^{\text{str}}_{s}=1-\text{(ii)}/[\text{(i)}+\text{(ii)}]$ is the share of the \emph{structural} term that aggregating across buyers cannot diversify away, and $C^{\text{gran}}_{s}=\text{(iii)}/[\text{(iii)}+\text{(iv)}]$ the same share of the \emph{granular} term.
 
