@@ -738,6 +738,17 @@ $D_{r}$, continuum limit & 1.838 & 1.861 \\
 
 
 
+
+\paragraph{The incidence of a shock, buyer by buyer}\label{app:incidence_buyer}
+The decomposition \eqref{eq:incidence_identity} holds for a spending-weighted average over buyers and for no other aggregator, so Table~\ref{tab:incidence} reports means rather than medians. Figure~\ref{fig:buyer_concentration} shows the cross-buyer distributions behind them: the effective number of supplier regions each buyer reaches, and its own commonality $C_{r}=1-\sum_{s}\theta_{rs}m_{rs}/\bar H_{r}$, where $m_{rs}=\sum_{l}(\omega_{lrs}-\bar\omega_{ls})^{2}$ is that buyer's contribution to the buyer-specific term. $C_{r}$ is not bounded below --- a buyer whose incidence is far from the common one in a sector where the common incidence is itself concentrated can carry $m_{rs}>H_{rs}$ --- so it is a ranking of buyers, not a share, and is drawn as such.
+
+\begin{figure}[H]
+    \centering
+\caption{Concentration and commonality, buyer by buyer\label{fig:buyer_concentration}}
+    \includegraphics[width = 0.95\linewidth]{figures/buyer_concentration_mu2.pdf}
+    \caption*{\footnotesize \emph{Notes}: One row per shocked commuting zone, ordered by the effective number of supplier regions its shock reaches; the two panels of each industry share that row order. Both statistics are computed on the expected network under the estimated allocation.}
+\end{figure}
+
 \subsection{EV eco-score reform: shock construction}\label{app:ev_ecoscore}
  
 This appendix describes the construction of the region-specific downstream demand shocks used in Section~4.3, based on the estimates of \cite{MalgouyresMayerNolden2025}.
