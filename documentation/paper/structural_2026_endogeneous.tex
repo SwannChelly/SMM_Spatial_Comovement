@@ -297,9 +297,11 @@ Two averages stand between a single realised network and the industry-level numb
 M_{s}=\sum_{r'}\operatorname{Var}\!\big(\omega_{r'rs}\big)\;\ge 0,
 \label{eq:incidence_identity}
 \end{equation}
+
+\swann{I prefer the definition with the norm explicited. Also it should be buyer specific and there is not r index here. }
 the variance being taken across buyers with the same weights.\footnote{$\bar H_s=\sum_r (X_{rs}/X_{\cdot s})\sum_{r'}\omega_{r'rs}^2=\sum_{r'}[\operatorname{Var}(\omega_{r'rs})+\bar\omega_{r's}^2]$. The identity holds for the weighted mean that defines $\bar\omega_s$ and for no other aggregator, so every average in this section is purchase-weighted, and $H$ is averaged before being inverted into an effective number, since $1/H$ is convex. The cross-buyer distributions behind these means are in Appendix~\ref{app:incidence_buyer}.} A shock to one buyer lands with concentration $\bar H_{s}$; a shock to the whole industry lands with $H(\bar\omega_{s})$, which is smaller exactly to the extent that buyers send their euros to different places. The first term is therefore the \emph{common} part of a buyer's exposure and $M_{s}$ the \emph{buyer-specific} part.
 
-\emph{Across varieties.} A realised network is not the expected one. Each of a sector's $N_{s}$ varieties is won by exactly one region, so a realised incidence vector has at most $N_{s}$ non-zero entries however diffuse the expected network is. Write $\omega_{r'rs}=\sum_{j}v_{jrs}\mathbf{1}\{r'\text{ wins }j\}$, with $v_{jrs}$ the share of buyer $r$'s spending on sector $s$ going to variety $j$. Under Fr\'echet the identity of a variety's winner is independent of the price at which it is won, so expenditure weights and win locations are independent and, for \emph{any} pair of buyers,
+\emph{Across varieties.} \swann{I have already introduced in the begining of section 5, the idea of realised vs average network. You can shorten the paragraph here. }A realised network is not the expected one. Each of a sector's $N_{s}$ varieties is won by exactly one region, so a realised incidence vector has at most $N_{s}$ non-zero entries however diffuse the expected network is. Write $\omega_{r'rs}=\sum_{j}v_{jrs}\mathbf{1}\{r'\text{ wins }j\}$, with $v_{jrs}$ the share of buyer $r$'s spending on sector $s$ going to variety $j$. Under Fr\'echet the identity of a variety's winner is independent of the price at which it is won, so expenditure weights and win locations are independent and, for \emph{any} pair of buyers,
 \begin{equation}
 \mathbb{E}\big[\omega_{rs}\!\cdot\!\omega_{r''s}\big]
 =\underbrace{\mathcal{V}_{rr''s}\,Q_{rr''s}}_{\text{same variety}}
@@ -310,7 +312,7 @@ the variance being taken across buyers with the same weights.\footnote{$\bar H_s
 \end{equation}
 Here $\mathcal{V}_{rr''s}=\mathbb{E}[\sum_{j}v_{jrs}v_{jr''s}]$ is the \emph{effective number of varieties}, $Q_{rr''s}$ the probability that the two buyers win the same variety in the same region, and $\Gamma_{rr''s}$ the probability that they land in the same region through different varieties --- the overlap that the sourcing shares $\gamma_{r'rs}$ of \eqref{eq:gamma_rrs} already imply. Setting $r''=r$ gives $\mathbb{E}[H_{rs}]=\mathcal{V}_{rs}+(1-\mathcal{V}_{rs})H(\gamma_{rs})$: chance concentrates a shock, and $\mathcal{V}$ says by how much.\footnote{Squaring $\omega_{r'rs}$ and taking expectations, $\mathbb{E}[H]=\mathbb{E}\sum_j v_j^2+\mathbb{E}\sum_{j\neq j'}v_jv_{j'}\mathbf{1}\{\text{same winner}\}$, and under the independence above the second term is $(1-\mathcal V)H(\gamma)$. The familiar $1/N_s$ is the special case of equal expenditure shares across varieties; by Cauchy--Schwarz $\mathcal{V}_{rs}\ge 1/N_{s}$ always, so reading granularity as a multinomial count \emph{understates} it.}
 
-Substituting \eqref{eq:variety_kernel} into \eqref{eq:incidence_identity} splits the expected concentration of a realised shock into four additive terms:
+Substituting \eqref{eq:variety_kernel} into \eqref{eq:incidence_identity} \swann{I think it is more interesting to speak using conditional variance here. Please add the demonstration in a footnote. } splits the expected concentration of a realised shock into four additive terms:
 \begin{equation}
 \mathbb{E}\big[\bar H_{s}\big]
 =\underbrace{H(\bar\gamma_{s})}_{\text{(i) structural, common}}
