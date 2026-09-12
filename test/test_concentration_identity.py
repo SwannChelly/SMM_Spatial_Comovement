@@ -1,6 +1,6 @@
 """Gate for the new concentration/commonality block: a planted economy whose answers
 need no arithmetic, plus the identities the code claims."""
-import json, numpy as np, pandas as pd, matplotlib, os
+import json, math, numpy as np, pandas as pd, matplotlib, os
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 
 _NB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "diffusion.ipynb")
@@ -39,24 +39,43 @@ def _region_labels(data):
     return pd.DataFrame({"index": np.arange(1, R + 1), "ze2010": np.arange(1, R + 1),
                          "ze2010_name": [f"Z{i}" for i in range(1, R + 1)]})
 def _n_hat_from_diagnostics(data): return N_HAT
+def model_theta(data): return THETA
+NU_S_DEFAULT = 1.5
 
-# a parquet drawn FROM the geometry: N_hat_s varieties per (sector, buyer), each won by
-# one cell with probability rho, equal expenditure shares -> the granularity formula is
-# exact and the four-cell identity is checkable against theory.
+# a parquet drawn FROM the geometry, VARIETY BY VARIETY: each variety of a sector is
+# won by one cell per buyer. `mode` controls the cross-buyer dependence, which is the
+# whole content of Q vs G:
+#   "independent" -> each buyer draws its own winner  => Q = G, rho = 0
+#   "shared"      -> one winner serves every buyer    => Q = 1, rho -> 1
+# and `unequal` switches the variety expenditure shares off equality, where
+# Cauchy-Schwarz requires V > 1/N.
 geom = sourcing_geometry(None)
-rows, B = [], 60
 spend_s = np.array([1.0, 2.0, 3.0])
-for b in range(B):
-    for s in range(S):
-        blk = geom["by_sector"][s]
-        for j, rd in enumerate(buyers):
-            k = rng.multinomial(int(N_HAT[s]), blk["rho"][:, j])
-            for i, n in enumerate(k):
-                if n:
-                    rows.append((b, int(rd), int(blk["cells"][i]) + 1, s + 1,
-                                 spend_s[s] * n / N_HAT[s]))
-sup = pd.DataFrame(rows, columns=["replication", "ze2010_downstream", "ze2010",
-                                  "A129", "share"])
+B = 60
+
+def build_parquet(mode="independent", unequal=False, rng=rng):
+    rows = []
+    for b in range(B):
+        for s in range(S):
+            blk = geom["by_sector"][s]
+            N = int(N_HAT[s]); ncell = blk["cells"].size
+            for rho in range(N):
+                if mode == "shared":
+                    w = np.full(len(buyers), rng.choice(ncell, p=blk["rho"][:, 0]))
+                else:
+                    w = np.array([rng.choice(ncell, p=blk["rho"][:, j])
+                                  for j in range(len(buyers))])
+                v = (rng.random(len(buyers)) if unequal
+                     else np.ones(len(buyers))) if unequal else np.ones(len(buyers))
+                for j, rd in enumerate(buyers):
+                    rows.append((b, int(rd), int(blk["cells"][w[j]]) + 1, s + 1,
+                                 rho, spend_s[s] * float(v[j])))
+    df = pd.DataFrame(rows, columns=["replication", "ze2010_downstream", "ze2010",
+                                     "A129", "variety", "share"])
+    # equal expenditure across a buyer's varieties unless `unequal`
+    return df
+
+sup = build_parquet("independent")
 data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "suppliers": sup,
         "sector_names": ["A", "B", "C"], "post_hoc_N_hat": N_HAT,
         "folder": "x", "step_dir": "step3"}
@@ -119,7 +138,69 @@ axes = plot_buyer_concentration({"X": by}, save_to="/tmp/x2.pdf")
 print("7 ok  table and both figures render")
 
 rep = concentration_report(data, industry="gate", verbose=False)
-assert set(rep) == {"sector", "summary", "derivatives", "buyers", "granular",
-                    "expected_check", "table", "zones"}
+assert set(rep) == {"sector", "summary", "derivatives", "buyers", "tail", "variety",
+                    "cosourcing", "granular", "table", "zones"}
+assert rep["table"] is not None and rep["variety"] is not None
 assert rep["granular"] is not None
 print("8 ok  concentration_report wires every piece together")
+
+
+# --- 9. the variety decomposition -------------------------------------------
+pan = variety_panel(data)
+vc = variety_concentration(data, panel=pan, verbose=False)
+# equal expenditure shares were planted, so V must be exactly 1/N_s
+assert np.allclose(vc["V"], 1.0 / N_HAT, rtol=1e-12), vc["V"].to_numpy()
+assert np.allclose(vc["V_times_N"], 1.0, rtol=1e-12)
+assert vc["V_buyer_range"].max() < 1e-12          # buyer-independent by construction
+print("9 ok  V = 1/N_s exactly under equal variety shares, buyer-independent")
+
+data_u = dict(data, suppliers=build_parquet("independent", unequal=True))
+vcu = variety_concentration(data_u, verbose=False)
+assert (vcu["V_times_N"] > 1.0 + 1e-9).all(), vcu["V_times_N"].to_numpy()
+print(f"10 ok unequal shares give V x N = {vcu['V_times_N'].round(2).to_list()} > 1 "
+      "(Cauchy-Schwarz)")
+
+# Q = G when winners are drawn independently across buyers; Q = 1 when shared
+co = cosourcing(data, panel=pan, verbose=False)
+assert np.abs(co["Q_minus_G"]).max() < 0.02, co["Q_minus_G"].to_numpy()
+data_s = dict(data, suppliers=build_parquet("shared"))
+co_s = cosourcing(data_s, verbose=False)
+assert (co_s["Q_off"] > 0.999).all(), co_s["Q_off"].to_numpy()
+print("11 ok independent winners give Q = G; shared winners give Q = 1")
+
+cells = granular_cells(data, panel=pan, verbose=False)
+tot = cells[["struct_common", "struct_specific", "gran_common", "gran_specific"]]
+assert np.allclose(tot.sum(axis=1), cells["E_H_bar"], atol=1e-12)
+# with winners drawn independently across buyers the off-diagonal Q - G vanishes, so
+# rho collapses onto its FLOOR: the (granular-weighted) Herfindahl of buyer spending.
+assert np.allclose(cells["rho_s"], cells["rho_floor"], atol=0.02), \
+    (cells["rho_s"].to_numpy(), cells["rho_floor"].to_numpy())
+cells_s = granular_cells(data_s, verbose=False)
+assert (cells_s["rho_s"] > 0.9).all(), cells_s["rho_s"].to_numpy()
+# E[H] = V + (1-V) H^gamma, checked against the realised mean of the same draws
+emp = granularity_concentration(data, verbose=False)
+gap = np.nanmax(np.abs(cells["E_H_bar"] - emp["h_realised"]) / emp["h_realised"])
+assert gap < 0.02, gap
+print(f"12 ok four cells add up; rho hits its floor {cells['rho_floor'].mean():.2f} "
+      f"when winners are independent and >0.9 when shared; the variety route "
+      f"reproduces the realisation route to {gap:.1%}")
+
+# the closed form diverges at this calibration and must say so
+tail = variety_tail_index(data, verbose=False)
+assert np.isclose(tail["kappa"].iloc[0], THETA / (NU_S_DEFAULT - 1))
+assert not np.isfinite(_xi_of_kappa(2.0)) and _xi_of_kappa(4.0) > 1
+print(f"13 ok kappa = {tail['kappa'].iloc[0]:.2f}; Xi diverges at kappa <= 2")
+
+# the re-simulated economy reproduces the parquet's own statistics, and alpha = 0
+# gives the exact controls
+sim = simulate_granular_regime(data, n_rep=40, n_hat=N_HAT, seed=5)
+c_sim = granular_cells(data, panel=sim, empirical=None, verbose=False)
+c0 = granular_cells(data, panel=simulate_granular_regime(
+    data, alpha=0.0, n_rep=20, n_hat=N_HAT, seed=6), empirical=None, verbose=False,
+    structural=structural_networks(data, alpha=0.0, buyers=buyers))
+assert np.allclose(c0["rho_s"], 1.0, atol=1e-12), c0["rho_s"].to_numpy()
+assert np.allclose(c0["C_structural"], 1.0, atol=1e-12)
+assert np.allclose(c0["C_realised"], 1.0, atol=1e-12)
+assert (c_sim["gran_common"] > 0).all()     # shared draws => positive dependence
+print("14 ok re-simulated regime: alpha = 0 gives Q = rho = C = 1 exactly; the "
+      "estimate carries a strictly positive granular common cell")
