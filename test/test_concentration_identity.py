@@ -84,6 +84,8 @@ CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
               "Comparative advantage only": dict(alpha=0.0)}
 UNIFORM_REGIME = "Uniform benchmark"
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
+CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
+             "Comparative advantage only": (.45, .60, .45)}
 exec(code, globals())
 
 # --- 1. the identity, and the alpha=0 control -------------------------------
@@ -138,8 +140,8 @@ axes = plot_buyer_concentration({"X": by}, save_to="/tmp/x2.pdf")
 print("7 ok  table and both figures render")
 
 rep = concentration_report(data, industry="gate", verbose=False)
-assert set(rep) == {"sector", "summary", "derivatives", "buyers", "tail", "variety",
-                    "cosourcing", "granular", "table", "zones"}
+assert set(rep) == {"sector", "summary", "derivatives", "buyers", "buyer_granular",
+                    "tail", "variety", "cosourcing", "granular", "table", "zones"}
 assert rep["table"] is not None and rep["variety"] is not None
 assert rep["granular"] is not None
 print("8 ok  concentration_report wires every piece together")
@@ -204,3 +206,56 @@ assert np.allclose(c0["C_realised"], 1.0, atol=1e-12)
 assert (c_sim["gran_common"] > 0).all()     # shared draws => positive dependence
 print("14 ok re-simulated regime: alpha = 0 gives Q = rho = C = 1 exactly; the "
       "estimate carries a strictly positive granular common cell")
+
+
+# --- 15. the BUYER-level object: E_Omega[H_r] regime by regime ----------------
+# The structure is what is gated, not a blob. Three things must hold by construction.
+# (a) `Infinite varieties` IS the structural column, so its granular term is exactly
+#     zero and its effective number is 1/H(gamma) — that series is the figure's point.
+# (b) Granularity is Jensen: E[H_r] >= H(gamma_r) for EVERY buyer under every regime,
+#     with equality only in the infinite-variety limit.
+# (c) Under equal variety shares the buyer-level formula collapses to the binomial one,
+#     so `h` must equal `sum_s theta_rs [H + (1-H)/N_s]` recomputed by hand — an
+#     independent route that shares no code with `buyer_granular_concentration`.
+bg = buyer_granular_concentration(data, panel=pan, verbose=False)
+assert set(bg.index.get_level_values("regime")) == {
+    "Both forces", "Distance only", "Comparative advantage only",
+    UNIFORM_REGIME, INFINITE_REGIME}
+inf = bg.loc[INFINITE_REGIME]
+assert np.allclose(inf["gran"], 0.0, atol=1e-14) and np.allclose(inf["V"], 0.0)
+assert np.allclose(inf["n_eff"], 1.0 / inf["h_struct"], rtol=1e-12)
+assert (bg["gran"].dropna() >= -1e-12).all()
+assert (bg.drop(index=INFINITE_REGIME, level="regime")["gran"].dropna() > 0).all()
+
+# (c) the hand recomputation, on the estimated regime
+sp = _sector_spend(data)
+nets = structural_networks(data, buyers=buyers)
+num = np.zeros(buyers.size); den = np.zeros(buyers.size)
+for s, blk in nets["by_sector"].items():
+    pi = sp.iloc[:, s].to_numpy(dtype=float)
+    hg = (np.asarray(blk["W"], float) ** 2).sum(axis=1)
+    num += pi * (hg + (1.0 - hg) / N_HAT[s]); den += pi
+hand = pd.Series(num / den, index=buyers)
+got = bg.loc["Both forces", "h"].reindex(buyers)
+assert np.allclose(got.to_numpy(), hand.to_numpy(), rtol=1e-12), \
+    (got.to_numpy(), hand.to_numpy())
+
+# the buyer rows must aggregate to the sector table's own structural numbers
+h_struct_ind = float((bg.loc["Both forces", "h_struct"] *
+                      bg.loc["Both forces", "spend"]).sum() /
+                     bg.loc["Both forces", "spend"].sum())
+w = sec.loc["Both forces", "spend"]
+assert abs(h_struct_ind - float((sec.loc["Both forces", "h_bar"] * w).sum() / w.sum())) < 1e-12
+print(f"15 ok buyer-level E[H_r]: infinite-variety series is exactly structural, "
+      f"granularity is strictly positive elsewhere, and the binomial recomputation "
+      f"matches to machine precision")
+
+ax = plot_buyer_granular_concentration(bg, save_to="/tmp/x3.pdf")
+# one bar per (buyer, non-baseline regime); the baseline is the zero rule, not a series
+n_b = bg.loc["Both forces"].shape[0]
+assert len(ax.patches) == 4 * n_b, len(ax.patches)
+assert len(ax.get_yticklabels()) == n_b
+ax_lvl = plot_buyer_granular_concentration(bg, units="level", save_to="/tmp/x4.pdf")
+assert len(ax_lvl.patches) == 5 * n_b
+print("16 ok the per-buyer figure carries one bar per (buyer, regime) and drops the "
+      "baseline series in percentage units")
