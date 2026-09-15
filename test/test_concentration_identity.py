@@ -141,7 +141,8 @@ print("7 ok  table and both figures render")
 
 rep = concentration_report(data, industry="gate", verbose=False)
 assert set(rep) == {"sector", "summary", "derivatives", "buyers", "buyer_granular",
-                    "tail", "variety", "cosourcing", "granular", "table", "zones"}
+                    "reach", "tail", "variety", "cosourcing", "granular", "table",
+                    "zones"}
 assert rep["table"] is not None and rep["variety"] is not None
 assert rep["granular"] is not None
 print("8 ok  concentration_report wires every piece together")
@@ -259,3 +260,74 @@ ax_lvl = plot_buyer_granular_concentration(bg, units="level", save_to="/tmp/x4.p
 assert len(ax_lvl.patches) == 5 * n_b
 print("16 ok the per-buyer figure carries one bar per (buyer, regime) and drops the "
       "baseline series in percentage units")
+
+
+# --- 17. the REGION count, which carries no variety weighting -----------------
+# `1/E[H_r]` is mostly `1/V` at any realistic N_s, so the reach is gated on the three
+# things that make it a geography count rather than a variety count.
+# (a) Against a BRUTE-FORCE recomputation: for each buyer, 1 - prod_s (1-gamma)^N_s
+#     accumulated zone by zone with an explicit Python loop, sharing no code with the
+#     vectorised scatter-add the function uses.
+# (b) MONOTONE in N_s and bounded by its own support, with the infinite-variety row
+#     equal to the support exactly.
+# (c) INVARIANT to the expenditure shares: doubling one sector's spend changes the
+#     input mix and hence E[H_r], but cannot change which zones are reached.
+rc = buyer_region_reach(data, n_hat=N_HAT, verbose=False)
+nets = structural_networks(data, buyers=buyers)
+
+# (a) brute force
+import collections
+hand = {}
+for b_i, b in enumerate(buyers):
+    logfail = collections.defaultdict(float)
+    for s, blk in nets["by_sector"].items():
+        for c_i, c in enumerate(blk["cells"]):
+            g = float(blk["W"][b_i, c_i])
+            logfail[int(c)] += N_HAT[s] * math.log1p(-g)
+    hand[int(b)] = sum(1.0 - math.exp(v) for v in logfail.values())
+got = rc.loc["Both forces", "reach"]
+assert np.allclose([hand[int(b)] for b in buyers], got.reindex(buyers).to_numpy(),
+                   rtol=1e-12), (hand, got.to_dict())
+
+# (b) support, monotonicity, the infinite row
+assert (rc["reach"] <= rc["support"] + 1e-9).all()
+assert np.allclose(rc.loc[INFINITE_REGIME, "reach"],
+                   rc.loc[INFINITE_REGIME, "support"], rtol=0, atol=0)
+assert np.allclose(rc.loc[INFINITE_REGIME, "reach_share"], 1.0)
+lo = buyer_region_reach(data, n_hat=N_HAT / 4, include_infinite=False, verbose=False)
+hi = buyer_region_reach(data, n_hat=N_HAT * 4, include_infinite=False, verbose=False)
+assert (lo["reach"] < rc.drop(index=INFINITE_REGIME, level="regime")["reach"]).all()
+assert (hi["reach"] > rc.drop(index=INFINITE_REGIME, level="regime")["reach"]).all()
+assert (hi["reach"] <= hi["support"] + 1e-9).all()
+
+# (c) the expenditure shares cannot move it, but they DO move E[H_r] — so the
+#     invariance is a separating test, not a vacuous one
+sp2 = _sector_spend(data).copy(); sp2.iloc[:, 0] *= 5.0
+rc2 = buyer_region_reach(data, spend=sp2, n_hat=N_HAT, verbose=False)
+assert np.allclose(rc2["reach"].to_numpy(), rc["reach"].to_numpy(), rtol=1e-12)
+bg2 = buyer_granular_concentration(data, spend=sp2, panel=pan, verbose=False)
+assert not np.allclose(bg2.loc["Both forces", "h"].to_numpy(),
+                       bg.loc["Both forces", "h"].to_numpy(), rtol=1e-6)
+print(f"17 ok reach matches a brute-force recomputation, rises with N_s, is capped by "
+      f"its support ({rc.loc['Both forces','reach'].median():.1f} of "
+      f"{rc.loc['Both forces','support'].median():.0f} zones at the estimate), and is "
+      f"invariant to the expenditure shares that move E[H_r]")
+
+ax = plot_buyer_region_reach(rc, save_to="/tmp/x5.pdf")
+assert len(ax.patches) == 5 * n_b, len(ax.patches)      # levels keep the baseline
+assert ax.get_xlim()[0] == 0.0                          # a count has an honest zero
+ax_p = plot_buyer_region_reach(rc, units="pct", save_to="/tmp/x6.pdf")
+assert len(ax_p.patches) == 4 * n_b
+# the concentration figure on a log axis must refuse bars: a bar's length would
+# encode the axis limits rather than the number
+ax_l = plot_buyer_granular_concentration(bg, units="level", kind="point", logx=True,
+                                         save_to="/tmp/x7.pdf")
+assert ax_l.get_xscale() == "log" and len(ax_l.patches) == 0
+assert len(ax_l.lines) == 5 + n_b        # one series per regime + one rule per buyer
+for bad in (dict(units="level", kind="bar", logx=True), dict(units="pct", logx=True)):
+    try:
+        plot_buyer_granular_concentration(bg, **bad); raise AssertionError(bad)
+    except ValueError:
+        pass
+print("18 ok the reach figure keeps an honest zero in levels; the concentration "
+      "figure draws points on a log axis and refuses bars there")
