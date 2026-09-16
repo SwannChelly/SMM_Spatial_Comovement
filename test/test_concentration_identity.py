@@ -6,10 +6,18 @@ matplotlib.use("Agg"); import matplotlib.pyplot as plt
 _NB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "diffusion.ipynb")
 nb = json.load(open(_NB))
 # located by CONTENT, not by index: a cell inserted above must not silently shift this
-# gate onto another section's definitions.
-code = next(''.join(c['source']) for c in nb['cells']
-            if c['cell_type'] == 'code'
-            and 'def sector_concentration(' in ''.join(c['source']))
+# gate onto another section's definitions. The section is split across three cells —
+# the buyer's own portfolio, the commonality exercise, and the report that joins them
+# — so all three are taken, in notebook order, and a missing one is named rather than
+# surfacing later as a NameError on whichever function it held.
+_ANCHORS = ('def sector_concentration(', 'def concentration_summary(',
+            'def concentration_report(')
+_cells = [''.join(c['source']) for c in nb['cells'] if c['cell_type'] == 'code'
+          and any(a in ''.join(c['source']) for a in _ANCHORS)]
+_missing = [a for a in _ANCHORS if not any(a in c for c in _cells)]
+assert not _missing, f"no notebook cell defines {_missing}"
+assert len(_cells) == len(_ANCHORS), f"{len(_cells)} cells carry the section's anchors"
+code = "\n".join(_cells)
 
 S, R, THETA = 3, 12, 1.3
 rng = np.random.default_rng(3)
