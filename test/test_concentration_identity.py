@@ -324,10 +324,21 @@ ax_l = plot_buyer_granular_concentration(bg, units="level", kind="point", logx=T
                                          save_to="/tmp/x7.pdf")
 assert ax_l.get_xscale() == "log" and len(ax_l.patches) == 0
 assert len(ax_l.lines) == 5 + n_b        # one series per regime + one rule per buyer
-for bad in (dict(units="level", kind="bar", logx=True), dict(units="pct", logx=True)):
+for bad in (dict(units="level", kind="bar", logx=True), dict(units="pct", logx=True),
+            dict(quantity="H")):
     try:
         plot_buyer_granular_concentration(bg, **bad); raise AssertionError(bad)
     except ValueError:
         pass
+# `quantity` must draw the TABLE'S OWN column, not a transform of it: the paper is
+# written in H, and `1/E[H_r]` is the reciprocal, not a rescaling, so a figure that
+# silently kept drawing n_eff would invert the ranking of every regime.
+for q in ("h", "n_eff"):
+    ax_q = plot_buyer_granular_concentration(bg, quantity=q, units="level",
+                                             save_to=f"/tmp/x8_{q}.pdf")
+    drawn = sorted(round(pt.get_width(), 12) for pt in ax_q.patches)
+    assert drawn == sorted(round(v, 12) for v in bg[q]), q
+    assert ("1/" in ax_q.get_xlabel()) == (q == "n_eff"), ax_q.get_xlabel()
 print("18 ok the reach figure keeps an honest zero in levels; the concentration "
-      "figure draws points on a log axis and refuses bars there")
+      "figure draws points on a log axis, refuses bars there, and draws whichever of "
+      "H or 1/H the caller asked for")
