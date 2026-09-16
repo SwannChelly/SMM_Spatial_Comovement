@@ -259,15 +259,71 @@ print(f"15 ok buyer-level E[H_r]: infinite-variety series is exactly structural,
       f"granularity is strictly positive elsewhere, and the binomial recomputation "
       f"matches to machine precision")
 
+# gran = V_s x slack_rs is EXACT sector by sector; at the buyer level the product of
+# the two spend-weighted averages misses the cross-sector covariance by exactly
+# Cov_theta(V_s, slack_rs). Both halves are gated, the second against a covariance
+# recomputed BY HAND from the per-sector pieces -- the planted N_HAT = [4, 10, 30]
+# makes V_s differ across sectors, so the covariance is genuinely non-zero here and
+# the test is not vacuous (an earlier draft of this gate asserted it was nil, and the
+# gate caught that).
+assert np.allclose(bg["slack"].to_numpy(), 1.0 - bg["h_struct"].to_numpy(), rtol=0,
+                   atol=1e-15)
+fin = bg.drop(index=INFINITE_REGIME, level="regime")
+sp_g = _sector_spend(data)
+# "Both forces" reads the PLANTED panel, whose variety shares are equal, so V_s is
+# exactly 1/N_s and the hand check shares NO code with the function. `V` is measured
+# per (sector, buyer), so the covariance is taken over sectors with that buyer's own
+# V_rs and its own input mix — the aggregate V_s of the per-sector table would be the
+# wrong object wherever V varies across buyers.
+nets_l = structural_networks(data, buyers=buyers)
+secs = list(nets_l["by_sector"])
+for b_i, b in enumerate(buyers):
+    th = np.array([sp_g.iloc[b_i, s] for s in secs], dtype=float)
+    th = th / th.sum()
+    Vs = np.array([1.0 / N_HAT[s] for s in secs])
+    sl = np.array([1.0 - (np.asarray(nets_l["by_sector"][s]["W"], float)[b_i] ** 2).sum()
+                   for s in secs])
+    cov = float(th @ (Vs * sl) - (th @ Vs) * (th @ sl))
+    assert abs(float(bg.loc[("Both forces", b), "gran_resid"]) - cov) < 1e-9, (b, cov)
+# every regime: the residual is the gap between the product of averages and the
+# average of products, so it can never exceed the granular term it decomposes
+assert (np.abs(fin["gran_resid"].to_numpy()) < fin["gran"].to_numpy()).all()
+assert np.abs(fin["gran_resid"].to_numpy()).max() > 1e-6      # not vacuous
+bs = bg.attrs["by_sector"].loc["Both forces"]
+assert set(bs.columns) >= {"V_s", "slack (median)", "gran (median)", "spend share"}
+assert abs(float(bs["spend share"].sum()) - 1.0) < 1e-12
+assert (bg.loc[INFINITE_REGIME, "gran"] == 0).all()   # no varieties, no granularity
+print(f"15b ok gran = V x slack; the buyer-level gap reproduces the hand-computed "
+      f"cross-sector covariance (slack median {fin['slack'].median():.4f}, V median "
+      f"{fin['V'].median():.4f})")
+
 ax = plot_buyer_granular_concentration(bg, save_to="/tmp/x3.pdf")
-# one bar per (buyer, non-baseline regime); the baseline is the zero rule, not a series
+# one bar per (buyer, non-baseline regime); the baseline is the zero rule, not a
+# series, and `Infinite varieties` is dropped by default
 n_b = bg.loc["Both forces"].shape[0]
-assert len(ax.patches) == 4 * n_b, len(ax.patches)
+n_reg = bg.index.get_level_values("regime").nunique()
+assert len(ax.patches) == (n_reg - 2) * n_b, len(ax.patches)
 assert len(ax.get_yticklabels()) == n_b
+# the right-margin annotation IS the baseline level, one per row plus the header
+lv = [t.get_text() for t in ax.texts]
+assert len(lv) == n_b + 1, lv
+base_h = bg.loc["Both forces", "n_eff"].reindex(
+    [ix for ix in bg.loc["Both forces"].index])
+assert sorted(float(t) for t in lv[:n_b]) == sorted(
+    round(float(v), 1) for v in base_h), (lv, base_h.to_dict())
 ax_lvl = plot_buyer_granular_concentration(bg, units="level", save_to="/tmp/x4.pdf")
-assert len(ax_lvl.patches) == 5 * n_b
-print("16 ok the per-buyer figure carries one bar per (buyer, regime) and drops the "
-      "baseline series in percentage units")
+assert len(ax_lvl.patches) == (n_reg - 1) * n_b
+# drop=() restores the infinite series; an unknown regime is named, not ignored
+ax_all = plot_buyer_granular_concentration(bg, drop=(), save_to="/tmp/x4b.pdf")
+assert len(ax_all.patches) == (n_reg - 1) * n_b
+try:
+    plot_buyer_granular_concentration(bg, drop=("No such regime",))
+    raise AssertionError("dropping an absent regime must raise")
+except KeyError:
+    pass
+print("16 ok the per-buyer figure carries one bar per (buyer, regime), drops the "
+      "baseline series in percentage units and the infinite-variety series by "
+      "default, and annotates each row with its baseline level")
 
 
 # --- 17. the REGION count, which carries no variety weighting -----------------
@@ -329,9 +385,9 @@ assert len(ax_p.patches) == 4 * n_b
 # the concentration figure on a log axis must refuse bars: a bar's length would
 # encode the axis limits rather than the number
 ax_l = plot_buyer_granular_concentration(bg, units="level", kind="point", logx=True,
-                                         save_to="/tmp/x7.pdf")
+                                         drop=(), save_to="/tmp/x7.pdf")
 assert ax_l.get_xscale() == "log" and len(ax_l.patches) == 0
-assert len(ax_l.lines) == 5 + n_b        # one series per regime + one rule per buyer
+assert len(ax_l.lines) == n_reg + n_b    # one series per regime + one rule per buyer
 for bad in (dict(units="level", kind="bar", logx=True), dict(units="pct", logx=True),
             dict(quantity="H")):
     try:
@@ -342,7 +398,7 @@ for bad in (dict(units="level", kind="bar", logx=True), dict(units="pct", logx=T
 # written in H, and `1/E[H_r]` is the reciprocal, not a rescaling, so a figure that
 # silently kept drawing n_eff would invert the ranking of every regime.
 for q in ("h", "n_eff"):
-    ax_q = plot_buyer_granular_concentration(bg, quantity=q, units="level",
+    ax_q = plot_buyer_granular_concentration(bg, quantity=q, units="level", drop=(),
                                              save_to=f"/tmp/x8_{q}.pdf")
     drawn = sorted(round(pt.get_width(), 12) for pt in ax_q.patches)
     assert drawn == sorted(round(v, 12) for v in bg[q]), q
