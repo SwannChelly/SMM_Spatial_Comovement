@@ -406,3 +406,63 @@ for q in ("h", "n_eff"):
 print("18 ok the reach figure keeps an honest zero in levels; the concentration "
       "figure draws points on a log axis, refuses bars there, and draws whichever of "
       "H or 1/H the caller asked for")
+
+# ---------------------------------------------------------------- 19
+# The factor split. What it has to get right is not arithmetic but the BENCHMARK: a
+# product cannot be attributed to its factors without one, so the gate pins the two
+# break-evens to their defining property (each alone makes gran = H) and checks that
+# the ratio built on them is the SAME number as the ratio of the terms -- which is
+# what makes the comparison symmetric rather than a choice of grouping.
+fs = granular_factor_decomposition(bg, regime="Both forces")
+cells = fs.attrs["cells"]
+assert len(cells) == len(secs) * n_b, (len(cells), len(secs), n_b)
+V_c = cells["V"].to_numpy(); H_c = cells["h_struct"].to_numpy()
+assert np.allclose(cells["gran"].to_numpy(), V_c * (1.0 - H_c), rtol=0, atol=1e-15)
+# (a) V_s* is the variety Herfindahl at which granularity would EQUAL the network
+Vst = cells["V_star"].to_numpy()
+assert np.allclose(Vst * (1.0 - H_c), H_c, rtol=1e-12)
+# (b) H_rs* likewise, holding V fixed
+Hst = cells["H_star"].to_numpy()
+assert np.allclose(V_c * (1.0 - Hst), Hst, rtol=1e-12)
+# (c) the V-side ratio IS the ratio of the two terms -- so "how many times too many
+#     varieties" and "how many times larger is granularity" are one statement
+assert np.allclose(cells["V_over_Vstar"].to_numpy(), cells["gran_over_H"].to_numpy(),
+                   rtol=1e-12)
+# (d) the three exact groupings of gran/H agree, which is the point the docstring
+#     makes: each factor can be made to look like the whole story
+gh = cells["gran_over_H"].to_numpy()
+assert np.allclose(gh, cells["V_over_H"].to_numpy() * (1.0 - H_c), rtol=1e-12)
+assert np.allclose(gh, V_c * cells["slack_over_H"].to_numpy(), rtol=1e-12)
+# (e) the slack channel can only shrink the ratio; the variety channel need not
+assert (1.0 - H_c <= 1.0).all()
+assert (cells["V_over_H"].to_numpy() > 1.0).any()
+# (f) per-sector table: one row per sector, spend shares summing to one, and V_s
+#     buyer-independent on the planted panel (equal variety shares => exactly 1/N_s)
+assert list(fs.index) == sorted(secs), (list(fs.index), secs)
+assert abs(float(fs["spend share"].sum()) - 1.0) < 1e-12
+assert np.allclose(fs["V_s spread"].to_numpy(), 0.0, atol=1e-12)
+assert np.allclose(fs["V_s"].to_numpy(),
+                   [1.0 / N_HAT[s] for s in sorted(secs)], rtol=1e-12)
+for bad in (dict(regime="Nonexistent regime"),):
+    try:
+        granular_factor_decomposition(bg, **bad); raise AssertionError(bad)
+    except KeyError:
+        pass
+stripped = bg.copy(); stripped.attrs = {}
+try:
+    granular_factor_decomposition(stripped); raise AssertionError("no by_cell")
+except KeyError:
+    pass
+# (g) the two aggregations of the ratio are both reported and the ratio-of-means one
+#     is the buyer-level number, not the mean of ratios (they differ by Jensen, and
+#     the gap is large wherever one heavy sector has a small ratio)
+s19 = fs.attrs["summary"]
+w19 = cells["spend"].to_numpy()
+assert abs(s19["gran / H_rs (ratio of means)"]
+           - np.average(cells["gran"], weights=w19)
+           / np.average(cells["h_struct"], weights=w19)) < 1e-12
+assert abs(s19["gran / H_rs (mean of ratios)"]
+           - np.average(cells["gran_over_H"], weights=w19)) < 1e-12
+print(f"19 ok the factor split is benchmarked rather than grouped: V_s/V_s* = "
+      f"{s19['V_s / V_s*']:.2f} against H_rs*/H_rs = {s19['H_rs* / H_rs']:.2f}, each "
+      f"defined by gran = H, and V_s/V_s* == gran/H_rs exactly")
