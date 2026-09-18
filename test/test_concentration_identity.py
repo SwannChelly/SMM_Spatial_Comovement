@@ -163,8 +163,16 @@ for _ax in axes[0]:
     assert _xl.y0 >= _tk - 1, "the twin label sits on its own ticks"
     assert _t.y0 >= _xl.y1, "the panel title sits on the twin label"
     assert _leg.y0 >= _t.y1, "the legend sits on a panel title"
+# The default must keep the TABLE's own row order: sorting by `n_hat_s` would turn
+# the y axis into a ranking of variety counts, which is not what the bars measure.
+_want = [str(r.sector_name) for r in gr.itertuples()]
+assert [t.get_text() for t in axes[0][0].get_yticklabels()] == _want
+# the kwarg must still be live: a column the planted table is NOT already sorted on
+_gr2 = gr.assign(_k=np.arange(len(gr))[::-1])
+_ax2 = plot_concentration_decomposition({"X": _gr2}, order_by="_k")[0][0]
+assert [t.get_text() for t in _ax2.get_yticklabels()] == _want[::-1]
 axes = plot_buyer_concentration({"X": by}, save_to="/tmp/x2.pdf")
-print("7 ok  table and both figures render")
+print("7 ok  table and both figures render; rows keep the table order by default")
 
 rep = concentration_report(data, industry="gate", verbose=False)
 assert set(rep) == {"sector", "summary", "derivatives", "buyers", "buyer_granular",
