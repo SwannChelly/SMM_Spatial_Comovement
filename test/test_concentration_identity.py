@@ -144,6 +144,25 @@ tab = concentration_table(data, sector=sec, granular=gr, verbose=False)
 assert np.isnan(tab.loc["Comparative advantage only", "gran_share_spec"])
 axes = plot_concentration_decomposition({"X": gr}, save_to="/tmp/x1.pdf")
 assert len(axes[0][0].patches) == 4 * len(gr)
+# The top band is three stacked things (twin ticks, twin label, title) plus a figure
+# legend, and matplotlib places the title without seeing the twin — so the stacking is
+# gated in DISPLAY coordinates rather than trusted to the pads that produce it.
+figd = axes[0][0].figure
+figd.canvas.draw(); _r = figd.canvas.get_renderer()
+assert len(figd.legends) == 1 and not any(a.get_legend() for a in figd.axes)
+_leg = figd.legends[0].get_window_extent(_r)
+assert len(figd.legends[0].get_texts()) == 5      # 4 segments + N_s, no variety frame
+for _ax in axes[0]:
+    _tw = [a for a in figd.axes
+           if a.get_position().bounds == _ax.get_position().bounds and a is not _ax][0]
+    _t = _tw.title.get_window_extent(_r)
+    _xl = _tw.xaxis.label.get_window_extent(_r)
+    _tk = max(lb.get_window_extent(_r).y1 for lb in _tw.get_xticklabels()
+              if lb.get_text())
+    assert _tw.get_title() and not _ax.get_title()      # the title is on the TWIN
+    assert _xl.y0 >= _tk - 1, "the twin label sits on its own ticks"
+    assert _t.y0 >= _xl.y1, "the panel title sits on the twin label"
+    assert _leg.y0 >= _t.y1, "the legend sits on a panel title"
 axes = plot_buyer_concentration({"X": by}, save_to="/tmp/x2.pdf")
 print("7 ok  table and both figures render")
 
