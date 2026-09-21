@@ -47,6 +47,10 @@ def _region_labels(data):
     return pd.DataFrame({"index": np.arange(1, R + 1), "ze2010": np.arange(1, R + 1),
                          "ze2010_name": [f"Z{i}" for i in range(1, R + 1)]})
 def _n_hat_from_diagnostics(data): return N_HAT
+# buyer SIZE, deliberately unequal (one buyer is ten times the smallest), so a size
+# weighting that came back uniform is caught rather than passing vacuously.
+EMP_PI_R = np.array([0.40, 0.25, 0.20, 0.11, 0.04])
+def _downstream_ze_index(data): return buyers
 def model_theta(data): return THETA
 NU_S_DEFAULT = 1.5
 
@@ -86,7 +90,7 @@ def build_parquet(mode="independent", unequal=False, rng=rng):
 sup = build_parquet("independent")
 data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "suppliers": sup,
         "sector_names": ["A", "B", "C"], "post_hoc_N_hat": N_HAT,
-        "folder": "x", "step_dir": "step3"}
+        "folder": "x", "step_dir": "step3", "emp_pi_r": EMP_PI_R}
 
 CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
               "Comparative advantage only": dict(alpha=0.0)}
@@ -177,9 +181,10 @@ print("7 ok  table and both figures render; rows keep the table order by default
 rep = concentration_report(data, industry="gate", verbose=False)
 assert set(rep) == {"sector", "summary", "derivatives", "buyers", "buyer_granular",
                     "reach", "tail", "variety", "cosourcing", "granular",
-                    "granular_equal", "table", "zones"}
+                    "granular_equal", "granular_size", "table", "zones"}
 assert rep["table"] is not None and rep["variety"] is not None
 assert rep["granular"] is not None and rep["granular_equal"] is not None
+assert rep["granular_size"] is not None
 print("8 ok  concentration_report wires every piece together")
 
 
@@ -235,14 +240,31 @@ assert ((_sp > 0) == (_eq > 0)).all().all()
 # rho_floor is the granular-weighted Herfindahl of buyer spending, so under equal
 # weights over n positive buyers it must land exactly on 1/n -- the statistic whose
 # movement between the two figures IS the customer size distribution.
-_ce = granular_cells(data, panel=pan, spend=equal_buyer_spend(_sector_spend(data)),
-                     verbose=False)
-_n = (_sector_spend(data) > 0).sum(axis=0).reindex(_ce.index).to_numpy(dtype=float)
+_base = _sector_spend(data)
+_ce = granular_cells(data, panel=pan, spend=equal_buyer_spend(_base), verbose=False)
+_n = (_base > 0).sum(axis=0).reindex(_ce.index).to_numpy(dtype=float)
 assert np.allclose(_ce["buyer_hhi"], 1.0 / _n, rtol=1e-12), _ce["buyer_hhi"].to_numpy()
 _tot = _ce[["struct_common", "struct_specific", "gran_common", "gran_specific"]]
 assert np.allclose(_tot.sum(axis=1), _ce["E_H_bar"], atol=1e-12)
-print(f"12b ok equal buyer weights keep the column totals, leave zero-spend buyers "
-      f"out, and put rho_floor on 1/n_buyers ({_ce['rho_floor'].mean():.2f})")
+# The SIZE weighting must reproduce `emp_pi_r` on the support, and must NOT coincide with
+# the equal one -- the planted pi_r is deliberately unequal, so a size variant that came
+# back uniform would mean the weights never reached `pi`.
+_sz = size_buyer_spend(_base, data)
+_w = np.asarray(data["emp_pi_r"], dtype=float).ravel()
+_wi = pd.Series(_w, index=_downstream_ze_index(data)).reindex(_base.index).to_numpy()
+for _c in _sz.columns:
+    _m = (_base[_c] > 0).to_numpy()
+    assert np.allclose(_sz[_c].to_numpy()[~_m], 0.0)
+    _got, _want = _sz[_c].to_numpy()[_m], _wi[_m]
+    assert np.allclose(_got / _got.sum(), _want / _want.sum(), rtol=1e-12)
+assert np.allclose(_sz.sum(axis=0), _base.sum(axis=0), rtol=1e-12)
+_cs = granular_cells(data, panel=pan, spend=_sz, verbose=False)
+assert not np.allclose(_cs["buyer_hhi"], _ce["buyer_hhi"], rtol=1e-6), \
+    "the size weighting collapsed onto the equal one"
+assert (_cs["buyer_hhi"].to_numpy() > _ce["buyer_hhi"].to_numpy() - 1e-12).all()
+print(f"12b ok equal weights put buyer_hhi on 1/n exactly; the size weighting reproduces "
+      f"emp_pi_r on the support and is strictly more concentrated "
+      f"(1/hhi {float(1/_cs['buyer_hhi'].mean()):.2f} vs {float(1/_ce['buyer_hhi'].mean()):.2f})")
 
 print(f"12 ok four cells add up; rho hits its floor {cells['rho_floor'].mean():.2f} "
       f"when winners are independent and >0.9 when shared; the variety route "
