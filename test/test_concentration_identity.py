@@ -176,10 +176,10 @@ print("7 ok  table and both figures render; rows keep the table order by default
 
 rep = concentration_report(data, industry="gate", verbose=False)
 assert set(rep) == {"sector", "summary", "derivatives", "buyers", "buyer_granular",
-                    "reach", "tail", "variety", "cosourcing", "granular", "table",
-                    "zones"}
+                    "reach", "tail", "variety", "cosourcing", "granular",
+                    "granular_equal", "table", "zones"}
 assert rep["table"] is not None and rep["variety"] is not None
-assert rep["granular"] is not None
+assert rep["granular"] is not None and rep["granular_equal"] is not None
 print("8 ok  concentration_report wires every piece together")
 
 
@@ -219,6 +219,31 @@ assert (cells_s["rho_s"] > 0.9).all(), cells_s["rho_s"].to_numpy()
 emp = granularity_concentration(data, verbose=False)
 gap = np.nanmax(np.abs(cells["E_H_bar"] - emp["h_realised"]) / emp["h_realised"])
 assert gap < 0.02, gap
+# --- 12b. the equal-buyer reweighting -----------------------------------------
+# The column TOTAL must survive, so the cross-SECTOR weights are untouched and the two
+# decompositions differ for exactly one reason; a zero-spend buyer must stay at zero
+# rather than being handed a share of the average portfolio it does not have.
+_sp = _sector_spend(data)
+_sp.iloc[0, 0] = 0.0                       # plant a buyer that does not buy sector 0
+_eq = equal_buyer_spend(_sp)
+assert np.allclose(_eq.sum(axis=0), _sp.sum(axis=0), rtol=1e-12)
+assert _eq.iloc[0, 0] == 0.0
+for _c in _eq.columns:
+    _v = _eq[_c].to_numpy()[_eq[_c].to_numpy() > 0]
+    assert _v.size and np.allclose(_v, _v[0], rtol=1e-12)
+assert ((_sp > 0) == (_eq > 0)).all().all()
+# rho_floor is the granular-weighted Herfindahl of buyer spending, so under equal
+# weights over n positive buyers it must land exactly on 1/n -- the statistic whose
+# movement between the two figures IS the customer size distribution.
+_ce = granular_cells(data, panel=pan, spend=equal_buyer_spend(_sector_spend(data)),
+                     verbose=False)
+_n = (_sector_spend(data) > 0).sum(axis=0).reindex(_ce.index).to_numpy(dtype=float)
+assert np.allclose(_ce["buyer_hhi"], 1.0 / _n, rtol=1e-12), _ce["buyer_hhi"].to_numpy()
+_tot = _ce[["struct_common", "struct_specific", "gran_common", "gran_specific"]]
+assert np.allclose(_tot.sum(axis=1), _ce["E_H_bar"], atol=1e-12)
+print(f"12b ok equal buyer weights keep the column totals, leave zero-spend buyers "
+      f"out, and put rho_floor on 1/n_buyers ({_ce['rho_floor'].mean():.2f})")
+
 print(f"12 ok four cells add up; rho hits its floor {cells['rho_floor'].mean():.2f} "
       f"when winners are independent and >0.9 when shared; the variety route "
       f"reproduces the realisation route to {gap:.1%}")
