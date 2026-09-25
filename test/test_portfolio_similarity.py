@@ -4,16 +4,13 @@ supplier customer portfolios, the groups cut out of it, and the within/between s
 The fixture plants TWO segmented blocks of suppliers -- one selling only to the first half
 of the buyers, one only to the second -- plus a handful of cells that straddle them, so the
 partition has a known answer and the rewiring null has something to fail against."""
-import json, numpy as np, pandas as pd, matplotlib, warnings
+import os, sys, numpy as np, pandas as pd, matplotlib, warnings
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
-NB = "/home/user/SMM_Spatial_Comovement/diffusion.ipynb"
-nb = json.load(open(NB, encoding="utf-8"))
-_cells = [c for c in nb["cells"] if c["cell_type"] == "code"
-          and "def portfolio_similarity(" in "".join(c["source"])]
-assert len(_cells) == 1, f"{len(_cells)} cells define portfolio_similarity"
-code = "".join(_cells[0]["source"])
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _nbmod import install
 
 S, R, BUY = 2, 24, 10
 CELLS = {0: np.arange(12), 1: np.arange(12, 24)}
@@ -47,7 +44,9 @@ def _by_sector_code(df, data):
 data = {"S": S, "R": R, "sector_names": ["A", "B"], "emp_pi_r": PI_R}
 PORTFOLIO_TAUS = (0.6, 0.7, 0.8)
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
-exec(code, globals())
+# The library, with the fixture installed where its functions resolve their globals.
+import utils, granular_lib
+install(globals(), [utils, granular_lib])
 
 # --- 1. the cosine, and its scale invariance ---------------------------------
 X, cells = portfolio_matrix(data, 0)

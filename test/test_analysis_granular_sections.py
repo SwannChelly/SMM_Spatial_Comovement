@@ -1,5 +1,6 @@
 """
-Gates for the sections added to `analysis_granular.ipynb`:
+Gates for the reporting sections, now in `utils.py`, `report_lib.py`,
+`diffusion_lib.py` and `granular_lib.py`:
   1. Identification / sensitivity  — the variety-count columns and the noise mask,
   2. Untargeted moment             — the PPML distance elasticity of comovement,
   3. Comparative advantage         — T against distance, within sector,
@@ -27,52 +28,52 @@ import pandas as pd
 import statsmodels.api as sm
 
 HERE = Path(__file__).resolve().parent
-NB_PATH = HERE.parent / "analysis_granular.ipynb"
+ROOT = HERE.parent
 TMP = HERE / "_granular_sections_tmp"
 TMP.mkdir(exist_ok=True)
 
 
-# The notebook alternates DEFINITION cells with cells that RUN the reporting — the
-# per-section `for cfg in INDUSTRIES:` loops, the joint table, the Constants cell and
-# the full run at the bottom. Those touch the real run tree, which does not exist here,
-# so they are skipped and only the definitions are executed.
-#
-# A cell is a run cell when it hits one of the markers below AND defines nothing at top
-# level. The second condition matters: the loader cell's DOCSTRING shows the call
-# `data = load_granular_data(industry, mu=2)`, so the marker alone would skip the very
-# cell that defines everything.
-RUN_CELL_MARKERS = (
-    "RUN THE REPORTING",
-    "RUN THIS SECTION ON ITS OWN",
-    "= load_granular_data(",
-    "generate_combined_table(INDUSTRIES",
-    "RUN_KWARGS = dict(",
-)
-# ... except that a definition cell may legitimately contain one of those strings in a
-# docstring, which is why `notebook_namespace` also requires the cell to define nothing.
+# The definitions are modules now, so the gate imports them. It used to assemble the
+# notebook's definition cells and skip its run cells by a banner -- and had to require
+# the cell to define something at top level as well, because the loader cell's own
+# docstring carried the banner's text. None of that is needed to import a module.
+import sys as _sys
+if str(ROOT) not in _sys.path:
+    _sys.path.insert(0, str(ROOT))
+import utils, report_lib, diffusion_lib, granular_lib                 # noqa: E402
+
+LIBRARIES = (utils, report_lib, diffusion_lib, granular_lib)
+
+
+
+_REAL_THETA_FROM_JULIA = utils._theta_from_julia
+
+
+def fixture_theta(on=True):
+    """Put `load_parameters.jl` out of `model_theta`'s reach, or put it back.
+
+    `model_theta` prefers that file over `stats.csv` -- the deliberate precedence, since
+    it is what the economy on disk was solved at -- and as a module it finds the repo's
+    copy from any working directory. A fixture that plants its own `theta` and checks a
+    closed form against it therefore needs the real calibration out of the way. The
+    precedence itself is gated in `test_extended_economy.py`, against the real file,
+    which is where it belongs.
+    """
+
+    utils._theta_from_julia = ((lambda root=None: None) if on
+                               else _REAL_THETA_FROM_JULIA)
 
 
 def notebook_namespace():
-    """
-    Every DEFINITION cell of the notebook, executed in order.
-
-    Cells are located by CONTENT rather than by index, so inserting a section above
-    does not silently change what is being tested.
-    """
-    nb = json.load(open(NB_PATH))
+    """Every name the four libraries define, in one namespace."""
     ns = {}
-    for i, c in enumerate(nb["cells"]):
-        if c["cell_type"] != "code":
-            continue
-        src = "".join(c["source"])
-        defines = re.search(r"^(def|class)\s", src, re.M) is not None
-        if src.lstrip().startswith("%") or (
-                not defines and any(m in src for m in RUN_CELL_MARKERS)):
-            continue
-        exec(compile(src, f"<notebook cell {i}>", "exec"), ns)
-    for name, value in (("THETA_DEFAULT", 1.768),      # normally set by the skipped
+    for m in LIBRARIES:
+        for k in vars(m):
+            if not k.startswith("__"):
+                ns[k] = getattr(m, k)
+    for name, value in (("THETA_DEFAULT", 1.768),      # the notebook Constants cell's
                         ("NU_S_DEFAULT", 1.5),
-                        ("EMPIRICAL_MEAN_LOG_D", 5.8)):  # Constants cell
+                        ("EMPIRICAL_MEAN_LOG_D", 5.8)):
         ns.setdefault(name, value)
     return ns
 
@@ -334,6 +335,7 @@ def gate_untargeted():
     #    replace the estimated decomposition, so what is gated is the arithmetic of
     #    `attach_lambda` (against a direct loop) and the shares (against their formula).
     # ---------------------------------------------------------------------------
+    fixture_theta(True)                  # the fixture's own theta, not the repo's
     S_l, R_l = 2, 6
     aa_of_ze = np.array([0, 0, 1, 1, 2, 2])
     T_aa = np.array([[1.0, 0.4, 0.25], [0.7, 1.3, 0.9]])
@@ -611,6 +613,7 @@ def gate_untargeted():
         raise AssertionError("should have raised")
 
     print("\nALL OK")
+    fixture_theta(False)                 # restore the real precedence
 
 def gate_comparative_advantage():
     """The T layout, the closed-form win probabilities, and the three measurements."""
@@ -1225,36 +1228,27 @@ def gate_amplification():
     print("counterfactual: support kept, D_r invariant, uniform benchmark exact, "
           "allocation matches the closed form")
 
-    # --- and the section has to run after the LOADER ALONE ----------------------
+    # --- and the section must not depend on the comparative-advantage one -------
     # The counterfactual reaches for the Ricardian geometry, which the comparative-
-    # advantage section also uses. If that helper lived inside THAT section, running
-    # this one on its own would raise NameError on the first counterfactual — which is
-    # exactly what happened once. So rebuild a namespace with every comparative-
-    # advantage cell REMOVED and require the reallocation to come out identical.
-    nb = json.load(open(NB_PATH))
-    ca_cells = ("def ca_distance_equivalence", "def ca_win_margin",
-                "def ca_variance_decomposition", "def ca_covariance_benchmark",
-                "def comparative_advantage_summary", "def plot_ca_distribution")
-    ns_noca = {}
-    for j, cell in enumerate(nb["cells"]):
-        if cell["cell_type"] != "code":
-            continue
-        code = "".join(cell["source"])
-        defines = re.search(r"^(def|class)\s", code, re.M) is not None
-        if code.lstrip().startswith("%") or any(m in code for m in ca_cells) or (
-                not defines and any(m in code for m in RUN_CELL_MARKERS)):
-            continue
-        exec(compile(code, f"<notebook cell {j}>", "exec"), ns_noca)
-    for name, value in (("THETA_DEFAULT", 1.768), ("NU_S_DEFAULT", 1.5),
-                        ("EMPIRICAL_MEAN_LOG_D", 5.8)):
-        ns_noca.setdefault(name, value)
-    assert "ca_win_margin" not in ns_noca, "the comparative-advantage cells were not excluded"
-    alone = ns_noca["counterfactual_frames"](data, diffusion=diff, verbose=False)
-    for lab in frames:
-        assert np.allclose(alone[lab]["upstream_sales"].to_numpy(),
-                           frames[lab]["upstream_sales"].to_numpy()), lab
-    print("the amplification section runs after the loader alone, with no "
-          "comparative-advantage cell executed")
+    # advantage tests also use. When that helper lived inside THOSE cells, running this
+    # section on its own raised NameError on the first counterfactual -- which is exactly
+    # what happened once. The geometry is in `utils` now, so the statement to gate is a
+    # module one and is stronger than the cell-exclusion it replaces: `diffusion_lib`
+    # must not read a single name from `granular_lib`.
+    import ast as _ast
+    _src = (ROOT / "diffusion_lib.py").read_text(encoding="utf-8")
+    _imports = [n for n in _ast.parse(_src).body
+                if isinstance(n, (_ast.Import, _ast.ImportFrom))]
+    _from = {getattr(n, "module", None) for n in _imports}
+    assert "granular_lib" not in _from and "report_lib" not in _from, _from
+    _gl = {n.name for n in _ast.parse((ROOT / "granular_lib.py").read_text(encoding="utf-8")).body
+           if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))}
+    _used = {n.id for n in _ast.walk(_ast.parse(_src))
+             if isinstance(n, _ast.Name) and isinstance(n.ctx, _ast.Load)}
+    _leak = sorted(_used & _gl)
+    assert not _leak, f"diffusion_lib reads granular_lib's {_leak}"
+    print("the amplification library imports nothing from the comparative-advantage one, "
+          "so either section runs on its own")
     print(cfs.round(3).to_string())
 
     # the figures

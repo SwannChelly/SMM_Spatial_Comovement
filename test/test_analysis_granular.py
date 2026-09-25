@@ -1,5 +1,6 @@
 """
-Gate for the granular / attraction-area Python reporting (`analysis_granular.ipynb`).
+Gate for the granular / attraction-area Python reporting (`utils.py` + `report_lib.py`,
+the library behind `model_report.ipynb`).
 
 Standalone and data-free: it writes a SYNTHETIC baseline + reporting tree with the
 exact file layout `main.jl --granular=true --ca_level=aa` produces, then executes the
@@ -9,7 +10,7 @@ flattening, MOMENT_MASK, the block split of `best_simulated_moments.npy`, the mu
 mu_2 folder routing, the beta -> gamma -> G standard-error split, the reference-area
 reconstruction in the gamma panel, and the LaTeX table's contents.
 
-    python3 test/test_analysis_granular.py [path/to/analysis_granular.ipynb]
+    python3 test/test_analysis_granular.py
 
 Runs every gate, prints PASS/FAIL per gate and exits non-zero if any failed.
 Print-only otherwise; nothing in the estimation pipeline is touched.
@@ -876,29 +877,30 @@ def run_checks(ns, ROOT, exp):
     return 0
 
 
-def load_notebook_code(path):
-    """Execute the notebook's code cells (skipping magics and the driver) in one namespace."""
+def load_library_code():
+    """The reporting library, as one namespace.
+
+    This used to execute `analysis_granular.ipynb`'s definition cells and skip its run
+    cells by a banner. The definitions are now modules, so they are imported: the same
+    code, without a notebook's JSON in the loop, and with no need to guess which cells
+    define and which run.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.join(here, "..")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import utils, report_lib
     ns = {"__name__": "nb"}
-    nb = json.load(open(path))
-    for i, cell in enumerate(nb["cells"]):
-        if cell["cell_type"] != "code":
-            continue
-        src = "".join(cell["source"])
-        # DEFINITION cells only. Every cell that RUNS a section on the real tree opens
-        # with the same banner, and the full run with its own — both are skipped here.
-        if (src.lstrip().startswith("%")
-                or "RUN THIS SECTION ON ITS OWN" in src
-                or "RUN THE REPORTING" in src):
-            continue
-        exec(compile(src, f"{os.path.basename(path)}:cell{i}", "exec"), ns)
+    for m in (utils, report_lib):
+        for k in vars(m):
+            if not k.startswith("__"):
+                ns[k] = getattr(m, k)
     return ns
 
 
 if __name__ == "__main__":
-    nb_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "analysis_granular.ipynb")
     with tempfile.TemporaryDirectory() as root:
         exp = build_synthetic_tree(root)
-        ns = load_notebook_code(nb_path)
-        print(f"loaded code from {nb_path}")
+        ns = load_library_code()
+        print("loaded code from utils.py + report_lib.py")
         sys.exit(run_checks(ns, root, exp))

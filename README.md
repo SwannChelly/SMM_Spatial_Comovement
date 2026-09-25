@@ -38,8 +38,16 @@ SMM_Spatial_Comovement/
 ├── optimizer.jl            # backend-neutral search: staging, bounds, loops
 ├── tools.jl                # inference, Jacobian, weight matrix, reporting
 │
-├── analysis.ipynb          # post-run analysis notebook (Python; installs its own deps)
-├── analysis_granular.ipynb # post-run analysis for --granular=true --ca_level=aa
+├── analysis.ipynb          # LEGACY post-run analysis (continuum ZE model)
+│
+│   # Python reporting for a --granular=true --ca_level=aa run. The notebooks are
+│   # narrative plus run cells; every function lives in one of the four modules.
+├── utils.py                # loader, theta+, Ricardian geometry, THE ECONOMY
+├── report_lib.py           # moment fit, count curve, Jacobian, identification, untargeted
+├── diffusion_lib.py        # amplification, local share, incidence, IO benchmark
+├── granular_lib.py         # comparative advantage, concentration, portfolios, dispersion
+├── model_report.ipynb          # the FIT of the model to its targets
+├── tests_counterfactuals.ipynb # the tests and the counterfactuals
 │
 ├── optimizers/             # interchangeable search engines (--optimizer=…)
 │   ├── pso_integration.jl      #   Particle Swarm Optimization (default)
@@ -77,12 +85,41 @@ Each subfolder contains a short `files.md` describing its files.
 julia pkg.jl
 ```
 
-**Python** (only for `analysis.ipynb` / `analysis_granular.ipynb`): each notebook
-installs its own dependencies in its first cell — just open and run it, no separate
-setup needed. `analysis_granular.ipynb` is the reporting for a granular /
-attraction-area run; set `MU = 1` or `MU = 2` in its last cell to read the step-1 or
-the step-3 best parameters. It is gated by `python3 test/test_analysis_granular.py`,
-which runs the notebook's own cells against a synthetic reporting tree.
+**Python** (for the reporting notebooks): each notebook installs its own dependencies
+in its first cell — just open and run it, no separate setup needed.
+
+Two notebooks report a granular / attraction-area run, and they split by what they
+answer. `model_report.ipynb` displays the FIT of the model to its targets — the moment
+table, the extensive margin and the zero-supplier share with their standard errors, the
+count curve, the Jacobian, identification, and the untargeted distance elasticity.
+`tests_counterfactuals.ipynb` interrogates the model one test at a time and runs the
+counterfactuals. Set `MU = 1` or `MU = 2` in the Constants cell to read the step-1 or
+the step-3 estimate.
+
+Neither notebook holds a function definition. Everything they call is in `utils.py`,
+`report_lib.py`, `diffusion_lib.py` or `granular_lib.py`, so a section is edited in a
+file and the gates under `test/` import the same code rather than executing the
+notebook's JSON.
+
+**Every economy is simulated in Python** from the extended parameter set
+`theta+ = (Omega_L, Omega_s, A, alpha, T, N)` — the estimated one and both
+counterfactuals, by one forward map (`utils.simulate_economy`). `suppliers.parquet` is
+not read by the reporting: it is the input to `utils.check_against_julia`, which compares
+the Python port against `solve_network` to the bit given Julia's own draws. That is the
+only exact check on the port, so run it after any change to either implementation:
+
+```python
+import utils
+d = utils.load_granular_data("aero", mu=2, base="..", profile_T=True, ca_level="aa",
+                             granular=True, relax_n_lo=True, optimizer="pso",
+                             parts=("core", "firm"))
+utils.check_against_julia(d)          # needs suppliers.parquet AND post_hoc_u.npy
+```
+
+The gates are `python3 test/test_analysis_granular.py` (the moment layout and the
+Jacobian axes), `test/test_analysis_granular_sections.py`, `test/test_modules.py` (the
+module layout, the specialised loader and the parquet-free path), `test/test_notebooks.py`
+and the five section files — all against synthetic fixtures, no run tree needed.
 
 **Input data.** Each industry needs a `baseline_<industry>/` folder (e.g.
 `baseline_aero/`) holding the empirical inputs — distances, wages, sectoral shares,

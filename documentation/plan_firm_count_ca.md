@@ -311,12 +311,12 @@ regression cells, `q̂`, `concentrate_N_s`, the Jacobian, the weight matrix — 
 
 ### 3.2 Python — two sites
 
-5. **`diffusion.ipynb`** — the loader gains `N_sr` and `N_FAC`; `sourcing_geometry`'s
+5. **`utils.py`** (loader + geometry) — the loader gains `N_sr` and `N_FAC`; `sourcing_geometry`'s
    one line
    `T_cell = np.ones(...) if equalise_T else est["T"][s, aa_of_ze[cells]]`
    becomes `... * N_fac[s, cells]`, and `equalise_T` becomes a **three-way switch**
    (§4.3).
-6. **`analysis_granular.ipynb`** — same `T` reconstruction; the §4 comparative-
+6. **`report_lib.py` / `granular_lib.py`** — same `T` reconstruction; the §4 comparative-
    advantage section (the variance decomposition, the distance equivalence, the
    alignment covariance) all read `T` at the cell level and will change numerically.
 

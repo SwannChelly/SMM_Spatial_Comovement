@@ -15,16 +15,12 @@ The fixture is the planted economy of `test_concentration_identity.py` with a HA
 `theta+` -- the point of the exercise being that `theta+` is a plain object, so it is written
 down rather than read from a run tree that does not exist in this environment.
 """
-import json, os, numpy as np, pandas as pd, warnings
+import os, sys, numpy as np, pandas as pd, warnings
 warnings.filterwarnings("ignore")
 
-_NB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "diffusion.ipynb")
-nb = json.load(open(_NB, encoding="utf-8"))
-_ANCHORS = ("def simulate_economy(",)
-_cells = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"
-          and any(a in "".join(c["source"]) for a in _ANCHORS)]
-assert len(_cells) == 1, f"{len(_cells)} cells define simulate_economy"
-code = _cells[0]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _nbmod import install
 
 S, R, THETA, ALPHA = 3, 12, 1.3, 0.4
 rng = np.random.default_rng(3)
@@ -60,7 +56,18 @@ CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
 THETA_DEFAULT = 1.0
 data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "post_hoc_N_hat": N_HAT,
         "folder": "x", "step_dir": "step3"}
-exec(code, globals())
+
+# The library, with the fixture installed where its functions resolve their globals.
+# `sourcing_geometry` and `_parquet_sector_index` are the two the economy reads; the
+# four calibration constants are what `extended_parameters` would otherwise take from
+# the notebook's own Constants cell.
+import utils, granular_lib
+install(globals(), [utils, granular_lib],
+        stubs={"sourcing_geometry": sourcing_geometry,
+               "_parquet_sector_index": _parquet_sector_index,
+               "NU_S_DEFAULT": NU_S_DEFAULT, "NU_ACROSS_DEFAULT": NU_ACROSS_DEFAULT,
+               "LAMBDA_DEFAULT": LAMBDA_DEFAULT, "THETA_DEFAULT": THETA_DEFAULT,
+               "CF_REGIMES": CF_REGIMES})
 
 # theta+ written down by hand: this IS the object, so nothing is read from a run tree.
 XP = {"Omega_L": 0.31, "Omega_s": np.array([0.2, 0.3, 0.5]),
@@ -308,20 +315,12 @@ print("9 ok  the comparator reproduces a parquet written in Julia's schema exact
 import re as _re
 from pathlib import Path as _P
 _root = _P(os.path.dirname(os.path.abspath(__file__))) / ".."
-# `_theta_from_julia` and `model_theta` live in the LOADER cell, which this gate does not
-# execute (it would pull the whole tree reader and overwrite the fixture's stubs). The two
-# definitions are sliced out by text and run in their own namespace, so what is gated is
-# the shipped source rather than a copy.
-_lc = [c for c in nb["cells"] if c["cell_type"] == "code"
-       and "def _theta_from_julia(" in "".join(c["source"])]
-assert len(_lc) == 1, f"{len(_lc)} cells define _theta_from_julia"
-_ls = "".join(_lc[0]["source"])
-_seg = _ls[_ls.index("def _theta_from_julia("):_ls.index("def unpack_estimated_T(")]
-_ns = {"Path": _P, "np": np, "THETA_DEFAULT": THETA_DEFAULT,
-       "_read_named_value": lambda df, n: (float(df.loc[df["name"] == n, "value"].iloc[0])
-                                           if (df["name"] == n).any() else None)}
-exec(_seg, _ns)
-_theta_from_julia, model_theta = _ns["_theta_from_julia"], _ns["model_theta"]
+# These live in utils beside the loader and are imported, not sliced out of a cell by
+# string index -- which is what the single-namespace notebook layout used to force.
+# `_read_named_value` is stubbed on the module so the fixture's two-column frame is read.
+utils._read_named_value = lambda df, n: (
+    float(df.loc[df["name"] == n, "value"].iloc[0]) if (df["name"] == n).any() else None)
+_theta_from_julia, model_theta = utils._theta_from_julia, utils.model_theta
 jl = _theta_from_julia(_root)
 src = (_root / "load_parameters.jl").read_text()
 want = float(_re.search(r"const\s+theta\s*=\s*\$\(\s*([0-9.eE+-]+)\s*\)", src).group(1))
@@ -329,16 +328,29 @@ assert jl == want, (jl, want)
 # it must WIN over a disagreeing stats.csv, since that is the value the parquet carries
 coefs = pd.DataFrame({"name": ["theta"], "value": [want * 2.0]})
 assert model_theta({"coefs": coefs, "base": str(_root)}) == want
-# with the file out of reach it falls back to stats.csv, and to THETA_DEFAULT with neither
-import os as _os
-_cwd = _os.getcwd(); _os.chdir("/tmp")
+# With the file out of reach it falls back to stats.csv, and to THETA_DEFAULT with
+# neither. Reaching that branch now takes a stub rather than a chdir: as a module,
+# `_theta_from_julia` also searches the directory the module itself sits in, so it finds
+# `load_parameters.jl` from any working directory -- which is stricter than the notebook
+# was, and is the point. The precedence it guards is asserted above with the real
+# function; what is left to gate here is `model_theta`'s two fallbacks.
+_real = utils._theta_from_julia
+utils._theta_from_julia = lambda root=None: None
 try:
     assert model_theta({"coefs": coefs, "base": "/nonexistent"}) == want * 2.0
     assert model_theta({"base": "/nonexistent"}) == float(THETA_DEFAULT)
 finally:
+    utils._theta_from_julia = _real
+# and the module really does find the file from an unrelated working directory
+import os as _os
+_cwd = _os.getcwd(); _os.chdir("/tmp")
+try:
+    assert utils._theta_from_julia() == want
+finally:
     _os.chdir(_cwd)
-print(f"10 ok  theta is read from load_parameters.jl ({want:g}) and wins over a "
-      "disagreeing stats.csv, so the notebook cannot drift from the economy it reports on")
+print(f"10 ok  theta is read from load_parameters.jl ({want:g}) from any working "
+      "directory and wins over a disagreeing stats.csv, so the notebook cannot drift "
+      "from the economy it reports on")
 
 # --- 11. the frame round trip: the emitted schema IS the parquet -----------------------
 # The point of `economy_frame` is that the whole reporting stack reads `suppliers.parquet`,
@@ -363,20 +375,9 @@ assert fr.groupby("SIREN")["replication"].nunique().max() == 1
 # the columns the section reads must carry the economy itself
 assert (fr["share"] > 0).all() and np.isfinite(fr["productivity"]).all()
 assert np.allclose(fr["intermediate_derivative"] * 0 + 1, 1)   # finite, no div-by-zero
-# ROUND TRIP through the notebook's own reader. `variety_panel` and `_sector_spend` live in
-# the buyer-portfolio cell, which this gate does not execute; both depend only on
-# `_parquet_sector_index` (stubbed above), so they are sliced out by text and run here --
-# gating the shipped source rather than a copy.
-_pc = [c for c in nb["cells"] if c["cell_type"] == "code"
-       and "def variety_panel(" in "".join(c["source"])]
-assert len(_pc) == 1, f"{len(_pc)} cells define variety_panel"
-_ps = "".join(_pc[0]["source"])
-_ns2 = {"np": np, "pd": pd, "_parquet_sector_index": _parquet_sector_index}
-for _a, _b in (("def _sector_spend(", "\ndef _conc_identity("),
-               ("def variety_panel(", "\ndef variety_concentration(")):
-    _i = _ps.index(_a)
-    exec(_ps[_i:_ps.index(_b, _i)], _ns2)
-variety_panel, _sector_spend = _ns2["variety_panel"], _ns2["_sector_spend"]
+# ROUND TRIP through the library's own reader. `variety_panel` and `_sector_spend` are
+# imported from `granular_lib`, where `_parquet_sector_index` is already stubbed above.
+variety_panel, _sector_spend = granular_lib.variety_panel, granular_lib._sector_spend
 sd = simulated_data(data, econ, XP)
 pan = variety_panel(sd)
 for s in range(S):

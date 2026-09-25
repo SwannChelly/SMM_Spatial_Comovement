@@ -1,0 +1,132 @@
+"""Gates for the two notebooks.
+
+The notebooks are now narrative plus run cells: every function they call is imported
+from `utils`, `report_lib`, `diffusion_lib` or `granular_lib`. Two things have to hold,
+and neither can be checked by a section gate.
+
+  1. STATICALLY, every code cell parses and every free name it uses is bound -- by the
+     libraries it star-imports, by the builtins, or by an earlier cell. That is the
+     property the old single-namespace layout gave for free and that a notebook of
+     imports has to earn: a function left behind in the other notebook would read here
+     as a NameError only when the cell was run, which is exactly how `alignment_frame`
+     went missing for four days.
+
+  2. FUNCTIONALLY, the wiring the refactor changed actually runs: the imports, the
+     Constants cell and the economy run cell execute against a real (if tiny) run tree
+     that carries NO `suppliers.parquet`, and produce every regime.
+
+The libraries' own behaviour is gated by the section files; this one gates the notebooks.
+"""
+import ast, builtins, json, os, shutil, sys, warnings
+warnings.filterwarnings("ignore")
+import matplotlib
+matplotlib.use("Agg")
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.join(HERE, "..")
+sys.path.insert(0, ROOT)
+sys.path.insert(0, HERE)
+import utils, report_lib, diffusion_lib, granular_lib                 # noqa: E402
+from _fixture_tree import build as build_tree                         # noqa: E402
+
+LIB = {"utils": utils, "report_lib": report_lib,
+       "diffusion_lib": diffusion_lib, "granular_lib": granular_lib}
+NOTEBOOKS = ["tests_counterfactuals.ipynb", "model_report.ipynb"]
+
+
+def _bound(src, known):
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            known.add(n.name)
+            a = n.args
+            for x in list(a.args) + list(a.kwonlyargs) + list(a.posonlyargs):
+                known.add(x.arg)
+            if a.vararg:
+                known.add(a.vararg.arg)
+            if a.kwarg:
+                known.add(a.kwarg.arg)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            mod = getattr(n, "module", None)
+            for x in n.names:
+                if x.name == "*" and mod in LIB:
+                    known |= {k for k in vars(LIB[mod]) if not k.startswith("_")}
+                else:
+                    known.add((x.asname or x.name).split(".")[0])
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            known.add(n.id)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            known.add(n.name)
+        elif isinstance(n, (ast.With, ast.AsyncWith)):
+            for it in n.items:
+                if isinstance(it.optional_vars, ast.Name):
+                    known.add(it.optional_vars.id)
+    return known
+
+
+# --- 1. every cell parses, every name is bound ---------------------------------------
+n_cells = 0
+for nbname in NOTEBOOKS:
+    nb = json.load(open(os.path.join(ROOT, nbname), encoding="utf-8"))
+    assert nb.get("nbformat") == 4, nbname
+    known = set(dir(builtins)) | {"display", "get_ipython", "__file__", "__name__"}
+    for i, c in enumerate(nb["cells"]):
+        if c["cell_type"] != "code":
+            continue
+        src = "".join(c["source"])
+        if src.lstrip().startswith("%"):
+            continue
+        n_cells += 1
+        ast.parse(src)                       # raises with the cell's own message
+        missing = sorted({n.id for n in ast.walk(ast.parse(src))
+                          if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                         - _bound(src, set(known)))
+        assert not missing, f"{nbname} cell {i}: undefined names {missing}"
+        known = _bound(src, known)
+print(f"1 ok  {len(NOTEBOOKS)} notebooks, {n_cells} code cells: every cell parses and "
+      "every free name is bound by the libraries or an earlier cell")
+
+# --- 2. neither notebook reads the parquet in its reporting path ---------------------
+for nbname in NOTEBOOKS:
+    src = "".join("".join(c["source"]) for c in
+                  json.load(open(os.path.join(ROOT, nbname), encoding="utf-8"))["cells"]
+                  if c["cell_type"] == "code")
+    assert '"firm"' not in src.split("check_against_julia")[0] or "RUN_KWARGS" in src
+    # the loader must be called with an explicit `parts`, never with the default
+    assert "parts=(" in src, f"{nbname} does not specialise the loader"
+    assert "suppliers_continuum" not in src, \
+        f"{nbname} still reaches for Julia's second parquet"
+print("2 ok  both notebooks specialise the loader and neither reads "
+      "suppliers_continuum.parquet")
+
+# --- 3. the wiring runs against a tree with no parquet -------------------------------
+TMP, KW = build_tree()
+try:
+    nb = json.load(open(os.path.join(ROOT, "tests_counterfactuals.ipynb"),
+                        encoding="utf-8"))
+    code = [c for c in nb["cells"] if c["cell_type"] == "code"
+            and not "".join(c["source"]).lstrip().startswith("%")]
+    g = {"__name__": "__nbgate__", "display": lambda *a, **k: None}
+    sys.path.insert(0, ROOT)
+    # imports, Constants
+    for c in code[:2]:
+        exec(compile("".join(c["source"]), "<imports/constants>", "exec"), g)
+    # point the Constants cell's run tree at the fixture, and the industries at it
+    g["RUN_KWARGS"] = {**KW, "parts": ("core", "geography")}
+    g["INDUSTRIES"] = [{"industry": "test", "display_name": "Test"}]
+    g["ECONOMY_REPLICATIONS"] = 3
+    g["MU"] = 2
+    # the economy run cell -- the one the refactor rewrote
+    econ_cell = next(c for c in code if "ECONOMIES = {}" in "".join(c["source"]))
+    exec(compile("".join(econ_cell["source"]), "<economy run cell>", "exec"), g)
+    ECON = g["ECONOMIES"]
+    assert set(ECON) == {("Test", r) for r in utils.CF_REGIMES}, sorted(ECON)
+    for (_, reg), dl in ECON.items():
+        assert dl["suppliers"] is not None and len(dl["suppliers"]) > 0
+        assert dl["economy"].meta["n_rep"] == 3
+        assert str(dl["suppliers_path"]).startswith("<simulated")
+    print(f"3 ok  the economy run cell builds {len(ECON)} economies from theta+ against a "
+          "tree carrying no suppliers.parquet, at the notebook's own replication count")
+finally:
+    shutil.rmtree(TMP, ignore_errors=True)
+
+print("\nall gates pass")

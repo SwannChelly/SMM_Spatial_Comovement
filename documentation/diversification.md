@@ -727,7 +727,7 @@ using $\operatorname{Cov}_w(w,\gamma) = \sum_r w_r^2\gamma_{krs} - H\,\mathbb E_
 
 | Object | Where it is | Note |
 |---|---|---|
-| $a_{ir}$ panel, zero-filled | `analysis_granular.ipynb`, `build_a_ir_panel` | one row per (supplier, downstream region); `a_ir` already computed |
+| $a_{ir}$ panel, zero-filled | `report_lib.py`, `build_a_ir_panel` | one row per (supplier, downstream region); `a_ir` already computed |
 | $w_r^{sr'd}$ | `<run>/<step>/w_srd_r.npy`, `[s, r', r]` | written by `write_post_hoc` in `main.jl` |
 | $\gamma_{r'rs}$ (closed form) | `sourcing_geometry(data)["by_sector"][s]["rho"]` | `psi/tot`, cells $\times$ downstream |
 | $\Phi_{rs}$ | the `tot` array inside `sourcing_geometry` | $m_{rs} = X_{rs}/\texttt{tot}$ is one line — but `tot` sums over that sector's *domestic active cells only*, so if foreign competition belongs in $\Phi$ the discrepancy is buyer-specific and does not cancel in the softmax |

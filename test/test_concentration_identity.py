@@ -1,25 +1,11 @@
 """Gate for the new concentration/commonality block: a planted economy whose answers
 need no arithmetic, plus the identities the code claims."""
-import json, math, numpy as np, pandas as pd, matplotlib, os
+import math, os, sys, numpy as np, pandas as pd, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 
-_NB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "diffusion.ipynb")
-nb = json.load(open(_NB))
-# located by CONTENT, not by index: a cell inserted above must not silently shift this
-# gate onto another section's definitions. The section is split across three cells —
-# the buyer's own portfolio, the commonality exercise, and the report that joins them
-# — so all three are taken, in notebook order, and a missing one is named rather than
-# surfacing later as a NameError on whichever function it held.
-# `def simulate_economy(` joins them because the counterfactual regimes now delegate to
-# that single forward map, so the cell defining it has to be in scope here too.
-_ANCHORS = ('def simulate_economy(', 'def sector_concentration(',
-            'def concentration_summary(', 'def concentration_report(')
-_cells = [''.join(c['source']) for c in nb['cells'] if c['cell_type'] == 'code'
-          and any(a in ''.join(c['source']) for a in _ANCHORS)]
-_missing = [a for a in _ANCHORS if not any(a in c for c in _cells)]
-assert not _missing, f"no notebook cell defines {_missing}"
-assert len(_cells) == len(_ANCHORS), f"{len(_cells)} cells carry the section's anchors"
-code = "\n".join(_cells)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _nbmod import install
 
 S, R, THETA = 3, 12, 1.3
 rng = np.random.default_rng(3)
@@ -101,12 +87,11 @@ UNIFORM_REGIME = "Uniform benchmark"
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
 CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
              "Comparative advantage only": (.45, .60, .45)}
-exec(code, globals())
-
-# `theta+` for the fixture. Defined AFTER the exec on purpose: `extended_parameters` is
-# itself one of the functions the notebook cell defines, so a stub written before would be
-# overwritten by it -- and the real one reads `best_params` off a run tree that does not
-# exist here. This is the whole object, written down by hand, which is the point of it.
+# `theta+` for the fixture, written down by hand -- which is the point of the object: the
+# real `extended_parameters` reads `best_params` off a run tree that does not exist here.
+# It sits BEFORE the install, and that is the whole difference a module makes: under the
+# old `exec` a stub written here would have been overwritten by the cell's own definition,
+# so it had to be written after and the ordering had to be explained.
 def extended_parameters(data, n_hat=None, theta=None, verbose=False):
     nb_ = len(buyers)
     return {"Omega_L": 0.31, "Omega_s": np.full(S, 1.0 / S),
@@ -118,6 +103,12 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=False):
             "lam": LAMBDA_DEFAULT, "epsilon": -16.0,
             "delta": np.ones(nb_), "wage": np.ones(R)}
 
+# The library, with the fixture installed where its functions resolve their globals.
+# This replaces `exec`-ing the notebook's definition cells into these globals: a library
+# function looks its globals up in ITS OWN module, so a stub is a module attribute, and
+# `install` then copies the library names back here without touching the fixture.
+import utils, granular_lib
+install(globals(), [utils, granular_lib])
 
 # --- 1. the identity, and the alpha=0 control -------------------------------
 sec = sector_concentration(data, verbose=False)

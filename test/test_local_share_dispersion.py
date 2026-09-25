@@ -7,23 +7,13 @@ variety by variety FROM the geometry, with equal expenditure across a buyer's va
 That is what makes the central gate real: the measured standard deviation across
 replications and the closed form `sqrt(sum_s theta^2 V p(1-p))` are two routes that share no
 code, and they must agree to the Monte-Carlo scale."""
-import json, os, numpy as np, pandas as pd, matplotlib, warnings
+import os, sys, numpy as np, pandas as pd, matplotlib, warnings
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
-_NB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "diffusion.ipynb")
-nb = json.load(open(_NB, encoding="utf-8"))
-# located by CONTENT: the buyer-portfolio cell carries the machinery this test rides
-# (`_sector_spend`, `structural_networks`, `variety_panel`, `simulate_granular_regime`,
-# `_V_by_buyer`), the second carries the test itself. Both are executed, so a helper
-# that moved cells is caught here rather than surfacing as a NameError in a run.
-_ANCHORS = ("def simulate_economy(", "def sector_concentration(", "def local_share_dispersion(")
-_cells = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"
-          and any(a in "".join(c["source"]) for a in _ANCHORS)]
-_missing = [a for a in _ANCHORS if not any(a in c for c in _cells)]
-assert not _missing, f"no notebook cell defines {_missing}"
-assert len(_cells) == len(_ANCHORS), f"{len(_cells)} cells carry the anchors"
-code = "\n".join(_cells)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _nbmod import install
 
 S, R, THETA = 3, 12, 1.3
 rng = np.random.default_rng(3)
@@ -98,12 +88,11 @@ INFINITE_REGIME = "Infinite varieties"
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
 CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
              "Comparative advantage only": (.45, .60, .45)}
-exec(code, globals())
-
-# `theta+` for the fixture. Defined AFTER the exec on purpose: `extended_parameters` is
-# itself one of the functions the notebook cell defines, so a stub written before would be
-# overwritten by it -- and the real one reads `best_params` off a run tree that does not
-# exist here. This is the whole object, written down by hand, which is the point of it.
+# `theta+` for the fixture, written down by hand -- which is the point of the object: the
+# real `extended_parameters` reads `best_params` off a run tree that does not exist here.
+# It sits BEFORE the install, and that is the whole difference a module makes: under the
+# old `exec` a stub written here would have been overwritten by the cell's own definition,
+# so it had to be written after and the ordering had to be explained.
 def extended_parameters(data, n_hat=None, theta=None, verbose=False):
     nb_ = len(buyers)
     return {"Omega_L": 0.31, "Omega_s": np.full(S, 1.0 / S),
@@ -115,6 +104,12 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=False):
             "lam": LAMBDA_DEFAULT, "epsilon": -16.0,
             "delta": np.ones(nb_), "wage": np.ones(R)}
 
+# The library, with the fixture installed where its functions resolve their globals.
+# This replaces `exec`-ing the notebook's definition cells into these globals: a library
+# function looks its globals up in ITS OWN module, so a stub is a module attribute, and
+# `install` then copies the library names back here without touching the fixture.
+import utils, granular_lib
+install(globals(), [utils, granular_lib])
 
 spend = _sector_spend(data)
 theta = spend.div(spend.sum(axis=1), axis=0)

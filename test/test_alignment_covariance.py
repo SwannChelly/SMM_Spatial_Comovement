@@ -6,37 +6,36 @@ comparative-advantage section and Test 3 bis kept calling it, so the cell raised
 `NameError` at run time with nothing to catch it. Gate 1 below is that regression: the
 cell must define its own `alignment_frame` and `_buyer_weights`, and the copy must agree
 with Test 8's."""
-import json, os, re, numpy as np, pandas as pd, matplotlib, warnings
+import ast, glob, os, sys, numpy as np, pandas as pd, matplotlib, warnings
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
-_NB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "diffusion.ipynb")
-nb = json.load(open(_NB, encoding="utf-8"))
-_cells = [(i, "".join(c["source"])) for i, c in enumerate(nb["cells"])
-          if c["cell_type"] == "code"]
-_own = [(i, s) for i, s in _cells if "def alignment_covariance(" in s]
-assert len(_own) == 1, f"{len(_own)} cells define alignment_covariance"
-CELL_I, code = _own[0]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _nbmod import install
 
-# --- 1. the cell is SELF-CONTAINED (the regression this file exists for) ------
-# `alignment_frame` and `_buyer_weights` came from a section that no longer exists. The
-# cell must carry them, and `_buyer_weights` must be byte-identical to Test 8's copy --
-# two copies of a helper are only safe while they agree.
-def _fn(src, name):
-    j = src.index(f"def {name}(")
-    m = re.search(r"\n(?=def |# ---|[A-Z_]+ *=|from |import )", src[j + 10:])
-    return (src[j:j + 10 + m.start()] if m else src[j:]).rstrip("\n")
-
-for nm in ("alignment_frame", "_buyer_weights"):
-    assert f"def {nm}(" in code, f"Test 3 bis does not define {nm} — it will NameError"
-t8 = [s for _, s in _cells if "def portfolio_similarity(" in s]
-assert len(t8) == 1
-assert _fn(code, "_buyer_weights") == _fn(t8[0], "_buyer_weights"), \
-    "the two _buyer_weights copies have drifted apart"
-defs = [i for i, s in _cells if "def alignment_frame(" in s]
-assert defs == [CELL_I], f"alignment_frame is defined in cells {defs}"
-print("1 ok  Test 3 bis carries its own alignment_frame and _buyer_weights, and the "
-      "helper agrees byte for byte with Test 8's copy")
+# --- 1. ONE definition, not two (the regression this file exists for) ---------
+# `alignment_frame` and `_buyer_weights` used to exist in two byte-identical copies --
+# one per notebook section, because each section had to be runnable on its own -- and
+# this gate checked that the copies had not drifted apart. The libraries remove the
+# duplication rather than police it, so what is checked now is that there IS only one of
+# each, across all four modules. That is the stronger statement: two copies cannot drift
+# if two copies cannot exist.
+_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+_MODS = ["utils.py", "report_lib.py", "diffusion_lib.py", "granular_lib.py"]
+_where = {}
+for _m in _MODS:
+    for _n in ast.parse(open(os.path.join(_ROOT, _m), encoding="utf-8").read()).body:
+        if isinstance(_n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _where.setdefault(_n.name, []).append(_m)
+for _nm in ("alignment_frame", "alignment_covariance", "alignment_covariance_by_buyer",
+            "_buyer_weights", "plot_alignment_covariance"):
+    assert _nm in _where, f"no module defines {_nm}"
+    assert len(_where[_nm]) == 1, f"{_nm} is defined in {_where[_nm]}"
+_dupes = {k: v for k, v in _where.items() if len(v) > 1}
+assert not _dupes, f"defined in more than one module: {_dupes}"
+print(f"1 ok  one definition each, across {len(_MODS)} modules and "
+      f"{len(_where)} functions -- the two copies this gate used to police are gone")
 
 # --- the planted economy ------------------------------------------------------
 S, R, BUY = 2, 10, 4
@@ -85,7 +84,10 @@ sup = pd.DataFrame([(int(z), s + 1, SPEND[(int(z), s)])
 data = {"S": S, "R": R, "sector_names": ["A", "B"], "emp_pi_r": PI_R,
         "suppliers": sup, "industry": "test", "folder": "x", "step_dir": "step3"}
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1); reference_color = (.3, .3, .3)
-exec(code, globals())
+
+# The library, with the fixture installed where its functions resolve their globals.
+import utils, granular_lib
+install(globals(), [utils, granular_lib])
 
 # --- 2. the panel ------------------------------------------------------------
 fr = alignment_frame(data)
