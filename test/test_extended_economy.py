@@ -297,4 +297,45 @@ print("9 ok  the comparator reproduces a parquet written in Julia's schema exact
       "column map that disagrees with Julia before comparing anything, and refuses a "
       "missing draw file rather than falling back to its own draws")
 
+# --- 10. theta comes from load_parameters.jl, not from a notebook constant -------------
+# The failure this closes: THETA_DEFAULT sat at 1.0 while the estimator ran at 1.768, and
+# nothing compared them, so every theta*alpha-scaled object would have been computed at an
+# effective distance elasticity the economy was never solved at. The parser makes the Julia
+# file the single source of truth; the gate checks that it reads it, prefers it, and says
+# so when stats.csv disagrees.
+import re as _re
+from pathlib import Path as _P
+_root = _P(os.path.dirname(os.path.abspath(__file__))) / ".."
+# `_theta_from_julia` and `model_theta` live in the LOADER cell, which this gate does not
+# execute (it would pull the whole tree reader and overwrite the fixture's stubs). The two
+# definitions are sliced out by text and run in their own namespace, so what is gated is
+# the shipped source rather than a copy.
+_lc = [c for c in nb["cells"] if c["cell_type"] == "code"
+       and "def _theta_from_julia(" in "".join(c["source"])]
+assert len(_lc) == 1, f"{len(_lc)} cells define _theta_from_julia"
+_ls = "".join(_lc[0]["source"])
+_seg = _ls[_ls.index("def _theta_from_julia("):_ls.index("def unpack_estimated_T(")]
+_ns = {"Path": _P, "np": np, "THETA_DEFAULT": THETA_DEFAULT,
+       "_read_named_value": lambda df, n: (float(df.loc[df["name"] == n, "value"].iloc[0])
+                                           if (df["name"] == n).any() else None)}
+exec(_seg, _ns)
+_theta_from_julia, model_theta = _ns["_theta_from_julia"], _ns["model_theta"]
+jl = _theta_from_julia(_root)
+src = (_root / "load_parameters.jl").read_text()
+want = float(_re.search(r"const\s+theta\s*=\s*\$\(\s*([0-9.eE+-]+)\s*\)", src).group(1))
+assert jl == want, (jl, want)
+# it must WIN over a disagreeing stats.csv, since that is the value the parquet carries
+coefs = pd.DataFrame({"name": ["theta"], "value": [want * 2.0]})
+assert model_theta({"coefs": coefs, "base": str(_root)}) == want
+# with the file out of reach it falls back to stats.csv, and to THETA_DEFAULT with neither
+import os as _os
+_cwd = _os.getcwd(); _os.chdir("/tmp")
+try:
+    assert model_theta({"coefs": coefs, "base": "/nonexistent"}) == want * 2.0
+    assert model_theta({"base": "/nonexistent"}) == float(THETA_DEFAULT)
+finally:
+    _os.chdir(_cwd)
+print(f"10 ok  theta is read from load_parameters.jl ({want:g}) and wins over a "
+      "disagreeing stats.csv, so the notebook cannot drift from the economy it reports on")
+
 print("\nall gates pass")

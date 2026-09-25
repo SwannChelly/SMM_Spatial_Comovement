@@ -17,7 +17,7 @@ nb = json.load(open(_NB, encoding="utf-8"))
 # (`_sector_spend`, `structural_networks`, `variety_panel`, `simulate_granular_regime`,
 # `_V_by_buyer`), the second carries the test itself. Both are executed, so a helper
 # that moved cells is caught here rather than surfacing as a NameError in a run.
-_ANCHORS = ("def sector_concentration(", "def local_share_dispersion(")
+_ANCHORS = ("def simulate_economy(", "def sector_concentration(", "def local_share_dispersion(")
 _cells = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"
           and any(a in "".join(c["source"]) for a in _ANCHORS)]
 _missing = [a for a in _ANCHORS if not any(a in c for c in _cells)]
@@ -60,6 +60,7 @@ def _downstream_ze_index(data): return buyers
 def model_theta(data): return THETA
 EMP_PI_R = np.array([0.40, 0.25, 0.20, 0.11, 0.04])
 NU_S_DEFAULT = 1.5
+NU_ACROSS_DEFAULT, LAMBDA_DEFAULT = 0.2, 0.5
 
 geom = sourcing_geometry(None)
 spend_s = np.array([1.0, 2.0, 3.0])
@@ -98,6 +99,22 @@ sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
 CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
              "Comparative advantage only": (.45, .60, .45)}
 exec(code, globals())
+
+# `theta+` for the fixture. Defined AFTER the exec on purpose: `extended_parameters` is
+# itself one of the functions the notebook cell defines, so a stub written before would be
+# overwritten by it -- and the real one reads `best_params` off a run tree that does not
+# exist here. This is the whole object, written down by hand, which is the point of it.
+def extended_parameters(data, n_hat=None, theta=None, verbose=False):
+    nb_ = len(buyers)
+    return {"Omega_L": 0.31, "Omega_s": np.full(S, 1.0 / S),
+            "A": np.linspace(0.8, 1.2, nb_), "alpha": np.array([ALPHA]), "T": None,
+            "N": np.asarray(N_HAT).astype(int) if n_hat is None
+                 else np.asarray(n_hat).astype(int),
+            "theta": THETA, "theta_source": "fixture",
+            "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT,
+            "lam": LAMBDA_DEFAULT, "epsilon": -16.0,
+            "delta": np.ones(nb_), "wage": np.ones(R)}
+
 
 spend = _sector_spend(data)
 theta = spend.div(spend.sum(axis=1), axis=0)

@@ -10,8 +10,10 @@ nb = json.load(open(_NB))
 # the buyer's own portfolio, the commonality exercise, and the report that joins them
 # — so all three are taken, in notebook order, and a missing one is named rather than
 # surfacing later as a NameError on whichever function it held.
-_ANCHORS = ('def sector_concentration(', 'def concentration_summary(',
-            'def concentration_report(')
+# `def simulate_economy(` joins them because the counterfactual regimes now delegate to
+# that single forward map, so the cell defining it has to be in scope here too.
+_ANCHORS = ('def simulate_economy(', 'def sector_concentration(',
+            'def concentration_summary(', 'def concentration_report(')
 _cells = [''.join(c['source']) for c in nb['cells'] if c['cell_type'] == 'code'
           and any(a in ''.join(c['source']) for a in _ANCHORS)]
 _missing = [a for a in _ANCHORS if not any(a in c for c in _cells)]
@@ -53,6 +55,7 @@ EMP_PI_R = np.array([0.40, 0.25, 0.20, 0.11, 0.04])
 def _downstream_ze_index(data): return buyers
 def model_theta(data): return THETA
 NU_S_DEFAULT = 1.5
+NU_ACROSS_DEFAULT, LAMBDA_DEFAULT = 0.2, 0.5
 
 # a parquet drawn FROM the geometry, VARIETY BY VARIETY: each variety of a sector is
 # won by one cell per buyer. `mode` controls the cross-buyer dependence, which is the
@@ -99,6 +102,22 @@ sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
 CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
              "Comparative advantage only": (.45, .60, .45)}
 exec(code, globals())
+
+# `theta+` for the fixture. Defined AFTER the exec on purpose: `extended_parameters` is
+# itself one of the functions the notebook cell defines, so a stub written before would be
+# overwritten by it -- and the real one reads `best_params` off a run tree that does not
+# exist here. This is the whole object, written down by hand, which is the point of it.
+def extended_parameters(data, n_hat=None, theta=None, verbose=False):
+    nb_ = len(buyers)
+    return {"Omega_L": 0.31, "Omega_s": np.full(S, 1.0 / S),
+            "A": np.linspace(0.8, 1.2, nb_), "alpha": np.array([ALPHA]), "T": None,
+            "N": np.asarray(N_HAT).astype(int) if n_hat is None
+                 else np.asarray(n_hat).astype(int),
+            "theta": THETA, "theta_source": "fixture",
+            "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT,
+            "lam": LAMBDA_DEFAULT, "epsilon": -16.0,
+            "delta": np.ones(nb_), "wage": np.ones(R)}
+
 
 # --- 1. the identity, and the alpha=0 control -------------------------------
 sec = sector_concentration(data, verbose=False)
