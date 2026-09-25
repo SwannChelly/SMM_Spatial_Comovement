@@ -184,7 +184,7 @@ own cells are executed against it.
 python test/test_local_share_dispersion.py
 ```
 
-Needs `numpy`, `pandas` and `matplotlib`; no data, no Julia. Nine gates, and three of them
+Needs `numpy`, `pandas` and `matplotlib`; no data, no Julia. Ten gates, and four of them
 are the ones worth knowing about. The MEASURED standard deviation across 200 replications is
 compared against the closed form, two routes sharing no code (median ratio within 10%). The
 shape claim `p(1-p)` is gated on the DRAWS rather than on the closed form, where it would be
@@ -193,6 +193,35 @@ track `sqrt(V p(1-p))` and peak in the bin containing one half. And the plan's c
 that cutting a force can lower the point while RAISING the bar — is gated cell by cell as the
 equivalence it is: at a fixed `V` the bar grows if and only if `p` moves TOWARDS one half, so
 the compensation needs a crossing and is not available wherever `p` sits well below it.
+Finally the drawn band is checked to BE the empirical 10-90 range of the draws about the
+point, clipped at zero, with the asymmetry gated as an ORDERING (a radius where `p` is small
+must give a more right-skewed band than one where `p` is near one half) so it cannot pass by
+luck on one configuration, and `p x N_eff = local / V` — the count of effective varieties
+landing locally, which says whether a wide band is granular or merely a few events.
+
+---
+
+## `test_alignment_covariance.py` — Test 3 bis, the alignment in kilometres
+
+Gate for `Cov_rho(log T, d)`, the rate the `Distance only` counterfactual integrates. It
+exists because the section had none: `alignment_frame` was deleted with the
+comparative-advantage section while Test 3 bis kept calling it, so the cell raised
+`NameError` at run time with nothing to catch it. Gate 1 is that regression — the cell must
+define its own `alignment_frame` and `_buyer_weights`, and the helper must be byte-identical
+to Test 8's copy, since two copies are only safe while they agree.
+
+```bash
+python test/test_alignment_covariance.py
+```
+
+Needs `numpy`, `pandas`, `matplotlib` and `scipy`; no data, no Julia. Six gates. The
+covariance is reproduced from a RAW-moment route (`E[xd] - E[x]E[d]`), algebraically
+distinct from the centred form the code evaluates, so a sign or weighting slip cannot
+cancel out; `Cov(log d, d) > 0` everywhere (two increasing functions of the same variable —
+a check, not a finding); a planted ALIGNED geometry comes out negative at the median while
+an orthogonal one does not, with the per-buyer sign flip the aggregate hides left visible
+rather than asserted away; and the buyer aggregation is the spend-weighted mean of its
+sectors, refusing both a missing parquet and a parquet whose region index does not line up.
 
 ---
 

@@ -89,6 +89,7 @@ data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "suppliers": sup,
         "sector_names": ["A", "B", "C"], "post_hoc_N_hat": N_HAT,
         "folder": "x", "step_dir": "step3", "emp_pi_r": EMP_PI_R}
 
+AMPLIFICATION_RADII = (100, 200)          # the Constants cell's value
 CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
               "Comparative advantage only": dict(alpha=0.0)}
 UNIFORM_REGIME = "Uniform benchmark"
@@ -239,7 +240,7 @@ print(f"6 ok  sd_fixed_V equals sd_closed on the baseline by construction and di
 # mix from the closed form. The whole regime's measured column must go missing instead.
 part = {s: blk for s, blk in pan.items() if s != 1}
 cut = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=part,
-                             verbose=False)
+                             radius_km=None, verbose=False)
 assert cut["sd_draws"].isna().all() and cut["local_draws"].isna().all()
 assert np.allclose(cut["local"], tab.loc["Both forces", "local"], atol=1e-12)
 print("7 ok  a sector absent from the panel blanks the measured dispersion and leaves "
@@ -289,9 +290,10 @@ order = [t.get_text() for t in ax.get_yticklabels()]
 want = (tab.loc["Both forces", "local"].sort_values().index.to_numpy())
 assert order == [f"Z{b}" for b in want], (order, want)
 assert ax.get_xlim()[0] == 0.0                      # a share has an honest zero
-# the bar IS k sigma, in data units, not a decoration
+# the bar IS k sigma, in data units, not a decoration -- asked for explicitly, since
+# the DEFAULT band is now the 10-90 quantile range
 k_test = 2.0
-ax2 = plot_local_share_dispersion(tab, k=k_test)
+ax2 = plot_local_share_dispersion(tab, band="draws", k=k_test)
 seg = ax2.containers[0][2][0].get_segments()
 base_sorted = tab.loc["Both forces"].reindex(want)
 drawn = np.array([s[1][0] - s[0][0] for s in seg]) / 2.0
@@ -302,7 +304,7 @@ assert len(axv.get_xticklabels()) == len(buyers) and axv.get_ylim()[0] == 0.0
 axs = plot_local_share_dispersion(tab, sector=2)
 assert len(axs.containers) == len(CF_REGIMES)
 for bad, kw in ((ValueError, dict(orientation="diagonal")),
-                (ValueError, dict(sd="guess")), (KeyError, dict(sector=99)),
+                (ValueError, dict(band="guess")), (KeyError, dict(sector=99)),
                 (KeyError, dict(baseline="nope"))):
     try:
         plot_local_share_dispersion(tab, **kw); raise AssertionError(f"no raise: {kw}")
@@ -312,5 +314,53 @@ plt.close("all")
 print("9 ok  one error-bar series per regime, buyers ordered by the baseline level, an "
       "honest zero, the bar equal to k sigma in data units, both orientations and the "
       "per-sector view")
+
+# --- 10. the quantile band and the counting regime ---------------------------
+# The band the figure draws is the empirical 10-90 range, not a symmetric sd. Ordering
+# is an identity of the quantiles; containment of the MEAN is not, and that is the
+# point: where the law is discrete and skewed the point can sit off-centre in its own
+# band, which a +/- sd cannot represent.
+assert (tab["q10"] <= tab["med_draws"] + 1e-12).all()
+assert (tab["med_draws"] <= tab["q90"] + 1e-12).all()
+assert ((tab["q90"] - tab["q10"]) > 0).all()
+assert (tab["band_skew"].abs() <= 1 + 1e-12).all()
+# p x N_eff is the count of effective varieties landing locally, and 1/V its factor
+assert np.allclose(tab["n_eff_var"], 1.0 / tab["V"], atol=1e-12)
+assert np.allclose(tab["p_n_eff"], tab["local"] * tab["n_eff_var"], atol=1e-12)
+# on the planted panel V = 1/N_s exactly, so N_eff is the spend-weighted harmonic-free
+# average of the variety counts and p x N_eff is a genuine expected count
+base_c = tab.loc["Both forces"]
+assert (base_c["n_eff_var"] > 0).all() and np.isfinite(base_c["p_n_eff"]).all()
+# the SKEW is not an artefact of the estimator: a radius where p is near one half gives
+# a near-symmetric band, one where p is small gives a right-skewed one. Gated as an
+# ordering, so it cannot pass by luck on a single configuration.
+lowp = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
+                              radius_km=120.0, verbose=False)
+midp = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
+                              radius_km=350.0, verbose=False)
+assert lowp["local"].median() < midp["local"].median()
+assert lowp["band_skew"].median() > midp["band_skew"].median(), \
+    (lowp["band_skew"].median(), midp["band_skew"].median())
+# the DEFAULT radius is the section's 200 km, not the own zone
+assert LOCAL_SHARE_RADIUS_KM == AMPLIFICATION_RADII[-1]
+dflt = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
+                              verbose=False)
+at200 = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
+                               radius_km=float(AMPLIFICATION_RADII[-1]), verbose=False)
+assert np.allclose(dflt["local"], at200["local"], atol=1e-12)
+# and the figure draws THAT band: the arms are q10/q90 about the point, clipped at zero
+axq = plot_local_share_dispersion(tab)
+want = tab.loc["Both forces"].reindex(
+    tab.loc["Both forces", "local"].sort_values().index)
+segq = axq.containers[0][2][0].get_segments()
+lo_drawn = np.array([g[0][0] for g in segq])
+hi_drawn = np.array([g[1][0] for g in segq])
+assert np.allclose(lo_drawn, np.minimum(want["q10"], want["local"]), atol=1e-9)
+assert np.allclose(hi_drawn, np.maximum(want["q90"], want["local"]), atol=1e-9)
+plt.close("all")
+print(f"10 ok  the drawn band IS the 10-90 range of the draws about the point (skew "
+      f"{tab.loc['Both forces', 'band_skew'].median():+.2f} at the default 200 km, "
+      f"rising to {lowp['band_skew'].median():+.2f} at a radius where p is smaller), "
+      "and p x N_eff = local/V")
 
 print("\nall gates pass")
