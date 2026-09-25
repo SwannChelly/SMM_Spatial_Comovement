@@ -258,7 +258,7 @@ economy and both counterfactuals from `theta+ = (Omega_L, Omega_s, A, alpha, T, 
 the point of the object — over the planted economy of `test_concentration_identity.py`
 (S = 3, R = 12, 5 buyers, `N_hat = [4, 10, 30]`).
 
-Nine gates. (1) the draw-matrix column order is region-outer/sector-inner, as Julia's
+Twelve gates. (1) the draw-matrix column order is region-outer/sector-inner, as Julia's
 column-major `findall` on the `(S, R)` cell mask walks it, with the C-order alternative
 shown to differ so the gate is not vacuous. (2) the four identities to machine precision.
 (3) `P_r`, `c_r`, `c_tilde_r`, `D_r`, `theta_rs`, `P` and `Y_r` against a hand
@@ -278,6 +278,17 @@ parquet written FROM the simulator in Julia's own schema: that leaves its index 
 under test (1-based `replication`/`variety`, the buyer map, `rep*N + variety`, dropped
 zero-share rows), and it must catch a single flipped winner and a 5% share perturbation
 SEPARATELY and refuse a column map that disagrees with Julia before comparing anything.
+
+(10) `theta` is parsed out of `load_parameters.jl` and wins over a disagreeing
+`stats.csv` -- the definitions are sliced out of the loader cell BY TEXT, so the shipped
+source is gated without pulling the whole tree reader over the fixture's stubs. (11) the
+frame round trip: `economy_frame` emits `suppliers.parquet`'s own schema, one `SIREN` per
+`(replication, cell, sector, variety)` and never shared across replications, and the
+notebook's own `variety_panel` / `_sector_spend` (also sliced by text) read the economy back
+out of it -- which is what makes the reporting stack regime-agnostic. (12) `economy_by_regime`
+reads `theta+` once and returns every regime with its own frame, `N` held fixed, the caller's
+`data` unmutated, and `D_r` moving across regimes where the two-route arrangement had to hold
+it at the baseline.
 
 **What it does not establish**: whether Julia agrees. Only a run with `post_hoc_u.npy` on
 disk can say that — `check_against_julia` is the call, and it is the first thing the

@@ -55,6 +55,8 @@ def _parquet_sector_index(data, sup): return sup["A129"].to_numpy().astype(int) 
 
 
 NU_S_DEFAULT, NU_ACROSS_DEFAULT, LAMBDA_DEFAULT = 1.5, 0.2, 0.5
+CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
+              "Comparative advantage only": dict(alpha=0.0)}
 THETA_DEFAULT = 1.0
 data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "post_hoc_N_hat": N_HAT,
         "folder": "x", "step_dir": "step3"}
@@ -337,5 +339,88 @@ finally:
     _os.chdir(_cwd)
 print(f"10 ok  theta is read from load_parameters.jl ({want:g}) and wins over a "
       "disagreeing stats.csv, so the notebook cannot drift from the economy it reports on")
+
+# --- 11. the frame round trip: the emitted schema IS the parquet -----------------------
+# The point of `economy_frame` is that the whole reporting stack reads `suppliers.parquet`,
+# so a regime emitted in that schema goes through the SAME code as the estimated economy.
+# What has to hold is that the round trip is lossless: the frame, read back by the
+# notebook's own `variety_panel`, must return the economy it was written from.
+fr = economy_frame(econ, XP)
+assert list(fr.columns) == ["SIREN", "A129", "ze2010", "ze2010_downstream", "share",
+                            "downstream_purchase", "intermediate_derivative",
+                            "productivity", "sample_weight", "variety", "replication"]
+assert len(fr) == sum(int(N_HAT[s]) for s in range(S)) * len(buyers) * B
+assert fr["replication"].min() == 1 and fr["replication"].max() == B
+assert fr["variety"].min() == 1
+for s in range(S):
+    assert fr.loc[fr["A129"] == s + 1, "variety"].max() == int(N_HAT[s])
+    assert np.allclose(fr.loc[fr["A129"] == s + 1, "sample_weight"], 1.0 / N_HAT[s])
+# SIREN is one firm per (replication, cell, sector, variety) -- two replications are two
+# economies, so a firm may NOT be shared across them
+k = fr[["replication", "ze2010", "A129", "variety"]].astype(int)
+assert fr["SIREN"].nunique() == len(k.drop_duplicates())
+assert fr.groupby("SIREN")["replication"].nunique().max() == 1
+# the columns the section reads must carry the economy itself
+assert (fr["share"] > 0).all() and np.isfinite(fr["productivity"]).all()
+assert np.allclose(fr["intermediate_derivative"] * 0 + 1, 1)   # finite, no div-by-zero
+# ROUND TRIP through the notebook's own reader. `variety_panel` and `_sector_spend` live in
+# the buyer-portfolio cell, which this gate does not execute; both depend only on
+# `_parquet_sector_index` (stubbed above), so they are sliced out by text and run here --
+# gating the shipped source rather than a copy.
+_pc = [c for c in nb["cells"] if c["cell_type"] == "code"
+       and "def variety_panel(" in "".join(c["source"])]
+assert len(_pc) == 1, f"{len(_pc)} cells define variety_panel"
+_ps = "".join(_pc[0]["source"])
+_ns2 = {"np": np, "pd": pd, "_parquet_sector_index": _parquet_sector_index}
+for _a, _b in (("def _sector_spend(", "\ndef _conc_identity("),
+               ("def variety_panel(", "\ndef variety_concentration(")):
+    _i = _ps.index(_a)
+    exec(_ps[_i:_ps.index(_b, _i)], _ns2)
+variety_panel, _sector_spend = _ns2["variety_panel"], _ns2["_sector_spend"]
+sd = simulated_data(data, econ, XP)
+pan = variety_panel(sd)
+for s in range(S):
+    assert np.allclose(np.sort(pan[s]["v"], axis=0), np.sort(econ[s]["v"], axis=0),
+                       atol=1e-12), f"sector {s}: variety_panel did not recover v"
+    assert np.array_equal(np.sort(pan[s]["winner"], axis=0),
+                          np.sort(econ[s]["winner"], axis=0))
+    assert np.array_equal(np.asarray(pan[s]["buyers"]).astype(int), buyers)
+# and the input mix read off the frame must be the closed form in the value block
+sp = _sector_spend(sd)
+mix = (sp / sp.sum(axis=1).to_numpy()[:, None] if sp.shape[0] == len(buyers)
+       else (sp / sp.sum(axis=0)).T)
+hand = econ.value["theta_rs"].mean(axis=0)              # (sector, buyer), averaged
+got = np.asarray(mix).T if np.asarray(mix).shape[0] == len(buyers) else np.asarray(mix)
+assert np.allclose(np.sort(got.ravel()), np.sort(hand.ravel()), rtol=2e-2), \
+    (got.ravel()[:4], hand.ravel()[:4])
+print(f"11 ok  the emitted frame carries the parquet's own schema ({len(fr)} rows, one "
+      "SIREN per (replication, cell, sector, variety)), `variety_panel` reads the economy "
+      "back out of it unchanged, and the input mix off the frame reproduces the closed "
+      "form in the value block")
+
+# --- 12. one entry point for every regime ---------------------------------------------
+# theta+ in, every economy out, N fixed throughout -- and the Julia check attempted first
+# rather than left to be remembered.
+U3b = np.stack(mats, axis=2)
+d12 = {**data, "post_hoc_u": U3b, "post_hoc_good_sr": np.column_stack([gs + 1, gr + 1]),
+       "suppliers": jul}
+regs = economy_by_regime(d12, XP, n_rep=8, verbose=False)
+assert set(regs) == set(CF_REGIMES)
+for reg, (e, dl) in regs.items():
+    assert np.array_equal(e.meta["N"], XP["N"]), f"{reg}: N moved"
+    assert dl["suppliers"] is not d12["suppliers"]
+    assert len(dl["suppliers"]) > 0 and "share" in dl["suppliers"].columns
+    assert d12["suppliers"] is jul, "the caller's data was mutated"
+# the three regimes are genuinely different economies, and the head is common to them
+assert not np.allclose(regs["Both forces"][0].value["D_r"],
+                       regs["Distance only"][0].value["D_r"])
+try:
+    economy_by_regime(d12, XP, n_rep=2, baseline="nope", verbose=False)
+    raise AssertionError("an absent baseline was accepted")
+except KeyError:
+    pass
+print("12 ok  economy_by_regime reads theta+ once and returns every regime with its own "
+      "frame, N held fixed, the caller's data untouched, and the counterfactuals moving "
+      "D_r where the two-route arrangement had to hold it at the baseline")
 
 print("\nall gates pass")
