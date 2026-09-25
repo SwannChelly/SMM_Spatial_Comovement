@@ -170,6 +170,32 @@ markdown cell.
 
 ---
 
+## `test_local_share_dispersion.py` — the local share as a level plus a dispersion
+
+Gate for Test 9 of `diffusion.ipynb`'s amplification section. The local share is LINEAR in
+the realised network, so `E[sum_l h_l omega_lrs] = p_rs` exactly and
+`Var = V_rs p_rs (1 - p_rs)` for any indicator `h`: the level carries no granularity and the
+whole of it sits in the bar. The fixture is the planted economy of
+`test_concentration_identity.py` — a parquet drawn variety by variety FROM the geometry with
+equal expenditure across a buyer's varieties, so `V = 1/N_s` exactly — and the notebook's
+own cells are executed against it.
+
+```bash
+python test/test_local_share_dispersion.py
+```
+
+Needs `numpy`, `pandas` and `matplotlib`; no data, no Julia. Nine gates, and three of them
+are the ones worth knowing about. The MEASURED standard deviation across 200 replications is
+compared against the closed form, two routes sharing no code (median ratio within 10%). The
+shape claim `p(1-p)` is gated on the DRAWS rather than on the closed form, where it would be
+a tautology: sweeping the radius moves `p` across its range and the empirical dispersion must
+track `sqrt(V p(1-p))` and peak in the bin containing one half. And the plan's conjecture —
+that cutting a force can lower the point while RAISING the bar — is gated cell by cell as the
+equivalence it is: at a fixed `V` the bar grows if and only if `p` moves TOWARDS one half, so
+the compensation needs a crossing and is not available wherever `p` sits well below it.
+
+---
+
 ## `test_diversification_identities.py` — the theory note's algebra
 
 Numerical gate for `documentation/diversification.md`, the companion note on customer
