@@ -48,6 +48,7 @@ SMM_Spatial_Comovement/
 ├── granular_lib.py         # comparative advantage, concentration, portfolios, dispersion
 ├── model_report.ipynb          # the FIT of the model to its targets
 ├── tests_counterfactuals.ipynb # the tests and the counterfactuals
+├── gates.ipynb                 # the test suite, run with its output in view
 │
 ├── optimizers/             # interchangeable search engines (--optimizer=…)
 │   ├── pso_integration.jl      #   Particle Swarm Optimization (default)
@@ -116,10 +117,13 @@ d = utils.load_granular_data("aero", mu=2, base="..", profile_T=True, ca_level="
 utils.check_against_julia(d)          # needs suppliers.parquet AND post_hoc_u.npy
 ```
 
-The gates are `python3 test/test_analysis_granular.py` (the moment layout and the
-Jacobian axes), `test/test_analysis_granular_sections.py`, `test/test_modules.py` (the
-module layout, the specialised loader and the parquet-free path), `test/test_notebooks.py`
-and the five section files — all against synthetic fixtures, no run tree needed.
+**The gates.** `gates.ipynb` runs the whole suite one file at a time with its verdict in
+view, and then renders the objects the gates reason about — the planted economy, the
+identities the forward map closes, the three regimes and the channel decomposition — so a
+number in an assertion can be read against the thing it constrains. The `.py` files under
+`test/` remain the source of truth; the notebook runs them in a subprocess rather than
+restating them, so a gate lives in exactly one place. 259 numbered gates across 10 files,
+all against synthetic fixtures — no run tree, no Julia, no real data.
 
 **Input data.** Each industry needs a `baseline_<industry>/` folder (e.g.
 `baseline_aero/`) holding the empirical inputs — distances, wages, sectoral shares,

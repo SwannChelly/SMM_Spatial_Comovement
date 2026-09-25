@@ -171,29 +171,31 @@ def local_share_profile(data, radii=(25, 50, 75, 100, 150, 200, 300, 500),
 def counterfactual_diffusion_frame(data, alpha=None, equalise_T=False,
                                    value_col="share", diffusion=None, verbose=True):
     """
-    The same diffusion frame with the upstream euros REALLOCATED across cells by the
-    closed-form win probabilities of a counterfactual regime.
+    ONE CHANNEL of a counterfactual, not the counterfactual: the upstream euros
+    REALLOCATED across cells at a FIXED upstream spend.
 
-    What is held fixed is what the model makes a cost-share object: how much of a
-    downstream region's euro leaves for upstream at all, and how that splits across
-    SECTORS. Neither involves T or alpha — the section header derives
-    $D_r = 1 + (1-\\Omega_L)(P_r/c_r)^{1-\\lambda}$, in which the comparative-advantage
-    parameters simply do not appear. What the two forces decide is where INSIDE a sector
-    the euro lands, so
+    Read `amplification_decomposition` for the full answer. This function holds the
+    spending shares where the estimated economy put them and moves only the within-sector
+    geography, so
 
         X_{lr} = sum_s spend_{sr} * rho^{regime}_{lrs},
 
-    with `spend` read off the realised economy and rho from `sourcing_geometry`:
-    `alpha=0` switches distance off, `equalise_T=True` switches comparative advantage
-    off, both switches off is the uniform benchmark.
+    with `spend` read off the economy and rho from `sourcing_geometry`. Since
+    sum_l rho = 1 for every (sector, buyer), the total upstream sales of a shocked region
+    -- hence $D_r$ -- come out IDENTICAL under every regime here. That is a property of
+    what this function holds fixed, NOT a property of the model.
 
-    Two consequences, both worth stating before the figures are read.
-
-    Since sum_l rho = 1 for every (sector, buyer), the TOTAL upstream sales of every
-    shocked region — hence $D_r$ — is identical under every regime. Cancelling a channel
-    moves a shock in space; it does not change its size. That is a property of the
-    one-tier structure, not an approximation, and it is why the counterfactual figures
-    are all about $L_r(d)$ and none of them re-draws $D_r$.
+    An earlier version of this docstring argued the opposite: that
+    $D_r = 1 + (1-\\Omega_L)(P_r/c_r)^{1-\\lambda}$ carries no comparative-advantage
+    parameter, so `T` and `alpha` could not move it. They do not appear in that
+    expression, but they decide which cell wins each variety and at what delivered cost,
+    so they set $P_{sr}$ and hence $P_r$. With `lambda < 1` labour and intermediates are
+    COMPLEMENTS, so a higher input price index raises the intermediate expenditure share:
+    equalising comparative advantage makes sourcing less efficient, $P_r$ rises, and the
+    buyer spends MORE of its euro upstream. Switching distance off runs the other way.
+    That response is part of how comparative advantage governs amplification and must not
+    be assumed away; it is channel (a) of `amplification_decomposition`, which this
+    function is channel (c) of.
 
     And "Both forces" is the closed-form EXPECTATION of the allocation, whereas the
     parquet is one realised finite-variety draw of it: the closed form spreads mass over
@@ -258,6 +260,20 @@ def counterfactual_frames(data, regimes=CF_REGIMES, value_col="share", diffusion
             for label, kw in regimes.items()}
 
 
+def simulated_frames(economies, value_col="share"):
+    """`{regime: diffusion frame}` from the SIMULATED economies.
+
+    A drop-in replacement for `counterfactual_frames` wherever the full response is
+    wanted rather than the geography channel alone: every consumer that takes `frames=`
+    (`counterfactual_amplification`, `incidence_concentration_overlap`, the figures) then
+    reads an economy in which the intermediate expenditure share and the sector mix have
+    responded, not one in which they were pinned at the estimate.
+    """
+    economies = {lab: ({**v[1], "economy": v[0]} if isinstance(v, tuple) else v)
+                 for lab, v in economies.items()}
+    return {lab: build_diffusion_frame(dl, value_col) for lab, dl in economies.items()}
+
+
 def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col="share",
                                  frames=None, diffusion=None, verbose=True):
     """
@@ -287,8 +303,15 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
         gap = float((amp["Both forces"] - amp["Realised"]).abs().max())
         col = f"share_within_{int(radii[0])}km"
         sh = out[col].unstack("regime")
-        print(f"  [counterfactual] D_r is identical across regimes to {spread:.2e} "
-              f"(it must be: sum_l rho = 1), and matches the realised D_r to {gap:.2e}")
+        if spread < 1e-9:
+            print(f"  [counterfactual] D_r is identical across regimes to {spread:.2e} "
+                  "-- because these frames hold the upstream spend fixed, not because "
+                  "the model says so; see `amplification_decomposition`")
+        else:
+            print(f"  [counterfactual] D_r RANGES {spread:.4f} across regimes: these "
+                  "frames come from re-solved economies, so the intermediate "
+                  "expenditure share has responded")
+        print(f"  [counterfactual] and matches the realised D_r to {gap:.2e}")
         print(f"  [counterfactual] {col}: realised {sh['Realised'].mean():.3f} vs "
               f"closed-form both-forces {sh['Both forces'].mean():.3f} — the gap is "
               "granularity, not a different economy")
@@ -323,6 +346,162 @@ def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="shar
         out[f"weighted_{c}"] = ((det[c] * w).groupby(level="regime", observed=True).sum()
                                 / w.groupby(level="regime", observed=True).sum())
     return out
+
+
+# --- The counterfactual, with the SPENDING SHARES allowed to respond -----------------
+#
+# `counterfactual_diffusion_frame` above holds the upstream spending fixed and reallocates
+# it. Its docstring used to argue that this was not an approximation -- that
+# `D_r = 1 + (1-Omega_L)(P_r/c_r)^{1-lambda}` carries no comparative-advantage parameter,
+# so `T` and `alpha` cannot move it. That is wrong, and the error matters for the section's
+# own question. `T` and `alpha` do not appear in that expression, but they decide WHICH
+# cell wins each variety and at what delivered cost, so they set `P_sr`, hence `P_r`. With
+# `lambda < 1` labour and intermediates are COMPLEMENTS, so a higher input price index
+# RAISES the intermediate expenditure share: equalising comparative advantage makes
+# sourcing less efficient, `P_r` rises, and the buyer spends MORE of its euro upstream, not
+# the same amount redistributed. Switching distance off runs the other way.
+#
+# So the amplification counterfactual has to come from the re-solved economy, which is what
+# `simulate_economy` gives. The fixed-spend reallocation is kept, demoted to what it
+# actually is: one CHANNEL of the answer, not the answer.
+#
+# The three channels are EXACT, not an approximation, because the model factorises:
+#
+#     X_{lr} = (D_r - 1) * sum_s theta_{rs} * rho_{lrs}
+#
+# with `theta_rs` the sector's share of the intermediate bill (it sums to one over
+# sectors -- gated by `economy_identities`) and `rho` the within-sector geography. Hence
+#
+#   (a) LEVEL       D_r - 1        how much of the euro leaves for upstream at all;
+#   (b) MIX         theta_rs       which upstream SECTORS it goes to;
+#   (c) GEOGRAPHY   rho_lrs        where inside a sector it lands.
+#
+# and each statistic is moved by a known subset of them. `D_r` moves through (a) ALONE.
+# `L_r(d)` and `d_r` are RATIOS in which `(D_r - 1)` cancels exactly, so they move through
+# (b) and (c) alone -- and (b) is a channel the fixed-spend route also shut down, since
+# equalising `T` changes relative sector price indices and sectors differ in geography.
+
+
+def _regime_profile(data, geom, mix, radii):
+    """`p_rs(d)` and `d_rs` per (sector, buyer), and their mix-weighted aggregates.
+
+    `p_rs(d) = sum_{l : d_lr <= d} rho_lrs` and `d_rs = sum_l rho_lrs d_lr` are pure
+    geometry; the buyer-level statistics are `sum_s mix_rs * (.)`, exact because
+    `sum_l rho = 1` per (sector, buyer) so the level factor cancels.
+    """
+    buyers = np.asarray(geom["downstream"]).astype(int)
+    nb = buyers.size
+    dist = np.zeros(nb)
+    near = {d: np.zeros(nb) for d in radii}
+    for s, blk in geom["by_sector"].items():
+        rho, dd = blk["rho"], blk["distance"]          # (n_cell, n_buyer)
+        w = np.asarray(mix)[int(s)]                    # (n_buyer,)
+        dist += w * (rho * dd).sum(axis=0)
+        for d in radii:
+            near[d] += w * np.where(dd <= d, rho, 0.0).sum(axis=0)
+    out = pd.DataFrame({"ze2010_downstream": buyers,
+                        "mean_upstream_distance": dist}).set_index("ze2010_downstream")
+    for d in radii:
+        out[f"share_within_{int(d)}km"] = near[d]
+    return out
+
+
+def amplification_decomposition(economies, regimes=None, radii=None,
+                                baseline="Both forces", verbose=True):
+    """
+    The counterfactual split into its three exact channels.
+
+    `economies` is `{regime: data_like}` as `utils.reporting_data` returns it: each entry
+    carries that regime's own re-solved economy under `"economy"`. Nothing is held fixed
+    that the model lets move -- in particular the intermediate expenditure share responds,
+    which is the whole point of reading amplification against comparative advantage.
+
+    Returns one row per (regime, shocked region) with
+
+        amplification        D_r, from the regime's own value block  -- channel (a) alone
+        mean_upstream_distance, share_within_*km
+                             the TOTAL effect, mix and geography both at the regime
+        *_geography          the same statistics with the sector MIX held at the baseline,
+                             so only rho moves                       -- channel (c) alone
+        *_mix                with the geometry held at the baseline, so only theta moves
+                             -- channel (b) alone
+
+    `total - baseline` is not in general `geography + mix - 2*baseline`: the two channels
+    interact through the weights, and the residual is reported by `decomposition_report`
+    rather than assumed away.
+    """
+    radii = _DEFAULT_RADII if radii is None else tuple(radii)
+    regs = CF_REGIMES if regimes is None else regimes
+    # `reporting_data` returns {regime: data_like} with the economy under "economy";
+    # `economy_by_regime` returns {regime: (economy, data_like)}. Both are accepted, so a
+    # caller never has to remember which entry point it came through.
+    economies = {lab: ({**v[1], "economy": v[0]} if isinstance(v, tuple) else v)
+                 for lab, v in economies.items()}
+    if baseline not in economies:
+        raise KeyError(f"baseline {baseline!r} not among {list(economies)}")
+
+    geo, mix = {}, {}
+    for lab in economies:
+        dl = economies[lab]
+        econ = dl.get("economy")
+        if econ is None:
+            raise KeyError(f"{lab}: no simulated economy -- `reporting_data` returns one "
+                           "per regime; a plain `load_granular_data` dict does not.")
+        kw = regs.get(lab, {"alpha": econ.meta.get("alpha"),
+                            "equalise_T": econ.meta.get("equalise_T", False)})
+        geo[lab] = sourcing_geometry(dl, **kw)
+        mix[lab] = econ.value["theta_rs"].mean(axis=0)          # (S, n_buyer)
+
+    rows = []
+    for lab, dl in economies.items():
+        econ = dl["economy"]
+        buyers = np.asarray(econ.meta.get("value_buyers", econ.meta["buyers"])).astype(int)
+        tot = _regime_profile(dl, geo[lab], mix[lab], radii)
+        gch = _regime_profile(dl, geo[lab], mix[baseline], radii)      # mix held at base
+        mch = _regime_profile(dl, geo[baseline], mix[lab], radii)      # geometry held
+        blk = tot.copy()
+        for c in tot.columns:
+            blk[f"{c}_geography"] = gch[c]
+            blk[f"{c}_mix"] = mch[c]
+        blk["amplification"] = econ.value["D_r"].mean(axis=0)
+        blk["region"] = _region_labels(dl).set_index("index")["ze2010_name"].reindex(buyers).to_numpy()
+        blk["regime"] = lab
+        rows.append(blk.reset_index())
+    out = pd.concat(rows, ignore_index=True)
+    out["regime"] = pd.Categorical(out["regime"], categories=list(economies), ordered=True)
+    out = out.set_index(["ze2010_downstream", "regime"]).sort_index()
+    out.attrs["radii"] = radii
+    out.attrs["baseline"] = baseline
+    if verbose:
+        decomposition_report(out, radii=radii, baseline=baseline)
+    return out
+
+
+def decomposition_report(detail, radii=None, baseline="Both forces"):
+    """Print the three channels per regime, and say which statistic each one can move."""
+    radii = detail.attrs.get("radii", _DEFAULT_RADII) if radii is None else tuple(radii)
+    amp = detail["amplification"].unstack("regime")
+    base_amp = amp[baseline]
+    print(f"  [decomposition] baseline = {baseline!r}; means across shocked regions\n")
+    print(f"    {'regime':<28s} {'D_r':>8s} {'dD_r':>8s} | "
+          f"{'total':>8s} {'geogr.':>8s} {'mix':>8s} {'resid':>8s}   (share within "
+          f"{int(radii[0])} km, deviation from baseline)")
+    col = f"share_within_{int(radii[0])}km"
+    sh = detail[col].unstack("regime")
+    shg = detail[f"{col}_geography"].unstack("regime")
+    shm = detail[f"{col}_mix"].unstack("regime")
+    for lab in amp.columns:
+        d_tot = float((sh[lab] - sh[baseline]).mean())
+        d_geo = float((shg[lab] - sh[baseline]).mean())
+        d_mix = float((shm[lab] - sh[baseline]).mean())
+        print(f"    {str(lab):<28s} {amp[lab].mean():8.4f} "
+              f"{float((amp[lab] - base_amp).mean()):+8.4f} | "
+              f"{d_tot:+8.4f} {d_geo:+8.4f} {d_mix:+8.4f} {d_tot - d_geo - d_mix:+8.4f}")
+    print("\n    D_r moves through the LEVEL channel alone -- the labour-against-"
+          "intermediates\n    margin, which responds because equalising T raises P_r and "
+          "lambda < 1 makes\n    the two complements. The local share is a ratio in which "
+          "(D_r - 1) cancels\n    exactly, so it moves through the sector MIX and the "
+          "within-sector GEOGRAPHY only.")
 
 # --- The economy is FINITE-VARIETY, and the parquet has to say so ------------
 #

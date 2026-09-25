@@ -133,5 +133,76 @@ print(f"3 ok  every regime is built from theta+ with no parquet in the tree; D_r
       f"continuum benchmark is simulated "
       f"({rep.loc['supplier_cells', 'granularity']:.1f} origins of granularity)")
 
+# --- 4. the counterfactual lets the SPENDING SHARES respond --------------------------
+# The question the amplification section asks is how the distribution of comparative
+# advantage governs how much of a euro is bought upstream at all. A counterfactual that
+# holds the upstream spend fixed cannot answer it: T and alpha do not appear in
+# D_r = 1 + (1-Omega_L)(P_r/c_r)^(1-lambda), but they set which cell wins each variety and
+# at what delivered cost, hence P_sr, hence P_r -- and with lambda < 1 labour and
+# intermediates are COMPLEMENTS, so a higher input price index raises the intermediate
+# expenditure share. Equalising comparative advantage therefore changes how much leaves
+# for upstream, not only where it goes.
+#
+# What has to hold is the factorisation the three channels rest on, and it is EXACT:
+#
+#     X_{lr} = (D_r - 1) * sum_s theta_{rs} * rho_{lrs},
+#
+# so D_r moves through the LEVEL channel alone, while L_r(d) and d_r are ratios in which
+# (D_r - 1) cancels and move through the sector MIX and the GEOGRAPHY alone.
+RAD = 300
+# `economy_by_regime` hands back (economy, data_like); `reporting_data` the flattened
+# form. Normalise once so the gate reads the same either way.
+ECON = {lab: {**dl, "economy": e} for lab, (e, dl) in regs.items()}
+det = diffusion_lib.amplification_decomposition(ECON, radii=(RAD,), verbose=False)
+col = f"share_within_{RAD}km"
+
+# (a) the factorisation, within ONE replication, against the economy's own value block
+worst = 0.0
+for lab, dl in ECON.items():
+    ec = dl["economy"]
+    D, th = ec.value["D_r"], ec.value["theta_rs"]
+    for s in sorted(ec):
+        rep_of = np.asarray(ec[s]["replication"])
+        for b in range(ec.meta["n_rep"]):
+            got = ec[s]["exp_val"][rep_of == b].sum(axis=0)
+            worst = max(worst, float(np.abs(got - th[b, s] * (D[b] - 1.0)).max()))
+assert worst < 1e-12, worst
+
+# (b) the baseline row is its own reference: holding either channel at the baseline
+#     cannot move it
+for c in ("mean_upstream_distance", col):
+    b = det.xs("Both forces", level="regime")
+    assert np.allclose(b[c], b[f"{c}_geography"], atol=1e-12)
+    assert np.allclose(b[c], b[f"{c}_mix"], atol=1e-12)
+
+# (c) D_r MOVES across regimes and is the value block's own -- this is the correction
+amp = det["amplification"].unstack("regime")
+assert float(amp.max(axis=1).sub(amp.min(axis=1)).max()) > 1e-6, amp
+for lab, dl in ECON.items():
+    assert np.allclose(amp[lab].to_numpy(),
+                       dl["economy"].value["D_r"].mean(axis=0), atol=1e-12)
+
+# (d) both channels are live: neither is identically the baseline under every regime
+moved = {}
+for c in (col, "mean_upstream_distance"):
+    tot = det[c].unstack("regime")
+    for suffix in ("_geography", "_mix"):
+        ch = det[f"{c}{suffix}"].unstack("regime")
+        moved[(c, suffix)] = float((ch.sub(tot["Both forces"], axis=0)).abs().max().max())
+assert all(v > 0 for v in moved.values()), moved
+
+# (e) and the fixed-spend route is the GEOGRAPHY channel, not the answer: it holds D_r
+#     at the baseline by construction, which the decomposition does not
+fixed = {lab: float(diffusion_lib.counterfactual_amplification(
+             ECON["Both forces"], radii=(RAD,), regimes={lab: kw},
+             verbose=False)["amplification"].mean())
+         for lab, kw in utils.CF_REGIMES.items()}
+assert max(fixed.values()) - min(fixed.values()) < 1e-9, fixed
+print(f"4 ok  the counterfactual lets the spending shares respond: the factorisation "
+      f"X = (D_r-1) * sum_s theta_rs rho_lrs is exact to {worst:.1e}, D_r moves with the "
+      f"regime (range {float(amp.max(axis=1).sub(amp.min(axis=1)).max()):.4f}) where the "
+      f"fixed-spend route pins it, and the sector MIX moves the local share "
+      f"({moved[(col, '_mix')]:.2e}) beside the geography ({moved[(col, '_geography')]:.2e})")
+
 shutil.rmtree(TMP, ignore_errors=True)
 print("\nall gates pass")
