@@ -98,6 +98,32 @@ for nbname in NOTEBOOKS:
 print("2 ok  both notebooks specialise the loader and neither reads "
       "suppliers_continuum.parquet")
 
+# --- 2b. the tests notebook's section numbering is consistent ------------------------
+# Test 9 (the local share as a level plus a dispersion) was merged into Test 6 (the local
+# share), since it is the same statistic read twice. What has to hold is that the merge
+# is complete: no orphan Test 9, both halves present in Test 6, and the section header's
+# table agreeing with the sections that follow it.
+src_cells = [(c["cell_type"], "".join(c["source"])) for c in
+             json.load(open(os.path.join(ROOT, "tests_counterfactuals.ipynb"),
+                            encoding="utf-8"))["cells"]]
+heads = [t.splitlines()[0] for k, t in src_cells if k == "markdown" and
+         t.lstrip().startswith("## Test ")]
+amp = [h for h in heads if not h.endswith("inside a sector?")]
+assert not any("Test 9" in h for h in heads), heads
+t6 = next(t for k, t in src_cells if k == "markdown" and "## Test 6 — how much of the shock" in t)
+for piece in ("### The level, and the sign reversal", "### The dispersion",
+              "10–90 percentiles", "sign reversal"):
+    assert piece in t6, piece
+run6 = next(t for k, t in src_cells if k == "code" and "the DISPERSION" in t)
+for fn in ("plot_local_share(", "plot_counterfactual_local_share(",
+           "local_share_dispersion(", "local_share_report(",
+           "plot_local_share_dispersion("):
+    assert fn in run6, f"Test 6's run cell does not call {fn}"
+hdr = next(t for k, t in src_cells if k == "markdown" and t.startswith("# Amplification"))
+assert "**eight tests**" in hdr and "| 9 |" not in hdr, "the header still advertises nine"
+print(f"2b ok  Test 9 is merged into Test 6: {len(heads)} test headings, both halves in "
+      "Test 6's markdown, both halves called by its run cell, and the header agrees")
+
 # --- 3. the wiring runs against a tree with no parquet -------------------------------
 TMP, KW = build_tree()
 try:

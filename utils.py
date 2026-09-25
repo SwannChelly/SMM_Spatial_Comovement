@@ -1816,6 +1816,12 @@ def reporting_data(industry, mu=2, parts=("core", "geography"), n_rep=None,
     To compare against Julia's own realisation instead, load with `parts` including
     `"firm"` and call `check_against_julia`. That is the one thing the parquet is for.
     """
+    # Resolve `n_rep` BEFORE the cache key. Otherwise `reporting_data(ind, mu)` and
+    # `reporting_data(ind, mu, n_rep=ECONOMY_REPLICATIONS)` are two entries, so the
+    # economy cell and the sections would each pay for a solve AND could disagree on how
+    # heavily the regimes were drawn -- silently, since both are legitimate economies.
+    if n_rep is None:
+        n_rep = ECONOMY_REPLICATIONS
     key = (industry, mu, tuple(sorted(resolve_parts(parts))), n_rep, seed, base,
            tuple(sorted(kw.items())),
            None if regimes is None else tuple(sorted(regimes)))

@@ -756,7 +756,7 @@ def _ring_colors(n):
 
 
 def plot_local_share(data, radii=None, value_col="share", summary=None, radius_km=None,
-                     sort_by="share_within_100km", order=None, xmax=None, ax=None, figsize=None,
+                     sort_by=None, order=None, xmax=None, ax=None, figsize=None,
                      save_to=None, title=None):
     """
     Bottom panel of Figure 6, with every radius on the SAME bar.
@@ -767,7 +767,10 @@ def plot_local_share(data, radii=None, value_col="share", summary=None, radius_k
     painted over it, all fully opaque — one bar says "this much stays within 100 km, and
     this much more is picked up by going out to 200 km", which is what the nesting
     means. Regions are sorted by the headline (smallest) radius, so the inner segments
-    form a staircase and the blue extensions are read against it.
+    form a staircase and the blue extensions are read against it. `sort_by` defaults to
+    that radius rather than to a hard-coded column name: the section's radii are a free
+    parameter (`AMPLIFICATION_RADII`), and a default naming one of them turned any other
+    choice into a `KeyError` on a column the caller had never asked for.
 
     `xmax` pins the axis. Left to itself it tracks the widest bar, which uses the panel
     but gives the two industries different scales; pass the same number to both when the

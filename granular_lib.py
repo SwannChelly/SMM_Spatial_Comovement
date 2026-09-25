@@ -1881,11 +1881,13 @@ def buyer_granular_concentration(data, regimes=None, value_col="share", spend=No
     `E_Omega[H_r(Omega)]` buyer by buyer under each regime, with its structural and
     granular halves and both as effective numbers of supplier zones.
 
-    One row per (regime, buyer). `Both forces` is read off `suppliers.parquet` — the
-    finite-variety economy `main.jl` actually solved — and every other regime off
-    `simulate_granular_regime`, which redraws the same economy from the model's own
-    primitives; a regime whose panel cannot be built falls back to the structural
-    columns with `h` left missing rather than silently reported as if it were realised.
+    One row per (regime, buyer). EVERY regime, the estimated economy included, comes from
+    `simulate_granular_regime` -- one forward map from `theta+`, so a counterfactual is
+    not a different kind of object from the baseline. (It used to read `Both forces` off
+    `suppliers.parquet` and simulate the rest.) A regime whose panel cannot be built falls
+    back to the structural columns with `h` left missing rather than being silently
+    reported as if it were realised. A `panel=` passed for the baseline still overrides,
+    which is how a caller hands in Julia's own realisation.
 
     Columns
     -------
@@ -3051,10 +3053,13 @@ def granular_table(data, regimes=None, value_col="share", spend=None, verbose=Tr
     The section's Table 3: the structural pair for every regime, and the granular
     triple beside it.
 
-    `Both forces` is computed TWICE — once off `suppliers.parquet` (the economy
-    `main.jl` actually solved) and once off `simulate_granular_regime` — because the
-    counterfactual rows can only come from the re-simulation, and a table mixing two
-    routes has to show that they agree on the row where both exist.
+    Every row comes from `simulate_granular_regime`, the baseline included, so the table
+    is built by ONE route. It used to compute `Both forces` twice -- once off
+    `suppliers.parquet`, once re-simulated -- and report the agreement, which was a weak
+    cross-check between the two implementations. That check is gone and is replaced by a
+    stronger one: `check_against_julia` compares the port against `solve_network` to the
+    bit, given Julia's own draws. Run it after changing either implementation; the
+    agreement this table used to display cannot be read off it any more.
     """
     sp = _sector_spend(data, value_col) if spend is None else spend
     want = dict(CF_REGIMES if regimes is None else regimes)

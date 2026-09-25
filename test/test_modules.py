@@ -204,5 +204,36 @@ print(f"4 ok  the counterfactual lets the spending shares respond: the factorisa
       f"fixed-spend route pins it, and the sector MIX moves the local share "
       f"({moved[(col, '_mix')]:.2e}) beside the geography ({moved[(col, '_geography')]:.2e})")
 
+# --- 5. two defects the merged Test 6 surfaced, both latent ---------------------------
+# (a) `plot_local_share` defaulted `sort_by` to the literal "share_within_100km". The
+#     section's radii are a free parameter (`AMPLIFICATION_RADII`, documented as "any
+#     tuple works"), so any choice not containing 100 km raised a KeyError on a column
+#     the caller had never asked for. The default now derives from `radii`.
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+base_dl = ECON["Both forces"]
+for rr in ((150, 300), (77,), (100, 200)):
+    ax = diffusion_lib.plot_local_share(base_dl, radii=rr)
+    assert ax is not None
+    plt.close("all")
+
+# (b) `reporting_data` keyed its cache on the `n_rep` it was PASSED, so calling it once
+#     with the notebook's replication count and once without produced two entries: a
+#     second solve, and two economies drawn at different intensities, both legitimate and
+#     silently different. `n_rep` is now resolved before the key.
+utils._REPORTING_CACHE.clear()
+kw = {k: v for k, v in KW.items() if k != "base"}
+a = utils.reporting_data("test", mu=2, parts=("core", "geography"), base=TMP,
+                         verbose=False, **kw)
+n_entries = len(utils._REPORTING_CACHE)
+b = utils.reporting_data("test", mu=2, parts=("core", "geography"), base=TMP,
+                         n_rep=utils.ECONOMY_REPLICATIONS, verbose=False, **kw)
+assert len(utils._REPORTING_CACHE) == n_entries, "an explicit n_rep missed the cache"
+assert a["Both forces"] is b["Both forces"], "the same request returned two economies"
+print(f"5 ok  the local-share figure accepts any radii (the default sort key derives from "
+      f"them), and `reporting_data` resolves n_rep before its cache key, so naming the "
+      f"replication count explicitly hits the same solve ({n_entries} cache entry)")
+
 shutil.rmtree(TMP, ignore_errors=True)
 print("\nall gates pass")
