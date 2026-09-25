@@ -282,38 +282,73 @@ print(f"8 ok  the report keeps the declared regime order; cell by cell the bar g
       "condition it needs")
 
 # --- 9. the figure ------------------------------------------------------------
-ax = plot_local_share_dispersion(tab)
-assert len(ax.containers) == len(CF_REGIMES)
-for c in ax.containers:
-    assert len(c[0].get_xdata()) == len(buyers)
-order = [t.get_text() for t in ax.get_yticklabels()]
+# The default layout is SMALL MULTIPLES, one panel per regime: the overlay put three
+# marks and three bands in every buyer row, and with arms of the order of the
+# between-regime movement they interleave.
+axes = plot_local_share_dispersion(tab)
+assert isinstance(axes, np.ndarray) and len(axes) == len(CF_REGIMES)
+for a in axes:
+    assert len(a.containers) == 1                   # ONE mark per row, not three
+    assert len(a.containers[0][0].get_xdata()) == len(buyers)
+    assert a.get_xlim() == axes[0].get_xlim()       # one shared window, or no comparison
+    assert a.get_xlim()[0] == 0.0                   # a share has an honest zero
+    assert a.get_title() == ""                      # the paper supplies the caption
+# every counterfactual panel carries the baseline as a faint ghost; the baseline panel
+# does not (it would be the same mark twice)
+_ghosts = lambda a: [l for l in a.lines if l.get_markerfacecolor() == "none"]
+assert _ghosts(axes[0]) == []
+for a in axes[1:]:
+    g = _ghosts(a)
+    assert len(g) == 1
+    assert np.allclose(g[0].get_xdata(),
+                       axes[0].containers[0][0].get_xdata(), atol=1e-12)
+# the regime names its own panel, as an annotation rather than a title
+ann = [t.get_text() for a in axes for t in a.texts]
+assert set(ann) == set(_regime_order(tab, "Both forces")), ann
+# buyer names appear ONCE, on the leftmost panel
+order = [t.get_text() for t in axes[0].get_yticklabels()]
 want = (tab.loc["Both forces", "local"].sort_values().index.to_numpy())
 assert order == [f"Z{b}" for b in want], (order, want)
-assert ax.get_xlim()[0] == 0.0                      # a share has an honest zero
+for a in axes[1:]:
+    assert not any(t.get_visible() for t in a.get_yticklabels())
+# the shared axis is labelled once, and the label names the QUANTITY only -- neither the
+# selected sector nor the band descriptor belongs on an axis
+labs = [a.get_xlabel() for a in axes if a.get_xlabel()]
+assert len(labs) == 1, labs
+assert "sector" not in labs[0] and "10-90" not in labs[0] and "sigma" not in labs[0]
 # the bar IS k sigma, in data units, not a decoration -- asked for explicitly, since
 # the DEFAULT band is now the 10-90 quantile range
 k_test = 2.0
 ax2 = plot_local_share_dispersion(tab, band="draws", k=k_test)
-seg = ax2.containers[0][2][0].get_segments()
+seg = ax2[0].containers[0][2][0].get_segments()
 base_sorted = tab.loc["Both forces"].reindex(want)
-drawn = np.array([s[1][0] - s[0][0] for s in seg]) / 2.0
+drawn = np.array([g[1][0] - g[0][0] for g in seg]) / 2.0
 assert np.allclose(drawn, k_test * base_sorted["sd_draws"].to_numpy(), atol=1e-9)
+# the overlay is retained and still carries its legend -- it is the form in which one
+# buyer row can be read without a saccade, at the cost of the crowding
+axo = plot_local_share_dispersion(tab, layout="overlay")
+assert not isinstance(axo, np.ndarray) and len(axo.containers) == len(CF_REGIMES)
+assert axo.get_legend() is not None and axo.get_xlim()[0] == 0.0
 # the vertical layout the plan describes, and the per-sector view
 axv = plot_local_share_dispersion(tab, orientation="v")
-assert len(axv.get_xticklabels()) == len(buyers) and axv.get_ylim()[0] == 0.0
+assert len(axv[0].get_xticklabels()) == len(buyers) and axv[0].get_ylim()[0] == 0.0
+assert len([a.get_ylabel() for a in axv if a.get_ylabel()]) == 1
 axs = plot_local_share_dispersion(tab, sector=2)
-assert len(axs.containers) == len(CF_REGIMES)
+assert len(axs) == len(CF_REGIMES)
+assert all("sector" not in a.get_xlabel() for a in axs)
 for bad, kw in ((ValueError, dict(orientation="diagonal")),
-                (ValueError, dict(band="guess")), (KeyError, dict(sector=99)),
-                (KeyError, dict(baseline="nope"))):
+                (ValueError, dict(band="guess")), (ValueError, dict(layout="grid")),
+                (KeyError, dict(sector=99)), (KeyError, dict(baseline="nope"))):
     try:
         plot_local_share_dispersion(tab, **kw); raise AssertionError(f"no raise: {kw}")
     except bad:
         pass
 plt.close("all")
-print("9 ok  one error-bar series per regime, buyers ordered by the baseline level, an "
-      "honest zero, the bar equal to k sigma in data units, both orientations and the "
-      "per-sector view")
+print("9 ok  small multiples by default -- one series per panel on one shared window, "
+      "buyers named once and ordered by the baseline level, the baseline ghosted in "
+      "every counterfactual panel, an honest zero, the axis label naming the quantity "
+      "alone, the bar equal to k sigma in data units, plus the overlay, the vertical "
+      "layout and the per-sector view")
 
 # --- 10. the quantile band and the counting regime ---------------------------
 # The band the figure draws is the empirical 10-90 range, not a symmetric sd. Ordering
@@ -352,7 +387,7 @@ assert np.allclose(dflt["local"], at200["local"], atol=1e-12)
 axq = plot_local_share_dispersion(tab)
 want = tab.loc["Both forces"].reindex(
     tab.loc["Both forces", "local"].sort_values().index)
-segq = axq.containers[0][2][0].get_segments()
+segq = axq[0].containers[0][2][0].get_segments()
 lo_drawn = np.array([g[0][0] for g in segq])
 hi_drawn = np.array([g[1][0] for g in segq])
 assert np.allclose(lo_drawn, np.minimum(want["q10"], want["local"]), atol=1e-9)
