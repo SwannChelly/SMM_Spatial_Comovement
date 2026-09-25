@@ -930,6 +930,15 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString;
     W_gran = granular_variety_weights(N_hat, N_max)
     cols = _empty_firm_cols()
     siren_map = Dict{NTuple{4,Int},Int}()
+    # The draws themselves are written beside the economy, stacked as
+    # (N_max, n_good, n_rep). Julia's `MersenneTwister` generates Float64 through dSFMT,
+    # which numpy's generators do not reproduce, so a reimplementation of this economy
+    # cannot regenerate these draws from the seed — it can only be handed them. With this
+    # file the Python forward map is a TEST of the Julia one (the two must agree to the
+    # bit, given the same theta+ and the same u); without it the two can only agree
+    # approximately, and a disagreement cannot be told from a convention mismatch. At
+    # production sizes this is of the order of ten megabytes.
+    u_stack = zeros(N_max, n_good, n_rep)
     for b in 1:n_rep
         u = generate_draws(N_max, n_good, :mc;
                            randomise = true, rng = MersenneTwister(base_seed + b))[1]
@@ -940,11 +949,18 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString;
         for g in 1:n_good, rho in (N_hat[GOOD_S[g]] + 1):N_max
             u[rho, g] = 0.5
         end
+        u_stack[:, :, b] .= u
         net_b = solve_network(params, return_firm_level=true,
                               u_draws = u, sample_weights = W_gran)
         @assert all(isfinite, net_b.firm_exp_val) "replication $b produced a non-finite expenditure share"
         _firm_level_rows!(cols, net_b, siren_map, b)
     end
+    npzwrite(joinpath(dest, "post_hoc_u.npy"), u_stack)
+    # The (sector, cell) identity of every draw COLUMN. `findall` on the (S, R) cell mask
+    # walks it column-major, so g runs region-outer and sector-inner; a consumer that
+    # assumes the other order reads one cell's draws for another and produces a
+    # plausible wrong economy, so the map is written down rather than left to be inferred.
+    npzwrite(joinpath(dest, "post_hoc_good_sr.npy"), hcat(GOOD_S, GOOD_R))
     df = _firm_cols_frame(cols)
     Parquet.write_parquet(joinpath(dest, "suppliers.parquet"), df)
 

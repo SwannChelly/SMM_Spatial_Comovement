@@ -247,3 +247,38 @@ of its customer portfolio (through `Φ`, obeying the same elasticity as any riva
 that the `α → ∞` limit is governed by **relative** log-distance, not by the nearest
 destination; and that the note's equation (20) needs a *single* upstream sector, not
 merely the absence of cross-sector spillovers.
+
+## `test_extended_economy.py` — the extended parameter set and the forward map
+
+Gates `extended_parameters` / `simulate_economy` / `economy_identities` /
+`check_against_julia`, i.e. the design in which ONE implementation produces the estimated
+economy and both counterfactuals from `theta+ = (Omega_L, Omega_s, A, alpha, T, N)`.
+
+`theta+` is written down BY HAND in the fixture rather than read from a run tree — that is
+the point of the object — over the planted economy of `test_concentration_identity.py`
+(S = 3, R = 12, 5 buyers, `N_hat = [4, 10, 30]`).
+
+Nine gates. (1) the draw-matrix column order is region-outer/sector-inner, as Julia's
+column-major `findall` on the `(S, R)` cell mask walks it, with the C-order alternative
+shown to differ so the gate is not vacuous. (2) the four identities to machine precision.
+(3) `P_r`, `c_r`, `c_tilde_r`, `D_r`, `theta_rs`, `P` and `Y_r` against a hand
+recomputation from `theta+` alone — including `D_r = 1 + (1-Omega_L)(P_r/c_r)^(1-lambda)`,
+which holds only because the two CES indices collapse, so it fixes the whole expenditure
+chain in one number. (4) determinism in `(theta+, draws)`, and the separating check that
+the HEAD moves the value block while leaving the winners untouched (the Ricardian argmin
+carries no price index). (5) the realised winner frequencies converge to
+`sourcing_geometry`'s closed-form `rho`, scored as a z against the binomial standard
+error — this is what ties the simulator to the structural half. (6) the exact controls:
+`alpha = 0` gives one winner per variety for every buyer, equalising `T` sends the euro
+further, `N` is held across regimes. (7) a supplied `(N_max, n_good)` draw matrix
+reproduces a hand recomputation exactly, and a wrong shape or count is refused up front
+rather than failing as an out-of-range index. (8) zero varieties, a mis-sized `A` and an
+empty sector are refused by name. (9) the cross-language comparator, gated against a
+parquet written FROM the simulator in Julia's own schema: that leaves its index arithmetic
+under test (1-based `replication`/`variety`, the buyer map, `rep*N + variety`, dropped
+zero-share rows), and it must catch a single flipped winner and a 5% share perturbation
+SEPARATELY and refuse a column map that disagrees with Julia before comparing anything.
+
+**What it does not establish**: whether Julia agrees. Only a run with `post_hoc_u.npy` on
+disk can say that — `check_against_julia` is the call, and it is the first thing the
+section's run cell does.
