@@ -1,5 +1,5 @@
 """Gate for Test 3 bis of the amplification section: the alignment in KILOMETRES,
-`Cov_rho(log T, d)` -- the rate the `Distance only` counterfactual integrates.
+`Cov_rho(log T, d)` -- the rate the `Equal comparative advantage` counterfactual integrates.
 
 This test exists because the section had none. `alignment_frame` was deleted with the
 comparative-advantage section and Test 3 bis kept calling it, so the cell raised

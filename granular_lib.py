@@ -658,7 +658,7 @@ def ca_distance_leverage(data, n_grid=201, reg=None):
 
         d/dt E_{rho(t)}[d] = Cov_{rho(t)}(log T, d),
 
-    an exponential-family identity, so the whole effect of the `Distance only` regime is
+    an exponential-family identity, so the whole effect of the `Equal comparative advantage` regime is
     the path integral of a covariance between capability and distance IN KILOMETRES. It is
     a covariance, not a variance: a `T_hat` that varies widely but is uncorrelated with the
     buyer's geography reallocates sourcing across regions without sending the euro one
@@ -1142,7 +1142,7 @@ CA_SUMMARY_GLOSSARY = [
     ("d_km", "The average sourcing distance d_rs: how far the euro travels, in "
              "kilometres, when a buyer of this sector sources a unit of it."),
     ("d_km_no_CA", "The same distance with comparative advantage equalised across areas "
-                   "— the `Distance only` regime."),
+                   "— the `Equal comparative advantage` regime."),
     ("delta_km", "The difference, in kilometres. Positive means comparative advantage was "
                  "holding sourcing CLOSER than proximity alone would, so equalising it "
                  "sends the euro further away."),
@@ -1202,7 +1202,7 @@ def plot_alignment_covariance(datasets, weights="rho", bins=24, frames=None, col
     carries kilometres, so it is the only one of the two a paragraph quoting a distance
     may cite: by the alignment identity it IS the rate at which dialling comparative
     advantage down moves that buyer's average sourcing distance, and its path integral
-    is the `Distance only` counterfactual.
+    is the `Equal comparative advantage` counterfactual.
 
     Three conventions, each a place the figure and the text can silently come apart. The
     moments are taken under the SOURCING probabilities, because that is the measure the
@@ -2560,7 +2560,7 @@ def plot_buyer_region_reach(table, baseline="Both forces", units="level", order=
 #
 # The 2x2 keeps all four cells, and the fourth is not empty: low concentration with low
 # commonality is DIFFUSE LOCAL SOURCING — every buyer spreads over its own
-# neighbourhood — which is exactly where the `Distance only` regime sits.
+# neighbourhood — which is exactly where the `Equal comparative advantage` regime sits.
 #
 #        C high  |  common pool          hub-and-spoke
 #        C low   |  diffuse local        local pockets
@@ -3101,7 +3101,7 @@ def granular_table(data, regimes=None, value_col="share", spend=None, verbose=Tr
     if verbose:
         print("  Table 3: structural pair, then the granular triple")
         print(out.round(3).to_string())
-        print("    the `Comparative advantage only` row must carry C = 1 and rho = 1 "
+        print("    the `No trade cost` row must carry C = 1 and rho = 1 "
               "exactly: with equal distances every buyer draws the same winner.")
     return out
 

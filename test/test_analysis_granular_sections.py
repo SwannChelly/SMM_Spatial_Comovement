@@ -1207,9 +1207,9 @@ def gate_amplification():
         data, regimes=UNIFORM, radii=(100, 200),
         detail=NS["counterfactual_amplification"](data, regimes=UNIFORM, radii=(100, 200),
                                                   diffusion=diff, verbose=False))
-    assert (cfs.loc["Distance only", "mean_upstream_distance"]
+    assert (cfs.loc["Equal comparative advantage", "mean_upstream_distance"]
             < uni.loc["Neither", "mean_upstream_distance"])
-    assert (cfs.loc["Distance only", "share_within_100km"]
+    assert (cfs.loc["Equal comparative advantage", "share_within_100km"]
             > uni.loc["Neither", "share_within_100km"])
     assert np.allclose(cfs["amplification"].to_numpy(), 1.0 + TOTAL_INPUT_SHARE)
 
@@ -1852,7 +1852,7 @@ def gate_amplification():
     # the arrows are true-scale displacements between the two regimes, not a rescaled
     # field: a stretched arrow would turn a small reallocation into a large one
     a0 = inc.xs("Both forces", level="regime")
-    a1 = inc.xs("Distance only", level="regime")
+    a1 = inc.xs("Equal comparative advantage", level="regime")
     tail, head = arrows[0].xyann, arrows[0].xy
     b = a0.index[0]
     assert np.allclose(tail, (a0.loc[b, "n_eff_ratio"], a0.loc[b, "tv_common"]))
@@ -1867,7 +1867,7 @@ def gate_amplification():
     NS["plt"].close(ax_p.figure)
 
     # exactly two regimes, and both must exist in the table
-    for bad in (("Both forces",), ("Both forces", "Distance only", "Neither")):
+    for bad in (("Both forces",), ("Both forces", "Equal comparative advantage", "Neither")):
         try:
             NS["plot_incidence_plane"]([("auto", inc)], regimes=bad)
         except ValueError:

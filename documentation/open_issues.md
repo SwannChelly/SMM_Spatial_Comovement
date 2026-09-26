@@ -74,7 +74,7 @@ would.
 ### 2.3 `rho` is reported at four regimes but validated at two
 
 The `alpha = 0` controls are exact by construction (`Q = 1`, `C = 1`, `rho = 1` to
-machine precision) and `Both forces` is computed both ways. The `Distance only` and
+machine precision) and `Both forces` is computed both ways. The `Equal comparative advantage` and
 `Uniform benchmark` rows come only from `simulate_granular_regime`, i.e. from one
 route with no independent check.
 

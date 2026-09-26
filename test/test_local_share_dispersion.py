@@ -81,13 +81,13 @@ data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "suppliers": sup,
         "folder": "x", "step_dir": "step3", "emp_pi_r": EMP_PI_R}
 
 AMPLIFICATION_RADII = (100, 200)          # the Constants cell's value
-CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
-              "Comparative advantage only": dict(alpha=0.0)}
+CF_REGIMES = {"Both forces": dict(), "Equal comparative advantage": dict(equalise_T=True),
+              "No trade cost": dict(alpha=0.0)}
 UNIFORM_REGIME = "Uniform benchmark"
 INFINITE_REGIME = "Infinite varieties"
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
-CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
-             "Comparative advantage only": (.45, .60, .45)}
+CF_COLORS = {"Both forces": toulouse_color, "Equal comparative advantage": sim_color,
+             "No trade cost": (.45, .60, .45)}
 # `theta+` for the fixture, written down by hand -- which is the point of the object: the
 # real `extended_parameters` reads `best_params` off a run tree that does not exist here.
 # It sits BEFORE the install, and that is the whole difference a module makes: under the

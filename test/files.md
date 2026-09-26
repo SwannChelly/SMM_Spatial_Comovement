@@ -207,7 +207,7 @@ landing locally, which says whether a wide band is granular or merely a few even
 
 ## `test_alignment_covariance.py` — Test 3 bis, the alignment in kilometres
 
-Gate for `Cov_rho(log T, d)`, the rate the `Distance only` counterfactual integrates. It
+Gate for `Cov_rho(log T, d)`, the rate the `Equal comparative advantage` counterfactual integrates. It
 exists because the section had none: `alignment_frame` was deleted with the
 comparative-advantage section while Test 3 bis kept calling it, so the cell raised
 `NameError` at run time with nothing to catch it. Gate 1 is that regression — the cell must

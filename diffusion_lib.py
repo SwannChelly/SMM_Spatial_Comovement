@@ -1133,7 +1133,7 @@ def plot_counterfactual_profile(data, regimes=CF_REGIMES,
     say whether a gap at 100 km is a level difference that persists or a crossing that
     closes by 200 km. The vertical distance from `Both forces` to each switched-off
     regime is what that force was contributing at every radius, and the SIGN of the first
-    gap is what separates the two industries: where `Distance only` sits ABOVE `Both
+    gap is what separates the two industries: where `Equal comparative advantage` sits ABOVE `Both
     forces`, comparative advantage is sending the shock further away than proximity alone
     would.
     """
@@ -1880,7 +1880,7 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
 # the near-far attractiveness ratio is exp(theta*alpha * 3.8): 2.4 in motor vehicles
 # at 0.23, 5.7 in aerospace at 0.46. So lambda should be SMALLER in motor vehicles
 # --- the industry with the stronger negative alignment --- and the counterfactual
-# regimes order it too: `Comparative advantage only` sets alpha = 0, which removes
+# regimes order it too: `No trade cost` sets alpha = 0, which removes
 # the buyer-specific term entirely and must drive lambda to zero.
 #
 # Two coefficients are reported and they answer different things. `slope` is the
@@ -1993,7 +1993,7 @@ def barycentre_shrinkage_report(barys, weights=None, verbose=True):
               "buyer.")
         print("  The only buyer-specific term in rho is d^(-theta*alpha), so the slope "
               "is predicted to RISE with theta*alpha (0.23 auto, 0.46 aero) and to "
-              "vanish under `Comparative advantage only`, where alpha = 0.")
+              "vanish under `No trade cost`, where alpha = 0.")
         print("  se/t/ci are clustered on the region: they say whether the BUYERS "
               "agree on a common shrinkage, not how precisely the parameters are known.")
     return out
@@ -2571,7 +2571,7 @@ def incidence_plane_crossings(moves):
                if _segments_cross(segs[i][0], segs[i][1], segs[j][0], segs[j][1]))
 
 
-def plot_incidence_plane(tables, regimes=("Both forces", "Distance only"),
+def plot_incidence_plane(tables, regimes=("Both forces", "Equal comparative advantage"),
                          layout="auto", figsize=None, save_to=None, annotate=True,
                          arrows=True, crossing_tol=0.25):
     """
@@ -2585,10 +2585,10 @@ def plot_incidence_plane(tables, regimes=("Both forces", "Distance only"),
     reasons of construction rather than taste.** The `Uniform benchmark` is the
     DENOMINATOR of the `x` axis: it sits at `(1, ~0)` by definition, so it is a fixed
     point and is drawn as the reference corner (the two rules), never as a cloud.
-    `Comparative advantage only` removes the only buyer-specific term in `rho`, so
+    `No trade cost` removes the only buyer-specific term in `rho`, so
     `tv_common` must collapse there — plotting it would lay a flat line on `y ~ 0` that
     a reader would take for an economic finding rather than an identity. That leaves
-    `Both forces` and `Distance only`, which is the comparison the section is about.
+    `Both forces` and `Equal comparative advantage`, which is the comparison the section is about.
 
     **Colour is the industry, marker FILL is the regime** (filled = the estimate, hollow
     = the counterfactual), so the four clouds are two contrasts and not four categories.

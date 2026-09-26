@@ -153,15 +153,15 @@ EMPIRICAL_MEAN_LOG_D = 5.8
 # selects among cells is not a counterfactual economy, and reading the two real regimes
 # against it invites the reader to treat "chance" as the null the model is tested against.
 CF_REGIMES = {"Both forces": dict(),
-              "Distance only": dict(equalise_T=True),
-              "Comparative advantage only": dict(alpha=0.0)}
+              "Equal comparative advantage": dict(equalise_T=True),
+              "No trade cost": dict(alpha=0.0)}
 
 # The realised economy is drawn beside the regimes wherever both appear, so it needs a
 # colour of its own: sharing "Both forces"' would make the granularity gap invisible.
 CF_COLORS = {"Realised": (0.32, 0.32, 0.32),
              "Both forces": toulouse_color,
-             "Distance only": sim_color,
-             "Comparative advantage only": (0.45, 0.60, 0.45),
+             "Equal comparative advantage": sim_color,
+             "No trade cost": (0.45, 0.60, 0.45),
              "Neither": (0.72, 0.72, 0.72)}    # kept for a caller that asks for it
 
 # The geometry-free benchmark: nothing selects among the cells of a sector, so the

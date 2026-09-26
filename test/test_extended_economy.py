@@ -51,8 +51,8 @@ def _parquet_sector_index(data, sup): return sup["A129"].to_numpy().astype(int) 
 
 
 NU_S_DEFAULT, NU_ACROSS_DEFAULT, LAMBDA_DEFAULT = 1.5, 0.2, 0.5
-CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
-              "Comparative advantage only": dict(alpha=0.0)}
+CF_REGIMES = {"Both forces": dict(), "Equal comparative advantage": dict(equalise_T=True),
+              "No trade cost": dict(alpha=0.0)}
 THETA_DEFAULT = 1.0
 data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "post_hoc_N_hat": N_HAT,
         "folder": "x", "step_dir": "step3"}
@@ -414,7 +414,7 @@ for reg, (e, dl) in regs.items():
     assert d12["suppliers"] is jul, "the caller's data was mutated"
 # the three regimes are genuinely different economies, and the head is common to them
 assert not np.allclose(regs["Both forces"][0].value["D_r"],
-                       regs["Distance only"][0].value["D_r"])
+                       regs["Equal comparative advantage"][0].value["D_r"])
 try:
     economy_by_regime(d12, XP, n_rep=2, baseline="nope", verbose=False)
     raise AssertionError("an absent baseline was accepted")

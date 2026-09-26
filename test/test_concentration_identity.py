@@ -81,12 +81,12 @@ data = {"S": S, "R": R, "CELL_MASK": CELL_MASK, "suppliers": sup,
         "sector_names": ["A", "B", "C"], "post_hoc_N_hat": N_HAT,
         "folder": "x", "step_dir": "step3", "emp_pi_r": EMP_PI_R}
 
-CF_REGIMES = {"Both forces": dict(), "Distance only": dict(equalise_T=True),
-              "Comparative advantage only": dict(alpha=0.0)}
+CF_REGIMES = {"Both forces": dict(), "Equal comparative advantage": dict(equalise_T=True),
+              "No trade cost": dict(alpha=0.0)}
 UNIFORM_REGIME = "Uniform benchmark"
 sim_color = (.2, .4, .7); toulouse_color = (.5, .2, .1)
-CF_COLORS = {"Both forces": toulouse_color, "Distance only": sim_color,
-             "Comparative advantage only": (.45, .60, .45)}
+CF_COLORS = {"Both forces": toulouse_color, "Equal comparative advantage": sim_color,
+             "No trade cost": (.45, .60, .45)}
 # `theta+` for the fixture, written down by hand -- which is the point of the object: the
 # real `extended_parameters` reads `best_params` off a run tree that does not exist here.
 # It sits BEFORE the install, and that is the whole difference a module makes: under the
@@ -113,7 +113,7 @@ install(globals(), [utils, granular_lib])
 # --- 1. the identity, and the alpha=0 control -------------------------------
 sec = sector_concentration(data, verbose=False)
 assert np.allclose(sec["h_bar"], sec["h_common"] + sec["m"], atol=1e-12)
-ca = sec.xs("Comparative advantage only", level="regime")
+ca = sec.xs("No trade cost", level="regime")
 assert np.allclose(ca["C"], 1.0, atol=1e-12), ca["C"].to_numpy()   # exact, a theorem
 assert np.allclose(sec.loc[UNIFORM_REGIME, "n_eff_ratio"], 1.0)
 assert (sec["m"] >= -1e-15).all()
@@ -122,7 +122,7 @@ print("1 ok  identity, alpha=0 gives C=1 exactly, uniform gives n_eff = n_cells"
 
 summ = concentration_summary(sec, verbose=False)
 assert np.allclose(summ["h_bar"], summ["h_common"] + summ["m"])
-assert abs(summ.loc["Comparative advantage only", "C"] - 1) < 1e-12
+assert abs(summ.loc["No trade cost", "C"] - 1) < 1e-12
 by = buyer_concentration(sec, data=data)
 w = by.xs("Both forces", level="regime")
 assert np.allclose(np.average(w["h"], weights=w["spend"]),
@@ -155,7 +155,7 @@ assert abs(zm["share_of_M"].sum() - 1) < 1e-12
 print("6 ok  the zone attribution of M sums to one")
 
 tab = concentration_table(data, sector=sec, granular=gr, verbose=False)
-assert np.isnan(tab.loc["Comparative advantage only", "gran_share_spec"])
+assert np.isnan(tab.loc["No trade cost", "gran_share_spec"])
 axes = plot_concentration_decomposition({"X": gr}, save_to="/tmp/x1.pdf")
 assert len(axes[0][0].patches) == 4 * len(gr)
 # The top band is three stacked things (twin ticks, twin label, title) plus a figure
@@ -312,7 +312,7 @@ print("14 ok re-simulated regime: alpha = 0 gives Q = rho = C = 1 exactly; the "
 #     independent route that shares no code with `buyer_granular_concentration`.
 bg = buyer_granular_concentration(data, panel=pan, verbose=False)
 assert set(bg.index.get_level_values("regime")) == {
-    "Both forces", "Distance only", "Comparative advantage only",
+    "Both forces", "Equal comparative advantage", "No trade cost",
     UNIFORM_REGIME, INFINITE_REGIME}
 inf = bg.loc[INFINITE_REGIME]
 assert np.allclose(inf["gran"], 0.0, atol=1e-14) and np.allclose(inf["V"], 0.0)
