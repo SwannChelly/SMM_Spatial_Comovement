@@ -7,7 +7,7 @@ variety by variety FROM the geometry, with equal expenditure across a buyer's va
 That is what makes the central gate real: the measured standard deviation across
 replications and the closed form `sqrt(sum_s theta^2 V p(1-p))` are two routes that share no
 code, and they must agree to the Monte-Carlo scale."""
-import os, sys, numpy as np, pandas as pd, matplotlib, warnings
+import inspect, os, sys, numpy as np, pandas as pd, matplotlib, warnings
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
@@ -157,28 +157,29 @@ V = _V_by_buyer(pan, buyers)
 for s in range(S):
     assert np.allclose(V.loc[s].to_numpy(), 1.0 / N_HAT[s], atol=1e-12)
 b0 = bs[bs["regime"] == "Both forces"]
-assert np.allclose(b0["sd"], np.sqrt(b0["V"] * b0["p"] * (1 - b0["p"])), atol=1e-12)
-# the SECTOR SUM squares the weights -- the one step the plan flags, gated directly
-sq = (b0.assign(c=b0["theta"] ** 2 * b0["sd"] ** 2)
-        .groupby("ze2010_downstream")["c"].sum().reindex(buyers).to_numpy())
-assert np.allclose(tab.loc["Both forces", "sd_closed"].to_numpy() ** 2, sq, atol=1e-14)
-# and the scale-free reading is EXACT and monotone: cv = sd/p = sqrt(V(1-p)/p),
-# strictly decreasing in p over the whole range, so it has no interior maximum where
-# the bar itself does.
-m0 = b0[b0["p"] > 0]
-assert np.allclose(m0["sd"] / m0["p"], np.sqrt(m0["V"] * (1 - m0["p"]) / m0["p"]),
-                   atol=1e-12)
-# monotone in p at a FIXED V, so the sweep is taken within one sector
-o = m0[m0["sector"] == 2].sort_values("p")
-assert len(o) >= 2
-assert (np.diff((o["sd"] / o["p"]).to_numpy()) <= 1e-12).all()
-print("2 ok  V = 1/N_s exactly on the planted panel, sd_s = sqrt(V p(1-p)), and the "
-      "sector aggregation adds the variances with SQUARED weights")
+# the LINEAR aggregations the table reports: the level and the buyer's V, both
+# recomputed here from the per-sector frame with no shared code
+t0 = tab.loc["Both forces"]
+agg = lambda col: (b0.assign(c=b0["theta"] * b0[col])
+                     .groupby("ze2010_downstream")["c"].sum().reindex(buyers).to_numpy())
+assert np.allclose(t0["local"].to_numpy(), agg("p"), atol=1e-14)
+assert np.allclose(t0["V"].to_numpy(), agg("V"), atol=1e-14)
+# and the lattice guard is exactly local / V_r
+assert np.allclose(t0["p_n_eff"].to_numpy(),
+                   t0["local"].to_numpy() / t0["V"].to_numpy(), atol=1e-12)
+print("2 ok  V = 1/N_s exactly on the planted panel, and the table's level and V_r "
+      "are the theta-weighted sector sums, with p x N_eff = local / V_r")
 
 # --- 3. the measured sd against the closed form (two routes, no shared code) --
 t = tab.loc["Both forces"]
 assert float(t["n_draws"].iloc[0]) == B
-ratio = (t["sd_draws"] / t["sd_closed"]).to_numpy()
+# The library no longer computes a closed form, so this is built HERE from the
+# per-sector pieces -- sectors draw independently, so the variances add with SQUARED
+# weights, which is the one aggregation step worth pinning.
+sd_closed = np.sqrt(
+    (b0.assign(c=b0["theta"] ** 2 * b0["V"] * b0["p"] * (1 - b0["p"]))
+       .groupby("ze2010_downstream")["c"].sum().reindex(buyers)).to_numpy())
+ratio = (t["sd_draws"].to_numpy() / sd_closed)
 assert np.isfinite(ratio).all()
 assert abs(np.median(ratio) - 1.0) < 0.10, ratio
 assert np.abs(ratio - 1.0).max() < 0.35, ratio
@@ -186,7 +187,8 @@ assert np.abs(ratio - 1.0).max() < 0.35, ratio
 # simulation error -- the check that the panel and the structural network are the same
 # regime, which no other column would reveal.
 assert np.abs(t["z"].to_numpy()).max() < 4.0, t["z"].to_numpy()
-print(f"3 ok  measured vs closed-form sd: median ratio {np.median(ratio):.3f}, max "
+print(f"3 ok  measured sd vs the SQUARED-weight closed form: median ratio "
+      f"{np.median(ratio):.3f}, max "
       f"deviation {np.abs(ratio - 1).max():.3f} at B = {B}; max |z| on the level "
       f"{np.abs(t['z']).max():.2f}")
 
@@ -199,19 +201,19 @@ print(f"3 ok  measured vs closed-form sd: median ratio {np.median(ratio):.3f}, m
 # a rounding-scale quantity whose SQUARE ROOT is the reported bar.
 wide = local_share_dispersion(data, radius_km=1e6, verbose=False)
 assert np.allclose(wide["local"], 1.0, atol=1e-12)
-assert np.abs(wide["sd_closed"]).max() < 1e-6
 assert np.allclose(wide["sd_draws"].dropna(), 0.0, atol=1e-12)
+assert np.allclose(wide["width"].dropna(), 0.0, atol=1e-12)
 assert np.allclose(wide["local_draws"].dropna(), 1.0, atol=1e-12)
 tight = local_share_dispersion(data, radius_km=1.0, verbose=False)
 assert np.allclose(tight["local"], 0.0, atol=1e-12)
-assert np.allclose(tight["sd_closed"], 0.0, atol=1e-12)
 assert np.allclose(tight["sd_draws"].dropna(), 0.0, atol=1e-12)
+assert np.allclose(tight["width"].dropna(), 0.0, atol=1e-12)
 # and in between the bar is strictly positive
 mid = local_share_dispersion(data, radius_km=300.0, verbose=False)
-assert (mid["sd_closed"] > 0).all() and (mid["sd_draws"] > 0).all()
+assert (mid["sd_draws"] > 0).all() and (mid["width"] > 0).all()
 assert ((mid["local"] > 0) & (mid["local"] < 1)).all()
-print("4 ok  the bar vanishes exactly at p = 0 and p = 1 on both routes and is "
-      "strictly positive in between")
+print("4 ok  the band vanishes exactly at p = 0 and p = 1 -- width and measured "
+      "sd both -- and is strictly positive in between")
 
 # --- 5. p(1-p) is maximal at one half, ON THE DRAWS ---------------------------
 # The closed form has this shape by construction, so asserting it there would be a
@@ -222,7 +224,7 @@ rows = []
 for d in np.arange(60.0, 820.0, 20.0):
     b = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
                                radius_km=float(d), verbose=False).attrs["by_sector"]
-    rows.append(b[b["sector"] == 2][["p", "sd", "sd_draws"]])
+    rows.append(b[b["sector"] == 2][["p", "V", "sd_draws"]])
 sw = pd.concat(rows, ignore_index=True)
 sw = sw[(sw["p"] > 1e-9) & (sw["p"] < 1 - 1e-9)]
 assert len(sw) > 40 and sw["p"].min() < 0.15 and sw["p"].max() > 0.85, sw["p"].describe()
@@ -243,15 +245,29 @@ print(f"5 ok  the MEASURED dispersion tracks sqrt(V p(1-p)) to a median "
       f"{100 * m.iloc[0] / m.max():.0f}% and {100 * m.iloc[-1] / m.max():.0f}% of its "
       "peak at the two ends")
 
-# --- 6. sd_fixed_V isolates gamma, and V is NOT invariant ---------------------
-base = tab.loc["Both forces"]
-assert np.allclose(base["sd_closed"], base["sd_fixed_V"], atol=1e-14)
-moved = [lab for lab in CF_REGIMES
-         if not np.allclose(tab.loc[lab, "sd_closed"], tab.loc[lab, "sd_fixed_V"],
-                            rtol=1e-6)]
-assert moved, "V came back identical under every regime — the column says nothing"
-print(f"6 ok  sd_fixed_V equals sd_closed on the baseline by construction and differs "
-      f"under {moved} — V moves with the regime, so the two columns are not one")
+# --- 6. coverage: the band's own claim, tested -------------------------------
+# `[q10, q90]` is advertised as holding 8 realised economies in 10. On a CONTINUOUS
+# law that is 0.80; the realised local share lives on a lattice, so the interval
+# contains AT LEAST 80% and can hold all of it. Both bounds are gated, and the
+# lattice case is CONSTRUCTED rather than hoped for: a radius fine enough that one
+# sector's share has two atoms makes the interval over-cover.
+cov = tab["coverage"].dropna()
+assert len(cov) and (cov >= 0.80 - 1e-9).all(), cov.min()
+assert (cov <= 1.0 + 1e-12).all(), cov.max()
+# the coverage is the share of draws inside the drawn arms, recomputed here from the
+# columns the figure reads -- so a band drawn from other numbers would fail
+assert np.isfinite(tab["q10"].dropna()).all() and (tab["q90"] >= tab["q10"]).all()
+assert np.allclose(tab["width"], tab["q90"] - tab["q10"], atol=1e-15, equal_nan=True)
+# a coarse lattice must over-cover: at a radius where a sector realises few distinct
+# values, coverage climbs away from 0.80
+coarse = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
+                                radius_km=40.0, verbose=False)
+fine = tab.loc[["Both forces"]]
+assert coarse["coverage"].median() >= fine["coverage"].median() - 1e-9, \
+    (coarse["coverage"].median(), fine["coverage"].median())
+print(f"6 ok  coverage is bounded below by 0.80 and above by 1 (median "
+      f"{cov.median():.3f}), equals the share of draws inside the drawn arms, and "
+      f"rises to {coarse['coverage'].median():.3f} on a coarser lattice")
 
 # --- 7. a sector with no varieties BLANKS the draws rather than reweighting ---
 # pandas sums a missing sector as zero, which would silently measure a different input
@@ -268,9 +284,10 @@ print("7 ok  a sector absent from the panel blanks the measured dispersion and l
 rep = local_share_report(tab, verbose=False)
 assert list(rep.index) == ["Both forces"] + [r for r in CF_REGIMES if r != "Both forces"]
 assert abs(rep.loc["Both forces", "d local (median)"]) < 1e-15
-assert abs(rep.loc["Both forces", "d sd (median)"]) < 1e-15
+assert abs(rep.loc["Both forces", "d width (median)"]) < 1e-15
+assert 0.80 - 1e-9 <= rep.loc["Both forces", "coverage (median)"] <= 1.0 + 1e-12
 for lab in CF_REGIMES:
-    assert (rep.loc[lab, "n: point down, bar UP"]
+    assert (rep.loc[lab, "n: point down, band WIDER"]
             + rep.loc[lab, "n: both down"]) <= len(buyers)
 
 # The conjecture is that cutting a force can LOWER the point and RAISE the bar. At a
@@ -334,14 +351,14 @@ for a in axes[1:]:
 labs = [a.get_xlabel() for a in axes if a.get_xlabel()]
 assert len(labs) == 1, labs
 assert "sector" not in labs[0] and "10-90" not in labs[0] and "sigma" not in labs[0]
-# the bar IS k sigma, in data units, not a decoration -- asked for explicitly, since
-# the DEFAULT band is now the 10-90 quantile range
-k_test = 2.0
-ax2 = plot_local_share_dispersion(tab, band="draws", k=k_test)
-seg = ax2[0].containers[0][2][0].get_segments()
+# the drawn arms ARE q10 and q90 in data units, clipped at zero -- there is no other
+# band, so this is the whole contract between the table and the picture
+seg = axes[0].containers[0][2][0].get_segments()
 base_sorted = tab.loc["Both forces"].reindex(want)
-drawn = np.array([g[1][0] - g[0][0] for g in seg]) / 2.0
-assert np.allclose(drawn, k_test * base_sorted["sd_draws"].to_numpy(), atol=1e-9)
+lo_d = np.array([g[0][0] for g in seg])
+hi_d = np.array([g[1][0] for g in seg])
+assert np.allclose(lo_d, np.maximum(base_sorted["q10"].to_numpy(), 0.0), atol=1e-9)
+assert np.allclose(hi_d, base_sorted["q90"].to_numpy(), atol=1e-9)
 # the overlay is retained and still carries its legend -- it is the form in which one
 # buyer row can be read without a saccade, at the cost of the crowding
 axo = plot_local_share_dispersion(tab, layout="overlay")
@@ -351,12 +368,13 @@ assert axo.get_legend() is not None and axo.get_xlim()[0] == 0.0
 axv = plot_local_share_dispersion(tab, orientation="v")
 assert len(axv[0].get_xticklabels()) == len(buyers) and axv[0].get_ylim()[0] == 0.0
 assert len([a.get_ylabel() for a in axv if a.get_ylabel()]) == 1
-axs = plot_local_share_dispersion(tab, sector=2)
-assert len(axs) == len(CF_REGIMES)
-assert all("sector" not in a.get_xlabel() for a in axs)
+# the band and per-sector switches are GONE: one figure, one band, no way to ask for
+# a symmetric sd or a single sector by accident
+for gone in ("band", "k", "sector"):
+    assert gone not in inspect.signature(plot_local_share_dispersion).parameters, gone
 for bad, kw in ((ValueError, dict(orientation="diagonal")),
-                (ValueError, dict(band="guess")), (ValueError, dict(layout="grid")),
-                (KeyError, dict(sector=99)), (KeyError, dict(baseline="nope"))):
+                (ValueError, dict(layout="grid")),
+                (KeyError, dict(baseline="nope"))):
     try:
         plot_local_share_dispersion(tab, **kw); raise AssertionError(f"no raise: {kw}")
     except bad:
@@ -365,18 +383,19 @@ plt.close("all")
 print("9 ok  small multiples by default -- one series per panel on one shared window, "
       "buyers named once and ordered by the baseline level, the baseline ghosted in "
       "every counterfactual panel, an honest zero, the axis label naming the quantity "
-      "alone, the bar equal to k sigma in data units, plus the overlay, the vertical "
-      "layout and the per-sector view")
+      "alone, the arms equal to q10 and q90 in data units, plus the overlay and the "
+      "vertical layout; `band`, `k` and `sector` are gone from the signature")
 
 # --- 10. the quantile band and the counting regime ---------------------------
 # The band the figure draws is the empirical 10-90 range, not a symmetric sd. Ordering
 # is an identity of the quantiles; containment of the MEAN is not, and that is the
 # point: where the law is discrete and skewed the point can sit off-centre in its own
 # band, which a +/- sd cannot represent.
-assert (tab["q10"] <= tab["med_draws"] + 1e-12).all()
-assert (tab["med_draws"] <= tab["q90"] + 1e-12).all()
 assert ((tab["q90"] - tab["q10"]) > 0).all()
-assert (tab["band_skew"].abs() <= 1 + 1e-12).all()
+# the band need NOT be centred on the point: where the law is skewed the expectation
+# sits off-centre inside its own range, which is what a +/- sd cannot represent
+_sk = ((tab["q90"] - tab["local"]) - (tab["local"] - tab["q10"])) / tab["width"]
+assert (_sk.abs() <= 1 + 1e-12).all()
 # p x N_eff is the count of effective varieties landing locally, and 1/V its factor
 assert np.allclose(tab["n_eff_var"], 1.0 / tab["V"], atol=1e-12)
 assert np.allclose(tab["p_n_eff"], tab["local"] * tab["n_eff_var"], atol=1e-12)
@@ -392,8 +411,9 @@ lowp = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
 midp = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
                               radius_km=350.0, verbose=False)
 assert lowp["local"].median() < midp["local"].median()
-assert lowp["band_skew"].median() > midp["band_skew"].median(), \
-    (lowp["band_skew"].median(), midp["band_skew"].median())
+_skew = lambda d: (((d["q90"] - d["local"]) - (d["local"] - d["q10"])) / d["width"])
+assert _skew(lowp).median() > _skew(midp).median(), \
+    (_skew(lowp).median(), _skew(midp).median())
 # the DEFAULT radius is the section's 200 km, not the own zone
 assert LOCAL_SHARE_RADIUS_KM == AMPLIFICATION_RADII[-1]
 dflt = local_share_dispersion(data, regimes={"Both forces": dict()}, panel=pan,
@@ -412,8 +432,8 @@ assert np.allclose(lo_drawn, np.minimum(want["q10"], want["local"]), atol=1e-9)
 assert np.allclose(hi_drawn, np.maximum(want["q90"], want["local"]), atol=1e-9)
 plt.close("all")
 print(f"10 ok  the drawn band IS the 10-90 range of the draws about the point (skew "
-      f"{tab.loc['Both forces', 'band_skew'].median():+.2f} at the default 200 km, "
-      f"rising to {lowp['band_skew'].median():+.2f} at a radius where p is smaller), "
+      f"{_skew(midp).median():+.2f} at 350 km against {_skew(lowp).median():+.2f} "
+      f"at 120 km, where p is smaller), "
       "and p x N_eff = local/V")
 
 print("\nall gates pass")

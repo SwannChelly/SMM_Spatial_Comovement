@@ -3662,45 +3662,45 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
                            panel=None, radius_km=LOCAL_SHARE_RADIUS_KM,
                            baseline="Both forces", verbose=True):
     """
-    Per (regime, buyer): the local share of the whole portfolio as a level and three
-    measurements of its dispersion.
+    Per (regime, buyer): the local share of the whole portfolio as a level, and the
+    range of the economies that realise it.
+
+    The reported object is GRANULARITY, not estimation uncertainty. Every replication
+    is drawn at the SAME `theta+`, so the band answers "at these fundamentals, how much
+    can a realised year differ from its expectation" — a statement about the economy.
+    It carries nothing of the uncertainty in `(alpha_hat, T_hat, N_hat)`, so it is not
+    a confidence interval and must not be captioned as one.
 
     Columns
     -------
     local        `sum_s theta_rs p_rs`, the continuum benchmark — exact, no granularity.
     q10, q90     the empirical 10th and 90th PERCENTILES of the realised local share
-                 across replications, and what the figure draws. A standard deviation
-                 would describe this distribution badly: when `p_r x N_eff_r` is small
-                 the law of the realised share is DISCRETE and skewed — a buyer at 5%
-                 with five effective varieties realises 0 or 0.2, never 0.05 — so a
-                 symmetric bar around the mean implies a shape the data do not have.
-                 Quantiles impose none and let the asymmetry show, which is a result
-                 rather than a defect of the drawing. `med_draws` is the median and
-                 `band_skew` scores the asymmetry on [-1, 1].
-    sd_draws     the empirical sd of the same realisations, kept for the closed-form
-                 comparison rather than for the figure. `V = E[sum_j v_j^2]` sits at
-                 the boundary of divergence at this calibration
-                 (`kappa_s = theta/(nu_s - 1) = 2` exactly), so the closed form below is
-                 a reading grid, not a measurement, and the number of draws behind
-                 these columns is carried in `n_draws`.
-    n_eff_var    `1/V_r`, the effective number of varieties, and `p_n_eff = local x
-                 n_eff_var` the expected COUNT of them landing locally. Below a few,
-                 the statistic is counting a handful of events and the band is wide and
-                 skewed for that reason alone — read it before reading the band.
-    sd_closed    `sqrt(sum_s theta_rs^2 V_rs p_rs (1 - p_rs))` with THIS regime's own V.
-    sd_fixed_V   the same with the BASELINE regime's V. The plan takes `V_s` to be a
-                 sectoral constant invariant to the counterfactuals, which is what
-                 would make every movement of the bar a movement of `gamma`. That is a
-                 claim about the simulated economy, not an identity, so both are
-                 reported and their gap IS the part of the movement that is V's.
-    local_draws  the mean of the realisations. `E[omega] = gamma` is exact, so the gap
-                 to `local` is pure simulation error and `z` scores it: a `z` far from
-                 zero means the panel and the structural network are not the same
-                 regime, which no other column would reveal.
-    cv           `sd_draws / local`, the scale-free reading.
+                 across replications: THE OBJECT, and what the figure draws. A standard
+                 deviation would describe this distribution badly — when `p_r x N_eff_r`
+                 is small the law is DISCRETE and skewed (a buyer at 5% with five
+                 effective varieties realises 0 or 0.2, never 0.05), so a symmetric bar
+                 implies a shape the data do not have. Quantiles impose none.
+    coverage     the share of realisations that actually fall inside `[q10, q90]`. On a
+                 continuous law this is 0.80 and the band means what it says. On a
+                 LATTICE it is not: the realised share lives on `{0, 1/N_eff, 2/N_eff,
+                 ...}`, so the interval contains AT LEAST 80% and can reach 1.0 when
+                 there are few atoms, while its width jumps by whole lattice steps and
+                 can collapse to zero when one atom carries more than 80% of the mass.
+                 A coverage near 0.80 licenses the "8 realisations in 10" reading; well
+                 above it says the width is an artefact of the variety count. This is
+                 the one number that tests the band's own claim.
+    p_n_eff      `local x n_eff_var` with `n_eff_var = 1/V_r`: the expected COUNT of
+                 effective varieties landing locally, i.e. how fine that lattice is.
+                 Read it before the band — below a few, the band is wide and skewed for
+                 a counting reason and not a geographic one.
+    z            `E[omega] = gamma` is EXACT, so the gap between the realised mean
+                 (`local_draws`) and `local` is pure simulation error, scored against
+                 `sd_draws/sqrt(n_draws)`. A `z` far from zero means the variety panel
+                 and the structural network are not the same economy — i.e. the draws
+                 are not draws of the right regime, which no other column would reveal.
 
-    `.attrs["by_sector"]` carries the same quantities BEFORE the sector aggregation,
-    where the squared weights have not yet diversified the spread away.
+    `.attrs["by_sector"]` carries `theta`, `p` and `V` BEFORE the sector aggregation,
+    which is what `local` and `V_r` are built from.
 
     ONE CHOICE IS MADE SILENTLY BY THE FORMULA AND IS STATED HERE. The input mix
     `theta_rs` is held FIXED at its mean across replications, on both routes. In the
@@ -3719,7 +3719,8 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
         raise KeyError(f"baseline {baseline!r} is not among {list(want)}.")
     names = _region_labels(data).set_index("index")["ze2010_name"]
 
-    # the panels first, baseline included, so `sd_fixed_V` can be built for every regime
+    # every panel first, so the aggregation below reads them rather than interleaving
+    # simulation with it
     panels, V_of = {}, {}
     for lab, kw in want.items():
         try:
@@ -3736,7 +3737,6 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
                   f"({type(e).__name__}: {e}) — the level only.")
             pan = None
         panels[lab], V_of[lab] = pan, (None if pan is None else _V_by_buyer(pan, buyers))
-    V_base = V_of.get(baseline)
 
     nb_ = buyers.size
     blocks, by_sector = [], []
@@ -3744,7 +3744,6 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
         nets = structural_networks(data, buyers=buyers, **kw)
         pan, V = panels[lab], V_of[lab]
         lvl = np.zeros(nb_)
-        var_c, var_f = np.zeros(nb_), np.zeros(nb_)
         V_r = np.zeros(nb_)
         parts, dropped = [], []
         for s, blk in nets["by_sector"].items():
@@ -3753,12 +3752,8 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
             p = (np.asarray(blk["W"], dtype=float) * mask.T).sum(axis=1)
             v_rs = (V.loc[s].to_numpy(dtype=float)
                     if V is not None and s in V.index else np.full(nb_, np.nan))
-            v_bs = (V_base.loc[s].to_numpy(dtype=float)
-                    if V_base is not None and s in V_base.index else np.full(nb_, np.nan))
             lvl += th * p
             V_r += th * v_rs
-            var_c += th ** 2 * v_rs * p * (1.0 - p)
-            var_f += th ** 2 * v_bs * p * (1.0 - p)
 
             drawn_s = None
             if pan is not None and s in pan:
@@ -3766,20 +3761,15 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
                 parts.append(drawn_s.mul(pd.Series(th, index=buyers), axis=1))
             elif pan is not None:
                 dropped.append(s)
+            # `sd_draws` is the only draw-derived column kept here: it is what pins
+            # the p(1-p) shape on MEASURED data rather than on the closed form, where
+            # it would be a tautology. The per-sector quantiles went with the
+            # per-sector figure.
             by_sector.append(pd.DataFrame({
                 "regime": lab, "sector": s, "ze2010_downstream": buyers,
                 "theta": th, "p": p, "V": v_rs,
-                "sd": np.sqrt(np.maximum(v_rs * p * (1.0 - p), 0.0)),
                 "sd_draws": (drawn_s.std(axis=0, ddof=1).reindex(buyers).to_numpy()
-                             if drawn_s is not None else np.nan),
-                "p_draws": (drawn_s.mean(axis=0).reindex(buyers).to_numpy()
-                            if drawn_s is not None else np.nan),
-                "q10": (drawn_s.quantile(0.10).reindex(buyers).to_numpy()
-                        if drawn_s is not None else np.nan),
-                "med_draws": (drawn_s.quantile(0.50).reindex(buyers).to_numpy()
-                              if drawn_s is not None else np.nan),
-                "q90": (drawn_s.quantile(0.90).reindex(buyers).to_numpy()
-                        if drawn_s is not None else np.nan)}))
+                             if drawn_s is not None else np.nan)}))
 
         if dropped:
             # a sector in the geometry but not in the panel would leave the draws
@@ -3794,35 +3784,34 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
             for q in parts[1:]:
                 idx = idx.intersection(q.index)
             drawn = sum(q.reindex(index=idx) for q in parts)
+            q10_s, q90_s = drawn.quantile(0.10), drawn.quantile(0.90)
+            # the share of realisations the band actually holds. On a lattice the 10-90
+            # interval contains AT LEAST 80% and can hold all of it, so this is what
+            # separates "8 realisations in 10" from an artefact of the variety count.
+            cov = (drawn.ge(q10_s, axis=1) & drawn.le(q90_s, axis=1)).mean(axis=0)
             sd_d = drawn.std(axis=0, ddof=1).reindex(buyers).to_numpy()
             mu_d = drawn.mean(axis=0).reindex(buyers).to_numpy()
-            q10 = drawn.quantile(0.10).reindex(buyers).to_numpy()
-            q50 = drawn.quantile(0.50).reindex(buyers).to_numpy()
-            q90 = drawn.quantile(0.90).reindex(buyers).to_numpy()
+            q10 = q10_s.reindex(buyers).to_numpy()
+            q90 = q90_s.reindex(buyers).to_numpy()
+            covg = cov.reindex(buyers).to_numpy()
             n_d = float(len(idx))
         else:
-            sd_d = mu_d = q10 = q50 = q90 = np.full(nb_, np.nan)
+            sd_d = mu_d = q10 = q90 = covg = np.full(nb_, np.nan)
             n_d = np.nan
 
         blocks.append(pd.DataFrame({
             "regime": lab, "ze2010_downstream": buyers, "local": lvl,
-            "q10": q10, "med_draws": q50, "q90": q90,
-            "sd_draws": sd_d, "sd_closed": np.sqrt(np.maximum(var_c, 0.0)),
-            "sd_fixed_V": np.sqrt(np.maximum(var_f, 0.0)),
-            "local_draws": mu_d, "n_draws": n_d, "V": V_r,
+            "q10": q10, "q90": q90, "coverage": covg,
+            "sd_draws": sd_d, "local_draws": mu_d, "n_draws": n_d, "V": V_r,
             "spend": tot.reindex(buyers).to_numpy()}))
 
     out = pd.concat(blocks, ignore_index=True).set_index(["regime", "ze2010_downstream"])
-    out["cv"] = out["sd_draws"] / out["local"].where(out["local"] > 0)
+    out["width"] = out["q90"] - out["q10"]
     # how many effective varieties land locally. `p x N_eff` of order one is the regime
     # in which the realised share is a handful of discrete events, so the band is wide
     # and skewed for a counting reason and not a geographic one.
     out["n_eff_var"] = 1.0 / out["V"].where(out["V"] > 0)
     out["p_n_eff"] = out["local"] * out["n_eff_var"]
-    # asymmetry of the band on [-1, 1]: positive = a long upper tail
-    _w = (out["q90"] - out["q10"]).where(lambda x: x > 0)
-    out["band_skew"] = ((out["q90"] - out["med_draws"])
-                        - (out["med_draws"] - out["q10"])) / _w
     # E[omega] = gamma is EXACT, so this is a pure simulation-error score and a free
     # check that the panel and the structural network describe the same regime.
     se = out["sd_draws"] / np.sqrt(out["n_draws"])
@@ -3843,12 +3832,8 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
             "local (median)": d["local"].median(),
             "local (min)": d["local"].min(), "local (max)": d["local"].max(),
             "q10 (median)": d["q10"].median(), "q90 (median)": d["q90"].median(),
-            "band width (median)": (d["q90"] - d["q10"]).median(),
-            "band skew (median)": d["band_skew"].median(),
-            "sd measured (median)": d["sd_draws"].median(),
-            "sd closed (median)": d["sd_closed"].median(),
-            "sd fixed V (median)": d["sd_fixed_V"].median(),
-            "cv (median)": d["cv"].median(),
+            "width (median)": d["width"].median(),
+            "coverage (median)": d["coverage"].median(),
             "draws": d["n_draws"].iloc[0]}))
         print(summ.round(4).to_string())
         # the counting regime, which decides whether the band is wide for a granular
@@ -3867,11 +3852,14 @@ def local_share_dispersion(data, regimes=None, value_col="share", spend=None,
                   f"max {zz.max():.2f} over {int(out['n_draws'].max())} draws"
                   + ("  <-- the panel and the structural network disagree"
                      if zz.max() > 4 else ""))
-        gap = (out["sd_closed"] / out["sd_fixed_V"]).replace([np.inf, -np.inf], np.nan)
-        print(f"    sd_closed / sd_fixed_V: median {gap.median():.3f}, "
-              f"range [{gap.min():.3f}, {gap.max():.3f}] — a range around one is V "
-              "behaving as the sectoral constant the reading assumes; a range away "
-              "from it means part of the bar's movement is V's, not gamma's.")
+        cv_ = out["coverage"]
+        if cv_.notna().any():
+            print(f"    coverage of [q10, q90]: median {cv_.median():.3f}, "
+                  f"max {cv_.max():.3f}"
+                  + ("  <-- well above 0.80: few atoms, so the interval over-covers "
+                     "and its width is a lattice step rather than a dispersion"
+                     if cv_.median() > 0.85 else
+                     "  — the band holds 80% of the realised economies, as written"))
     return out
 
 
@@ -3885,65 +3873,60 @@ def _regime_order(table, baseline):
     return [baseline] + [r for r in seen if r != baseline]
 
 
-def local_share_report(table, baseline=None, sd="band", verbose=True):
+def local_share_report(table, baseline=None, verbose=True):
     """
-    The two statements the figure is there to support, each measured rather than
-    asserted.
+    What the band says, and whether it says it.
+
+    Two readings of the band itself, each measured rather than asserted:
 
     (1) `p(1-p)` is maximal at `p = 1/2` and vanishes at both ends, so the buyers whose
         local sourcing is INTERMEDIATE are the ones whose realised local share says
-        least. Below one half the bar RISES with the point, above it the bar FALLS —
-        so which statement holds is an empirical question about where the local shares
-        sit, and the share of buyers past one half is reported before anything is read
-        into a movement.
+        least. Below one half the band WIDENS with the point, above it it narrows — so
+        which holds is an empirical question about where the local shares sit, and the
+        share of buyers past one half is reported before anything is read into a
+        movement.
 
-    (2) Whether cutting a force lowers the point and RAISES the bar — chance filling
-        the dispersion geography vacates, the compensation the Herfindahl shows. That
-        needs `p` to be pushed TOWARDS one half; at `p` well below it the two move
-        together and the compensation cannot operate on this statistic. The count of
-        buyers moving each way is reported, so the conjecture is decided rather than
-        restated.
+    (2) Whether cutting a force lowers the point and WIDENS the band — chance filling
+        the dispersion geography vacates. That needs `p` pushed TOWARDS one half; at
+        `p` well below it the two move together and the compensation cannot operate on
+        this statistic. The count of buyers moving each way is reported.
+
+    Then the two guards, which are the conditions under which (1) and (2) mean
+    anything: `coverage` (does the 10-90 interval hold 80% of the realisations, or is
+    it over-covering a lattice) and `z` (are the realisations draws of the right
+    economy at all).
     """
     base = table.attrs.get("baseline", "Both forces") if baseline is None else baseline
     keep = _regime_order(table, base)
-    if sd == "band":                       # the drawn band: half the 10-90 width
-        sg_all = 0.5 * (table["q90"] - table["q10"])
-    else:
-        sg_all = table[{"draws": "sd_draws", "closed": "sd_closed",
-                        "fixed_V": "sd_fixed_V"}[sd]]
     pt = table["local"].unstack("regime")[keep]
-    sg = sg_all.unstack("regime")[keep]
+    wd = table["width"].unstack("regime")[keep]
 
     n = len(pt)
     above = int((pt[base] > 0.5).sum())
     rows = []
     for lab in pt.columns:
-        d_pt = pt[lab] - pt[base]
-        d_sg = sg[lab] - sg[base]
+        d_pt, d_wd = pt[lab] - pt[base], wd[lab] - wd[base]
         rows.append({"regime": lab, "local (median)": pt[lab].median(),
-                     "sd (median)": sg[lab].median(),
-                     "cv (median)": (sg[lab] / pt[lab]).median(),
+                     "width (median)": wd[lab].median(),
+                     "coverage (median)": table.loc[lab, "coverage"].median(),
                      "d local (median)": d_pt.median(),
-                     "d sd (median)": d_sg.median(),
-                     "n: point down, bar UP": int(((d_pt < 0) & (d_sg > 0)).sum()),
-                     "n: both down": int(((d_pt < 0) & (d_sg < 0)).sum()),
+                     "d width (median)": d_wd.median(),
+                     "n: point down, band WIDER": int(((d_pt < 0) & (d_wd > 0)).sum()),
+                     "n: both down": int(((d_pt < 0) & (d_wd < 0)).sum()),
                      "buyers past 1/2": int((pt[lab] > 0.5).sum())})
     rep = pd.DataFrame(rows).set_index("regime")
     if verbose:
-        print("\n  the level against the spread, regime by regime")
+        print("\n  the level against the band, regime by regime")
         print(rep.round(4).to_string())
-        # illustrated on the band the FIGURE draws, so the sentence and the picture
-        # are the same object: the 10-90 range of the realisations, not a symmetric sd.
         b = table.loc[base]
-        width = (b["q90"] - b["q10"])
-        worst = width.idxmax() if width.notna().any() else sg[base].idxmax()
+        worst = b["width"].idxmax() if b["width"].notna().any() else pt[base].idxmax()
         lo, hi = float(b.loc[worst, "q10"]), float(b.loc[worst, "q90"])
         nm = table["region"].groupby(level="ze2010_downstream").first().get(worst, worst)
         print(f"\n    (1) the widest band is {nm}: {pt[base].loc[worst]:.3f} expected, "
-              f"and 8 realisations in 10 fall in [{lo:.3f}, {hi:.3f}] — the same "
-              "fundamentals, a different year.")
-        print(f"        {above} of {n} buyers sit above p = 1/2 in {base}, so the bar "
-              + ("RISES with the point for essentially every buyer: a force that "
+              f"and 8 economies in 10 realise a share in [{lo:.3f}, {hi:.3f}] — the "
+              "same fundamentals, a different year.")
+        print(f"        {above} of {n} buyers sit above p = 1/2 in {base}, so the band "
+              + ("WIDENS with the point for essentially every buyer: a force that "
                  "lowers the local share lowers its dispersion too, and the "
                  "compensation the Herfindahl shows cannot operate here."
                  if above == 0 else
@@ -3953,29 +3936,35 @@ def local_share_report(table, baseline=None, sd="band", verbose=True):
             if lab == base:
                 continue
             r = rep.loc[lab]
-            print(f"        (2) {lab}: {int(r['n: point down, bar UP'])} of {n} buyers "
-                  f"lose local share AND gain dispersion, {int(r['n: both down'])} lose "
-                  "both.")
-        cnt = table.loc[base]
-        sk = cnt["band_skew"]
-        print(f"        (3) p x N_eff is {cnt['p_n_eff'].median():.1f} at the median "
-              f"buyer and {cnt['p_n_eff'].min():.1f} at the lowest, so the realised "
-              "share is a count of that many effective varieties: the band is DISCRETE "
-              "and skewed there (median band skew "
-              f"{sk.median():+.2f}, most skewed {sk.abs().max():.2f}) — that is the "
-              "result, not a drawing defect, and it is why the figure carries 10-90 "
-              "quantiles rather than a symmetric sd.")
-        print("        the scale-free reading is `cv`, and it needs no regime: sector "
-              "by sector cv = sd/p = sqrt(V (1-p)/p) EXACTLY, which is strictly "
-              "decreasing in p over the whole range. So unlike the bar itself the "
-              "RELATIVE noise has no interior maximum — the less local a buyer, the "
-              "less its realised local share can be trusted relative to its own size, "
-              "on either side of one half.")
+            print(f"        (2) {lab}: {int(r['n: point down, band WIDER'])} of {n} "
+                  f"buyers lose local share AND gain dispersion, "
+                  f"{int(r['n: both down'])} lose both.")
+        # --- the two guards ---------------------------------------------------
+        cv_, pn = b["coverage"], b["p_n_eff"]
+        print(f"\n    [guard] coverage: median {cv_.median():.3f}, max "
+              f"{cv_.max():.3f} over {int(b['n_draws'].iloc[0])} economies. "
+              + ("the band holds 80% of the realisations, so it reads as written."
+                 if cv_.median() < 0.85 else
+                 "WELL ABOVE 0.80: the realised share is a lattice with few atoms, so "
+                 "the interval over-covers and its width is a step of that lattice "
+                 "rather than a dispersion — read p x N_eff before quoting a width."))
+        print(f"    [guard] p x N_eff: {pn.median():.1f} at the median buyer, "
+              f"{pn.min():.1f} at the lowest"
+              + (" — fine enough for the band to read as a continuous range."
+                 if pn.min() >= 3 else
+                 " — BELOW 3 somewhere: there the realised share is a count of a "
+                 "handful of events and the band is discrete."))
+        z = b["z"].abs()
+        print(f"    [guard] |z|: max {z.max():.2f}"
+              + (" — the realisations and the structural network are the same economy."
+                 if z.max() < 3 else
+                 " — ABOVE 3: the variety panel and the structural network disagree, "
+                 "so the band is drawn around the wrong point. Check theta and re-run "
+                 "check_against_julia before reading anything below."))
     return rep
 
 
-def plot_local_share_dispersion(table, baseline=None, band="quantile", k=1.0,
-                                sector=None, regimes=None, order=None,
+def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
                                 orientation="h", layout="panels", figsize=None,
                                 save_to=None):
     """
@@ -3997,26 +3986,23 @@ def plot_local_share_dispersion(table, baseline=None, band="quantile", k=1.0,
     the eye across the figure; the baseline panel carries no such ghost (it would be the
     same mark drawn twice).
 
-    `band` chooses what the bar is.
-    `"quantile"` (the default) is the empirical 10-90 range of the realised local share,
-    drawn ASYMMETRICALLY about the point. It is the right object here: where
-    `p x N_eff` is of order one the realised share is a count of a few events, so its
-    law is discrete and skewed, and a symmetric `+/- sd` would draw a shape the data do
-    not have. `"fixed_V"` is the closed form with the BASELINE regime's `V` held across
-    regimes, which is the band to use when every movement must read as a movement of
-    `gamma` — `V` itself moves with the regime, so the two are not the same comparison.
-    `"closed"` uses each regime's own `V`, and `"draws"` the symmetric measured sd;
-    both are `+/- k` times the quantity.
+    The bar is the empirical 10-90 range of the realised local share, drawn
+    ASYMMETRICALLY about the point, and there is no other option: where `p x N_eff` is
+    of order one the realised share is a count of a few events, so its law is discrete
+    and skewed and a symmetric `+/- sd` draws a shape the data do not have. Read
+    `coverage` in the table beside it — on a lattice the interval holds more than 80%
+    and its width is a step of that lattice.
 
     `orientation="h"` puts the buyers on the y axis (commuting-zone names are long, and
     this is the form every other per-buyer figure of the section uses); `"v"` puts them
-    on the x axis. `sector=s` draws one sector instead of the portfolio, where the
-    squared weights have not yet diversified the spread away.
+    on the x axis.
 
-    The axis label names the QUANTITY only. What the point and the bar are is a property
-    of the exhibit, not of the axis, and belongs in the caption — putting it on the axis
-    forces the reader to parse a legend before reading a number, and the sector, when
-    one is selected, is likewise a caption fact.
+    The axis label names the QUANTITY only. What the point and the bar are is a
+    property of the exhibit, not of the axis, and belongs in the caption — putting it
+    on the axis forces the reader to parse a legend before reading a number. The
+    caption says "point: the continuum expectation; bar: 10-90% of realised economies",
+    never "confidence interval": the replications share one `theta+`, so the band is
+    granularity and carries no estimation uncertainty.
 
     Returns the `Axes` under `"overlay"` and an array of `Axes`, one per regime in the
     drawn order, under `"panels"`.
@@ -4025,31 +4011,12 @@ def plot_local_share_dispersion(table, baseline=None, band="quantile", k=1.0,
         raise ValueError(f"orientation must be 'h' or 'v', got {orientation!r}.")
     if layout not in ("panels", "overlay"):
         raise ValueError(f"layout must be 'panels' or 'overlay', got {layout!r}.")
-    _sd_col = {"draws": "sd_draws", "closed": "sd_closed", "fixed_V": "sd_fixed_V"}
-    if band != "quantile" and band not in _sd_col:
-        raise ValueError(f"band must be 'quantile', 'draws', 'closed' or 'fixed_V', "
-                         f"got {band!r}.")
     base = table.attrs.get("baseline", "Both forces") if baseline is None else baseline
 
     keep = _regime_order(table, base)
-    if sector is None:
-        src, pcol = table, "local"
-    else:
-        bs = table.attrs["by_sector"]
-        bs = bs[bs["sector"] == sector]
-        if bs.empty:
-            raise KeyError(f"sector {sector!r} is not in the table.")
-        src = bs.set_index(["regime", "ze2010_downstream"])
-        pcol = "p"
-    pt = src[pcol].unstack("regime")[keep]
-    if band == "quantile":
-        lo_t = src["q10"].unstack("regime")[keep]
-        hi_t = src["q90"].unstack("regime")[keep]
-    else:
-        scol = _sd_col[band] if sector is None else \
-            {"draws": "sd_draws"}.get(band, "sd")
-        sg = src[scol].unstack("regime")[keep]
-        lo_t, hi_t = pt - k * sg, pt + k * sg
+    pt = table["local"].unstack("regime")[keep]
+    lo_t = table["q10"].unstack("regime")[keep]
+    hi_t = table["q90"].unstack("regime")[keep]
     if regimes is not None:
         cols = list(regimes)
         if base not in cols:
