@@ -1004,82 +1004,15 @@ def plot_amplification_vs_local(data, radius_km=AMPLIFICATION_RADIUS_KM,
         fig.savefig(save_to, bbox_inches="tight")
     return ax
 
-def plot_counterfactual_local_share(data, regimes=CF_REGIMES, radius_km=None,
-                                    value_col="share", detail=None, frames=None,
-                                    diffusion=None, include_realised=True, xmax=None,
-                                    figsize=None, save_to=None):
-    """
-    The same shock, propagated with one force switched off: the share of upstream sales
-    staying within `radius_km`, region by region, one bar per regime.
-
-    Read as two switches against the estimated allocation, not against chance. The step
-    from `Both forces` to `Distance only` is what comparative advantage was doing; the
-    step to `Comparative advantage only` is what proximity was doing. The first is the
-    one with content: $T$ pulls sourcing towards a few favoured areas wherever they
-    happen to be, so removing it pushes the local share UP for most regions and down
-    only for those that host a favoured area — a SIGNED prediction, which is why the two
-    industries can disagree. Removing distance can only push it down.
-
-    Regions keep the order of the previous figure (the realised share within the same
-    radius), so the two are read together. $D_r$ is not re-plotted: it is identical in
-    every regime by construction, which is the whole point — the counterfactual moves a
-    shock in space without changing its size.
-    """
-    radius_km = _DEFAULT_RADII[0] if radius_km is None else radius_km
-    det = (counterfactual_amplification(data, regimes=regimes, radii=(radius_km,),
-                                        value_col=value_col, frames=frames,
-                                        diffusion=diffusion)
-           if detail is None else detail)
-    col = f"share_within_{int(radius_km)}km"
-    if col not in det.columns:
-        raise KeyError(f"{col} is not in the detail table — pass "
-                       f"`radii=({radius_km},)` to counterfactual_amplification.")
-
-    wide = det[col].unstack("regime")
-    order = wide["Realised"].sort_values().index      # the order of the previous figure
-    labels = [r for r in (["Realised"] if include_realised else []) + list(regimes)
-              if r in wide.columns]
-    wide = wide[labels].reindex(order)
-    names = det["region"].groupby(level="ze2010_downstream").first().reindex(wide.index)
-
-    # one row per region, sized so each of the regimes keeps a legible bar
-    fig, ax = plt.subplots(
-        figsize=figsize or (9, max(3.5, 0.085 * len(labels) * len(wide))))
-    y = np.arange(len(wide))
-    height = 0.8 / len(labels)
-    for k, lab in enumerate(labels):
-        off = ((len(labels) - 1) / 2 - k) * height        # first label on top of the group
-        ax.barh(y + off, wide[lab].to_numpy(), height=height, alpha=1.0,
-                color=CF_COLORS.get(lab, toulouse_color),
-                edgecolor="white", linewidth=0.4, label=lab)
-    ax.set_yticks(y)
-    ax.set_yticklabels(names.astype(str))
-    ax.set_ylim(-0.6, len(wide) - 0.4)
-    top = float(np.nanmax(wide.to_numpy()))
-    ax.set_xlim(0, xmax if xmax is not None else max(0.1, np.ceil(top * 20) / 20 + 0.05))
-    ax.set_xlabel(f"Share of upstream sales within {radius_km:g} km")
-    ax.set_ylabel("Commuting zone")
-    ax.grid(alpha=0.2, axis="x")
-    ax.legend(frameon=False, fontsize=9, ncol=min(3, len(labels)),
-              loc="lower left", bbox_to_anchor=(0.0, 1.005))
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    fig.tight_layout()
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return ax
-
-
 def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
                                  detail=None, frames=None, diffusion=None,
                                  include_realised=True, units="pct", baseline="Both forces",
                                  kind="bar", annotate_km=True, xmin=None, xmax=None,
                                  figsize=None, save_to=None):
     """
-    The per-buyer companion of `plot_counterfactual_local_share`: the average sourcing
-    distance `d_r` of each shocked region, one mark per regime, regions in the SAME
-    order as that figure (ascending realised local share) so the two read together.
+    The average sourcing distance `d_r` of each shocked region, one mark per regime,
+    regions ordered by the realised local share (the order of `plot_local_share`, so the
+    two read together).
 
     `units` is the design decision, and it is the one that makes the figure readable.
     Every `d_r` sits between roughly 250 and 450 km, so in KILOMETRES the entire
@@ -1108,7 +1041,7 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
         raise ValueError(f"units must be 'pct' or 'km', got {units!r}.")
 
     wide = det["mean_upstream_distance"].unstack("regime")
-    # the ordering of plot_counterfactual_local_share, so the two panels line up
+    # ordered by the realised local share, so the panels line up with plot_local_share
     share_cols = [c for c in det.columns if c.startswith("share_within_")]
     if share_cols and "Realised" in wide.columns:
         order = det[sorted(share_cols)[0]].unstack("regime")["Realised"].sort_values().index
@@ -1326,18 +1259,6 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
             det = counterfactual_amplification(data, regimes=regimes, radii=radii,
                                                value_col=value_col, frames=frames,
                                                diffusion=diff)
-            plot_counterfactual_local_share(data, regimes=regimes, radius_km=radii[0],
-                                            detail=det,
-                                            save_to=tag("counterfactual_local_share"))
-            if show:
-                plt.show()
-            # the same figure at the wider radius the reduced-form part works with
-            if len(radii) > 1:
-                plot_counterfactual_local_share(
-                    data, regimes=regimes, radius_km=radii[-1], detail=det,
-                    save_to=tag(f"counterfactual_local_share{int(radii[-1])}km"))
-                if show:
-                    plt.show()
             plot_counterfactual_profile(data, regimes=regimes, mark=radii, frames=frames,
                                         diffusion=diff,
                                         save_to=tag("counterfactual_profile"))

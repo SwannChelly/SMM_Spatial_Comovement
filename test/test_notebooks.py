@@ -17,7 +17,7 @@ and neither can be checked by a section gate.
 
 The libraries' own behaviour is gated by the section files; this one gates the notebooks.
 """
-import ast, builtins, json, os, shutil, sys, warnings
+import ast, builtins, json, os, re, shutil, sys, warnings
 warnings.filterwarnings("ignore")
 import matplotlib
 matplotlib.use("Agg")
@@ -90,13 +90,22 @@ for nbname in NOTEBOOKS:
     src = "".join("".join(c["source"]) for c in
                   json.load(open(os.path.join(ROOT, nbname), encoding="utf-8"))["cells"]
                   if c["cell_type"] == "code")
-    assert '"firm"' not in src.split("check_against_julia")[0] or "RUN_KWARGS" in src
     # the loader must be called with an explicit `parts`, never with the default
     assert "parts=(" in src, f"{nbname} does not specialise the loader"
     assert "suppliers_continuum" not in src, \
         f"{nbname} still reaches for Julia's second parquet"
-print("2 ok  both notebooks specialise the loader and neither reads "
-      "suppliers_continuum.parquet")
+    # The PARQUET IS NOT ON EITHER REPORTING PATH. `load_granular_data` opens
+    # `suppliers.parquet` only under `parts` containing "firm", so a notebook that
+    # never asks for that part cannot read it, whatever its sections then do -- every
+    # economy, the estimated one included, is simulated from theta+. The one legitimate
+    # use of the file is `check_against_julia`, which is not run from a notebook.
+    _code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    for _p in re.findall(r"parts\s*=\s*\(([^)]*)\)", _code, flags=re.S):
+        assert "firm" not in _p, f"{nbname} asks the loader for the parquet: parts=({_p})"
+    assert "check_against_julia(" not in _code, \
+        f"{nbname} runs the Julia comparator, which needs the parquet"
+print("2 ok  both notebooks specialise the loader, neither asks for the `firm` part, so "
+      "suppliers.parquet is never opened on a reporting path")
 
 # --- 2b. the tests notebook's section numbering is consistent ------------------------
 # Test 9 (the local share as a level plus a dispersion) was merged into Test 6 (the local
@@ -115,10 +124,16 @@ for piece in ("### The level, and the sign reversal", "### The dispersion",
               "10–90 percentiles", "sign reversal"):
     assert piece in t6, piece
 run6 = next(t for k, t in src_cells if k == "code" and "the DISPERSION" in t)
-for fn in ("plot_local_share(", "plot_counterfactual_local_share(",
+for fn in ("plot_local_share(", "plot_counterfactual_profile(",
            "local_share_dispersion(", "local_share_report(",
            "plot_local_share_dispersion("):
     assert fn in run6, f"Test 6's run cell does not call {fn}"
+# the per-region counterfactual bars are RETIRED (the profile carries the same
+# reallocation at every radius), and the band is drawn ONLY as the 10-90 quantile range:
+# a symmetric +/- sigma bar draws a shape the discrete law does not have.
+assert "plot_counterfactual_local_share" not in run6, "the retired per-region bars are back"
+_run6_code = "\n".join(l for l in run6.splitlines() if not l.lstrip().startswith("#"))
+assert "fixed_V" not in _run6_code, "the fixed_V band is drawn again"
 hdr = next(t for k, t in src_cells if k == "markdown" and t.startswith("# Amplification"))
 assert "**eight tests**" in hdr and "| 9 |" not in hdr, "the header still advertises nine"
 print(f"2b ok  Test 9 is merged into Test 6: {len(heads)} test headings, both halves in "

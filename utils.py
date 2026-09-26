@@ -92,17 +92,17 @@ NU_S_DEFAULT = 1.5
 NU_ACROSS_DEFAULT = 0.2          # nu, ACROSS sectors
 LAMBDA_DEFAULT = 0.5             # lambda, labour against intermediates
 
-# How many economies each SIMULATED regime draws — the counterfactuals, and anything
-# else that goes through `simulate_economy`. `None` means "match the baseline": the
-# replication count of `suppliers.parquet`, so the sampled regimes are as heavily drawn
-# as the Julia economy they are read against without the number living in two places.
+# How many economies each regime draws — every regime, the estimated one included, since
+# all of them go through `simulate_economy`. It used to default to `None`, meaning "match
+# the baseline": the replication count of `suppliers.parquet`. That is obsolete — the
+# parquet is not on the reporting path and there is no baseline to match — so the number
+# is set here outright. It governs the DISPERSION every band and `z` score rests on, and
+# it is the one knob that buys precision for Python time alone.
 #
-# The Julia-side knob is `POST_HOC_REPLICATIONS` in `main.jl` (currently 50) and it is a
-# DIFFERENT quantity: it governs how many economies are actually SOLVED and written to
-# the parquet, which is what the estimated-economy row and every `z`/band on it rest on.
-# Raising this one costs Python time; raising that one costs a Julia re-run, and only
-# that one improves the baseline.
-ECONOMY_REPLICATIONS = None
+# The Julia-side `POST_HOC_REPLICATIONS` in `main.jl` is a DIFFERENT quantity: how many
+# economies Julia SOLVES and writes for the verification artefact. Raising that one costs
+# a re-run and improves only `check_against_julia`'s sample, not anything reported.
+ECONOMY_REPLICATIONS = 1000
 
 # Highest K kept anywhere in the count-curve reporting: the panels, the empirical
 # increments read out of G_K.csv, and the bootstrap variances read out of G_K_var.csv
@@ -1382,12 +1382,10 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     different geometry, but re-running it would recalibrate a moment rather than answer a
     counterfactual.
 
-    `n_rep` is how many economies are drawn. `None` takes `ECONOMY_REPLICATIONS` and, when
-    that is `None` too, the replication count of `suppliers.parquet` — so the Python
-    counterfactuals are sampled as heavily as the Julia baseline they are read against
-    without the number being restated in two places. `POST_HOC_REPLICATIONS` in `main.jl`
-    is the Julia-side knob; it governs how many economies are SOLVED and written, and this
-    one how many are drawn here.
+    `n_rep` is how many economies are drawn; `None` takes `ECONOMY_REPLICATIONS` (1000).
+    It sets the DISPERSION every band and `z` score rests on, and costs Python time
+    alone. `POST_HOC_REPLICATIONS` in `main.jl` is a different quantity: how many
+    economies Julia solves and writes for `check_against_julia`.
 
     `buyers` restricts the returned per-sector panel to those buyer zones (the consumers
     that ride a spend frame need its own buyer set). The VALUE block is deliberately not
@@ -1432,11 +1430,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     # setup sits after them.
     if u is None:
         if n_rep is None:
-            n_rep = globals().get("ECONOMY_REPLICATIONS")
-        if n_rep is None:
-            sup = data.get("suppliers")
-            n_rep = (int(sup["replication"].nunique())
-                     if sup is not None and "replication" in sup.columns else 50)
+            n_rep = globals().get("ECONOMY_REPLICATIONS") or 1000
         rng, u_list = np.random.default_rng(seed), None
     else:
         u_list = [np.asarray(x, dtype=float) for x in (u if isinstance(u, (list, tuple)) else [u])]

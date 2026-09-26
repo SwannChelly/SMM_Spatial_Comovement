@@ -111,6 +111,12 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=False):
 import utils, granular_lib
 install(globals(), [utils, granular_lib])
 
+# The fixture's planted parquet carries B realisations, so the SIMULATED regimes must be
+# drawn as heavily if `sd_draws` is to be compared across them. The module default is a
+# production number (1000); the notebooks override it the same way.
+for _m in (utils, granular_lib):
+    _m.ECONOMY_REPLICATIONS = B
+
 spend = _sector_spend(data)
 theta = spend.div(spend.sum(axis=1), axis=0)
 tab = local_share_dispersion(data, radius_km=None, verbose=False)

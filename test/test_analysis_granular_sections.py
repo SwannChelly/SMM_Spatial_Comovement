@@ -1252,8 +1252,10 @@ def gate_amplification():
     print(cfs.round(3).to_string())
 
     # the figures
-    NS["plot_counterfactual_local_share"](data, radius_km=100, detail=det,
-                                          save_to=str(out / "amp_cf_local.png"))
+    # the per-region counterfactual bars are retired; the profile carries the same
+    # reallocation at every radius, so a single radius can no longer flatter a regime
+    assert "plot_counterfactual_local_share" not in _src, \
+        "the retired per-region counterfactual figure is back in diffusion_lib"
     NS["plot_counterfactual_profile"](data, frames=frames, diffusion=diff, mark=(100, 200),
                                       radii=(50, 100, 200, 400),
                                       save_to=str(out / "amp_cf_profile.png"))
@@ -1663,8 +1665,7 @@ def gate_amplification():
 
     # neither counterfactual figure carries a title: both go into the paper under its own
     # caption, and an in-panel "auto, mu_2, one force off" duplicates it in a smaller font
-    for fn, kw in (("plot_counterfactual_profile", dict(frames=frames, diffusion=diff)),
-                   ("plot_counterfactual_local_share", dict(detail=det, radius_km=100))):
+    for fn, kw in (("plot_counterfactual_profile", dict(frames=frames, diffusion=diff)),):
         axf = NS[fn](data, **kw)
         assert axf.get_title() == "" and axf.get_title(loc="right") == "", (fn, axf.get_title(loc="right"))
         NS["plt"].close(axf.figure)
