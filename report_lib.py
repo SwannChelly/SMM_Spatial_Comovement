@@ -21,8 +21,9 @@ import pyfixest as pf          # PPML with absorbed fixed effects (ppmlhdfe)
 
 from utils import (
     EMPIRICAL_MEAN_LOG_D, NU_S_DEFAULT, THETA_DEFAULT,
-    _despine, _read_named_value, font_size, get_figsize, load_granular_data,
-    reference_color, sim_color, toulouse_color, unpack_estimated_T,
+    _despine, _read_named_value, fs, get_figsize, load_granular_data, pct,
+    reference_color, set_name_axis_fontsize, sim_color, toulouse_color,
+    unpack_estimated_T,
 )
 
 
@@ -148,9 +149,9 @@ def bubble_scatter(ax, x, y, xlabel, ylabel, title, size_scale=300,
 
     b, t = wls_through_origin(x, y, w)
     ax.text(0.98, 0.09, rf"Coefficient: ${np.round(b, 3)}$", ha="right", va="bottom",
-            fontsize=10, transform=ax.transAxes)
+            fontsize=fs(10), transform=ax.transAxes)
     ax.text(0.98, 0.01, rf"t-stat: ${np.round(t, 1)}$", ha="right", va="bottom",
-            fontsize=10, transform=ax.transAxes)
+            fontsize=fs(10), transform=ax.transAxes)
 
     if regression_line:
         xx = np.linspace(0, lims[1], 100)
@@ -230,9 +231,9 @@ def plot_gamma_aa(data, ax=None, save_to=None):
     b, t = wls_through_origin(x_free, y_free, weights=x_free)
     ax.plot(lims, lims, color="black", linewidth=1)
     ax.text(0.98, 0.09, rf"Coefficient: ${np.round(b, 3)}$", ha="right", va="bottom",
-            fontsize=10, transform=ax.transAxes)
+            fontsize=fs(10), transform=ax.transAxes)
     ax.text(0.98, 0.01, rf"t-stat: ${np.round(t, 1)}$", ha="right", va="bottom",
-            fontsize=10, transform=ax.transAxes)
+            fontsize=fs(10), transform=ax.transAxes)
 
     ax.set_xlim(lims)
     ax.set_ylim(lims)
@@ -367,7 +368,7 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
         top = ax.get_ylim()[1]
         for i, (n, cl) in enumerate(zip(N_hat, clamped)):
             ax.text(i, top, rf"$\hat{{N}}_s={int(n)}$" + ("*" if cl != 0 else ""),
-                    ha="center", va="bottom", fontsize=font_size-3, rotation=45)
+                    ha="center", va="bottom", fontsize=fs(12), rotation=45)
         #ax.set_ylim(ax.get_ylim()[0], top * 1.02)
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -861,20 +862,20 @@ def _block_grid(ax, data, m_edges, p_edges, block_names=True):
         return
     ax_top, ax_right = ax.secondary_xaxis("top"), ax.secondary_yaxis("right")
     ax_top.set_xticks((p_edges[:-1] + p_edges[1:]) / 2 - 0.5)
-    ax_top.set_xticklabels(data["param_block_names"], fontsize=10, fontweight="bold",
+    ax_top.set_xticklabels(data["param_block_names"], fontsize=fs(10), fontweight="bold",
                            rotation=45)
     ax_right.set_yticks((m_edges[:-1] + m_edges[1:]) / 2 - 0.5)
-    ax_right.set_yticklabels(data["moment_block_names"], fontsize=10, fontweight="bold")
+    ax_right.set_yticklabels(data["moment_block_names"], fontsize=fs(10), fontweight="bold")
 
 
 def _axis_labels(ax, data, shape):
     xs = np.arange(shape[1])[::_tick_every(shape[1])]
     ax.set_xticks(xs)
-    ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=7)
+    ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=fs(7))
     ax.xaxis.set_ticks_position("bottom")
     ys = np.arange(shape[0])[::_tick_every(shape[0])]
     ax.set_yticks(ys)
-    ax.set_yticklabels(np.array(data["moment_labels"])[ys], fontsize=7)
+    ax.set_yticklabels(np.array(data["moment_labels"])[ys], fontsize=fs(7))
     ax.set_xlabel("Parameter")
     ax.set_ylabel("Moment")
 
@@ -912,7 +913,7 @@ def _sector_subblocks(data, block_name="Regional sourcing shares"):
     return runs
 
 
-def _sector_axis(ax, data, block_name="Regional sourcing shares", fontsize=8):
+def _sector_axis(ax, data, block_name="Regional sourcing shares", fontsize=fs(8)):
     """
     Left y axis: one tick per sector of `block_name`, at the middle of its rows, with a
     thin separator between sectors. Every other row label is dropped -- on a matrix this
@@ -965,7 +966,7 @@ def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
     cbar.set_label("Elasticity" if "elast" in kind else "d m / d theta")
     if not coarse:
         cbar.ax.set_xticklabels([f"{t:g}" for t in JACOBIAN_BOUNDARIES],
-                                fontsize=8, rotation=45)
+                                fontsize=fs(8), rotation=45)
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, bbox_inches="tight")
@@ -1000,7 +1001,7 @@ def plot_jacobian_noise(data, kind="elasticity", noise_max=NOISE_MAX, figsize=(1
     share = float(bad.mean())
     ax.set_title(f"Jacobian noise-to-signal $\\sigma/|\\varepsilon|$ — "
                  f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"\n{100 * share:.1f}% of entries at or above {noise_max:g} "
+                 f"\n{100 * share:.1f}{pct()} of entries at or above {noise_max:g} "
                  "(black squares) — not readable", pad=28)
     cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
                         extend="max")
@@ -1063,25 +1064,25 @@ def plot_jacobian_blocks(data, kind="elasticity", coarse=True, ncols=3,
             ax.axvline(e - 0.5, color="black", linewidth=1.2, alpha=0.5)
 
         cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.12)
-        cbar.set_label("Elasticity", fontsize=9)
+        cbar.set_label("Elasticity", fontsize=fs(9))
         ax.set_title(f"{name}\n({block.shape[0]}x{block.shape[1]})",
-                     fontsize=13, fontweight="bold", pad=12)
-        ax.set_xlabel("Parameter", fontsize=10)
+                     fontsize=fs(13), fontweight="bold", pad=12)
+        ax.set_xlabel("Parameter", fontsize=fs(10))
 
         xs = np.arange(block.shape[1])[::_tick_every(block.shape[1], 20)]
         ax.set_xticks(xs)
-        ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=7)
+        ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=fs(7))
         ax.xaxis.set_ticks_position("bottom")
 
         row_labels = np.array(data["moment_labels"][m_edges[i]:m_edges[i + 1]])
         ys = np.arange(block.shape[0])[::_tick_every(block.shape[0], 20)]
         ax.set_yticks(ys)
-        ax.set_yticklabels(row_labels[ys], fontsize=7)
+        ax.set_yticklabels(row_labels[ys], fontsize=fs(7))
 
     for ax in axes[len(names):]:
         ax.axis("off")
     fig.suptitle(f"Jacobian by moment block — {data['industry']}, "
-                 rf"$\hat{{\mu}}_{data['mu']}$", fontsize=18, fontweight="bold")
+                 rf"$\hat{{\mu}}_{data['mu']}$", fontsize=fs(18), fontweight="bold")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, bbox_inches="tight")
@@ -1155,9 +1156,9 @@ def _cov_panel(ax, M, data, title, mode="cov", pct=95):
         ax.axvline(e - 0.5, color="black", linewidth=0.8, alpha=0.6)
     ticks = (edges[:-1] + edges[1:]) / 2 - 0.5
     ax.set_xticks(ticks)
-    ax.set_xticklabels(names, fontsize=9)
+    ax.set_xticklabels(names, fontsize=fs(9))
     ax.set_yticks(ticks)
-    ax.set_yticklabels(names, fontsize=9, rotation=90, va="center")
+    ax.set_yticklabels(names, fontsize=fs(9), rotation=90, va="center")
     ax.set_title(title, pad=14)
     return im
 
@@ -1183,7 +1184,7 @@ def plot_variance_covariance(data, figsize=(16, 5.5), pct=95, save_to=None):
         im = _cov_panel(ax, M, data, title, mode="cov", pct=pct)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.suptitle(f"Moment variance-covariance — {data['industry']} "
-                 "(extensive margin, sourcing shares, zero-supplier shares)", fontsize=14)
+                 "(extensive margin, sourcing shares, zero-supplier shares)", fontsize=fs(14))
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1213,7 +1214,7 @@ def plot_moment_correlation(data, figsize=(16, 5.5), save_to=None):
         im = _cov_panel(ax, M, data, title, mode="corr")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.suptitle(f"Moment CORRELATION — {data['industry']} "
-                 "(same three matrices, rescaled by their own diagonal)", fontsize=14)
+                 "(same three matrices, rescaled by their own diagonal)", fontsize=fs(14))
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1347,16 +1348,16 @@ def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
         for j in range(n_p):
             if not np.isfinite(live[i, j]):
                 continue
-            txt = f"{100 * live[i, j]:.0f}%\nmax {mx[i, j]:.3g}"
+            txt = f"{100 * live[i, j]:.0f}{pct()}\nmax {mx[i, j]:.3g}"
             if read[i, j] < 0.999:
-                txt += f"\n({100 * read[i, j]:.0f}% readable)"
-            ax.text(j, i, txt, ha="center", va="center", fontsize=8,
+                txt += f"\n({100 * read[i, j]:.0f}{pct()} readable)"
+            ax.text(j, i, txt, ha="center", va="center", fontsize=fs(8),
                     color="white" if live[i, j] > 0.55 else "black")
     ax.set_xticks(range(n_p))
-    ax.set_xticklabels(p_names, rotation=30, ha="left", fontsize=10)
+    ax.set_xticklabels(p_names, rotation=30, ha="left", fontsize=fs(10))
     ax.xaxis.set_ticks_position("top")
     ax.set_yticks(range(n_m))
-    ax.set_yticklabels(m_names, fontsize=10)
+    ax.set_yticklabels(m_names, fontsize=fs(10))
     ax.set_xlabel("Parameter block")
     ax.set_ylabel("Moment block")
     ax.set_title(f"Identification map — {data['industry']}, "
@@ -1421,7 +1422,7 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
     ax.set_title(f"Elasticity Jacobian, $|\\varepsilon| \\geq {threshold:g}$ and "
                  f"$\\sigma/|\\varepsilon| < {noise_max:g}$ — "
                  f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"   ({100 * kept:.1f}% of {A.size} entries shown)", pad=28)
+                 f"   ({100 * kept:.1f}{pct()} of {A.size} entries shown)", pad=28)
     cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22)
     cbar.set_label(r"$\varepsilon = \partial \log m / \partial \log \theta$"
                    "   (symmetric log; grey = below threshold, white = too noisy)")
@@ -1489,16 +1490,16 @@ def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative adv
         for i, (v, nm) in enumerate(zip(v_p, nm_p)):
             if v == 0:
                 ax.text(i, bottom * 1.35, "n/m" if nm else "0", ha="center", va="bottom",
-                        fontsize=9, color=reference_color, fontweight="bold")
+                        fontsize=fs(9), color=reference_color, fontweight="bold")
         ax.set_xticks(x)
-        ax.set_xticklabels(m_names, rotation=45, ha="right", fontsize=9)
-        ax.set_title(pname, fontsize=13, fontweight="bold")
+        ax.set_xticklabels(m_names, rotation=45, ha="right", fontsize=fs(9))
+        ax.set_title(pname, fontsize=fs(13), fontweight="bold")
         _despine(ax)
     axes[0].set_ylabel(rf"${stat_tex}_{{j,k}} |\varepsilon_{{jk}}|$ in block (readable only)")
     fig.suptitle(f"Where each channel acts — {data['industry']}, "
                  rf"$\hat{{\mu}}_{data['mu']}$"
                  f"   (dashed: threshold {threshold:g}; \"0\" = exactly zero, "
-                 "\"n/m\" = nothing measured)", fontsize=13)
+                 "\"n/m\" = nothing measured)", fontsize=fs(13))
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1962,7 +1963,7 @@ def plot_untargeted_moment(results, figsize=None, save_to=None):
     ceil = -1.0 / EMPIRICAL_MEAN_LOG_D
     ax.axhline(ceil, color="0.4", linestyle=":", linewidth=1.1)
     ax.annotate(rf"ceiling $-1/\overline{{\log d}}$ = {ceil:.3f}", (0.01, ceil),
-                xycoords=("axes fraction", "data"), fontsize=8, color="0.35", va="bottom")
+                xycoords=("axes fraction", "data"), fontsize=fs(8), color="0.35", va="bottom")
     ax.axhline(0.0, color="0.6", linewidth=0.8)
     ax.set_xlim(-0.5, len(results) - 0.5)
     ax.set_xticks(x)
@@ -1970,8 +1971,8 @@ def plot_untargeted_moment(results, figsize=None, save_to=None):
                         .get("display_name", r["industry"]) for r in results])
     ax.set_ylabel(r"$\delta/\gamma$ (reduced-form scale)")
     ax.set_title("Untargeted moment: model against the spatial-comovement regression",
-                 fontsize=10)
-    ax.legend(frameon=False, loc="best", fontsize=8)
+                 fontsize=fs(10))
+    ax.legend(frameon=False, loc="best", fontsize=fs(8))
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -2362,11 +2363,11 @@ def plot_structural_vs_measured(structural_results, figsize=None, save_to=None):
                color=reference_color, alpha=0.8,
                label="measured (PPML)" if i == 0 else None)
         ax.annotate(rf"$\theta\alpha$ = {r['theta_alpha']:.3f}", (x[i], 0.004),
-                    ha="center", fontsize=8, color="0.3")
+                    ha="center", fontsize=fs(8), color="0.3")
         ax.annotate(f"R: weight {r['R_weighting']:+.2f}, form {r['R_functional']:+.2f}, "
                     f"comp {r['R_composition']:+.2f}",
                     (x[i], delta_over_gamma_from_eta(r["eta"])), xytext=(0, -12),
-                    textcoords="offset points", ha="center", fontsize=7, color="0.35")
+                    textcoords="offset points", ha="center", fontsize=fs(7), color="0.35")
     ax.axhline(0.0, color="0.6", linewidth=0.8)
     ceil = -1.0 / EMPIRICAL_MEAN_LOG_D
     ax.axhline(ceil, color="0.4", linestyle=":", linewidth=1.1)
@@ -2375,8 +2376,8 @@ def plot_structural_vs_measured(structural_results, figsize=None, save_to=None):
                         .get("display_name", r["industry"])
                         for r in structural_results])
     ax.set_ylabel(r"$\delta/\gamma$ (reduced-form scale)")
-    ax.set_title("The moment computed against the moment estimated", fontsize=10)
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.set_title("The moment computed against the moment estimated", fontsize=fs(10))
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -2502,7 +2503,7 @@ def plot_untargeted_ladder(ladder, industry, figsize=None, save_to=None):
     fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=1.0, hf=0.6))
     if emp.get("ci_lo") is not None:
         ax.axvspan(emp["ci_lo"], emp["ci_hi"], color=reference_color, alpha=0.15,
-                   label="data 95% CI")
+                   label=f"data 95{pct()} CI")
     ax.barh(y, vals, color=[reference_color if d else
                             (0.30, 0.55, 0.40) if t else sim_color
                             for d, t in zip(is_data, is_struct)], alpha=0.85)
@@ -2511,14 +2512,14 @@ def plot_untargeted_ladder(ladder, industry, figsize=None, save_to=None):
             ax.plot([l, h], [i, i], color="black", linewidth=1)
     ceil = -1.0 / EMPIRICAL_MEAN_LOG_D
     ax.axvline(ceil, color="0.4", linestyle=":", linewidth=1.1)
-    ax.annotate(rf"$-1/\overline{{\log d}}$", (ceil, len(df) - 0.4), fontsize=8,
+    ax.annotate(rf"$-1/\overline{{\log d}}$", (ceil, len(df) - 0.4), fontsize=fs(8),
                 color="0.35", ha="right")
     ax.axvline(0.0, color="0.6", linewidth=0.8)
     ax.set_yticks(y)
-    ax.set_yticklabels(df.index, fontsize=9)
+    ax.set_yticklabels(df.index, fontsize=fs(9))
     ax.set_xlabel(r"$\delta/\gamma$ (reduced-form scale)")
-    ax.set_title(f"Untargeted moment against Table 3 — {industry}", fontsize=11)
-    ax.legend(frameon=False, fontsize=8, loc="lower left")
+    ax.set_title(f"Untargeted moment against Table 3 — {industry}", fontsize=fs(11))
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower left")
     _despine(ax)
     fig.tight_layout()
     if save_to:

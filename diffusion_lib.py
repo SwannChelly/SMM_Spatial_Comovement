@@ -27,8 +27,9 @@ except Exception:            # maps are optional
 from utils import (
     AMPLIFICATION_RADII, CF_COLORS, CF_REGIMES, UNIFORM_REGIME,
     _as_ze_string, _despine, _n_hat_from_diagnostics, _parquet_sector_index,
-    _region_labels, get_figsize, reference_color, sim_color, sourcing_geometry,
-    toulouse_color,
+    _region_labels, fs, get_figsize, name_axis_fontsize, pct, reference_color,
+    set_name_axis_fontsize,
+    sim_color, sourcing_geometry, toulouse_color,
 )
 
 
@@ -280,8 +281,10 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
     One row per (shocked region, regime): the amplification coefficient, the share of
     upstream sales within each radius, and the mean distance those sales travel.
 
-    The realised economy is reported too, as the regime `"Realised"`, so the closed-form
-    "Both forces" row can be read against the draw it is the expectation of.
+    Every regime, "Both forces" included, is a re-solved economy, so there is no
+    separate "realised" row to read the baseline against: it would be the same economy
+    drawn at the same seed, and it measured 0.00 against "Both forces" on D_r, on every
+    distance quantile and on the local share.
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
     base = build_diffusion_frame(data, value_col) if diffusion is None else diffusion
@@ -289,10 +292,8 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
                                     diffusion=base, verbose=verbose)
               if frames is None else frames)
 
-    rows = {"Realised": amplification_summary(data, radii=radii, value_col=value_col,
-                                              diffusion=base)}
-    rows.update({lab: amplification_summary(data, radii=radii, value_col=value_col,
-                                            diffusion=f) for lab, f in frames.items()})
+    rows = {lab: amplification_summary(data, radii=radii, value_col=value_col,
+                                       diffusion=f) for lab, f in frames.items()}
     out = pd.concat([s.assign(regime=lab) for lab, s in rows.items()])
     out["regime"] = pd.Categorical(out["regime"], categories=list(rows), ordered=True)
     out = out.reset_index().set_index(["ze2010_downstream", "regime"]).sort_index()
@@ -300,9 +301,7 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
     if verbose:
         amp = out["amplification"].unstack("regime")
         spread = float((amp[list(frames)].max(axis=1) - amp[list(frames)].min(axis=1)).max())
-        gap = float((amp["Both forces"] - amp["Realised"]).abs().max())
         col = f"share_within_{int(radii[0])}km"
-        sh = out[col].unstack("regime")
         if spread < 1e-9:
             print(f"  [counterfactual] D_r is identical across regimes to {spread:.2e} "
                   "-- because these frames hold the upstream spend fixed, not because "
@@ -311,10 +310,6 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
             print(f"  [counterfactual] D_r RANGES {spread:.4f} across regimes: these "
                   "frames come from re-solved economies, so the intermediate "
                   "expenditure share has responded")
-        print(f"  [counterfactual] and matches the realised D_r to {gap:.2e}")
-        print(f"  [counterfactual] {col}: realised {sh['Realised'].mean():.3f} vs "
-              f"closed-form both-forces {sh['Both forces'].mean():.3f} — the gap is "
-              "granularity, not a different economy")
     return out
 
 
@@ -726,12 +721,12 @@ def plot_amplification(data, value_col="share", summary=None, figsize=None,
          else summary).sort_values("amplification")
     fig, ax = plt.subplots(figsize=figsize or (8, max(3.0, 0.28 * len(s))))
     ax.barh(s["region"].astype(str), s["amplification"], color=toulouse_color)
+    set_name_axis_fontsize(ax, len(s))
     ax.set_xlabel(r"Amplification measure $D_r$")
-    ax.set_ylabel("Commuting zone")
     ax.set_xlim(left=1.0)
     ax.grid(alpha=0.2, axis="x")
     ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$"
-                 f"   mean $D_r$ = {s['amplification'].mean():.3f}", fontsize=11)
+                 f"   mean $D_r$ = {s['amplification'].mean():.3f}", fontsize=fs(11))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     fig.tight_layout()
@@ -801,6 +796,7 @@ def plot_local_share(data, radii=None, value_col="share", summary=None, radius_k
                                alpha=1.0, label=lab, zorder=2 + (len(radii) - i)))
     ax.set_yticks(y)
     ax.set_yticklabels(s["region"].astype(str))
+    set_name_axis_fontsize(ax, len(s))
     ax.set_ylim(-0.7, len(s) - 0.3)
     # no bar comes near 1, and a mostly empty panel is harder to read, not more honest:
     # the axis tracks the widest bar unless `xmax` pins it
@@ -811,14 +807,13 @@ def plot_local_share(data, radii=None, value_col="share", summary=None, radius_k
     ax.set_xlabel("Share of the upstream sales a shock generates\n"
                   + "mean  " + ",  ".join(f"{s[c].mean():.3f} within {r:g} km"
                                           for r, c in zip(radii, cols)))
-    ax.set_ylabel("Commuting zone")
     ax.grid(alpha=0.2, axis="x")
     # the legend sits ABOVE the axes: with a bar per commuting zone there is no corner
     # inside the plot it can occupy without covering the regions it explains
-    ax.legend(handles=handles[::-1], frameon=False, fontsize=9, ncol=len(radii),
+    ax.legend(handles=handles[::-1], frameon=False, fontsize=fs(9), ncol=len(radii),
               loc="lower left", bbox_to_anchor=(0.0, 1.005))
     ax.set_title(title or (f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$"),
-                 fontsize=10, loc="right")
+                 fontsize=fs(10), loc="right")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     ax.figure.tight_layout()
@@ -911,7 +906,7 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
 
     for _, row in shocked.nlargest(n_label, col).iterrows() if n_label else ():
         p = row.geometry.representative_point()
-        ax.annotate(str(row["region"]), (p.x, p.y), fontsize=8, xytext=(6, 4),
+        ax.annotate(str(row["region"]), (p.x, p.y), fontsize=fs(8), xytext=(6, 4),
                     textcoords="offset points", color="black",
                     path_effects=[pe.withStroke(linewidth=2.0, foreground="white")])
 
@@ -919,14 +914,14 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
     ax.set_ylim(42, 52)
     ax.set_axis_off()
     if title is not None:
-        ax.set_title(title, fontsize=11)
+        ax.set_title(title, fontsize=fs(11))
     if cbar:
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cb = ax.figure.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.035,
                                 pad=0.02, aspect=35)
-        cb.set_label(f"Share of upstream sales within {radius_km:g} km", fontsize=9)
-        cb.ax.tick_params(labelsize=8)
+        cb.set_label(f"Share of upstream sales within {radius_km:g} km", fontsize=fs(9))
+        cb.ax.tick_params(labelsize=fs(8))
         cb.minorticks_off()
     ax.figure.tight_layout()
     if save_to:
@@ -954,12 +949,12 @@ def plot_local_share_profile(data, radii=(25, 50, 75, 100, 150, 200, 300, 500),
     ax.set_ylim(0, 1)
     for m in mark:
         ax.axvline(m, color="0.6", linewidth=0.9, linestyle=":")
-        ax.annotate(f"{m:g} km", (m, 0.98), fontsize=8, color="0.4", ha="left",
+        ax.annotate(f"{m:g} km", (m, 0.98), fontsize=fs(8), color="0.4", ha="left",
                     va="top", xytext=(3, 0), textcoords="offset points")
     ax.set_xlabel("Radius around the shocked region (km)")
     ax.set_ylabel("Share of upstream sales within the radius")
-    ax.legend(frameon=False, fontsize=8, loc="upper left")
-    ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$", fontsize=11)
+    ax.legend(frameon=False, fontsize=fs(8), loc="upper left")
+    ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$", fontsize=fs(11))
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -987,7 +982,7 @@ def plot_amplification_vs_local(data, radius_km=AMPLIFICATION_RADIUS_KM,
     ax.scatter(plain["amplification"], plain[col], s=30, color=toulouse_color, alpha=0.8)
     ax.scatter(named["amplification"], named[col], s=45, facecolors="none",
                edgecolors=toulouse_color, linewidths=1.2)
-    texts = [ax.text(r["amplification"], r[col], str(r["region"]), fontsize=8)
+    texts = [ax.text(r["amplification"], r[col], str(r["region"]), fontsize=fs(8))
              for _, r in named.iterrows()]
     try:                                   # nicer label placement when available
         from adjustText import adjust_text
@@ -996,7 +991,7 @@ def plot_amplification_vs_local(data, radius_km=AMPLIFICATION_RADIUS_KM,
         pass
     ax.set_xlabel(r"Amplification measure $D_r$")
     ax.set_ylabel(f"Share of upstream sales within {radius_km:g} km")
-    ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$", fontsize=11)
+    ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$", fontsize=fs(11))
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -1006,7 +1001,7 @@ def plot_amplification_vs_local(data, radius_km=AMPLIFICATION_RADIUS_KM,
 
 def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
                                  detail=None, frames=None, diffusion=None,
-                                 include_realised=True, units="pct", baseline="Both forces",
+                                 units="pct", baseline="Both forces",
                                  kind="bar", annotate_km=True, xmin=None, xmax=None,
                                  figsize=None, save_to=None):
     """
@@ -1043,12 +1038,11 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
     wide = det["mean_upstream_distance"].unstack("regime")
     # ordered by the realised local share, so the panels line up with plot_local_share
     share_cols = [c for c in det.columns if c.startswith("share_within_")]
-    if share_cols and "Realised" in wide.columns:
-        order = det[sorted(share_cols)[0]].unstack("regime")["Realised"].sort_values().index
+    if share_cols and baseline in wide.columns:
+        order = det[sorted(share_cols)[0]].unstack("regime")[baseline].sort_values().index
     else:
         order = wide.iloc[:, 0].sort_values().index
-    labels = [r for r in (["Realised"] if include_realised else []) + list(regimes)
-              if r in wide.columns]
+    labels = [r for r in regimes if r in wide.columns]
     wide = wide[labels].reindex(order)
     names = det["region"].groupby(level="ze2010_downstream").first().reindex(wide.index)
 
@@ -1061,8 +1055,13 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
             lambda c: 100.0 * (c.astype(float) - base_km) / base_km)
         labels = [l for l in labels if l != baseline]
 
+    # A ROW must hold a buyer's NAME as well as its marks, so the per-row height is the
+    # larger of the two demands. Sizing it off the mark count alone leaves ~12pt a row
+    # once a regime is dropped, which no name fits into; 0.28 in is the row height the
+    # other per-buyer figures use.
     fig, ax = plt.subplots(
-        figsize=figsize or (9, max(3.5, 0.085 * max(len(labels), 1) * len(wide))))
+        figsize=figsize or (9, max(3.5, max(0.28, 0.085 * max(len(labels), 1))
+                                   * len(wide))))
     y = np.arange(len(wide))
     if kind == "bar":
         height = 0.8 / max(len(labels), 1)
@@ -1092,25 +1091,27 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
         ax.axvline(0.0, color="0.35", linewidth=1.0, zorder=3)
     ax.set_yticks(y)
     ax.set_yticklabels(names.astype(str))
+    set_name_axis_fontsize(ax, len(wide))
     ax.set_ylim(-0.6, len(wide) - 0.4)
     ax.set_xlim(lo, hi)
     if units == "pct":
         ax.set_xlabel(f"Change in the mean distance travelled by the upstream euro "
-                      f"(% of {baseline})")
+                      f"({pct()} of {baseline})")
     else:
         ax.set_xlabel("Mean distance travelled by the upstream euro (km)")
-    ax.set_ylabel("Commuting zone")
     ax.grid(alpha=0.2, axis="x")
     # the level the percentages are taken against, so the figure never hides the km
     if units == "pct" and annotate_km and base_km is not None:
+        # one entry per row, like the names on the left, so it takes the same cap
+        margin_size = name_axis_fontsize(ax, len(wide), size_at_ref=7.5)
         for yi, idx in enumerate(wide.index):
             ax.annotate(f"{base_km.loc[idx]:.0f} km", xy=(1.005, yi),
                         xycoords=("axes fraction", "data"), va="center", ha="left",
-                        fontsize=7.5, color="0.35", annotation_clip=False)
+                        fontsize=margin_size, color="0.35", annotation_clip=False)
         ax.annotate(f"{baseline}\n(km)", xy=(1.005, 1.005),
                     xycoords="axes fraction", va="bottom", ha="left",
-                    fontsize=7.5, color="0.35", annotation_clip=False)
-    ax.legend(frameon=False, fontsize=9, ncol=min(3, max(len(labels), 1)),
+                    fontsize=margin_size, color="0.35", annotation_clip=False)
+    ax.legend(frameon=False, fontsize=fs(9), ncol=min(3, max(len(labels), 1)),
               loc="lower left", bbox_to_anchor=(0.0, 1.005))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -1143,23 +1144,19 @@ def plot_counterfactual_profile(data, regimes=CF_REGIMES,
                                     diffusion=base) if frames is None else frames)
 
     fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
-    curves = {"Realised": local_share_profile(data, radii=radii, value_col=value_col,
-                                              diffusion=base)}
-    curves.update({lab: local_share_profile(data, radii=radii, value_col=value_col,
-                                            diffusion=f) for lab, f in frames.items()})
+    curves = {lab: local_share_profile(data, radii=radii, value_col=value_col,
+                                       diffusion=f) for lab, f in frames.items()}
     for lab, p in curves.items():
         ax.plot(p.index, p["median"], marker="o", markersize=4,
-                color=CF_COLORS.get(lab, "0.3"),
-                linestyle="--" if lab == "Realised" else "-",
-                linewidth=1.6 if lab != "Realised" else 1.2, label=lab)
+                color=CF_COLORS.get(lab, "0.3"), linewidth=1.6, label=lab)
     for m in mark:
         ax.axvline(m, color="0.6", linewidth=0.9, linestyle=":")
-        ax.annotate(f"{m:g} km", (m, 0.99), fontsize=8, color="0.4", ha="left",
+        ax.annotate(f"{m:g} km", (m, 0.99), fontsize=fs(8), color="0.4", ha="left",
                     va="top", xytext=(3, 0), textcoords="offset points")
     ax.set_ylim(0, 1)
     ax.set_xlabel("Radius around the shocked region (km)")
     ax.set_ylabel("Share within the radius (median region)")
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -1330,7 +1327,7 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
 
 
 def distance_distribution(data, regimes=CF_REGIMES, value_col="share", detail=None,
-                          frames=None, diffusion=None, include_realised=True):
+                          frames=None, diffusion=None):
     """
     The mean sourcing distance of each shocked downstream region, regime by regime.
 
@@ -1345,10 +1342,7 @@ def distance_distribution(data, regimes=CF_REGIMES, value_col="share", detail=No
     det = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
                                         frames=frames, diffusion=diffusion, verbose=False)
            if detail is None else detail)
-    out = det["mean_upstream_distance"].unstack("regime").dropna(how="all")
-    if not include_realised and "Realised" in out.columns:
-        out = out.drop(columns=["Realised"])
-    return out
+    return det["mean_upstream_distance"].unstack("regime").dropna(how="all")
 
 
 def relative_displacement(data, regimes=CF_REGIMES, value_col="share", detail=None,
@@ -1437,7 +1431,7 @@ def distance_distribution_report(data, regimes=CF_REGIMES, value_col="share",
 
 
 def plot_distance_distribution(data, regimes=CF_REGIMES, value_col="share", detail=None,
-                               frames=None, diffusion=None, include_realised=True,
+                               frames=None, diffusion=None,
                                figsize=None, save_to=None):
     """
     How far the shock travels, and how each force moves that.
@@ -1448,29 +1442,25 @@ def plot_distance_distribution(data, regimes=CF_REGIMES, value_col="share", deta
     remote ones. Medians are marked on the axis, so the level shift is readable beside
     the shape change.
 
-    Read against `Both forces`, not against the realised draw: the realised curve is one
-    finite-variety draw of the same economy and its distance from `Both forces` is
-    granularity, not a force.
+    `Both forces` is the estimated economy and the curve the other two are read
+    against.
     """
     dist = distance_distribution(data, regimes=regimes, value_col=value_col, detail=detail,
-                                 frames=frames, diffusion=diffusion,
-                                 include_realised=include_realised)
+                                 frames=frames, diffusion=diffusion)
     fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
     for lab in dist.columns:
         v = np.sort(dist[lab].dropna().to_numpy())
         if v.size == 0:
             continue
         ax.step(v, np.arange(1, v.size + 1) / v.size, where="post",
-                color=CF_COLORS.get(lab, "0.3"),
-                linestyle="--" if lab == "Realised" else "-",
-                linewidth=1.2 if lab == "Realised" else 1.6, label=lab)
+                color=CF_COLORS.get(lab, "0.3"), linewidth=1.6, label=lab)
         ax.plot([np.median(v)], [0.5], marker="o", markersize=5,
                 color=CF_COLORS.get(lab, "0.3"), zorder=3)
     ax.axhline(0.5, color="0.8", linewidth=0.8, zorder=0)
     ax.set_ylim(0, 1)
     ax.set_xlabel("Mean distance travelled by the upstream euro (km)")
     ax.set_ylabel("Share of shocked regions")
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -1480,7 +1470,7 @@ def plot_distance_distribution(data, regimes=CF_REGIMES, value_col="share", deta
 
 
 def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=None,
-                            frames=None, diffusion=None, include_realised=True,
+                            frames=None, diffusion=None,
                             bins=12, layout="overlay", figsize=None, save_to=None):
     """
     The density companion of `plot_distance_distribution`: the same `d_r` values, drawn
@@ -1509,8 +1499,7 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
     exactly, a histogram of twenty points does not. Vary `bins` before believing a mode.
     """
     dist = distance_distribution(data, regimes=regimes, value_col=value_col, detail=detail,
-                                 frames=frames, diffusion=diffusion,
-                                 include_realised=include_realised)
+                                 frames=frames, diffusion=diffusion)
     labels = [c for c in dist.columns if dist[c].notna().any()]
     if not labels:
         raise ValueError("no regime carries a finite mean sourcing distance.")
@@ -1524,9 +1513,7 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
     def _draw(ax, lab):
         v = dist[lab].dropna().to_numpy(dtype=float)
         col = CF_COLORS.get(lab, "0.3")
-        ax.hist(v, bins=edges, histtype="step",
-                linestyle="--" if lab == "Realised" else "-",
-                linewidth=1.2 if lab == "Realised" else 1.6, color=col, label=lab)
+        ax.hist(v, bins=edges, histtype="step", linewidth=1.6, color=col, label=lab)
         ax.axvline(np.median(v), color=col, linewidth=1.0, alpha=0.55, linestyle=":")
 
     if layout == "overlay":
@@ -1535,7 +1522,7 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
             _draw(ax, lab)
         ax.set_xlabel("Mean distance travelled by the upstream euro (km)")
         ax.set_ylabel("Number of shocked regions")
-        ax.legend(frameon=False, fontsize=8)
+        ax.legend(frameon=False, fontsize=fs(8))
         _despine(ax)
         axes = ax
     else:
@@ -1545,7 +1532,7 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
         axs = np.atleast_1d(axs)
         for ax, lab in zip(axs, labels):
             _draw(ax, lab)
-            ax.set_ylabel(lab, fontsize=8, rotation=0, ha="right", va="center")
+            ax.set_ylabel(lab, fontsize=fs(8), rotation=0, ha="right", va="center")
             _despine(ax)
         axs[-1].set_xlabel("Mean distance travelled by the upstream euro (km)")
         axes = axs
@@ -1775,11 +1762,11 @@ def plot_sourcing_barycentre(data, bary=None, value_col="share", diffusion=None,
     ax.set_aspect("equal")
     ax.set_axis_off()
     if title is not None:
-        ax.set_title(title, fontsize=10)
+        ax.set_title(title, fontsize=fs(10))
     if annotate:
         txt = (f"median pull {v['displacement_km'].median():.0f} km"
                + (f"\n{short} region(s) below {min_km:g} km not drawn" if short else ""))
-        ax.text(0.02, 0.02, txt, transform=ax.transAxes, fontsize=8, va="bottom",
+        ax.text(0.02, 0.02, txt, transform=ax.transAxes, fontsize=fs(8), va="bottom",
                 ha="left", color="0.25")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1789,16 +1776,16 @@ def plot_sourcing_barycentre(data, bary=None, value_col="share", diffusion=None,
 
 def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
                      crs=BARYCENTRE_CRS, min_km=0.0, figsize=None, save_to=None,
-                     save_each=None, include_realised=True, verbose=False):
+                     save_each=None, verbose=False):
     """
     The barycentre map for every regime and both industries in one figure: one ROW per
     scenario, one COLUMN per industry (`datasets` order — motor vehicles then
     aerospace as the section runs them).
 
-    `datasets` is a sequence of `(column title, data)` pairs. The realised draw is the
-    first row and the three closed-form regimes follow, so the reader compares each
-    regime against the estimated economy directly above the fold rather than against
-    the other industry.
+    `datasets` is a sequence of `(column title, data)` pairs. "Both forces" -- the
+    estimated economy -- is the first row and the counterfactuals follow, so the reader
+    compares each regime against the estimate directly above the fold rather than
+    against the other industry.
 
     Every panel is drawn in the same projected CRS at the same true arrow scale and
     the axes are pinned to the same window, so an arrow in one panel is directly
@@ -1814,7 +1801,7 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
     Returns `(fig, barycentres)` with `barycentres` keyed by `(column title, regime)`,
     so the numbers behind every panel are available without recomputing them.
     """
-    labels = (["Realised"] if include_realised else []) + list(regimes)
+    labels = list(regimes)
     ncol, nrow = len(datasets), len(labels)
     fig, axes = plt.subplots(nrow, ncol, squeeze=False,
                              figsize=figsize or get_figsize(wf=1.0, hf=0.30 * nrow * 2 / max(ncol, 1)))
@@ -1823,9 +1810,8 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
     for j, (name, data) in enumerate(datasets):
         base = build_diffusion_frame(data, value_col)
         coords = _zone_coordinates(data, crs=crs)
-        frames = {"Realised": base} if include_realised else {}
-        frames.update(counterfactual_frames(data, regimes=regimes, value_col=value_col,
-                                            diffusion=base, verbose=verbose))
+        frames = counterfactual_frames(data, regimes=regimes, value_col=value_col,
+                                       diffusion=base, verbose=verbose)
         for i, lab in enumerate(labels):
             b = sourcing_barycentre(data, diffusion=frames[lab], value_col=value_col,
                                     coords=coords, crs=crs)
@@ -1847,7 +1833,7 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
                 # the row label goes on the axes, not in a title: a title on every panel
                 # would repeat the industry name four times and the scenario name twice
                 ax.text(-0.04, 0.5, lab, transform=ax.transAxes, rotation=90,
-                        va="center", ha="center", fontsize=9)
+                        va="center", ha="center", fontsize=fs(9))
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -2189,7 +2175,7 @@ def incidence_stats(W, weights=None):
 
 
 def incidence_concentration_overlap(data, regimes=CF_REGIMES, value_col="share",
-                                    frames=None, diffusion=None, include_realised=True,
+                                    frames=None, diffusion=None,
                                     weights=None, benchmark=True, verbose=False):
     """
     One row per (regime, shocked buyer): how concentrated the response is and how much
@@ -2238,10 +2224,9 @@ def incidence_concentration_overlap(data, regimes=CF_REGIMES, value_col="share",
             data, value_col=value_col, diffusion=base, verbose=verbose,
             **want[UNIFORM_REGIME])
 
-    order = (["Realised"] if include_realised else []) + \
-            [r for r in regimes if r in frames] + \
+    order = [r for r in regimes if r in frames] + \
             ([UNIFORM_REGIME] if benchmark else [])
-    supply = {"Realised": base, **frames}
+    supply = dict(frames)
 
     names = base.groupby("ze2010_downstream")["shocked_name"].first()
     omegas, rows = {}, []
@@ -2346,7 +2331,7 @@ def distance_normalisation(data, regimes=CF_REGIMES, value_col="share", detail=N
     return out
 
 
-def destination_composition(data, regime="Realised", n_hub=2, value_col="share",
+def destination_composition(data, regime="Both forces", n_hub=2, value_col="share",
                             frames=None, diffusion=None, table=None):
     """
     Each buyer's response split into {own zone, the industry's hubs, everything else}.
@@ -2362,14 +2347,17 @@ def destination_composition(data, regime="Realised", n_hub=2, value_col="share",
     construction and the figure shows it as a missing block, which is correct.
     """
     base = build_diffusion_frame(data, value_col) if diffusion is None else diffusion
-    if regime == "Realised":
-        df = base
-    else:
-        frames = (counterfactual_frames(data, value_col=value_col, diffusion=base,
-                                        verbose=False) if frames is None else frames)
-        if regime not in frames:
-            raise KeyError(f"regime {regime!r} is not among {list(frames)}.")
-        df = frames[regime]
+    # EVERY regime, the baseline included, comes from `frames` -- never from `base`. The
+    # two are not the same object: `base` is the realised draw, while a frame built by
+    # `counterfactual_frames` is the closed-form reallocation, and they differ by
+    # granularity. Taking the baseline off `base` while the other bars of the same
+    # figure come from the frames would read that granularity gap as a composition
+    # difference. Pass `frames=simulated_frames(...)` for the re-solved economies.
+    frames = (counterfactual_frames(data, value_col=value_col, diffusion=base,
+                                    verbose=False) if frames is None else frames)
+    if regime not in frames:
+        raise KeyError(f"regime {regime!r} is not among {list(frames)}.")
+    df = frames[regime]
 
     W = incidence_matrix(df, R=data["R"])
     names = (df.drop_duplicates("ze2010").set_index("ze2010")["ze_name"]
@@ -2395,7 +2383,7 @@ def destination_composition(data, regime="Realised", n_hub=2, value_col="share",
     return out
 
 
-def plot_destination_composition(data, regime="Realised", n_hub=2, value_col="share",
+def plot_destination_composition(data, regime="Both forces", n_hub=2, value_col="share",
                                  composition=None, frames=None, diffusion=None,
                                  sort_by="Own zone", figsize=None, save_to=None):
     """
@@ -2435,12 +2423,13 @@ def plot_destination_composition(data, regime="Realised", n_hub=2, value_col="sh
         left = left + v
     ax.set_yticks(y)
     ax.set_yticklabels(comp["region"].astype(str))
+    set_name_axis_fontsize(ax, len(comp))
     ax.set_ylim(-0.6, len(comp) - 0.4)
     ax.set_xlim(0, 1)
     ax.set_xlabel("Share of the upstream response")
     ax.set_ylabel("Shocked commuting zone")
     ax.grid(alpha=0.2, axis="x")
-    ax.legend(frameon=False, fontsize=9, ncol=min(4, len(seg)),
+    ax.legend(frameon=False, fontsize=fs(9), ncol=min(4, len(seg)),
               loc="lower left", bbox_to_anchor=(0.0, 1.005))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -2501,7 +2490,7 @@ def realised_incidence(data, value_col="share", diffusion=None, expected=None,
                          "realised economy to measure — this is the continuum solve.")
     if expected is None:
         expected = incidence_concentration_overlap(
-            data, value_col=value_col, include_realised=False, benchmark=False,
+            data, value_col=value_col, benchmark=False,
             regimes={"Both forces": dict()})
     exp_row = expected.xs("Both forces", level="regime")
 
@@ -2675,7 +2664,7 @@ def plot_incidence_plane(tables, regimes=("Both forces", "Equal comparative adva
                            marker=mk, s=80, color=c, edgecolors="black",
                            linewidths=0.9, zorder=6)
         if layout == "panels":
-            ax.set_title(s["label"], fontsize=9)
+            ax.set_title(s["label"], fontsize=fs(9))
 
     for ax in axl:
         ax.axvline(1.0, color="0.5", lw=0.8, ls="--")
@@ -2688,10 +2677,10 @@ def plot_incidence_plane(tables, regimes=("Both forces", "Equal comparative adva
     axl[0].set_ylabel("Share of the response that is buyer-specific")
     xlab = "Effective number of destinations, relative to the uniform allocation"
     if layout == "panels":
-        fig.supxlabel(xlab, fontsize=9)
+        fig.supxlabel(xlab, fontsize=fs(9))
     else:
         axl[0].set_xlabel(xlab)
-    axl[0].legend(frameon=False, fontsize=8, loc="best")
+    axl[0].legend(frameon=False, fontsize=fs(8), loc="best")
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -2974,8 +2963,8 @@ def plot_io_benchmark(data, benchmark=None, figsize=None, save_to=None, **kw):
     ax.set_ylabel("Share of sectors below")
     ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$"
                  f"   model $D_r$ at the {100 * q:.0f}th percentile of sectors",
-                 fontsize=11)
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+                 fontsize=fs(11))
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     _despine(ax)
     fig.tight_layout()
     if save_to:

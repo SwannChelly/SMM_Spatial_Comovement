@@ -36,22 +36,163 @@ except Exception:
     sns = None
 
 # ---------------------------------------------------------------- style
+#
+# ONE style, in one place. Both notebooks import it and neither redefines it: a
+# duplicated rcParams block in a notebook cell shadows this one after import, so the
+# two drift and a figure's size depends on which cell was run last.
+#
+# Two sizes, and the distinction is what keeps a figure legible when the base moves.
+# `font_size` is the BODY size -- it drives the rcParams (axis labels, ticks, legend),
+# so it is what a paper's font size should be set to. Every figure-local size in the
+# libraries (an annotation, a panel title, a name axis) is written as `fs(x)`, where
+# `x` is that size AT THE REFERENCE BASE: `fs` rescales it PROPORTIONALLY, so raising
+# the body size carries the whole family with it instead of leaving the annotations
+# frozen at 8pt while the axis labels jump. At `font_size == FONT_SIZE_REF` every
+# `fs(x)` is exactly `x`, so the figures this repo has already produced are unchanged.
 document_width_pt = 511.0
 plt.rc("font", family="serif")
 toulouse_color = (132 / 255, 46 / 255, 27 / 255)
 reference_color = toulouse_color#(0.75, 0.30, 0.20)
 sim_color = (0.247, 0.404, 0.667)
-font_size = 15
-plt.rcParams.update({
-    "font.size": font_size,
-    "axes.labelsize": font_size,
-    "axes.titlesize": font_size + 2,
-    "xtick.labelsize": font_size - 3,
-    "ytick.labelsize": font_size - 3,
-    "legend.fontsize": font_size - 3,
-    "legend.title_fontsize": font_size,
-    "figure.titlesize": font_size,
-})
+
+# The base every hard-coded size in the libraries was drawn at. Do NOT change it --
+# it is the anchor `fs` is calibrated against, not a setting. Change `font_size`.
+FONT_SIZE_REF = 15.0
+font_size = 15.0
+
+# The LaTeX preamble used when `usetex=True`. fontenc T1 is there for the per-buyer
+# figures, whose tick labels are French commuting-zone names: it gives real accented
+# glyphs rather than composed ones, and correct hyphenation for accented words. utf8
+# inputenc is a no-op on TeX Live 2018 and later, where it is already the default --
+# MEASURED: the amsmath-only preamble renders "Ile-De-France" and "Chateauroux" without
+# error on TeX Live 2023 -- and is kept only so an older installation still compiles.
+LATEX_PREAMBLE = (r"\usepackage[utf8]{inputenc}"
+                  r"\usepackage[T1]{fontenc}"
+                  r"\usepackage{amsmath}\usepackage{amssymb}")
+
+
+def _rc_from_base(size):
+    """The rcParams the body size drives."""
+    size = float(size)
+    return {"font.size": size,
+            "axes.labelsize": size,
+            "axes.titlesize": size + 2,
+            "xtick.labelsize": size - 3,
+            "ytick.labelsize": size - 3,
+            "legend.fontsize": size - 3,
+            "legend.title_fontsize": size,
+            "figure.titlesize": size}
+
+
+plt.rcParams.update(_rc_from_base(font_size))
+
+
+def fs(size_at_ref):
+    """
+    A figure-local font size, given at the REFERENCE base and rescaled to the current
+    body size: `fs(8)` is 8pt at the default and 10.7pt once the body size is 20.
+
+    It resolves `font_size` from this module at CALL time, so `set_paper_style` moves
+    every call site at once -- including the ones in the other libraries, which import
+    this function rather than the number.
+    """
+    return float(size_at_ref) * float(font_size) / FONT_SIZE_REF
+
+
+def axes_height_inches(ax):
+    """Height of `ax`'s drawing area in inches, or None if it cannot be determined."""
+    try:
+        return float(ax.get_position().height) * float(ax.figure.get_size_inches()[1])
+    except Exception:
+        return None
+
+
+def axes_width_inches(ax):
+    """Width of `ax`'s drawing area in inches, or None if it cannot be determined."""
+    try:
+        return float(ax.get_position().width) * float(ax.figure.get_size_inches()[0])
+    except Exception:
+        return None
+
+
+def name_axis_fontsize(ax, n_rows, axis="y", size_at_ref=None, min_size=5.0,
+                       fill=0.80):
+    """
+    Font size for a categorical axis carrying `n_rows` NAMES -- commuting zones,
+    attraction areas, sectors.
+
+    Such an axis cannot simply take the body size, and that is the whole reason this
+    exists: a per-buyer figure stacks ~20 long names in a few inches, so at a 20pt body
+    the labels overlap and swamp the marks they annotate. The size is therefore capped
+    by the room each row ACTUALLY has -- `fill` of the per-row budget in points, a label
+    needing about its own size plus leading to clear its neighbour -- and only then by
+    the ceiling. With few rows the cap is slack and the axis reads at the ceiling; with
+    many it tapers. Never below `min_size`, where a name stops being worth drawing and
+    the caller should be dropping rows instead.
+
+    The ceiling is `fs(size_at_ref)` when the caller names a size, and otherwise the
+    CURRENT rcParams tick size for that axis -- which already tracks the body size. So
+    a figure that fixed no size keeps exactly the size it had, and only gains the cap.
+    """
+    if size_at_ref is None:
+        key = "ytick.labelsize" if axis == "y" else "xtick.labelsize"
+        size = float(mpl.font_manager.font_scalings.get(plt.rcParams[key],
+                                                       plt.rcParams[key])
+                     if isinstance(plt.rcParams[key], str) else plt.rcParams[key])
+    else:
+        size = fs(size_at_ref)
+    h = axes_height_inches(ax) if axis == "y" else axes_width_inches(ax)
+    n = int(n_rows or 0)
+    if h is not None and n > 0:
+        size = min(size, fill * 72.0 * h / n)
+    return max(float(min_size), float(size))
+
+
+def set_name_axis_fontsize(ax, n_rows, axis="y", size_at_ref=None, min_size=5.0,
+                           fill=0.80):
+    """`name_axis_fontsize`, applied to `ax`'s tick labels. Returns the size used."""
+    size = name_axis_fontsize(ax, n_rows, axis=axis, size_at_ref=size_at_ref,
+                              min_size=min_size, fill=fill)
+    ax.tick_params(axis=axis, labelsize=size)
+    return size
+
+
+def set_paper_style(font_size=None, usetex=False, preamble=None, family="serif"):
+    """
+    Set the body font size, and optionally route text through LaTeX.
+
+    This is the one call a notebook makes; it rebinds the module-level `font_size`, so
+    every `fs(...)` in every library follows and the figure family stays internally
+    proportioned. `usetex` is OFF by default and is never enabled at import, because a
+    missing LaTeX installation would then fail every figure in the test gates rather
+    than in the notebook that asked for it.
+
+    Returns the rcParams the call applied, so a cell shows what it did.
+    """
+    # the parameter carries the module global's name -- which is the name to write at a
+    # call site -- so the rebinding goes through `globals()` rather than `global`.
+    if font_size is not None:
+        globals()["font_size"] = float(font_size)
+    rc = _rc_from_base(globals()["font_size"])
+    rc["font.family"] = family
+    rc["text.usetex"] = bool(usetex)
+    if usetex:
+        rc["text.latex.preamble"] = LATEX_PREAMBLE if preamble is None else preamble
+    plt.rcParams.update(rc)
+    return rc
+
+
+def pct():
+    """
+    A literal per-cent sign, escaped when text goes through LaTeX.
+
+    Under `usetex` a bare `%` opens a COMMENT, so it does not raise -- it SILENTLY
+    truncates the rest of the label, which is how "(% of Both forces)" became "(" on a
+    rendered axis. `\\%` is the LaTeX spelling, and a non-usetex render would print that
+    backslash literally, so the choice cannot be written into the source string: it is
+    made here, when the text is built, from the rcParam in force.
+    """
+    return r"\%" if plt.rcParams.get("text.usetex", False) else "%"
 
 
 def get_figsize(document_width_pt=document_width_pt, wf=1.0, hf=0.5):
@@ -156,12 +297,13 @@ CF_REGIMES = {"Both forces": dict(),
               "Equal comparative advantage": dict(equalise_T=True),
               "No trade cost": dict(alpha=0.0)}
 
-# The realised economy is drawn beside the regimes wherever both appear, so it needs a
-# colour of its own: sharing "Both forces"' would make the granularity gap invisible.
-CF_COLORS = {"Realised": (0.32, 0.32, 0.32),
-             "Both forces": toulouse_color,
-             "Equal comparative advantage": sim_color,
-             "No trade cost": (0.45, 0.60, 0.45),
+# One colour per regime, fixed here so a regime reads the same in every figure.
+# "Both forces" is the ESTIMATED economy and is black: it is the reference the two
+# counterfactuals are read against, not one of three alternatives, so it takes the
+# neutral ink and each counterfactual takes a hue of its own.
+CF_COLORS = {"Both forces": (0.0, 0.0, 0.0),
+             "Equal comparative advantage": toulouse_color,
+             "No trade cost": sim_color,
              "Neither": (0.72, 0.72, 0.72)}    # kept for a caller that asks for it
 
 # The geometry-free benchmark: nothing selects among the cells of a sector, so the
