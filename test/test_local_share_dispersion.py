@@ -316,6 +316,16 @@ print(f"8 ok  the report keeps the declared regime order; cell by cell the bar g
       f"dispersion, {n_cross} cross 1/2), which is the plan's compensation and the "
       "condition it needs")
 
+def _remake(t, k, name):
+    """A copy of `t` cut to `k` buyers and carrying `name` on every row -- the two
+    things that used to move the data box (the buyer count, the length of the names)."""
+    keep = list(dict.fromkeys(t.index.get_level_values("ze2010_downstream")))[:k]
+    out = t[t.index.get_level_values("ze2010_downstream").isin(keep)].copy()
+    out["region"] = name
+    out.attrs = dict(t.attrs)
+    return out
+
+
 # --- 9. the figure ------------------------------------------------------------
 # ONE INDEPENDENT FIGURE per regime and no other form: an overlay put three marks and
 # three bands in every buyer row, and with arms of the order of the between-regime
@@ -413,42 +423,75 @@ for lab, a in axes.items():
     # the grid is on the QUANTITY axis only -- a horizontal rule through every buyer row
     # would be a rule through the mark itself
 
-# ... and the labels must not COLLIDE, which is the measured constraint the spacing was
-# chosen against. The fixture's buyer names are two characters, so the axis is wide and
-# the check would pass on anything: it is run on a copy carrying REAL commuting-zone
-# names at the paper's own body size, which is where the squeeze comes from.
+# ... and the labels must not COLLIDE at that width, which is the constraint the label
+# spacing was chosen against, nor can the spacing be loosened for nothing: a label on
+# EVERY gridline must collide on the same axis, or four is too coarse.
 import utils as _u
-_long = tab.copy()
-_names = ["Belfort - Montbéliard - Héricourt", "Charleville-Mézières",
-          "Roissy - Sud Picardie", "Istres - Martigues", "Île-De-France"]
-_long["region"] = [_names[i % len(_names)] for i in range(len(_long))]
 _base_fs = _u.font_size
 try:
     _u.set_paper_style(font_size=20.0)
-    _lab_ax = plot_local_share_dispersion(_long)["Both forces"]
+    _lab_ax = plot_local_share_dispersion(tab)["Both forces"]
+    _boxes = lambda a: sorted([t.get_window_extent()
+                               for t in a.get_xticklabels() if t.get_text()],
+                              key=lambda b: b.x0)
     _lab_ax.figure.canvas.draw()
-    _bb = sorted([t.get_window_extent()
-                  for t in _lab_ax.get_xticklabels() if t.get_text()],
-                 key=lambda b: b.x0)
+    _bb = _boxes(_lab_ax)
     assert len(_bb) >= 2, _bb
     assert all(_bb[i].x1 <= _bb[i + 1].x0 for i in range(len(_bb) - 1)), \
         [(round(b.x0, 1), round(b.x1, 1)) for b in _bb]
-    # non-vacuous: labelling every gridline at this width DOES collide
     _lab_ax.xaxis.set_major_locator(
         matplotlib.ticker.MultipleLocator(LOCAL_SHARE_DISPERSION_GRID))
     _lab_ax.figure.canvas.draw()
-    _bb2 = sorted([t.get_window_extent()
-                   for t in _lab_ax.get_xticklabels() if t.get_text()],
-                  key=lambda b: b.x0)
+    _bb2 = _boxes(_lab_ax)
     assert any(_bb2[i].x1 > _bb2[i + 1].x0 for i in range(len(_bb2) - 1)), \
         "a label on every gridline fits after all -- the spacing can be tightened"
+
+    # --- the GEOMETRY, which is the second thing a pinned window needs -------------
+    # `tight_layout` gave the names whatever width they asked for and the data box what
+    # was left, so the box came out 1.62 in in motor vehicles against 2.44 in in
+    # aerospace: one window, two scales. Gated on two tables that differ in BOTH the
+    # things that used to move it -- the buyer count and the length of the names.
+    _mk = lambda k, nm: _remake(tab, k, nm)
+    _wide = _mk(len(buyers), "Belfort - Montbéliard - Héricourt")   # many, long names
+    _thin = _mk(len(buyers) - 2, "Pau")                             # few, short names
+    _nw = _wide.index.get_level_values("ze2010_downstream").nunique()
+    _nt = _thin.index.get_level_values("ze2010_downstream").nunique()
+    assert _nw > _nt, (_nw, _nt)
+    _aw = plot_local_share_dispersion(_wide)["Both forces"]
+    _at = plot_local_share_dispersion(_thin)["Both forces"]
+    _wf = lambda a: a.figure.get_size_inches()[0]
+    _hf = lambda a: a.figure.get_size_inches()[1]
+    assert abs(_wf(_aw) - _wf(_at)) < 1e-9, (_wf(_aw), _wf(_at))     # same FIGURE width
+    for _a in (_aw, _at):                                            # same DATA box
+        assert abs(_u.axes_width_inches(_a) - LOCAL_SHARE_DISPERSION_AXES_W) < 1e-9, \
+            _u.axes_width_inches(_a)
+    # the row height is what is constant, so the HEIGHT follows the buyer count
+    assert _hf(_aw) > _hf(_at)
+    assert abs((_u.axes_height_inches(_aw) - _u.axes_height_inches(_at))
+               - LOCAL_SHARE_DISPERSION_ROW_H * (_nw - _nt)) < 1e-9
+    # and the names are drawn at ONE size across the pair -- a column too narrow for the
+    # longest name would shrink one of them and split the family
+    assert np.isclose(_aw.get_yticklabels()[0].get_fontsize(),
+                      _at.get_yticklabels()[0].get_fontsize(), atol=1e-9), \
+        (_aw.get_yticklabels()[0].get_fontsize(),
+         _at.get_yticklabels()[0].get_fontsize())
+    # the fallback exists and REPORTS: a name past the column shrinks rather than being
+    # cut off at the figure edge, since there is no tight bbox to widen the figure
+    _huge = _mk(_nt, "X" * 200)
+    _buf2 = io.StringIO()
+    with contextlib.redirect_stdout(_buf2):
+        _ah = plot_local_share_dispersion(_huge)["Both forces"]
+    assert "shrunk" in _buf2.getvalue(), _buf2.getvalue()
+    assert (_ah.get_yticklabels()[0].get_fontsize()
+            < _aw.get_yticklabels()[0].get_fontsize())
+    assert abs(_wf(_ah) - _wf(_aw)) < 1e-9, "the figure widened to fit a name"
 finally:
     _u.set_paper_style(font_size=_base_fs)
 
 # the band, per-sector and LAYOUT switches are all GONE: one figure, one band, one form,
 # no way to ask for a symmetric sd, a single sector, an overlay or a vertical axis by
 # accident
-for gone in ("band", "k", "sector", "layout", "orientation"):
+for gone in ("band", "k", "sector", "layout", "orientation", "figsize"):
     assert gone not in inspect.signature(plot_local_share_dispersion).parameters, gone
 try:
     plot_local_share_dispersion(tab, baseline="nope"); raise AssertionError("no raise")
@@ -462,8 +505,10 @@ print("9 ok  one INDEPENDENT figure per regime and no other form -- one series e
       f"is PINNED at {LOCAL_SHARE_DISPERSION_XLIM} so a table of another scale draws the "
       f"same one (an exceedance is reported), the grid runs every {_g:g} with a "
       f"non-colliding label every {LOCAL_SHARE_DISPERSION_LABEL_EVERY} lines, and "
-      "`band`, `k`, `sector`, `layout` and `orientation` are "
-      "gone from the signature")
+      f"every figure is {LOCAL_SHARE_DISPERSION_AXES_W:g} in wide in its data box at "
+      "one figure width whatever the buyer count and the names, with only the height "
+      "following the rows; `band`, `k`, `sector`, `layout`, `orientation` and `figsize` "
+      "are gone from the signature")
 
 # --- 10. the quantile band and the counting regime ---------------------------
 # The band the figure draws is the empirical 10-90 range, not a symmetric sd. Ordering

@@ -4002,10 +4002,24 @@ LOCAL_SHARE_DISPERSION_XLIM = (0.0, 0.80)
 LOCAL_SHARE_DISPERSION_GRID = 0.1
 LOCAL_SHARE_DISPERSION_LABEL_EVERY = 4
 
+# The GEOMETRY, in inches, and it is fixed rather than fitted for the same reason the
+# window is. `tight_layout` gives the buyer names whatever width they ask for and hands
+# the DATA BOX what is left, so the box came out 1.62 in wide in motor vehicles (whose
+# names run to "Belfort - Montbéliard - Héricourt") against 2.44 in in aerospace -- the
+# two figures carried the same pinned window drawn at a 50% different scale, which is
+# the one thing pinning the window was meant to prevent. The name column and the data
+# box are therefore both FIXED, so every figure this function draws is the same width
+# and the same scale; a name too long for its column shrinks to fit and says so.
+#
+# Only the HEIGHT follows the data, through a CONSTANT row height: fewer buyers, a
+# shorter figure, and the marks land on the same physical spacing in both industries.
+LOCAL_SHARE_DISPERSION_NAME_W = 3.5    # the commuting-zone column
+LOCAL_SHARE_DISPERSION_AXES_W = 2.0    # the data box -- identical in every figure
+LOCAL_SHARE_DISPERSION_ROW_H = 0.22    # one buyer row
+
 
 def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
-                                xlim=LOCAL_SHARE_DISPERSION_XLIM, figsize=None,
-                                save_to=None):
+                                xlim=LOCAL_SHARE_DISPERSION_XLIM, save_to=None):
     """
     One INDEPENDENT FIGURE per regime -- the baseline and the two counterfactuals, drawn
     and saved one after the other. Each carries one point per buyer at the continuum
@@ -4025,8 +4039,15 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
     The axis is LINEAR and in points of local share -- the object is the level, not a
     ratio, so there is nothing a log axis would straighten -- and is GRIDDED every
     `LOCAL_SHARE_DISPERSION_GRID`, with a label every
-    `LOCAL_SHARE_DISPERSION_LABEL_EVERY` gridlines: the buyer names leave the data axis
-    about 1.6 in wide, where three tick labels fit and five collide.
+    `LOCAL_SHARE_DISPERSION_LABEL_EVERY` gridlines: the data box is 2 in wide, where
+    three tick labels fit and nine collide.
+
+    The GEOMETRY is fixed, not fitted. Every figure is the same WIDTH and its data box
+    the same width, so a pinned window is drawn at one scale throughout -- see
+    `LOCAL_SHARE_DISPERSION_NAME_W` / `_AXES_W`. Only the HEIGHT follows the data,
+    through a constant row height, so an industry with fewer buyers gets a shorter
+    figure at the same row spacing. A name too long for its column is shrunk to fit and
+    the shrink is reported.
 
     The bar is the empirical 10-90 range of the realised local share, drawn
     ASYMMETRICALLY about the point, and there is no other option: where `p x N_eff` is
@@ -4090,12 +4111,25 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
                   f"{lim[1]:g} and so clipped: {', '.join(over)} — widen "
                   "LOCAL_SHARE_DISPERSION_XLIM.")
 
-    if figsize is None:
-        figsize = (4.8, max(3.5, 0.22 * n))
+    # the fixed geometry. The two pads are the only things read off the style: the x tick
+    # labels need room under the box and the last of them overhangs its right edge by
+    # about half its width, and both scale with the body size, so they are computed from
+    # it rather than guessed -- they are the same in every figure regardless.
+    t_pt = float(mpl.font_manager.font_scalings.get(plt.rcParams["xtick.labelsize"],
+                                                    plt.rcParams["xtick.labelsize"])
+                 if isinstance(plt.rcParams["xtick.labelsize"], str)
+                 else plt.rcParams["xtick.labelsize"])
+    pad_b, pad_r, pad_t = t_pt * 1.35 / 72 + 0.10, t_pt * 0.85 / 72, 0.08
+    name_w, ax_w = LOCAL_SHARE_DISPERSION_NAME_W, LOCAL_SHARE_DISPERSION_AXES_W
+    ax_h = LOCAL_SHARE_DISPERSION_ROW_H * n
+    fig_w, fig_h = name_w + ax_w + pad_r, pad_b + ax_h + pad_t
+    rect = (name_w / fig_w, pad_b / fig_h, ax_w / fig_w, ax_h / fig_h)
+
     stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
     axes = {}
     for lab in labels:
-        fig, ax = plt.subplots(figsize=figsize)
+        fig = plt.figure(figsize=(fig_w, fig_h))
+        ax = fig.add_axes(rect)
         # the baseline as a faint open ghost on every counterfactual figure
         if lab != base:
             ax.plot(pt[base].to_numpy(dtype=float), pos, "o", mfc="none", mec="0.6",
@@ -4122,11 +4156,31 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
         # the exhibit still carries no title of its own (the paper supplies the caption).
         ax.annotate(lab, xy=(0.98, 0.02), xycoords="axes fraction",
                     ha="right", va="bottom", fontsize=fs(9), color=c)
-        fig.tight_layout()
+
+        # the names are capped by the ROW height above; a name can still be too wide for
+        # a column whose width is fixed, and with no `tight_layout` to widen the figure
+        # it would be cut off at the edge. Measured and shrunk to fit -- text width is
+        # linear in the font size, so one pass lands it -- and the shrink is reported,
+        # since it means this figure's names are smaller than its siblings'.
+        fig.canvas.draw()
+        room = (name_w - 0.10) * fig.dpi
+        wide = max((t.get_window_extent().width for t in ax.get_yticklabels()),
+                   default=0.0)
+        if wide > room:
+            was = ax.get_yticklabels()[0].get_fontsize()
+            now = max(5.0, was * room / wide)
+            ax.tick_params(axis="y", labelsize=now)
+            print(f"  [dispersion] {lab}: the longest buyer name needs "
+                  f"{wide / fig.dpi:.2f} in of a {name_w:g} in column — names shrunk "
+                  f"from {was:.1f}pt to {now:.1f}pt. Widen "
+                  "LOCAL_SHARE_DISPERSION_NAME_W to keep the family at one size.")
         if stem:
             slug = re.sub(r"[^a-z0-9]+", "_", str(lab).lower()).strip("_")
             path = f"{stem}_{slug}{ext or '.pdf'}"
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            fig.savefig(path, bbox_inches="tight")
+            # NOT `bbox_inches="tight"`: cropping to the ink makes the saved width
+            # depend on how long this industry's names happen to be, which is the
+            # difference this geometry exists to remove.
+            fig.savefig(path)
         axes[lab] = ax
     return axes
