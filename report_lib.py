@@ -357,7 +357,7 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
 
     fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
     _paired_errorbar(ax, data["sector_names"], emp, sim, se_e, se_s, ci=ci,
-                     ylabel=r"$\bar{G}_s(0)$", xlabel="Sector (A129)", rotate=45)
+                     ylabel=r"$\bar{G}_s(0)$", rotate=45)
 
     # The profiled variety count is what the model moves to hit this moment, so
     # print it next to each sector — a clamped sector cannot close its own residual.
@@ -761,7 +761,7 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
         _paired_errorbar(
             ax, sectors, sub["empirical"].values, sub["simulated"].values,
             _band(sub["se_empirical"].values), _band(sub["se_simulated"].values), ci=ci,
-            ylabel=rf"$\bar{{G}}_s({K})$", xlabel="Sector (A129)", rotate=45)
+            ylabel=rf"$\bar{{G}}_s({K})$", rotate=45)
         ax.figure.tight_layout()
         if stem:
             path = f"{stem}_K{K}{ext or '.pdf'}"

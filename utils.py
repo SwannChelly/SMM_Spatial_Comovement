@@ -243,7 +243,7 @@ LAMBDA_DEFAULT = 0.5             # lambda, labour against intermediates
 # The Julia-side `POST_HOC_REPLICATIONS` in `main.jl` is a DIFFERENT quantity: how many
 # economies Julia SOLVES and writes for the verification artefact. Raising that one costs
 # a re-run and improves only `check_against_julia`'s sample, not anything reported.
-ECONOMY_REPLICATIONS = 10
+ECONOMY_REPLICATIONS = 1000
 
 # Highest K kept anywhere in the count-curve reporting: the panels, the empirical
 # increments read out of G_K.csv, and the bootstrap variances read out of G_K_var.csv
