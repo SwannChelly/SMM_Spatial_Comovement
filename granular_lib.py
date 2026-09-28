@@ -3986,61 +3986,70 @@ def local_share_report(table, baseline=None, verbose=True):
     return rep
 
 
+# the x window is PINNED and shared by every figure this function draws -- across the
+# regimes of one industry AND across industries, which is the whole point of pinning it
+# rather than fitting it to each table. The pair is read as "aerospace reaches 0.75
+# where motor vehicles never passes 0.47"; a window fitted per call rescales that away
+# and paints the two industries alike. Same argument, same device as
+# `LOCAL_SHARE_MAP_VLIM` on the map. A band beyond it is CLIPPED, so an exceedance is
+# reported rather than silently flattened.
+LOCAL_SHARE_DISPERSION_XLIM = (0.0, 0.80)
+# A gridline every 0.1, and a LABEL every fourth one. The label spacing is a measured
+# constraint rather than a taste: the commuting-zone names take about two thirds of the
+# figure's width, leaving the data axis about 1.6 in, and a tick label at the paper's
+# tick size is about 0.42 in wide -- so three labels fit and five collide. The grid is
+# what carries the intermediate values; that is what a grid is for.
+LOCAL_SHARE_DISPERSION_GRID = 0.1
+LOCAL_SHARE_DISPERSION_LABEL_EVERY = 4
+
+
 def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
-                                orientation="h", layout="panels", figsize=None,
+                                xlim=LOCAL_SHARE_DISPERSION_XLIM, figsize=None,
                                 save_to=None):
     """
-    The figure: one point per (buyer, regime) at the continuum level, with a band
-    carrying the granularity. Buyers ordered by their local share in `baseline`, so the
-    same order holds across regimes and who loses their local anchoring is read off
-    directly. The axis is LINEAR and in points of local share — the object is the level,
-    not a ratio, so there is nothing a log axis would straighten.
+    One INDEPENDENT FIGURE per regime -- the baseline and the two counterfactuals, drawn
+    and saved one after the other. Each carries one point per buyer at the continuum
+    level with a band carrying the granularity, buyers on the `y` axis (commuting-zone
+    names are long) ordered by their local share in `baseline`, so the same order holds
+    across regimes and who loses their local anchoring is read off directly.
 
-    `layout` is the one decision that changes how the figure reads, and the default
-    moved for a reason. `"overlay"` puts all three regimes in ONE panel, offset within
-    each buyer row: that is three marks and three bands per row, and with a band whose
-    arms are of the order of the between-regime movement the marks interleave and the
-    reader has to disentangle colour from vertical position. `"panels"` (the default)
-    draws one INDEPENDENT FIGURE per regime — its own figure, its own file, its own
-    buyer names — so a regime can be dropped into a paper or a slide on its own instead
-    of carrying the other two with it. What still ties them together is the `x` WINDOW,
-    pinned once across regimes from the widest band drawn, and the buyer ORDER, taken
-    from `baseline`: without those two a figure read beside another would compare
-    nothing. Each counterfactual figure carries the BASELINE point as a faint open mark,
-    so the displacement is legible in the figure itself rather than only across figures;
-    the baseline figure carries no such ghost (it would be the same mark twice).
+    There is ONE form and no switch to another. A regime gets its own figure and its own
+    file, so it can be dropped into a paper or a slide without carrying the other two
+    with it; what ties the set together is the buyer ORDER, taken from `baseline`, and
+    the `x` WINDOW, which is pinned rather than fitted -- see
+    `LOCAL_SHARE_DISPERSION_XLIM`. Each counterfactual figure carries the BASELINE point
+    as a faint open mark, so the displacement is legible in the figure itself rather than
+    only across figures; the baseline figure carries no such ghost (it would be the same
+    mark twice).
+
+    The axis is LINEAR and in points of local share -- the object is the level, not a
+    ratio, so there is nothing a log axis would straighten -- and is GRIDDED every
+    `LOCAL_SHARE_DISPERSION_GRID`, with a label every
+    `LOCAL_SHARE_DISPERSION_LABEL_EVERY` gridlines: the buyer names leave the data axis
+    about 1.6 in wide, where three tick labels fit and five collide.
 
     The bar is the empirical 10-90 range of the realised local share, drawn
     ASYMMETRICALLY about the point, and there is no other option: where `p x N_eff` is
     of order one the realised share is a count of a few events, so its law is discrete
     and skewed and a symmetric `+/- sd` draws a shape the data do not have. Read
-    `coverage` in the table beside it — on a lattice the interval holds more than 80%
+    `coverage` in the table beside it -- on a lattice the interval holds more than 80%
     and its width is a step of that lattice.
 
-    `orientation="h"` puts the buyers on the y axis (commuting-zone names are long, and
-    this is the form every other per-buyer figure of the section uses); `"v"` puts them
-    on the x axis.
-
-    Under `"panels"` the X AXIS IS NOT NAMED — neither the quantity (orientation `"h"`)
-    nor the commuting zone (`"v"`). The quantity is what the caption has to state anyway,
-    together with what the point and the bar ARE, and stating it on the axis of every one
-    of three separate figures makes the reader parse the same legend three times; the
-    zone axis is named by its own tick labels. The caption says "point: the continuum
+    THE X AXIS IS NOT NAMED. The quantity is what the caption has to state anyway,
+    together with what the point and the bar ARE, and stating it under every one of
+    three separate figures makes the reader parse the same legend three times; the buyer
+    axis is named by its own tick labels. The caption says "point: the continuum
     expectation; bar: 10-90% of realised economies", never "confidence interval": the
     replications share one `theta+`, so the band is granularity and carries no estimation
-    uncertainty. The `"overlay"` layout is one exhibit and keeps its label.
+    uncertainty.
 
-    `save_to` is a file under `"overlay"` and a STEM under `"panels"`: the regime is
-    appended before the extension, so `.../local_share_dispersion_auto.pdf` writes
-    `..._both_forces.pdf`, `..._equal_comparative_advantage.pdf`, ... One call still
-    produces the whole set and nothing overwrites anything.
+    `save_to` is a STEM: the regime is appended before the extension, so
+    `.../local_share_dispersion_auto.pdf` writes `..._both_forces.pdf`,
+    `..._equal_comparative_advantage.pdf`, ... One call produces the whole set and
+    nothing overwrites anything, and nothing is written at the stem itself.
 
-    Returns the `Axes` under `"overlay"` and `{regime: Axes}` under `"panels"`.
+    Returns `{regime: Axes}`.
     """
-    if orientation not in ("h", "v"):
-        raise ValueError(f"orientation must be 'h' or 'v', got {orientation!r}.")
-    if layout not in ("panels", "overlay"):
-        raise ValueError(f"layout must be 'panels' or 'overlay', got {layout!r}.")
     base = table.attrs.get("baseline", "Both forces") if baseline is None else baseline
 
     keep = _regime_order(table, base)
@@ -4058,7 +4067,7 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
              .reindex(idx).astype(str))
     labels = list(pt.columns)
 
-    n, m = len(idx), len(labels)
+    n = len(idx)
     pos = np.arange(n)
     # the band is drawn about the POINT, which is the expectation; a skewed law can put
     # a quantile on the far side of it, so the arm is clipped at zero rather than handed
@@ -4068,103 +4077,51 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
         return v, np.vstack([np.maximum(v - lo_t[lab].to_numpy(dtype=float), 0.0),
                              np.maximum(hi_t[lab].to_numpy(dtype=float) - v, 0.0)])
 
-    what = table.attrs.get("radius_km")
-    lab_v = ("Local share of the upstream response — own zone" if what is None
-             else f"Local share of the upstream response — within {what:g} km")
     hi_max = float(np.nanmax(hi_t.to_numpy(dtype=float)))
-    lim = (0.0, hi_max * 1.05 if np.isfinite(hi_max) and hi_max > 0 else 1.0)
+    if xlim is None:
+        lim = (0.0, hi_max * 1.05 if np.isfinite(hi_max) and hi_max > 0 else 1.0)
+    else:
+        lim = (float(xlim[0]), float(xlim[1]))
+        over = [f"{names[i]} ({lab})"
+                for lab in labels
+                for i in hi_t.index[hi_t[lab].to_numpy(dtype=float) > lim[1]]]
+        if over:
+            print(f"  [dispersion] {len(over)} band(s) beyond the pinned x max = "
+                  f"{lim[1]:g} and so clipped: {', '.join(over)} — widen "
+                  "LOCAL_SHARE_DISPERSION_XLIM.")
 
-    def _dress(ax, first, name_zone=True):
-        # `first` governs whether the buyer names are shown, and they are hidden with
-        # `tick_params` rather than by setting empty tick LABELS: an overlay-style shared
-        # axis would carry a formatter set on one axes to the whole group. Under
-        # `"panels"` every figure is independent and names its own buyers.
-        if orientation == "h":
-            ax.set_yticks(pos); ax.set_yticklabels(names)
-            set_name_axis_fontsize(ax, n)
-            ax.tick_params(axis="y", labelleft=first)
-            ax.set_ylim(-0.6, n - 0.4); ax.set_xlim(*lim)
-            ax.grid(alpha=0.2, axis="x")
-<<<<<<< HEAD
-=======
-            if first and name_zone:
-                ax.set_ylabel("Commuting zone")
->>>>>>> claude/upbeat-gates-3ba6hv
-        else:
-            ax.set_xticks(pos); ax.set_xticklabels(names, rotation=90)
-            set_name_axis_fontsize(ax, n, axis="x")
-            ax.tick_params(axis="x", labelbottom=first)
-            ax.set_xlim(-0.6, n - 0.4); ax.set_ylim(*lim)
-            ax.grid(alpha=0.2, axis="y")
-<<<<<<< HEAD
-=======
-            if first and name_zone:
-                ax.set_xlabel("Commuting zone")
->>>>>>> claude/upbeat-gates-3ba6hv
-
-    def _draw(ax, lab, ghost):
-        c = CF_COLORS.get(lab, toulouse_color)
-        if ghost is not None:
-            g = pt[ghost].to_numpy(dtype=float)
-            if orientation == "h":
-                ax.plot(g, pos, "o", mfc="none", mec="0.6", ms=4.0, lw=0,
-                        zorder=1, label=ghost)
-            else:
-                ax.plot(pos, g, "o", mfc="none", mec="0.6", ms=4.0, lw=0,
-                        zorder=1, label=ghost)
-        v, e = _arms(lab)
-        kw = dict(fmt="o", markersize=4.0, color=c, ecolor=c, elinewidth=1.2,
-                  capsize=0.0, linestyle="none", zorder=3, label=lab)
-        if orientation == "h":
-            ax.errorbar(v, pos, xerr=e, **kw)
-        else:
-            ax.errorbar(pos, v, yerr=e, **kw)
-
-    if layout == "overlay":
-        step = 0.8 / max(m, 1)
-        if figsize is None:
-            figsize = (9, max(3.5, 0.10 * m * n)) if orientation == "h" \
-                else (max(7.0, 0.55 * n), 5.0)
-        fig, ax = plt.subplots(figsize=figsize)
-        for j, lab in enumerate(labels):
-            off = ((m - 1) / 2 - j) * step
-            c = CF_COLORS.get(lab, toulouse_color)
-            v, e = _arms(lab)
-            kw = dict(fmt="o", markersize=4.5, color=c, ecolor=c, elinewidth=1.4,
-                      capsize=2.5, linestyle="none", label=lab)
-            if orientation == "h":
-                ax.errorbar(v, pos + off, xerr=e, **kw)
-            else:
-                ax.errorbar(pos + off, v, yerr=e, **kw)
-        _dress(ax, True)
-        (ax.set_xlabel if orientation == "h" else ax.set_ylabel)(lab_v)
-        ax.legend(frameon=False, fontsize=fs(8), loc="best")
-        fig.tight_layout()
-        if save_to:
-            fig.savefig(save_to, bbox_inches="tight")
-        return ax
-
-    # One INDEPENDENT figure per regime. `figsize` is now the size of ONE of them, and
-    # the window `lim` is shared by construction rather than by `sharex`, which is what
-    # keeps three separate files comparable.
     if figsize is None:
-        figsize = (4.8, max(3.5, 0.22 * n)) if orientation == "h" \
-            else (max(7.0, 0.55 * n), 3.4)
+        figsize = (4.8, max(3.5, 0.22 * n))
     stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
     axes = {}
     for lab in labels:
         fig, ax = plt.subplots(figsize=figsize)
-        _draw(ax, lab, None if lab == base else base)
-        # every figure names its own buyers (there is no leftmost panel to lean on) and
-        # NONE of them names the x axis -- the quantity belongs in the caption.
-        _dress(ax, True, name_zone=(orientation == "h"))
-        if orientation == "v":
-            ax.set_ylabel(lab_v)
+        # the baseline as a faint open ghost on every counterfactual figure
+        if lab != base:
+            ax.plot(pt[base].to_numpy(dtype=float), pos, "o", mfc="none", mec="0.6",
+                    ms=4.0, lw=0, zorder=1, label=base)
+        c = CF_COLORS.get(lab, toulouse_color)
+        v, e = _arms(lab)
+        ax.errorbar(v, pos, xerr=e, fmt="o", markersize=4.0, color=c, ecolor=c,
+                    elinewidth=1.2, capsize=0.0, linestyle="none", zorder=3, label=lab)
+
+        # every figure names its own buyers -- there is no leftmost panel to lean on --
+        # and NONE of them names the x axis: the quantity belongs in the caption.
+        ax.set_yticks(pos); ax.set_yticklabels(names)
+        set_name_axis_fontsize(ax, n)
+        ax.set_ylim(-0.6, n - 0.4); ax.set_xlim(*lim)
+        # a gridline every LOCAL_SHARE_DISPERSION_GRID, labelled every
+        # LOCAL_SHARE_DISPERSION_LABEL_EVERY of them
+        g = LOCAL_SHARE_DISPERSION_GRID
+        ax.xaxis.set_major_locator(
+            mpl.ticker.MultipleLocator(LOCAL_SHARE_DISPERSION_LABEL_EVERY * g))
+        ax.xaxis.set_minor_locator(mpl.ticker.MultipleLocator(g))
+        ax.grid(alpha=0.2, axis="x", which="both")
+        ax.tick_params(axis="x", which="minor", length=0)
         # the regime names its own figure; an in-axes annotation rather than a title, so
         # the exhibit still carries no title of its own (the paper supplies the caption).
         ax.annotate(lab, xy=(0.98, 0.02), xycoords="axes fraction",
-                    ha="right", va="bottom", fontsize=fs(9),
-                    color=CF_COLORS.get(lab, toulouse_color))
+                    ha="right", va="bottom", fontsize=fs(9), color=c)
         fig.tight_layout()
         if stem:
             slug = re.sub(r"[^a-z0-9]+", "_", str(lab).lower()).strip("_")

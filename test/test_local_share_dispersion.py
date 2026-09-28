@@ -7,7 +7,7 @@ variety by variety FROM the geometry, with equal expenditure across a buyer's va
 That is what makes the central gate real: the measured standard deviation across
 replications and the closed form `sqrt(sum_s theta^2 V p(1-p))` are two routes that share no
 code, and they must agree to the Monte-Carlo scale."""
-import inspect, os, re, sys, tempfile, numpy as np, pandas as pd, matplotlib, warnings
+import contextlib, inspect, io, os, re, sys, tempfile, numpy as np, pandas as pd, matplotlib, warnings
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
@@ -317,10 +317,11 @@ print(f"8 ok  the report keeps the declared regime order; cell by cell the bar g
       "condition it needs")
 
 # --- 9. the figure ------------------------------------------------------------
-# The default layout is one INDEPENDENT FIGURE per regime: the overlay put three marks
-# and three bands in every buyer row, and with arms of the order of the between-regime
+# ONE INDEPENDENT FIGURE per regime and no other form: an overlay put three marks and
+# three bands in every buyer row, and with arms of the order of the between-regime
 # movement they interleave. Separate figures then have to be tied together by the
-# WINDOW and the buyer ORDER, since there is no shared axis left to do it.
+# WINDOW and the buyer ORDER, since there is no shared axis left to do it -- and the
+# window is PINNED rather than fitted, so the tie holds ACROSS INDUSTRIES too.
 _regs = _regime_order(tab, "Both forces")
 axes = plot_local_share_dispersion(tab)
 assert isinstance(axes, dict) and list(axes) == list(_regs), (list(axes), _regs)
@@ -374,37 +375,95 @@ lo_d = np.array([g[0][0] for g in seg])
 hi_d = np.array([g[1][0] for g in seg])
 assert np.allclose(lo_d, np.maximum(base_sorted["q10"].to_numpy(), 0.0), atol=1e-9)
 assert np.allclose(hi_d, base_sorted["q90"].to_numpy(), atol=1e-9)
-# the overlay is retained and still carries its legend -- it is the form in which one
-# buyer row can be read without a saccade, at the cost of the crowding
-axo = plot_local_share_dispersion(tab, layout="overlay")
-assert not isinstance(axo, np.ndarray) and len(axo.containers) == len(CF_REGIMES)
-assert axo.get_legend() is not None and axo.get_xlim()[0] == 0.0
-# the vertical layout the plan describes, and the per-sector view
-axv = plot_local_share_dispersion(tab, orientation="v")
-_v0 = axv["Both forces"]
-assert len(_v0.get_xticklabels()) == len(buyers) and _v0.get_ylim()[0] == 0.0
-# the quantity moves to the y axis there, on EVERY figure, and the x axis -- now the
-# buyer axis -- is again unnamed
-assert all(a.get_ylabel() and not a.get_xlabel() for a in axv.values()), \
-    [(a.get_ylabel(), a.get_xlabel()) for a in axv.values()]
-# the band and per-sector switches are GONE: one figure, one band, no way to ask for
-# a symmetric sd or a single sector by accident
-for gone in ("band", "k", "sector"):
+# the window is PINNED, not fitted: the same call on a table of a DIFFERENT scale must
+# return the SAME window, which is what makes two industries comparable side by side and
+# is the defect a per-call `hi_max * 1.05` produced. A fitted window would move here.
+half = tab.copy()
+for _c in ("local", "q10", "q90"):
+    half[_c] = half[_c] * 0.5
+ax_half = plot_local_share_dispersion(half)
+assert ax_half["Both forces"].get_xlim() == a0.get_xlim() == LOCAL_SHARE_DISPERSION_XLIM, \
+    (ax_half["Both forces"].get_xlim(), a0.get_xlim(), LOCAL_SHARE_DISPERSION_XLIM)
+# ... and it can still be fitted on request, which is the only way the assertion above
+# is not vacuous (a hard-coded `set_xlim` would pass it too)
+ax_fit = plot_local_share_dispersion(half, xlim=None)
+assert ax_fit["Both forces"].get_xlim()[1] < a0.get_xlim()[1]
+# a band beyond the pinned window is REPORTED rather than silently flattened
+wide = tab.copy(); wide["q90"] = wide["q90"] + 10.0
+_buf = io.StringIO()
+with contextlib.redirect_stdout(_buf):
+    plot_local_share_dispersion(wide)
+assert "clipped" in _buf.getvalue(), _buf.getvalue()
+
+# the GRID runs every 0.1 across the whole window, on ticks that are multiples of it,
+# and only every second line carries a label (at this font size 0.0 ... 0.8 collide)
+_g = LOCAL_SHARE_DISPERSION_GRID
+for lab, a in axes.items():
+    maj = np.array(a.get_xticks(minor=False))
+    mnr = np.array(a.get_xticks(minor=True))
+    lines = np.sort(np.concatenate([maj, mnr]))
+    lo, hi = a.get_xlim()
+    inside = lines[(lines >= lo - 1e-9) & (lines <= hi + 1e-9)]
+    assert np.allclose(inside, np.arange(0.0, hi + 1e-9, _g), atol=1e-9), (lab, inside)
+    assert np.allclose(np.diff(np.sort(maj)),
+                       LOCAL_SHARE_DISPERSION_LABEL_EVERY * _g, atol=1e-9), (lab, maj)
+    assert not a.yaxis._major_tick_kw.get("gridOn"), lab
+    assert a.xaxis._major_tick_kw.get("gridOn"), lab
+    assert a.xaxis._minor_tick_kw.get("gridOn"), lab
+    # the grid is on the QUANTITY axis only -- a horizontal rule through every buyer row
+    # would be a rule through the mark itself
+
+# ... and the labels must not COLLIDE, which is the measured constraint the spacing was
+# chosen against. The fixture's buyer names are two characters, so the axis is wide and
+# the check would pass on anything: it is run on a copy carrying REAL commuting-zone
+# names at the paper's own body size, which is where the squeeze comes from.
+import utils as _u
+_long = tab.copy()
+_names = ["Belfort - Montbéliard - Héricourt", "Charleville-Mézières",
+          "Roissy - Sud Picardie", "Istres - Martigues", "Île-De-France"]
+_long["region"] = [_names[i % len(_names)] for i in range(len(_long))]
+_base_fs = _u.font_size
+try:
+    _u.set_paper_style(font_size=20.0)
+    _lab_ax = plot_local_share_dispersion(_long)["Both forces"]
+    _lab_ax.figure.canvas.draw()
+    _bb = sorted([t.get_window_extent()
+                  for t in _lab_ax.get_xticklabels() if t.get_text()],
+                 key=lambda b: b.x0)
+    assert len(_bb) >= 2, _bb
+    assert all(_bb[i].x1 <= _bb[i + 1].x0 for i in range(len(_bb) - 1)), \
+        [(round(b.x0, 1), round(b.x1, 1)) for b in _bb]
+    # non-vacuous: labelling every gridline at this width DOES collide
+    _lab_ax.xaxis.set_major_locator(
+        matplotlib.ticker.MultipleLocator(LOCAL_SHARE_DISPERSION_GRID))
+    _lab_ax.figure.canvas.draw()
+    _bb2 = sorted([t.get_window_extent()
+                   for t in _lab_ax.get_xticklabels() if t.get_text()],
+                  key=lambda b: b.x0)
+    assert any(_bb2[i].x1 > _bb2[i + 1].x0 for i in range(len(_bb2) - 1)), \
+        "a label on every gridline fits after all -- the spacing can be tightened"
+finally:
+    _u.set_paper_style(font_size=_base_fs)
+
+# the band, per-sector and LAYOUT switches are all GONE: one figure, one band, one form,
+# no way to ask for a symmetric sd, a single sector, an overlay or a vertical axis by
+# accident
+for gone in ("band", "k", "sector", "layout", "orientation"):
     assert gone not in inspect.signature(plot_local_share_dispersion).parameters, gone
-for bad, kw in ((ValueError, dict(orientation="diagonal")),
-                (ValueError, dict(layout="grid")),
-                (KeyError, dict(baseline="nope"))):
-    try:
-        plot_local_share_dispersion(tab, **kw); raise AssertionError(f"no raise: {kw}")
-    except bad:
-        pass
+try:
+    plot_local_share_dispersion(tab, baseline="nope"); raise AssertionError("no raise")
+except KeyError:
+    pass
 plt.close("all")
-print("9 ok  one INDEPENDENT figure per regime by default -- one series each, its own "
-      "figure and its own file off the stem, buyers named on every one and ordered by "
-      "the baseline level, one shared window, the baseline ghosted in every "
-      "counterfactual figure, an honest zero, NO x-axis label, the arms equal to q10 "
-      "and q90 in data units, plus the overlay and the vertical layout; `band`, `k` "
-      "and `sector` are gone from the signature")
+print("9 ok  one INDEPENDENT figure per regime and no other form -- one series each, "
+      "its own figure and its own file off the stem, buyers named on every one and "
+      "ordered by the baseline level, the baseline ghosted in every counterfactual "
+      "figure, NO x-axis label, the arms equal to q10 and q90 in data units; the window "
+      f"is PINNED at {LOCAL_SHARE_DISPERSION_XLIM} so a table of another scale draws the "
+      f"same one (an exceedance is reported), the grid runs every {_g:g} with a "
+      f"non-colliding label every {LOCAL_SHARE_DISPERSION_LABEL_EVERY} lines, and "
+      "`band`, `k`, `sector`, `layout` and `orientation` are "
+      "gone from the signature")
 
 # --- 10. the quantile band and the counting regime ---------------------------
 # The band the figure draws is the empirical 10-90 range, not a symmetric sd. Ordering
