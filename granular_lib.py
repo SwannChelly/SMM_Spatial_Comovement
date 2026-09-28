@@ -4061,7 +4061,7 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
     n, m = len(idx), len(labels)
     pos = np.arange(n)
     # the band is drawn about the POINT, which is the expectation; a skewed law can put
-    # a quantile on the far side of it, so the arm is clipped at zero rather than handed
+    # a quantile on the far fside of it, so the arm is clipped at zero rather than handed
     # to matplotlib as a negative length.
     def _arms(lab):
         v = pt[lab].to_numpy(dtype=float)
@@ -4085,22 +4085,12 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
             ax.tick_params(axis="y", labelleft=first)
             ax.set_ylim(-0.6, n - 0.4); ax.set_xlim(*lim)
             ax.grid(alpha=0.2, axis="x")
-<<<<<<< HEAD
-=======
-            if first and name_zone:
-                ax.set_ylabel("Commuting zone")
->>>>>>> claude/upbeat-gates-3ba6hv
         else:
             ax.set_xticks(pos); ax.set_xticklabels(names, rotation=90)
             set_name_axis_fontsize(ax, n, axis="x")
             ax.tick_params(axis="x", labelbottom=first)
             ax.set_xlim(-0.6, n - 0.4); ax.set_ylim(*lim)
             ax.grid(alpha=0.2, axis="y")
-<<<<<<< HEAD
-=======
-            if first and name_zone:
-                ax.set_xlabel("Commuting zone")
->>>>>>> claude/upbeat-gates-3ba6hv
 
     def _draw(ax, lab, ghost):
         c = CF_COLORS.get(lab, toulouse_color)
@@ -4160,11 +4150,7 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
         _dress(ax, True, name_zone=(orientation == "h"))
         if orientation == "v":
             ax.set_ylabel(lab_v)
-        # the regime names its own figure; an in-axes annotation rather than a title, so
-        # the exhibit still carries no title of its own (the paper supplies the caption).
-        ax.annotate(lab, xy=(0.98, 0.02), xycoords="axes fraction",
-                    ha="right", va="bottom", fontsize=fs(9),
-                    color=CF_COLORS.get(lab, toulouse_color))
+
         fig.tight_layout()
         if stem:
             slug = re.sub(r"[^a-z0-9]+", "_", str(lab).lower()).strip("_")
