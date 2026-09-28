@@ -3979,12 +3979,14 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
     each buyer row: that is three marks and three bands per row, and with a band whose
     arms are of the order of the between-regime movement the marks interleave and the
     reader has to disentangle colour from vertical position. `"panels"` (the default)
-    is SMALL MULTIPLES — one panel per regime, one mark per row, a shared `x` window and
-    the same buyer rows throughout, so a regime is read as a shape and the comparison is
-    made between panels rather than inside a row. Each counterfactual panel carries the
-    BASELINE point as a faint open mark, so the displacement is visible without moving
-    the eye across the figure; the baseline panel carries no such ghost (it would be the
-    same mark drawn twice).
+    draws one INDEPENDENT FIGURE per regime — its own figure, its own file, its own
+    buyer names — so a regime can be dropped into a paper or a slide on its own instead
+    of carrying the other two with it. What still ties them together is the `x` WINDOW,
+    pinned once across regimes from the widest band drawn, and the buyer ORDER, taken
+    from `baseline`: without those two a figure read beside another would compare
+    nothing. Each counterfactual figure carries the BASELINE point as a faint open mark,
+    so the displacement is legible in the figure itself rather than only across figures;
+    the baseline figure carries no such ghost (it would be the same mark twice).
 
     The bar is the empirical 10-90 range of the realised local share, drawn
     ASYMMETRICALLY about the point, and there is no other option: where `p x N_eff` is
@@ -3997,15 +3999,21 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
     this is the form every other per-buyer figure of the section uses); `"v"` puts them
     on the x axis.
 
-    The axis label names the QUANTITY only. What the point and the bar are is a
-    property of the exhibit, not of the axis, and belongs in the caption — putting it
-    on the axis forces the reader to parse a legend before reading a number. The
-    caption says "point: the continuum expectation; bar: 10-90% of realised economies",
-    never "confidence interval": the replications share one `theta+`, so the band is
-    granularity and carries no estimation uncertainty.
+    Under `"panels"` the X AXIS IS NOT NAMED — neither the quantity (orientation `"h"`)
+    nor the commuting zone (`"v"`). The quantity is what the caption has to state anyway,
+    together with what the point and the bar ARE, and stating it on the axis of every one
+    of three separate figures makes the reader parse the same legend three times; the
+    zone axis is named by its own tick labels. The caption says "point: the continuum
+    expectation; bar: 10-90% of realised economies", never "confidence interval": the
+    replications share one `theta+`, so the band is granularity and carries no estimation
+    uncertainty. The `"overlay"` layout is one exhibit and keeps its label.
 
-    Returns the `Axes` under `"overlay"` and an array of `Axes`, one per regime in the
-    drawn order, under `"panels"`.
+    `save_to` is a file under `"overlay"` and a STEM under `"panels"`: the regime is
+    appended before the extension, so `.../local_share_dispersion_auto.pdf` writes
+    `..._both_forces.pdf`, `..._equal_comparative_advantage.pdf`, ... One call still
+    produces the whole set and nothing overwrites anything.
+
+    Returns the `Axes` under `"overlay"` and `{regime: Axes}` under `"panels"`.
     """
     if orientation not in ("h", "v"):
         raise ValueError(f"orientation must be 'h' or 'v', got {orientation!r}.")
@@ -4044,23 +4052,24 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
     hi_max = float(np.nanmax(hi_t.to_numpy(dtype=float)))
     lim = (0.0, hi_max * 1.05 if np.isfinite(hi_max) and hi_max > 0 else 1.0)
 
-    def _dress(ax, first):
-        # the buyer names are hidden with `tick_params`, not by setting empty tick
-        # LABELS: the panels share an axis, so a formatter set on one of them applies to
-        # the whole shared group and would blank the leftmost panel too.
+    def _dress(ax, first, name_zone=True):
+        # `first` governs whether the buyer names are shown, and they are hidden with
+        # `tick_params` rather than by setting empty tick LABELS: an overlay-style shared
+        # axis would carry a formatter set on one axes to the whole group. Under
+        # `"panels"` every figure is independent and names its own buyers.
         if orientation == "h":
             ax.set_yticks(pos); ax.set_yticklabels(names)
             ax.tick_params(axis="y", labelleft=first)
             ax.set_ylim(-0.6, n - 0.4); ax.set_xlim(*lim)
             ax.grid(alpha=0.2, axis="x")
-            if first:
+            if first and name_zone:
                 ax.set_ylabel("Commuting zone")
         else:
             ax.set_xticks(pos); ax.set_xticklabels(names, rotation=90)
             ax.tick_params(axis="x", labelbottom=first)
             ax.set_xlim(-0.6, n - 0.4); ax.set_ylim(*lim)
             ax.grid(alpha=0.2, axis="y")
-            if first:
+            if first and name_zone:
                 ax.set_xlabel("Commuting zone")
 
     def _draw(ax, lab, ghost):
@@ -4105,28 +4114,32 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
             fig.savefig(save_to, bbox_inches="tight")
         return ax
 
+    # One INDEPENDENT figure per regime. `figsize` is now the size of ONE of them, and
+    # the window `lim` is shared by construction rather than by `sharex`, which is what
+    # keeps three separate files comparable.
     if figsize is None:
-        figsize = (3.4 * m + 1.2, max(3.5, 0.22 * n)) if orientation == "h" \
-            else (max(7.0, 0.55 * n), 3.2 * m)
-    if orientation == "h":
-        fig, axes = plt.subplots(1, m, figsize=figsize, sharey=True)
-    else:
-        fig, axes = plt.subplots(m, 1, figsize=figsize, sharex=True)
-    axes = np.atleast_1d(axes)
-    for j, lab in enumerate(labels):
-        ax = axes[j]
+        figsize = (4.8, max(3.5, 0.22 * n)) if orientation == "h" \
+            else (max(7.0, 0.55 * n), 3.4)
+    stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
+    axes = {}
+    for lab in labels:
+        fig, ax = plt.subplots(figsize=figsize)
         _draw(ax, lab, None if lab == base else base)
-        _dress(ax, j == 0)
-        # the regime names the panel; it is an in-axes annotation rather than a title so
+        # every figure names its own buyers (there is no leftmost panel to lean on) and
+        # NONE of them names the x axis -- the quantity belongs in the caption.
+        _dress(ax, True, name_zone=(orientation == "h"))
+        if orientation == "v":
+            ax.set_ylabel(lab_v)
+        # the regime names its own figure; an in-axes annotation rather than a title, so
         # the exhibit still carries no title of its own (the paper supplies the caption).
         ax.annotate(lab, xy=(0.98, 0.02), xycoords="axes fraction",
                     ha="right", va="bottom", fontsize=9,
                     color=CF_COLORS.get(lab, toulouse_color))
-    # the shared axis is labelled ONCE, on the middle panel: repeating a long label
-    # under every panel is the crowding the small multiples exist to remove.
-    mid = axes[m // 2]
-    (mid.set_xlabel if orientation == "h" else mid.set_ylabel)(lab_v)
-    fig.tight_layout()
-    if save_to:
-        fig.savefig(save_to, bbox_inches="tight")
+        fig.tight_layout()
+        if stem:
+            slug = re.sub(r"[^a-z0-9]+", "_", str(lab).lower()).strip("_")
+            path = f"{stem}_{slug}{ext or '.pdf'}"
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fig.savefig(path, bbox_inches="tight")
+        axes[lab] = ax
     return axes

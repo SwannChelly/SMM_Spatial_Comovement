@@ -7,7 +7,7 @@ variety by variety FROM the geometry, with equal expenditure across a buyer's va
 That is what makes the central gate real: the measured standard deviation across
 replications and the closed form `sqrt(sum_s theta^2 V p(1-p))` are two routes that share no
 code, and they must agree to the Monte-Carlo scale."""
-import inspect, os, sys, numpy as np, pandas as pd, matplotlib, warnings
+import inspect, os, re, sys, tempfile, numpy as np, pandas as pd, matplotlib, warnings
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
@@ -317,43 +317,58 @@ print(f"8 ok  the report keeps the declared regime order; cell by cell the bar g
       "condition it needs")
 
 # --- 9. the figure ------------------------------------------------------------
-# The default layout is SMALL MULTIPLES, one panel per regime: the overlay put three
-# marks and three bands in every buyer row, and with arms of the order of the
-# between-regime movement they interleave.
+# The default layout is one INDEPENDENT FIGURE per regime: the overlay put three marks
+# and three bands in every buyer row, and with arms of the order of the between-regime
+# movement they interleave. Separate figures then have to be tied together by the
+# WINDOW and the buyer ORDER, since there is no shared axis left to do it.
+_regs = _regime_order(tab, "Both forces")
 axes = plot_local_share_dispersion(tab)
-assert isinstance(axes, np.ndarray) and len(axes) == len(CF_REGIMES)
-for a in axes:
-    assert len(a.containers) == 1                   # ONE mark per row, not three
+assert isinstance(axes, dict) and list(axes) == list(_regs), (list(axes), _regs)
+figs = [a.figure for a in axes.values()]
+assert len({id(f) for f in figs}) == len(_regs), "the regimes still share one figure"
+assert all(len(f.axes) == 1 for f in figs), "a figure carries more than its own regime"
+a0 = axes["Both forces"]
+for a in axes.values():
+    assert len(a.containers) == 1                   # ONE mark per figure, not three
     assert len(a.containers[0][0].get_xdata()) == len(buyers)
-    assert a.get_xlim() == axes[0].get_xlim()       # one shared window, or no comparison
+    assert a.get_xlim() == a0.get_xlim()            # one shared window, or no comparison
     assert a.get_xlim()[0] == 0.0                   # a share has an honest zero
     assert a.get_title() == ""                      # the paper supplies the caption
-# every counterfactual panel carries the baseline as a faint ghost; the baseline panel
+# every counterfactual figure carries the baseline as a faint ghost; the baseline figure
 # does not (it would be the same mark twice)
 _ghosts = lambda a: [l for l in a.lines if l.get_markerfacecolor() == "none"]
-assert _ghosts(axes[0]) == []
-for a in axes[1:]:
-    g = _ghosts(a)
+assert _ghosts(a0) == []
+for lab in _regs[1:]:
+    g = _ghosts(axes[lab])
     assert len(g) == 1
-    assert np.allclose(g[0].get_xdata(),
-                       axes[0].containers[0][0].get_xdata(), atol=1e-12)
-# the regime names its own panel, as an annotation rather than a title
-ann = [t.get_text() for a in axes for t in a.texts]
-assert set(ann) == set(_regime_order(tab, "Both forces")), ann
-# buyer names appear ONCE, on the leftmost panel
-order = [t.get_text() for t in axes[0].get_yticklabels()]
+    assert np.allclose(g[0].get_xdata(), a0.containers[0][0].get_xdata(), atol=1e-12)
+# the regime names its own figure, as an annotation rather than a title
+for lab, a in axes.items():
+    assert [t.get_text() for t in a.texts] == [lab], (lab, [t.get_text() for t in a.texts])
+# every figure names its own buyers, in the baseline order, and they are VISIBLE (there
+# is no leftmost panel to lean on any more)
 want = (tab.loc["Both forces", "local"].sort_values().index.to_numpy())
-assert order == [f"Z{b}" for b in want], (order, want)
-for a in axes[1:]:
-    assert not any(t.get_visible() for t in a.get_yticklabels())
-# the shared axis is labelled once, and the label names the QUANTITY only -- neither the
-# selected sector nor the band descriptor belongs on an axis
-labs = [a.get_xlabel() for a in axes if a.get_xlabel()]
-assert len(labs) == 1, labs
-assert "sector" not in labs[0] and "10-90" not in labs[0] and "sigma" not in labs[0]
+for lab, a in axes.items():
+    order = [t.get_text() for t in a.get_yticklabels()]
+    assert order == [f"Z{b}" for b in want], (lab, order, want)
+    assert all(t.get_visible() for t in a.get_yticklabels()), lab
+# the X AXIS IS NOT NAMED on any of them -- the quantity is the caption's job
+assert all(a.get_xlabel() == "" for a in axes.values()), \
+    [a.get_xlabel() for a in axes.values()]
+# each figure is saved on its OWN file, off `save_to` as a STEM, and nothing is written
+# at the stem itself
+with tempfile.TemporaryDirectory() as _d:
+    _stem = os.path.join(_d, "disp.pdf")
+    plot_local_share_dispersion(tab, save_to=_stem)
+    assert not os.path.exists(_stem), "the stem itself was written"
+    for lab in _regs:
+        _slug = re.sub(r"[^a-z0-9]+", "_", lab.lower()).strip("_")
+        _f = os.path.join(_d, f"disp_{_slug}.pdf")
+        assert os.path.getsize(_f) > 0, _f
+    assert len(os.listdir(_d)) == len(_regs), os.listdir(_d)
 # the drawn arms ARE q10 and q90 in data units, clipped at zero -- there is no other
 # band, so this is the whole contract between the table and the picture
-seg = axes[0].containers[0][2][0].get_segments()
+seg = a0.containers[0][2][0].get_segments()
 base_sorted = tab.loc["Both forces"].reindex(want)
 lo_d = np.array([g[0][0] for g in seg])
 hi_d = np.array([g[1][0] for g in seg])
@@ -366,8 +381,12 @@ assert not isinstance(axo, np.ndarray) and len(axo.containers) == len(CF_REGIMES
 assert axo.get_legend() is not None and axo.get_xlim()[0] == 0.0
 # the vertical layout the plan describes, and the per-sector view
 axv = plot_local_share_dispersion(tab, orientation="v")
-assert len(axv[0].get_xticklabels()) == len(buyers) and axv[0].get_ylim()[0] == 0.0
-assert len([a.get_ylabel() for a in axv if a.get_ylabel()]) == 1
+_v0 = axv["Both forces"]
+assert len(_v0.get_xticklabels()) == len(buyers) and _v0.get_ylim()[0] == 0.0
+# the quantity moves to the y axis there, on EVERY figure, and the x axis -- now the
+# buyer axis -- is again unnamed
+assert all(a.get_ylabel() and not a.get_xlabel() for a in axv.values()), \
+    [(a.get_ylabel(), a.get_xlabel()) for a in axv.values()]
 # the band and per-sector switches are GONE: one figure, one band, no way to ask for
 # a symmetric sd or a single sector by accident
 for gone in ("band", "k", "sector"):
@@ -380,11 +399,12 @@ for bad, kw in ((ValueError, dict(orientation="diagonal")),
     except bad:
         pass
 plt.close("all")
-print("9 ok  small multiples by default -- one series per panel on one shared window, "
-      "buyers named once and ordered by the baseline level, the baseline ghosted in "
-      "every counterfactual panel, an honest zero, the axis label naming the quantity "
-      "alone, the arms equal to q10 and q90 in data units, plus the overlay and the "
-      "vertical layout; `band`, `k` and `sector` are gone from the signature")
+print("9 ok  one INDEPENDENT figure per regime by default -- one series each, its own "
+      "figure and its own file off the stem, buyers named on every one and ordered by "
+      "the baseline level, one shared window, the baseline ghosted in every "
+      "counterfactual figure, an honest zero, NO x-axis label, the arms equal to q10 "
+      "and q90 in data units, plus the overlay and the vertical layout; `band`, `k` "
+      "and `sector` are gone from the signature")
 
 # --- 10. the quantile band and the counting regime ---------------------------
 # The band the figure draws is the empirical 10-90 range, not a symmetric sd. Ordering
@@ -425,7 +445,7 @@ assert np.allclose(dflt["local"], at200["local"], atol=1e-12)
 axq = plot_local_share_dispersion(tab)
 want = tab.loc["Both forces"].reindex(
     tab.loc["Both forces", "local"].sort_values().index)
-segq = axq[0].containers[0][2][0].get_segments()
+segq = axq["Both forces"].containers[0][2][0].get_segments()
 lo_drawn = np.array([g[0][0] for g in segq])
 hi_drawn = np.array([g[1][0] for g in segq])
 assert np.allclose(lo_drawn, np.minimum(want["q10"], want["local"]), atol=1e-9)
