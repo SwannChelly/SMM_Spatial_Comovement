@@ -854,7 +854,10 @@ def gate_comparative_advantage():
         f"one point per sector, got {[len(p.get_xdata()) for p in pts]}"
     assert pts[0].get_linestyle() in ("None", "none", " ", ""), "points must not be joined"
     # the y axis is a plain list of sectors, and each POINT is named with its top area
-    # beside the mark — test 1's form (annotate, offset (6, 4), fontsize 8, ref colour)
+    # beside the mark — test 1's form (annotate, offset (6, 4), fs(8), ref colour). The
+    # size is gated RELATIVE to the body size, not as the literal 8: every figure-local
+    # size in the libraries scales with `font_size`, so a literal would pin this figure
+    # to one base and fail the moment the notebook raises it.
     ticks = [t.get_text() for t in axe.get_yticklabels()]
     assert set(ticks) == set(sector_names) and len(ticks) == S, ticks
     eq_df = NS["ca_distance_equivalence"](data)
@@ -866,7 +869,8 @@ def gate_comparative_advantage():
     assert [t.get_text() for t in named] == want, ([t.get_text() for t in named], want)
     assert [t.xy[1] for t in named] == list(range(S)), [t.xy for t in named]
     assert all(t.get_text().startswith("Zone") for t in named), want
-    assert all(t.get_fontsize() == 8 for t in named)
+    assert all(t.get_fontsize() == NS["fs"](8) for t in named), \
+        [t.get_fontsize() for t in named]
     assert all(tuple(np.round(t.get_position(), 6)) == (6.0, 4.0) for t in named), \
         [t.get_position() for t in named]
     # the paper takes this figure as it stands: no title, and a plain distance label
@@ -1189,7 +1193,9 @@ def gate_amplification():
                                              frames=frames, verbose=False)
     amp = det["amplification"].unstack("regime")
     assert np.allclose(amp.to_numpy(), 1.0 + TOTAL_INPUT_SHARE, atol=1e-12), amp
-    assert "Realised" in amp.columns and set(NS["CF_REGIMES"]) <= set(amp.columns)
+    # the duplicate "Realised" row is gone -- every regime is a re-solved economy, so
+    # the reported set is exactly CF_REGIMES and nothing else
+    assert set(amp.columns) == set(NS["CF_REGIMES"]), list(amp.columns)
 
     # Both switches at once is the uniform 1/n draw. It is no longer a REPORTED regime —
     # `CF_REGIMES` carries the two single switches — but it is still what pins the closed
@@ -1386,9 +1392,9 @@ def gate_amplification():
         fig, barys = NS["barycentre_panel"]([("Motor Vehicles", gdata),
                                              ("Aerospace", gdata)], crs=None,
                                             save_to=str(out / "barycentre_panel.png"))
-        assert np.array(fig.axes).size == 4 * 2, len(fig.axes)
+        assert np.array(fig.axes).size == len(NS["CF_REGIMES"]) * 2, len(fig.axes)
         assert set(barys) == {(n, r) for n in ("Motor Vehicles", "Aerospace")
-                              for r in ["Realised"] + list(NS["CF_REGIMES"])}
+                              for r in NS["CF_REGIMES"]}
         # every panel is drawn in the same window and at the same true scale, which is
         # the only thing that makes a grid of maps comparable panel to panel
         lims = {(tuple(np.round(a.get_xlim(), 6)), tuple(np.round(a.get_ylim(), 6)))
@@ -1396,9 +1402,18 @@ def gate_amplification():
         assert len(lims) == 1, lims
         assert all(q.scale == 1.0 for a in fig.axes for q in a.collections
                    if hasattr(q, "U"))
-        # the realised row must be the realised economy, not a regime redrawn
-        assert np.allclose(barys[("Aerospace", "Realised")]["bary_x"].to_numpy(),
-                           nb_["bary_x"].to_numpy(), equal_nan=True)
+        # each row must BE the frame the panel solved for that regime. The baseline row
+        # is the CLOSED-FORM "Both forces" frame, not the realised draw `diff`: the two
+        # differ by granularity, and gating against the draw would license a panel that
+        # mixes the two routes. That distinction is asserted too, on the same objects.
+        cf_base = NS["counterfactual_frames"](gdata, diffusion=diff,
+                                              verbose=False)["Both forces"]
+        want = NS["sourcing_barycentre"](gdata, diffusion=cf_base, crs=None)
+        assert np.allclose(barys[("Aerospace", "Both forces")]["bary_x"].to_numpy(),
+                           want["bary_x"].to_numpy(), equal_nan=True)
+        assert not np.allclose(want["bary_x"].to_numpy(),
+                               nb_["bary_x"].to_numpy(), equal_nan=True), \
+            "closed form and realised draw coincide -- the gate would be vacuous"
         NS["plt"].close(fig)
         print("barycentre figure: one quiver at true scale, 4 x 2 panel on one window")
 
@@ -1506,7 +1521,7 @@ def gate_amplification():
 
     # the dict form keys one row per (industry, regime) and is what the report prints
     tab = NS["barycentre_shrinkage"]({("auto", "Both forces"): b2,
-                                      ("auto", "Realised"): planted})
+                                      ("auto", "No trade cost"): planted})
     assert tab.shape[0] == 2 and isinstance(tab.index, pd.MultiIndex)
     # too few placeable regions must say so rather than return a slope off two points
     try:
@@ -1763,7 +1778,7 @@ def gate_amplification():
     # regime reached by two different routes, which is what pins the plumbing
     inc_n = NS["incidence_concentration_overlap"](
         data, regimes={"Neither": dict(alpha=0.0, equalise_T=True)},
-        frames=None, diffusion=diff, include_realised=False)
+        frames=None, diffusion=diff)
     assert np.allclose(inc_n.loc["Neither", "n_eff"].to_numpy(),
                        inc_n.loc[NS["UNIFORM_REGIME"], "n_eff"].to_numpy())
     # the sales weighting is a DIFFERENT question and must not silently coincide. It

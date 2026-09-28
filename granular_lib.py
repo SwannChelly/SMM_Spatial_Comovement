@@ -26,9 +26,10 @@ from utils import (
     PORTFOLIO_TAUS, UNIFORM_REGIME,
     _buyer_weights, _by_sector_code, _despine, _downstream_ze_index,
     _n_hat_from_diagnostics, _parquet_sector_index, _region_labels,
-    _sectors_in_code_order, aa_display_names, get_figsize, model_theta,
-    reference_color, sim_color, simulate_economy, sourcing_geometry,
-    toulouse_color, unpack_estimated_T,
+    _sectors_in_code_order, aa_display_names, fs, get_figsize, model_theta,
+    name_axis_fontsize, pct, reference_color, set_name_axis_fontsize, sim_color,
+    simulate_economy,
+    sourcing_geometry, toulouse_color, unpack_estimated_T,
 )
 
 
@@ -109,7 +110,7 @@ def plot_ca_distribution(data, figsize=None, save_to=None, floor_ratio=1e-4):
         top = sub.loc[sub["rank"].idxmin()]
         r_top = 10.0 ** float(top["log10_T_dev"])
         ax.scatter([r_top], [y], s=60, marker="D", color=reference_color, zorder=3)
-        ax.annotate(str(top["area"]), (r_top, y), fontsize=8,
+        ax.annotate(str(top["area"]), (r_top, y), fontsize=fs(8),
                     xytext=(6, 4), textcoords="offset points", color=reference_color)
 
     # set_xscale BEFORE margins: margins computed on a linear axis then reinterpreted in
@@ -137,7 +138,8 @@ def plot_ca_distribution(data, figsize=None, save_to=None, floor_ratio=1e-4):
     ax.xaxis.set_minor_formatter(NullFormatter())
 
     ax.set_yticks(range(len(order)))
-    ax.set_yticklabels(order, fontsize=9)
+    ax.set_yticklabels(order,
+                       fontsize=name_axis_fontsize(ax, len(order), size_at_ref=9))
     ax.set_xlabel(r"$\hat T_{as}$ relative to the sector's median area "
                   r"(ratio, log scale; one decade = one order of magnitude)")
     ax.set_ylabel("Sector")
@@ -253,7 +255,7 @@ def plot_ca_distance_equivalence(data, figsize=None, save_to=None, reference_km=
     ax.plot(km, y, linestyle="none", marker="o", markersize=7, color=reference_color,
             markeredgecolor="black", markeredgewidth=0.5)
     for yi, (x_i, area) in enumerate(zip(km, df["top_area"].astype(str))):
-        ax.annotate(area, (x_i, yi), fontsize=8, xytext=(6, 4),
+        ax.annotate(area, (x_i, yi), fontsize=fs(8), xytext=(6, 4),
                     textcoords="offset points", color=reference_color)
     ax.set_xscale("log")
     ax.set_ylim(-0.6, len(df) - 0.4)
@@ -265,7 +267,7 @@ def plot_ca_distance_equivalence(data, figsize=None, save_to=None, reference_km=
         # to its right runs off the figure
         ax.text(median_km, ax.get_ylim()[1],
                 f"{median_km:,.0f} km ",
-                fontsize=8, va="top", ha="right", color="0.3")
+                fontsize=fs(8), va="top", ha="right", color="0.3")
 
     fmt = LogFormatterSciNotation(base=10.0)
     ax.xaxis.set_major_locator(LogLocator(base=10.0))
@@ -286,7 +288,8 @@ def plot_ca_distance_equivalence(data, figsize=None, save_to=None, reference_km=
         ax.set_xlim(right=max(float(finite.max()), median_km) * 4.0)
 
     ax.set_yticks(y)
-    ax.set_yticklabels(df.index, fontsize=9)
+    ax.set_yticklabels(df.index,
+                       fontsize=name_axis_fontsize(ax, len(df), size_at_ref=9))
     ax.set_xlabel("Distance (km)")
     ax.grid(axis="x", which="major", linestyle="dashed", alpha=0.4)
     _despine(ax)
@@ -381,15 +384,16 @@ def plot_ca_win_margin(data, figsize=None, save_to=None):
                label="within-area distance handicap (best to worst region of that area)")
     ax.axvline(0.0, color="0.6", linewidth=0.8)
     for i, (_, r) in enumerate(df.iterrows()):
-        ax.annotate(f"{100 * r['share_buyers_won']:.0f}% of buyers",
-                    (max(r["mean_win_margin"], 0.0), i), fontsize=8,
+        ax.annotate(f"{100 * r['share_buyers_won']:.0f}{pct()} of buyers",
+                    (max(r["mean_win_margin"], 0.0), i), fontsize=fs(8),
                     xytext=(4, -3), textcoords="offset points")
     ax.set_yticks(y)
-    ax.set_yticklabels(df.index, fontsize=9)
+    ax.set_yticklabels(df.index,
+                       fontsize=name_axis_fontsize(ax, len(df), size_at_ref=9))
     ax.set_xlabel("log distance")
     ax.set_title(f"Does the favoured area actually win? — {data['industry']}, "
-                 rf"$\hat\mu_{data['mu']}$", fontsize=11)
-    ax.legend(frameon=False, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.18))
+                 rf"$\hat\mu_{data['mu']}$", fontsize=fs(11))
+    ax.legend(frameon=False, fontsize=fs(8), loc="upper center", bbox_to_anchor=(0.5, -0.18))
     _despine(ax)
     fig.tight_layout()
     if save_to:
@@ -792,10 +796,10 @@ def plot_spatial_alignment(data, buyer=None, n_label=4, figsize=None, save_to=No
 
     if n_label:
         for _, r in fr.assign(_x=x, _y=y).nlargest(int(n_label), "weight").iterrows():
-            ax.annotate(str(r["area"]), (r["_x"], r["_y"]), fontsize=8,
+            ax.annotate(str(r["area"]), (r["_x"], r["_y"]), fontsize=fs(8),
                         xytext=(6, 4), textcoords="offset points", color=reference_color)
     ax.annotate(rf"${b:+.0f}$ km per log point", (0.03, 0.05), xycoords="axes fraction",
-                fontsize=9, color="0.25")
+                fontsize=fs(9), color="0.25")
     ax.set_xlabel(r"Comparative advantage $\log \hat{T}$ (deviation)")
     ax.set_ylabel("Distance to the buyer (km, deviation)")
     _despine(ax)
@@ -1076,11 +1080,11 @@ def plot_alignment_correlation(datasets, statistic="cov_km", weights=None, bins=
         (r"$\mathrm{Corr}_l(\log \hat T_{a(l)s},\ \log d_{lr})$ "
          f"at one {unit}"))
     ax.set_ylabel("Density")
-    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.legend(frameon=False, fontsize=fs(8), loc="upper left")
     if annotate:
-        txt = "\n".join(f"{name}: {float((fr[col] > 0).mean()):.0%} positive"
+        txt = "\n".join(f"{name}: {100 * float((fr[col] > 0).mean()):.0f}{pct()} positive"
                         for name, fr in frs.items())
-        ax.text(0.98, 0.97, txt, transform=ax.transAxes, fontsize=8, va="top",
+        ax.text(0.98, 0.97, txt, transform=ax.transAxes, fontsize=fs(8), va="top",
                 ha="right", color="0.25")
     _despine(ax)
     fig.tight_layout()
@@ -1262,10 +1266,11 @@ def plot_alignment_covariance(datasets, weights="rho", bins=24, frames=None, col
                   f"(km per log point) at one {unit}")
     ax.set_ylabel("Density")
     ax.set_ylim(bottom=0.0)
-    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.legend(frameon=False, fontsize=fs(8), loc="upper left")
     if annotate:
-        txt = "\n".join(f"{n}: {float((v > 0).mean()):.0%} positive" for n, v in vals.items())
-        ax.text(0.98, 0.97, txt, transform=ax.transAxes, fontsize=8, va="top",
+        txt = "\n".join(f"{n}: {100 * float((v > 0).mean()):.0f}{pct()} positive"
+                        for n, v in vals.items())
+        ax.text(0.98, 0.97, txt, transform=ax.transAxes, fontsize=fs(8), va="top",
                 ha="right", color="0.25")
     _despine(ax)
     fig.tight_layout()
@@ -2261,8 +2266,13 @@ def plot_buyer_granular_concentration(table, baseline="Both forces", units="pct"
         wide = wide[[baseline] + labels]
         labels = list(wide.columns)
 
+    # A ROW must hold a buyer's NAME as well as its marks, so the per-row height is the
+    # larger of the two demands. Sizing it off the mark count alone leaves ~12pt a row
+    # once a regime is dropped, which no name fits into; 0.28 in is the row height the
+    # other per-buyer figures use.
     fig, ax = plt.subplots(
-        figsize=figsize or (9, max(3.5, 0.085 * max(len(labels), 1) * len(wide))))
+        figsize=figsize or (9, max(3.5, max(0.28, 0.085 * max(len(labels), 1))
+                                   * len(wide))))
     y = np.arange(len(wide))
     height = 0.8 / max(len(labels), 1)
     palette = dict(CF_COLORS)
@@ -2298,26 +2308,28 @@ def plot_buyer_granular_concentration(table, baseline="Both forces", units="pct"
         ax.axvline(0.0, color="0.35", linewidth=1.0, zorder=3)
     ax.set_yticks(y)
     ax.set_yticklabels(names.astype(str))
+    set_name_axis_fontsize(ax, len(wide))
     ax.set_ylim(-0.6, len(wide) - 0.4)
     ax.set_xlim(lo, hi)
     qsym = ("$\\mathbb{E}_\\Omega[H_r]$" if quantity == "h"
             else "$1/\\mathbb{E}_\\Omega[H_r]$")
     qname = ("Concentration of the supplier portfolio" if quantity == "h"
              else "Effective number of supplier commuting zones")
-    ax.set_xlabel(f"Change in {qname.lower()} {qsym} (% of {baseline})"
+    ax.set_xlabel(f"Change in {qname.lower()} {qsym} ({pct()} of {baseline})"
                   if units == "pct" else f"{qname} {qsym}")
-    ax.set_ylabel("Commuting zone")
     ax.grid(alpha=0.2, axis="x")
     if units == "pct" and annotate_level:
+        # one entry per row, like the names on the left, so it takes the same cap
+        margin_size = name_axis_fontsize(ax, len(wide), size_at_ref=7.5)
         for yi, i in enumerate(wide.index):
             ax.annotate(f"{base.loc[i]:.3f}" if quantity == "h"
                         else f"{base.loc[i]:.1f}", xy=(1.005, yi),
                         xycoords=("axes fraction", "data"), va="center", ha="left",
-                        fontsize=7.5, color="0.35", annotation_clip=False)
+                        fontsize=margin_size, color="0.35", annotation_clip=False)
         ax.annotate(f"{baseline}\n{qsym}", xy=(1.005, 1.005),
-                    xycoords="axes fraction", va="bottom", ha="left", fontsize=7.5,
-                    color="0.35", annotation_clip=False)
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+                    xycoords="axes fraction", va="bottom", ha="left",
+                    fontsize=margin_size, color="0.35", annotation_clip=False)
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     fig.tight_layout()
     if save_to:
         fig.savefig(save_to, bbox_inches="tight")
@@ -2490,8 +2502,13 @@ def plot_buyer_region_reach(table, baseline="Both forces", units="level", order=
         labels = [baseline] + labels
         wide = wide[labels]
 
+    # A ROW must hold a buyer's NAME as well as its marks, so the per-row height is the
+    # larger of the two demands. Sizing it off the mark count alone leaves ~12pt a row
+    # once a regime is dropped, which no name fits into; 0.28 in is the row height the
+    # other per-buyer figures use.
     fig, ax = plt.subplots(
-        figsize=figsize or (9, max(3.5, 0.085 * max(len(labels), 1) * len(wide))))
+        figsize=figsize or (9, max(3.5, max(0.28, 0.085 * max(len(labels), 1))
+                                   * len(wide))))
     y = np.arange(len(wide))
     palette = dict(CF_COLORS)
     palette.setdefault(INFINITE_REGIME, (0.55, 0.45, 0.65))
@@ -2511,23 +2528,26 @@ def plot_buyer_region_reach(table, baseline="Both forces", units="level", order=
         ax.axvline(0.0, color="0.35", linewidth=1.0, zorder=3)
     ax.set_yticks(y)
     ax.set_yticklabels(names.astype(str))
+    set_name_axis_fontsize(ax, len(wide))
     ax.set_ylim(-0.6, len(wide) - 0.4)
     ax.set_xlim(lo, hi)
     ax.set_xlabel("Number of upstream commuting zones supplying the buyer"
                   if units == "level" else
-                  f"Change in the number of upstream commuting zones (% of {baseline})")
-    ax.set_ylabel("Commuting zone")
+                  f"Change in the number of upstream commuting zones "
+                  f"({pct()} of {baseline})")
     ax.grid(alpha=0.2, axis="x")
     if annotate_level and "support" in table.columns:
         sup = table["support"].groupby(level="ze2010_downstream").max().reindex(wide.index)
+        # one entry per row, like the names on the left, so it takes the same cap
+        margin_size = name_axis_fontsize(ax, len(wide), size_at_ref=7.5)
         for yi, i in enumerate(wide.index):
             ax.annotate(f"{sup.loc[i]:.0f}", xy=(1.005, yi),
                         xycoords=("axes fraction", "data"), va="center", ha="left",
-                        fontsize=7.5, color="0.35", annotation_clip=False)
+                        fontsize=margin_size, color="0.35", annotation_clip=False)
         ax.annotate("Reachable\nzones", xy=(1.005, 1.005), xycoords="axes fraction",
-                    va="bottom", ha="left", fontsize=7.5, color="0.35",
+                    va="bottom", ha="left", fontsize=margin_size, color="0.35",
                     annotation_clip=False)
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     fig.tight_layout()
     if save_to:
         fig.savefig(save_to, bbox_inches="tight")
@@ -3147,7 +3167,8 @@ def plot_concentration_decomposition(tables, variety=None, figsize=None,
                     edgecolor="white", linewidth=0.4)
             left = left + v
         ax.set_yticks(y)
-        ax.set_yticklabels([str(r.sector_name) for r in t.itertuples()], fontsize=8)
+        ax.set_yticklabels([str(r.sector_name) for r in t.itertuples()],
+                           fontsize=name_axis_fontsize(ax, len(t), size_at_ref=8))
         ax.set_ylim(-0.6, len(t) - 0.4)
         ax.set_xlim(0, 1)
         ax.set_xlabel(r"Share of $E[\bar H_s]$")
@@ -3169,9 +3190,9 @@ def plot_concentration_decomposition(tables, variety=None, figsize=None,
         # then the panel title -- which is therefore set on the TWIN with an explicit
         # pad. Setting it on the primary axis puts it at the primary's own top, where
         # matplotlib does not see the twin's ticks or label, and the three collide.
-        tw.set_xlabel("Varieties per sector", fontsize=8, color="0.35", labelpad=2)
-        tw.set_title(label, fontsize=10, pad=26)
-        tw.tick_params(axis="x", colors="0.35", labelsize=8, pad=1)
+        tw.set_xlabel("Varieties per sector", fontsize=fs(8), color="0.35", labelpad=2)
+        tw.set_title(label, fontsize=fs(10), pad=26)
+        tw.tick_params(axis="x", colors="0.35", labelsize=fs(8), pad=1)
         for side in ("left", "right"):
             tw.spines[side].set_visible(False)
         if ax is axes[0][0]:
@@ -3186,7 +3207,7 @@ def plot_concentration_decomposition(tables, variety=None, figsize=None,
     # lands on the bottom rows' data whatever the `loc`.
     h, l = axes[0][0].get_legend_handles_labels()
     h, l = h + mark_h, l + mark_l
-    fig.legend(h, l, frameon=False, fontsize=8, ncol=min(len(h), 3 * n),
+    fig.legend(h, l, frameon=False, fontsize=fs(8), ncol=min(len(h), 3 * n),
                loc="lower center", bbox_to_anchor=(0.5, 1.0), borderaxespad=0.0,
                columnspacing=1.6, handlelength=1.4)
     if save_to:
@@ -3220,7 +3241,7 @@ def plot_buyer_concentration(tables, regime="Both forces", sort_by="n_eff",
                     color=sim_color if j == 0 else toulouse_color)
             ax.set_yticks(y)
             ax.set_yticklabels(t["region"].astype(str) if "region" in t else t.index,
-                               fontsize=7)
+                               fontsize=name_axis_fontsize(ax, len(t), size_at_ref=7))
             if j:
                 ax.set_yticklabels([])
                 ax.axvline(1.0, color="0.4", lw=0.8, ls="--")
@@ -3229,7 +3250,7 @@ def plot_buyer_concentration(tables, regime="Both forces", sort_by="n_eff",
             ax.grid(alpha=0.2, axis="x")
             for side in ("top", "right"):
                 ax.spines[side].set_visible(False)
-        axes[0][2 * k].set_title(label, fontsize=10, loc="left")
+        axes[0][2 * k].set_title(label, fontsize=fs(10), loc="left")
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -3553,16 +3574,17 @@ def plot_portfolio_decomposition(tables, tau=None, figsize=None, save_to=None):
         ax.plot(cb + t["delta_null_mean"].to_numpy(dtype=float), y, "D", ms=5, mfc="white",
                 color="0.35", label="rewiring null", zorder=3)
         ax.set_yticks(y)
-        ax.set_yticklabels([str(r.sector_name) for r in t.itertuples()], fontsize=8)
+        ax.set_yticklabels([str(r.sector_name) for r in t.itertuples()],
+                           fontsize=name_axis_fontsize(ax, len(t), size_at_ref=8))
         ax.set_ylim(-0.6, len(t) - 0.4)
         ax.set_xlabel("cosine similarity of customer portfolios")
-        ax.set_title(label, fontsize=10)
+        ax.set_title(label, fontsize=fs(10))
         ax.grid(alpha=0.2, axis="x")
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
     fig.tight_layout()
     h, l = axes[0][0].get_legend_handles_labels()
-    fig.legend(h, l, frameon=False, fontsize=8, ncol=3, loc="lower center",
+    fig.legend(h, l, frameon=False, fontsize=fs(8), ncol=3, loc="lower center",
                bbox_to_anchor=(0.5, 1.0), borderaxespad=0.0)
     if save_to:
         fig.savefig(save_to, bbox_inches="tight")
@@ -4050,18 +4072,16 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
         # the whole shared group and would blank the leftmost panel too.
         if orientation == "h":
             ax.set_yticks(pos); ax.set_yticklabels(names)
+            set_name_axis_fontsize(ax, n)
             ax.tick_params(axis="y", labelleft=first)
             ax.set_ylim(-0.6, n - 0.4); ax.set_xlim(*lim)
             ax.grid(alpha=0.2, axis="x")
-            if first:
-                ax.set_ylabel("Commuting zone")
         else:
             ax.set_xticks(pos); ax.set_xticklabels(names, rotation=90)
+            set_name_axis_fontsize(ax, n, axis="x")
             ax.tick_params(axis="x", labelbottom=first)
             ax.set_xlim(-0.6, n - 0.4); ax.set_ylim(*lim)
             ax.grid(alpha=0.2, axis="y")
-            if first:
-                ax.set_xlabel("Commuting zone")
 
     def _draw(ax, lab, ghost):
         c = CF_COLORS.get(lab, toulouse_color)
@@ -4099,7 +4119,7 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
                 ax.errorbar(pos + off, v, yerr=e, **kw)
         _dress(ax, True)
         (ax.set_xlabel if orientation == "h" else ax.set_ylabel)(lab_v)
-        ax.legend(frameon=False, fontsize=8, loc="best")
+        ax.legend(frameon=False, fontsize=fs(8), loc="best")
         fig.tight_layout()
         if save_to:
             fig.savefig(save_to, bbox_inches="tight")
@@ -4120,7 +4140,7 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
         # the regime names the panel; it is an in-axes annotation rather than a title so
         # the exhibit still carries no title of its own (the paper supplies the caption).
         ax.annotate(lab, xy=(0.98, 0.02), xycoords="axes fraction",
-                    ha="right", va="bottom", fontsize=9,
+                    ha="right", va="bottom", fontsize=fs(9),
                     color=CF_COLORS.get(lab, toulouse_color))
     # the shared axis is labelled ONCE, on the middle panel: repeating a long label
     # under every panel is the crowding the small multiples exist to remove.
