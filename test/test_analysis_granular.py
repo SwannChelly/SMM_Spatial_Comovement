@@ -775,7 +775,7 @@ def run_checks(ns, ROOT, exp):
     check("best_params is the stage-K parameter column",
           g["best_params"] is not None and g["best_params"].ndim == 1)
     check("optional geography degrades to None when absent",
-          g["france"] is None and g["ref"] is None and g["suppliers"] is None)
+          g["france"] is None and g["suppliers"] is None)
     check("G_K.csv read through the `G` column (real layout: group, A129, G, K, N_supplier_s)",
           close(g["G_target"], exp["G_target"]))
     check("N_supplier_s read", close(g["N_supplier_s"], exp["N_supplier_s"]))

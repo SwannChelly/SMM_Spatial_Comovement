@@ -57,7 +57,7 @@ for k in ("best_simulated_moments", "J", "Sigma_data", "Omega", "suppliers",
           "se_empirical", "G_curve_sim"):
     assert data[k] is None, f"{k} was read although its part was not asked for"
 assert data["best_params"] is not None and data["post_hoc_N_hat"] is not None
-assert data["distances"] is not None, "geography was asked for"
+assert data["regional_wage"] is not None, "geography was asked for"
 assert data["G_target"] is not None and np.isnan(data["G_target"]).all(), \
     "counts were not asked for, so Gbar_s(0) must come back empty rather than read"
 # and asking for a part whose files are absent must FAIL rather than pass quietly

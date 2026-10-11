@@ -503,7 +503,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                               inference  Sigma_data / Sigma_sim / Omega / W_step3 and the
                                          fitted-moment standard errors
                               jacobian   jacobian_all*.npy and its axes
-                              geography  distances, france.gpkg, regional wages
+                              geography  france.gpkg, regional wages
                               firm       suppliers.parquet and Julia's own draws --
                                          needed ONLY by `check_against_julia`, since the
                                          economy is simulated here from `theta+`
@@ -521,7 +521,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
 
     which binds `input_folder`, `folder`, `coefs`, `agg_labor_share`, `epsilon`,
     `agg_industry_share`, `emp_pi_r`, `reg_coef`, `emp_gamma_ls`, `X_dr`,
-    `filter_N_upstream_df`, `distances`, `france`, `ref`, `idf_ze`, `N_downstream`,
+    `filter_N_upstream_df`, `france`, `idf_ze`, `N_downstream`,
     `regional_wage`, `best_params`, `best_simulated_moments`,
     `suppliers`, `empirical_moments`, `empirical_moments_dict`
     and `best_simulated_moments_dict` under the same names the old notebook used —
@@ -1017,21 +1017,11 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         except Exception:
             return None
 
-    distances = regional_wage = france = None
+    regional_wage = france = None
     if "geography" in parts:
-        distances = _opt(np.load, input_folder / "full_distances.npy")
         regional_wage = _opt(np.load, input_folder / "regional_wages.npy")
         france = None if gpd is None else _opt(
             lambda: gpd.read_file(input_folder / "france.gpkg", encoding="utf-8").sort_values(by="ze2010"))
-    ref = None
-    if france is not None and distances is not None:
-        def _build_ref():
-            n = len(france)
-            r = pd.DataFrame(distances[:n, :n], index=france["ze2010"].values,
-                             columns=france["ze2010"].values).reset_index()
-            r.rename(columns={"index": "ze2010_i"}, inplace=True)
-            return r.melt(id_vars="ze2010_i", var_name="ze2010_j", value_name="M_ij")
-        ref = _opt(_build_ref)
 
     # Firm-level artefacts. main.jl writes them into the STEP folder of the estimate
     # they were computed at — step1 for theta_hat_1, step3 for theta_hat_2 — so `mu`
@@ -1108,7 +1098,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # (`best_simulated_moments_dict[key][..., K]`)
         "best_simulated_moments_dict": stage_blocks,
         # geography / panels (None when the file is absent)
-        "idf_ze": idf_ze, "distances": distances, "france": france, "ref": ref,
+        "idf_ze": idf_ze, "france": france,
         "regional_wage": regional_wage, "N_downstream": N_downstream,
         "suppliers": suppliers, "suppliers_path": suppliers_path, "w_srd_r": w_srd_r,
         "suppliers_continuum": suppliers_continuum, "post_hoc_N_hat": post_hoc_N_hat,
