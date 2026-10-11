@@ -334,7 +334,7 @@ as `T_{r's}` scales ×0.25 … ×8.)
 Each of the following is stated in the indicative and is *not* computed anywhere in the
 note or the repo artefacts it cites:
 - L531–535: "`N^0_s` … is a small number in aerospace … and a substantially larger one in
-  motor vehicles." Not computed. It *is* computable from `X_rs.npy` alone (see I4) and
+  motor vehicles." Not computed. It *is* computable from `emp_gamma_ls.npy` alone (see I4) and
   should simply be computed.
 - L553–554: "These suppliers are small." No support.
 - L555–559: "The large aerospace suppliers should therefore be *more* multi-homing than the

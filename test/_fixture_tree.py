@@ -19,13 +19,13 @@ def build(seed=11):
     os.makedirs(inp); os.makedirs(os.path.join(run, "step3"))
 
     filt = np.zeros((S, R), dtype=int); filt[:, :6] = 1
-    X_rs = np.zeros((S, R)); X_rs[:, :4] = rng.uniform(1, 5, (S, 4))
+    rng.uniform(1, 5, (S, 4))   # kept so every later draw of the stream is unchanged
     AA = np.zeros((R, R_D), dtype=int)
     for r in range(R):
         AA[r, r % R_D] = 1
     emp_gamma = np.zeros((S, R)); emp_gamma[:, :6] = rng.uniform(0.05, 0.5, (S, 6))
+    emp_gamma[:, 4:6] = 0.0     # columns 4-5: control cells (filter == 1, no observed supplier)
     np.save(f"{inp}/filter_N_upstream.npy", filt)
-    np.save(f"{inp}/X_rs.npy", X_rs)
     np.save(f"{inp}/attraction_area_linkages.npy", AA)
     np.save(f"{inp}/emp_gamma_ls.npy", emp_gamma)
     np.save(f"{inp}/input_share.npy", rng.dirichlet(np.ones(S)))
@@ -55,7 +55,7 @@ def build(seed=11):
 
     n_T = 0
     aa_of_ze = AA.argmax(axis=1)
-    sup_cells = (filt == 1) & (X_rs > 0)
+    sup_cells = (filt == 1) & (emp_gamma > 0)
     AA_ACTIVE = np.zeros((S, R_D), dtype=bool)
     for s in range(S):
         AA_ACTIVE[s, aa_of_ze[sup_cells[s]]] = True

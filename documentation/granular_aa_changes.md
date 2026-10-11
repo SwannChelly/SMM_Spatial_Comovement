@@ -146,7 +146,7 @@ ZE-level files and errors out under `:aa`, where the file must already match.
 
 | File | Change |
 |---|---|
-| `filter_N_upstream.npy` | now **binary**. Control cell ⟺ `filter == 1 & X_rs == 0` (was status 2). `supplier_cells = (filter .== 1) .& (X_rs .> 0)` is unchanged, so the legacy path needed no edit |
+| `filter_N_upstream.npy` | now **binary**. Control cell ⟺ `filter == 1 & γ_ls == 0` (was status 2). `supplier_cells = (filter .== 1) .& (emp_gamma_ls .> 0)` is unchanged, so the legacy path needed no edit |
 | `attraction_area_linkages.npy` | new, `(R, R_downstream)` binary. Three load-time assertions; the decisive one is `argmax_col == CLOSEST_DOWNSTREAM_REGION` — the model's fixed effect and the empirical `A129_AA` grouping must be the SAME partition |
 | `G_K.csv` | new. `G(0)` → `G_TARGET`; `N_supplier_s` → `N_HI`, and `N_LO = ⌈N_supplier_s / R_downstream⌉` |
 | `Sigma_*` | β → γ → G layout, `Sigma_aa_` prefix under `:aa` (§5) |

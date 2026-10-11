@@ -14,8 +14,8 @@
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1 — RAW DATA LOADING
-# Reads the per-industry empirical inputs (wages, shares, distances, firm counts,
-# sourcing matrix X_rs) from disk. Nothing is broadcast to workers yet.
+# Reads the per-industry empirical inputs (wages, shares, distances, firm counts)
+# from disk. Nothing is broadcast to workers yet.
 # ═══════════════════════════════════════════════════════════════════════════
 
 coefs                         = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
@@ -31,7 +31,6 @@ regional_wages_local .= ifelse.(regional_wages_local .!= 0, regional_wages_local
 N_downstream_per_region_local = NPZ.npzread(joinpath(input_folder, "N_downstream_per_region.npy"))
 agg_industry_share_local      = NPZ.npzread(joinpath(input_folder, "input_share.npy"))
 domestic_share_local          = NPZ.npzread(joinpath(input_folder, "domestic_share.npy"))
-X_rs_local                    = NPZ.npzread(joinpath(input_folder, "X_rs.npy")) # X_rs has shape (S,R)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 2 — FIXED STRUCTURAL PARAMETERS (CALIBRATION)
@@ -269,6 +268,15 @@ emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_l
 # target derived from it — the same matrix under :ze, the AA aggregate under :aa.
 @everywhere const emp_gamma_ls = $(emp_gamma_ls_local)
 
+# Observed-supplier support, (S, R_full): a cell has supplier sales in the data ⟺ its
+# observed sourcing share is positive. γ_ls is the cell's sales divided by a positive
+# sector total, so its sign IS the sign of the sales — the support and the γ target
+# come from one file and agree by construction.
+observed_supplier_local = permutedims(emp_gamma_ls_local) .> 0
+size(observed_supplier_local) == size(filter_N_upstream_local) || error(
+    "emp_gamma_ls.npy is $(size(observed_supplier_local)) (S, R) but filter_N_upstream.npy is " *
+    "$(size(filter_N_upstream_local)); both must be built on the same (sector, ZE) grid.")
+
 # ── Projective (domestic-share-balanced) γ target for the Sinkhorn inversion ──
 # The observed γ_ls are DOMESTIC sourcing shares: per sector they sum to
 # domestic_share[s] < 1 (the rest is imported / out-of-system), NOT to 1. The
@@ -301,8 +309,8 @@ emp_gamma_ls_tilde_local = emp_gamma_ls_local ./ reshape(max.(domestic_share_loc
 # ── Cells with OBSERVED SUPPLIER SALES ──────────────────────────────────────
 # `filter_N_upstream` is BINARY: 1 ⟺ the (sector, ZE) cell enters the optimisation,
 # 0 ⟺ it is dropped (no firms). Within the kept cells,
-#   supplier cell ⟺ filter == 1 AND X_rs  > 0
-#   control  cell ⟺ filter == 1 AND X_rs == 0   (firms, but no observed supplier)
+#   supplier cell ⟺ filter == 1 AND γ_ls  > 0
+#   control  cell ⟺ filter == 1 AND γ_ls == 0   (firms, but no observed supplier)
 #
 # `supplier_cells` is therefore "the cells with supplier sales IN THE DATA". It plays
 # two distinct roles and it is worth keeping them apart:
@@ -312,7 +320,7 @@ emp_gamma_ls_tilde_local = emp_gamma_ls_local ./ reshape(max.(domestic_share_loc
 #       attraction areas host at least one supplier in a sector. The cells actually
 #       put into the optimisation are all of `filter == 1` inside those areas
 #       (CELL_MASK below), control cells included, because they inherit T_{s,a} > 0.
-supplier_cells_local = (filter_N_upstream_local .== 1) .& (X_rs_local .> 0)  # (S, R_full)
+supplier_cells_local = (filter_N_upstream_local .== 1) .& observed_supplier_local  # (S, R_full)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 3b — ATTRACTION AREAS, CELL SET, AND THE T-COLUMN SPACE
@@ -372,7 +380,7 @@ n_AA_local = R_down_
 # sector dimension must be carried through (plan §2).
 aa_active_local = falses(S_, n_AA_local)
 for s in 1:S_, l in 1:R_full
-    if filter_N_upstream_local[s, l] == 1 && X_rs_local[s, l] > 0
+    if filter_N_upstream_local[s, l] == 1 && observed_supplier_local[s, l]
         aa_active_local[s, aa_of_ze_local[l]] = true
     end
 end
@@ -457,26 +465,26 @@ SECTOR_T_COLS_local = [findall(view(T_active_local, s, :)) for s in 1:S_]
 @everywhere const SECTOR_T_COLS = $SECTOR_T_COLS_local
 
 # ── Control cells: kept by the filter but with no observed supplier ──────────
-# NEW BINARY ENCODING: control cell ⟺ filter == 1 AND X_rs == 0 (the old status-2).
+# NEW BINARY ENCODING: control cell ⟺ filter == 1 AND γ_ls == 0 (the old status-2).
 #   :ze — comparative advantage is null there (T ≡ 0): NOT simulated, no T/γ/π_r
 #         moment; they enter the extensive-margin regression only, as extra y=0
 #         observations at their distance bin (see fast_weighted_regression).
 #   :aa — they inherit their area's T_{s,a} > 0 and ARE simulated as ordinary goods
 #         (they are in CELL_MASK), so the appended y=0 rows would double-count them;
 #         the regression's control-row path is switched off (REG_INCLUDE_CONTROL).
-control_indices_local = findall((filter_N_upstream_local .== 1) .& (X_rs_local .== 0))
+control_indices_local = findall((filter_N_upstream_local .== 1) .& .!observed_supplier_local)
 CONTROL_S_local       = [ci[1] for ci in control_indices_local]
 CONTROL_R_local       = [ci[2] for ci in control_indices_local]
 n_control_local       = length(control_indices_local)
 @everywhere const CONTROL_S = $CONTROL_S_local
 @everywhere const CONTROL_R = $CONTROL_R_local
 @everywhere const N_CONTROL = $n_control_local
-println("Control cells (filter==1 & X_rs==0): $n_control_local " *
+println("Control cells (filter==1 & γ_ls==0): $n_control_local " *
         (ca_level_local == :aa ? "(simulated as ordinary goods under :aa)." :
                                  "(extensive-margin y=0 observations, not simulated)."))
 # ── Per-sector composition of the estimated set ─────────────────────────────
 # The three counts that determine what the estimator is actually fitting:
-#   ZE active  — cells with observed supplier sales (X_rs > 0)
+#   ZE active  — cells with observed supplier sales (γ_ls > 0)
 #   ZE control — cells kept by the filter with NO observed supplier. Under :ze these
 #                are extensive-margin y=0 rows only; under :aa they are SIMULATED,
 #                inherit T_{s,a} > 0, and their zeros become model predictions —

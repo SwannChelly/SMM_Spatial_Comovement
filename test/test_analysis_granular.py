@@ -67,7 +67,7 @@ def _build_industry(ROOT, industry, sectors):
 
     # ---- filter / trade: sector 3 has an EMPTY attraction area (AA 2) ---------
     filter_N = np.zeros((S, R), dtype=np.int64)
-    X_rs = np.zeros((S, R))
+    supp_mask = np.zeros((S, R), dtype=bool)          # observed supplier cells
     for s in range(S):
         keep = RNG.random(R) < 0.75
         keep[aa_of_ze == 0] = True                      # AA 0 always populated
@@ -76,13 +76,14 @@ def _build_industry(ROOT, industry, sectors):
         filter_N[s, keep] = 1
         supp = keep & (RNG.random(R) < 0.8)
         supp[np.flatnonzero(keep)[0]] = True            # at least one supplier
-        X_rs[s, supp] = RNG.uniform(1.0, 10.0, supp.sum())
-    # control cells: filter == 1 but X_rs == 0 (goods under :aa, zero observed gamma)
+        supp_mask[s] = supp
+        RNG.uniform(1.0, 10.0, supp.sum())             # kept so the RNG stream is unchanged
+    # control cells: filter == 1 but gamma == 0 (goods under :aa, zero observed gamma)
 
     domestic_share = RNG.uniform(0.55, 0.9, S)
     emp_gamma_ls = np.zeros((S, R))
     for s in range(S):
-        supp = X_rs[s] > 0
+        supp = supp_mask[s]
         w = RNG.uniform(0.2, 1.0, supp.sum())
         emp_gamma_ls[s, supp] = w / w.sum() * domestic_share[s]
 
@@ -112,7 +113,6 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/input_share.npy", agg_industry_share)
     np.save(f"{BASE}/emp_gamma_ls.npy", emp_gamma_ls)
     np.save(f"{BASE}/filter_N_upstream.npy", filter_N)
-    np.save(f"{BASE}/X_rs.npy", X_rs)
     np.save(f"{BASE}/domestic_share.npy", domestic_share)
     np.save(f"{BASE}/N_downstream_per_region.npy", N_downstream)
     np.save(f"{BASE}/attraction_area_linkages.npy", AA_link)
@@ -147,7 +147,7 @@ def _build_industry(ROOT, industry, sectors):
                  ).to_csv(f"{BASE}/G_K_var.csv", index=False)
 
     # ---- the model-side structures the loader must rebuild ---------------------
-    supplier = (filter_N == 1) & (X_rs > 0)
+    supplier = (filter_N == 1) & (emp_gamma_ls > 0)
     AA_ACTIVE = np.zeros((S, R_D), dtype=bool)
     for s in range(S):
         AA_ACTIVE[s, aa_of_ze[supplier[s]]] = True
@@ -760,7 +760,7 @@ def run_checks(ns, ROOT, exp):
     g.update(d2)
     for name in ("input_folder", "folder", "coefs", "agg_labor_share", "epsilon",
                  "agg_industry_share", "emp_pi_r", "reg_coef", "emp_gamma_ls", "X_dr",
-                 "X_rs", "filter_N_upstream_df", "idf_ze", "N_downstream", "K",
+                 "filter_N_upstream_df", "idf_ze", "N_downstream", "K",
                  "empirical_moments", "empirical_moments_dict", "best_simulated_moments",
                  "best_simulated_moments_dict", "best_params", "n_coef", "industry",
                  "emp_gamma_aa", "aa_names", "AA_ACTIVE", "G_target"):

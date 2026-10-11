@@ -405,7 +405,7 @@ All of the following are computable from artefacts the estimation already writes
 | 2 | Customers served | $n_i$; and $\sum_r \hat\gamma_{r'rs}$, $\sum_r \hat\gamma/\hat q$ in closed form | firm | parquet; $\hat\gamma$, $\hat q$ |
 | 3 | Intensive margin | $CV_i$ from (4) | firm | parquet |
 | 4 | Cell portfolio | $N_{r's} = 1/\sum_r (w_r^{sr'd})^2$ | cell | `w_srd_r.npy`, or $\hat\gamma\times X$ |
-| 5 | **Realised diversification** $\mathcal K$ | $N_{r's}/N^0_s$, $N^0_s \equiv 1/\sum_r \bar m_{rs}^2$ **at $\alpha = 0$** (so $\bar m = \bar X_{\cdot s}$) | cell | `X_rs.npy` |
+| 5 | **Realised diversification** $\mathcal K$ | $N_{r's}/N^0_s$, $N^0_s \equiv 1/\sum_r \bar m_{rs}^2$ **at $\alpha = 0$** (so $\bar m = \bar X_{\cdot s}$) | cell | `emp_gamma_ls.npy` |
 | 6 | Portfolio similarity | $\cos\angle(w^{r'}, w^{l})$, and its distance profile | cell pair | closed form |
 | 7 | Aggregation gain | equation (5) | cell | parquet |
 | 8 | Local volatility | $\zeta_{r'}^2 H^M_{r'}$ | region | $M$ |
@@ -456,7 +456,7 @@ The paper's existing sentence, that hub regions "act as aggregators of network-d
 
 **Independence of downstream shocks.** Proposition 1's identification of variance with the Herfindahl requires $\Sigma_{dd} = \sigma^2 I$. Motor vehicles and aerospace are subject to large industry-wide shocks; with a common factor, every portfolio loads on it and all effective numbers collapse toward 1. The statistics should therefore be presented as applying to the *idiosyncratic regional* component of downstream demand — which is also the component the paper's counterfactual shocks (EV eco-score, military procurement) are designed to isolate. As a robustness exercise, report $a_i'\hat\Sigma a_i$ for an estimated $\hat\Sigma$ beside $\sigma^2 H_i$; Proposition 1's first line is stated for a general $\Sigma_{dd}$ precisely so that this is available.
 
-**$a_{ir}$ is a model object.** The estimation observes the extensive margin at the industry level ($\mathrm{Sup}_i$), the count distribution $G_s(K)$, and the regional sourcing shares $\gamma_{ls}$ aggregated over buyers — not the bilateral supplier $\times$ buyer matrix. The firm-level portfolio is therefore *not* directly measurable in the data, and the diversification statistics are model output. This is exactly why §5 matters: the untargeted moment $\delta/\gamma$ is the observable that disciplines them, and (18) is the map. Statistics that *are* observable should be flagged as such and separated from the rest in the table: $N^0_s$ at $\alpha = 0$ needs only `X_rs.npy`, whereas the buyer dual (statistic 10) needs the estimated $\hat\gamma$ and is model output.
+**$a_{ir}$ is a model object.** The estimation observes the extensive margin at the industry level ($\mathrm{Sup}_i$), the count distribution $G_s(K)$, and the regional sourcing shares $\gamma_{ls}$ aggregated over buyers — not the bilateral supplier $\times$ buyer matrix. The firm-level portfolio is therefore *not* directly measurable in the data, and the diversification statistics are model output. This is exactly why §5 matters: the untargeted moment $\delta/\gamma$ is the observable that disciplines them, and (18) is the map. Statistics that *are* observable should be flagged as such and separated from the rest in the table: $N^0_s$ at $\alpha = 0$ needs only `emp_gamma_ls.npy`, whereas the buyer dual (statistic 10) needs the estimated $\hat\gamma$ and is model output.
 
 **Sales outside the industry.** $a_{ir}$ is a portfolio share *within* the modelled downstream industry. A real supplier also sells elsewhere, which is a diversification channel the model does not represent. The reported $N$ therefore *understate* true diversification, in the same direction as the bias the paper already notes on $\delta/\gamma$. If a firm's industry share $\varphi_i$ is available, $H_i^{\text{total}} = \varphi_i^2 H_i + \dots$ bounds the correction; absent that, the statistics are conditional on industry exposure and should be labelled so.
 
@@ -731,7 +731,7 @@ using $\operatorname{Cov}_w(w,\gamma) = \sum_r w_r^2\gamma_{krs} - H\,\mathbb E_
 | $w_r^{sr'd}$ | `<run>/<step>/w_srd_r.npy`, `[s, r', r]` | written by `write_post_hoc` in `main.jl` |
 | $\gamma_{r'rs}$ (closed form) | `sourcing_geometry(data)["by_sector"][s]["rho"]` | `psi/tot`, cells $\times$ downstream |
 | $\Phi_{rs}$ | the `tot` array inside `sourcing_geometry` | $m_{rs} = X_{rs}/\texttt{tot}$ is one line — but `tot` sums over that sector's *domestic active cells only*, so if foreign competition belongs in $\Phi$ the discrepancy is buyer-specific and does not cancel in the softmax |
-| $X_{rs}$ | `X_rs.npy` / the downstream purchase column of `suppliers.parquet` | |
+| $X_{rs}$ | `emp_gamma_ls.npy` / the downstream purchase column of `suppliers.parquet` | |
 | $\hat q_{r's}$ | `granular_diagnostics.npz` (raw diagnostic, alongside the count moment) | needed for (15); it is the **exact** simulated union, not an FKG approximation |
 | $\hat\alpha$, $\hat T$, $\theta$ | `unpack_estimated_T`, `model_theta` | `N_TAU = 1` required for a single $\alpha$ |
 | $\alpha = 0$ / $T$ equalised counterfactuals | `sourcing_geometry(..., alpha=0, equalise_T=True)` | already implemented |

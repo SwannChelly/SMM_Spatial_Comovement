@@ -39,7 +39,7 @@ Design rules that follow:
   `--ca_level=aa`; under `ze` the existing reduced-T scatter runs unchanged.
   `unpack_params` branches once, at the top.
 * **The active set is the one genuinely shared change.** Under `--ca_level=aa` the control
-  cells (`filter == 1` and `X_rs == 0`) become ordinary goods; under `ze` they stay as
+  cells (`filter == 1` and `γ_ls == 0`) become ordinary goods; under `ze` they stay as
   they are. The `filter_N_upstream` re-encoding of §2 is *not* behind a flag — it changes
   how the control set is built in both modes.
 * **The regression keeps its `(ρ, g)` row structure and its draws in both modes.** The
@@ -167,17 +167,17 @@ the mechanism, not a numerical nuisance.
 
 ```
 filter_N_upstream[s,l] == 1   ⟺   the (sector, ZE) cell enters the optimisation
-supplier cell                 ⟺   filter == 1  AND  X_rs[s,l] >  0
-control cell (no supplier)    ⟺   filter == 1  AND  X_rs[s,l] == 0
+supplier cell                 ⟺   filter == 1  AND  γ_ls[s,l] >  0
+control cell (no supplier)    ⟺   filter == 1  AND  γ_ls[s,l] == 0
 ```
 
 Three consequences for the code:
 
-* **`supplier_cells` is unchanged.** `(filter_N_upstream .== 1) .& (X_rs .> 0)` still
+* **`supplier_cells` is unchanged.** `(filter_N_upstream .== 1) .& (emp_gamma_ls .> 0)` still
   selects exactly the supplier cells under the new encoding. It plays two roles that must
   be kept apart: under `--ca_level=ze` it IS the estimated set; under `:aa` it only
   *defines* `𝒜⁺`, i.e. which areas host at least one supplier in a sector.
-* **The control set is `findall((filter_N_upstream .== 1) .& (X_rs .== 0))`.** Same object
+* **The control set is `findall((filter_N_upstream .== 1) .& (emp_gamma_ls .== 0))`.** Same object
   as the old status 2, new encoding.
 * **`CELL_MASK` is given, not derived.** Under `--ca_level=aa` the cell set is simply
   `filter_N_upstream .== 1`. The old `has_firms` construction disappears.
@@ -212,7 +212,7 @@ Two rules, both easy to get wrong.
 
 1. **The moment set is (sector, AA) pairs with a supplier in the data**, not AAs:
    ```
-   AA_ACTIVE[s,a] = any( l ∈ a : filter[s,l] == 1 && X_rs[s,l] > 0 )
+   AA_ACTIVE[s,a] = any( l ∈ a : filter[s,l] == 1 && γ_ls[s,l] > 0 )
    ```
    A given AA can be active in one sector and empty in another; the sectoral dimension
    must be carried through. Block 5 is the active `(s,a)` set minus one reference AA per
@@ -332,7 +332,7 @@ PRECOMPUTED ONCE   (load_parameters.jl)
 ════════════════════════════════════════════════════════════════════════════════
 AA_OF_ZE        :: Vector{Int}(R)        from attraction_area_linkages.npy (R × R_d binary)
                                          @assert rows sum to 1, and == CLOSEST_DOWNSTREAM_REGION
-AA_ACTIVE       :: BitMatrix(S, R_d)     any(l ∈ a : filter[s,l]==1 && X_rs[s,l] > 0)  → 𝒜⁺_s
+AA_ACTIVE       :: BitMatrix(S, R_d)     any(l ∈ a : filter[s,l]==1 && γ_ls[s,l] > 0)  → 𝒜⁺_s
                                          NB sectoral: an AA can be active in s and empty in s'
 CELL_MASK       :: BitMatrix(S, R)       ca_level == :aa ? (filter_N_upstream .== 1)
                                                          : supplier_cells            # legacy

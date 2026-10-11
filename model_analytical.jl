@@ -417,7 +417,6 @@ function test_analytical_vs_simulated(params; N_rho_test::Int=10_000, n_quad::In
     γ_ana = moms_ana[5]   # (R, S)
 
     # reconstruct c_s = sum_before / sum_after per sector from the RAW file
-    X_rs_raw = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))   # (S,R), pre-threshold mask
     emp_raw  = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))  # (R,S) raw
     println("\n  Per-sector γ_ls gap vs structure:")
     @printf("  %-8s %7s %10s %10s %10s %10s\n",

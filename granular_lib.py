@@ -952,7 +952,7 @@ def alignment_covariance_by_buyer(data, cov=None, weights="rho"):
     """
     The same covariance aggregated to the BUYER, which is the level Section 5.1 quotes.
 
-    `d_r = sum_s (X_rs/X_r) d_rs`, so the buyer-level rate is the spend-weighted average
+    `d_r = sum_s theta_rs d_rs`, with `theta_rs` the buyer's input mix, so the buyer-level rate is the spend-weighted average
     of its sectors' rates — the same buyer-first aggregation `counterfactual_diffusion_frame`
     performs on the euros, and the reason a sector median and a buyer median need not
     agree (one sector can carry most of a buyer's spending).
@@ -1839,7 +1839,7 @@ def simulate_granular_regime(data, alpha=None, equalise_T=False, n_rep=None,
 # The object is the across-VARIETY split of eq. (variety_split) taken at the buyer
 # level and aggregated over sectors with the buyer's own input mix:
 #
-#     E_Omega[ H_r(Omega) ] = sum_s (X_rs/X_r) [ H(gamma_rs) + V_rs (1 - H(gamma_rs)) ] .
+#     E_Omega[ H_r(Omega) ] = sum_s theta_rs [ H(gamma_rs) + V_rs (1 - H(gamma_rs)) ] .
 #
 # Two readings come out of it and neither is available from the industry aggregate.
 # The STRUCTURAL term sum_s theta_rs H(gamma_rs) is the N_s -> infinity limit — the

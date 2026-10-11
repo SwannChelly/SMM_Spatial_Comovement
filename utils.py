@@ -399,7 +399,7 @@ def _region_labels(data):
     Model region index (1..R) -> ZE code -> display NAME.
 
     The model orders regions by sorted `ze2010`, exactly as `load_parameters.jl` builds
-    `X_rs`, so the l-th row of the distance matrix and the integer codes in
+    `emp_gamma_ls`, so the l-th row of the distance matrix and the integer codes in
     `suppliers.parquet` are the l-th entry of that sorted list. `france` covers more
     commuting zones than the model does, so the join is on the CODE, and a zone with no
     name falls back to its code rather than to NaN.
@@ -520,7 +520,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         globals().update(data)        # in a script / notebook cell
 
     which binds `input_folder`, `folder`, `coefs`, `agg_labor_share`, `epsilon`,
-    `agg_industry_share`, `emp_pi_r`, `reg_coef`, `emp_gamma_ls`, `X_dr`, `X_rs`,
+    `agg_industry_share`, `emp_pi_r`, `reg_coef`, `emp_gamma_ls`, `X_dr`,
     `filter_N_upstream_df`, `distances`, `france`, `ref`, `idf_ze`, `N_downstream`,
     `regional_wage`, `best_params`, `best_simulated_moments`,
     `suppliers`, `empirical_moments`, `empirical_moments_dict`
@@ -557,7 +557,6 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     agg_industry_share = np.load(input_folder / "input_share.npy").ravel()
     emp_gamma_ls = np.load(input_folder / "emp_gamma_ls.npy")          # (S, R)
     filter_N_upstream = np.load(input_folder / "filter_N_upstream.npy")  # (S, R), binary
-    X_rs = np.load(input_folder / "X_rs.npy")                          # (S, R)
     domestic_share = np.load(input_folder / "domestic_share.npy").ravel()
     N_downstream = np.load(input_folder / "N_downstream_per_region.npy").ravel()
     S, R = filter_N_upstream.shape
@@ -584,7 +583,11 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     aa_names = _aa_names(X_dr, n_AA)
 
     # 𝒜⁺_s : (sector, AA) hosting at least one observed supplier; CELL_MASK: simulated cells
-    supplier_cells = (filter_N_upstream == 1) & (X_rs > 0)
+    # a cell has supplier sales in the data <=> its observed sourcing share is positive
+    if emp_gamma_ls.shape != filter_N_upstream.shape:
+        raise ValueError(f"emp_gamma_ls.npy is {emp_gamma_ls.shape} but filter_N_upstream.npy "
+                         f"is {filter_N_upstream.shape}; both must be on the same (S, R) grid")
+    supplier_cells = (filter_N_upstream == 1) & (emp_gamma_ls > 0)
     AA_ACTIVE = np.zeros((S, n_AA), dtype=bool)
     for s in range(S):
         AA_ACTIVE[s, aa_of_ze[supplier_cells[s]]] = True
@@ -1080,7 +1083,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
         "T_REF_AA": T_REF_AA, "domestic_share": domestic_share,
         "filter_N_upstream": filter_N_upstream, "filter_N_upstream_df": filter_N_upstream_df,
-        "X_rs": X_rs, "X_dr": X_dr, "emp_gamma_ls": emp_gamma_ls,
+        "X_dr": X_dr, "emp_gamma_ls": emp_gamma_ls,
         # scalars / targets
         "epsilon": epsilon, "agg_labor_share": agg_labor_share,
         "agg_industry_share": agg_industry_share, "emp_pi_r": emp_pi_r,

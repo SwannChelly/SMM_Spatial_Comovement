@@ -241,7 +241,7 @@ These are cheap and two of them are decisive.
   the firms observed *supplying the downstream industry*, regressing `γ` on it is
   circular: `η` would come out near 1 mechanically, block 5 and block 6 would carry
   the same information twice, and the exercise would be void. The test is immediate:
-  **control cells (`filter == 1` and `X_rs == 0`) must have `N_sl ≥ 1`.** If those
+  **control cells (`filter == 1` and `γ_ls == 0`) must have `N_sl ≥ 1`.** If those
   cells are all zero, `N_sr` is a supplier count — stop.
 - **G2 — within-area variation must exist.** Report, per sector, the share of the
   variance of `log N_sl` that survives area fixed effects, and the partial

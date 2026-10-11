@@ -42,7 +42,7 @@ println("="^70)
 @assert T_MASK == T_MASK_MOMENT "T1 FAILED: T_MASK != T_MASK_MOMENT"
 println("T1 PASS: T_MASK == T_MASK_MOMENT  (the two conventions are now one)")
 
-# helper: s-major flat position of (s,r) in vec(permutedims(X_rs)) over (R,S)
+# helper: s-major flat position of (s,r) in vec(permutedims(·)) of an (S,R) matrix
 smajor_flat(s, r) = (s - 1) * R_full + r
 # reduced (T_MASK) index of an active (s,r)
 function reduced_idx(s, r)

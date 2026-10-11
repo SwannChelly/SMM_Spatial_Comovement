@@ -1243,7 +1243,7 @@ never pruned, and neither is the β block.
 
 The γ block may have been bootstrapped on the PRE-threshold active set; if a
 `gamma_threshold` pruned (s,r) pairs, the matching γ rows/cols are dropped. That
-subset branch is ZE-level only (it keys on `X_rs.npy`); under `CA_LEVEL == :aa` the
+subset branch is ZE-level only (it keys on the support of `emp_gamma_ls.npy`); under `CA_LEVEL == :aa` the
 file must already match the active AA-level γ moments.
 
 NOTE: the subset branch returns Cov(raw γ); the loss uses renormalized γ (factor
@@ -1287,15 +1287,16 @@ function reconcile_sigma_data(Sigma_full::AbstractMatrix, input_folder::String)
     # ── Reconcile the γ BLOCK ONLY against the (possibly thresholded) active set ──
     # Under :aa the γ block is AA-level and the files are generated post-hoc for the
     # current active set, so only the use-as-is branch applies; the ZE-level
-    # pre-threshold subset branch keys on X_rs.npy, which has no AA counterpart.
+    # pre-threshold subset branch keys on the ZE-level emp_gamma_ls.npy support,
+    # which has no AA counterpart.
     gamma_keep = nothing                                  # nothing ⇒ use the γ block as-is
     if n_gamma_file != n_gam
         CA_LEVEL === :aa && error(
             "Σ γ block has $(n_gamma_file) rows but the active AA-level γ moment count " *
             "is $(n_gam). Regenerate $(sigma_beta_gamma_filename(; smm=true)) for the " *
             "current active set (the pre-threshold subset branch is ZE-level only).")
-        X_rs_raw          = NPZ.npzread(joinpath(input_folder, "X_rs.npy"))      # (S,R) raw
-        T_mask_moment_old = vec(permutedims(X_rs_raw)) .> 0                       # sector-major
+        gamma_raw         = NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")) # (S,R) raw
+        T_mask_moment_old = vec(permutedims(gamma_raw)) .> 0                      # sector-major
         T_mask_moment_new = collect(T_MASK)                                      # thresholded; s-major (= moment convention)
 
         # In the old mask, remove reference regions.

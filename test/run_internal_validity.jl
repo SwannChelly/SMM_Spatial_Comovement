@@ -8,7 +8,7 @@
 #              masks / T_REF_REGION / MOMENT_MASK / gamma_threshold are built
 #              from the REAL baseline), replace ONLY the target globals
 #              `empirical_moments` (← masked m(θ₀)) and `reg_coef` (← θ₀'s
-#              reg_coef block). emp_gamma_ls / X_rs / emp_pi_r_full stay REAL so
+#              reg_coef block). emp_gamma_ls / emp_pi_r_full stay REAL so
 #              every mask / reference / threshold is frozen. The override is an
 #              in-place mutation of the (const) arrays on all workers — no const
 #              rebinding, so already-compiled methods see the new values.
