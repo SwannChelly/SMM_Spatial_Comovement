@@ -551,8 +551,11 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
 
     # ---------------------------------------------------------------- targets
     coefs = pd.read_csv(input_folder / "stats.csv")
-    epsilon = coefs.loc[0, "value"]
-    agg_labor_share = coefs.loc[1, "value"]
+    epsilon = _read_named_value(coefs, "epsilon")
+    agg_labor_share = _read_named_value(coefs, "labor_share")
+    if epsilon is None or agg_labor_share is None:
+        raise KeyError("stats.csv must carry `epsilon` and `labor_share` "
+                       "(rows: epsilon, labor_share, reg_coef_cloglog_1)")
 
     agg_industry_share = np.load(input_folder / "input_share.npy").ravel()
     emp_gamma_ls = np.load(input_folder / "emp_gamma_ls.npy")          # (S, R)

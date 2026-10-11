@@ -19,6 +19,35 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 coefs                         = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
+
+# Read a scalar stat by name from stats.csv (a column named `name`, else a row whose
+# label column equals `name`, with the number in `value`). Returns nothing if absent.
+function _read_named_value(coefs_df, name::AbstractString)
+    cols = names(coefs_df)
+    if name in cols
+        vals = collect(skipmissing(coefs_df[!, name]))
+        !isempty(vals) && return Float64(vals[1])
+    end
+    if "value" in cols
+        for cname in cols
+            col = coefs_df[!, cname]
+            idx = findfirst(x -> x isa AbstractString &&
+                                 lowercase(strip(x)) == lowercase(name), col)
+            idx !== nothing && return Float64(coefs_df[idx, "value"])
+        end
+    end
+    return nothing
+end
+
+# stats.csv carries exactly three scalars, read BY NAME (never by row position):
+# epsilon, labor_share, and reg_coef_cloglog_1 (the empirical cloglog distance slope,
+# which divided by θ is the α prior on trade costs).
+function _require_stat(coefs_df, name::AbstractString)
+    v = _read_named_value(coefs_df, name)
+    v === nothing && error("stats.csv has no `$name` entry (expected rows: epsilon, " *
+                           "labor_share, reg_coef_cloglog_1)")
+    return v
+end
 distances_local               = NPZ.npzread(joinpath(input_folder, "distances.npy"))
 filter_N_upstream_local       = NPZ.npzread(joinpath(input_folder, "filter_N_upstream.npy"))
 w_rs_local                    = NPZ.npzread(joinpath(input_folder, "w_rs.npy")) # Upstream average wage.
@@ -47,19 +76,20 @@ S_, R_full = size(filter_N_upstream_local)
 R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])[1]
 @everywhere const R_downstream        = $(R_down_)
 @everywhere const agg_industry_share  = $(agg_industry_share_local)
-@everywhere const agg_labor_share     = $(coefs[2, "value"])
+@everywhere const agg_labor_share     = $(_require_stat(coefs, "labor_share"))
 @everywhere const domestic_share      = $(domestic_share_local)
 @everywhere regional_wages            = $(regional_wages_local)
 @everywhere const distances           = $(distances_local)
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const w_rs                = $(w_rs_local)
 @everywhere const filter_N_upstream   = $(filter_N_upstream_local)
-@everywhere const epsilon             = $(coefs[1, "value"])
-@everywhere const P_alpha             = $(coefs[4, "value"]) #Prior on alpha
+@everywhere const epsilon             = $(_require_stat(coefs, "epsilon"))
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
 @everywhere const theta               = $(1.768)#1.768
+# α prior = empirical cloglog distance slope / θ (the same value TAU_PRIOR uses).
+@everywhere const P_alpha             = $(_require_stat(coefs, "reg_coef_cloglog_1") / theta)
 
 println("\n Lambda = $lambda — Labor / CI share")
 println("\n Epsilon = $epsilon — Sales elasticity")
@@ -655,25 +685,6 @@ reg_include_size_local    = ca_level_local == :aa ? true  : !include_control_loc
 println("reg_method = :$reg_method_local ; include_control (control group) = $include_control_local " *
         "⇒ effective (control rows, log-z size control) = ($reg_include_control_local, $reg_include_size_local)")
 
-# Read a scalar stat by name from stats.csv (a column named `name`, else a row whose
-# label column equals `name`, with the number in `value`). Returns nothing if absent.
-function _read_named_value(coefs_df, name::AbstractString)
-    cols = names(coefs_df)
-    if name in cols
-        vals = collect(skipmissing(coefs_df[!, name]))
-        !isempty(vals) && return Float64(vals[1])
-    end
-    if "value" in cols
-        for cname in cols
-            col = coefs_df[!, cname]
-            idx = findfirst(x -> x isa AbstractString &&
-                                 lowercase(strip(x)) == lowercase(name), col)
-            idx !== nothing && return Float64(coefs_df[idx, "value"])
-        end
-    end
-    return nothing
-end
-
 if reg_method_local == :cloglog
     if n_coef == 1
         _rc = _read_named_value(coefs, "reg_coef_cloglog_1")
@@ -685,7 +696,8 @@ if reg_method_local == :cloglog
     end
 else
     if n_coef == 1
-        reg_coef_local = [coefs[3, "value"]]
+        error("reg_method=:lpm with n_coef=1 is no longer supported: stats.csv carries " *
+              "only the cloglog slope (reg_coef_cloglog_1). Use --reg=cloglog.")
     else
         reg_coef_local = NPZ.npzread(joinpath(input_folder, "reg_coef_$(n_coef).npy"))
     end
@@ -988,7 +1000,8 @@ end
 # inversion at α = 0 (τ ≡ 1 ⇒ market access M is common within a sector and cancels),
 # so when the α prior is missing we fall back to α = 0 rather than to a second,
 # redundant code path.
-_prior_alpha = _read_prior_alpha(coefs)/theta
+_prior_alpha = _read_prior_alpha(coefs)
+_prior_alpha = _prior_alpha === nothing ? nothing : _prior_alpha / theta
 _init_alpha  = _prior_alpha === nothing ? 0.0 : Float64(_prior_alpha)
 if _prior_alpha === nothing
     @warn "prior_alpha (reg_coef_cloglog_1) not found in stats.csv — inverting T at α = 0 " *

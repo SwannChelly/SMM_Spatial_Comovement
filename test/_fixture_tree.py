@@ -37,7 +37,8 @@ def build(seed=11):
     _D = (_D + _D.T) / 2
     np.save(f"{inp}/distances.npy", _D)            # read by `sourcing_geometry`
     np.save(f"{inp}/regional_wages.npy", np.ones(R))  # read by the loader's geography part
-    pd.DataFrame({"name": ["epsilon", "labor"], "value": [-16.0, 0.3]}).to_csv(
+    pd.DataFrame({"stats": ["epsilon", "labor_share", "reg_coef_cloglog_1"],
+                  "value": [-16.0, 0.3, 0.23]}).to_csv(
         f"{inp}/stats.csv", index=False)
     pd.DataFrame({"ze2010": [f"{1000 + r}" for r in range(R)],
                   "X_dr": rng.uniform(1, 9, R),

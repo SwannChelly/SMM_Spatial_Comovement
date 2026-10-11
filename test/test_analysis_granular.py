@@ -90,7 +90,6 @@ def _build_industry(ROOT, industry, sectors):
     agg_industry_share = RNG.dirichlet(np.ones(S) * 3)
     agg_labor_share = 0.42
     epsilon = -2.5
-    prior_alpha = 0.31
 
     X_dr = pd.DataFrame({
         "ze2010": ze,
@@ -101,9 +100,8 @@ def _build_industry(ROOT, industry, sectors):
     X_dr["ze2010_downstream"] = np.where(X_dr["downstream"], X_dr["ze2010"], "")
     X_dr.to_csv(f"{BASE}/X_dr.csv", index=False)
 
-    pd.DataFrame({"stats": ["epsilon", "agg_labor_share", "reg_coef", "prior_alpha",
-                            "reg_coef_cloglog_1"],
-                  "value": [epsilon, agg_labor_share, 0.11, prior_alpha, 0.23]}
+    pd.DataFrame({"stats": ["epsilon", "labor_share", "reg_coef_cloglog_1"],
+                  "value": [epsilon, agg_labor_share, 0.23]}
                  ).to_csv(f"{BASE}/stats.csv", index=False)
 
     pd.DataFrame([{"A129": sectors[s], "ze2010": int(ze[r])}

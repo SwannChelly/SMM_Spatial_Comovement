@@ -66,7 +66,7 @@ end
 R_downstream_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0])[1]
 @everywhere const R_downstream = $(R_downstream_)
 @everywhere const agg_industry_share = $(agg_industry_share_local)
-@everywhere const agg_labor_share = $(coefs[2, "value"])
+@everywhere const agg_labor_share = $(only(coefs[coefs.stats .== "labor_share", "value"]))
 @everywhere const domestic_share = $(domestic_share_local)
 @everywhere regional_wages = $(regional_wages_local)
 @everywhere const distances = $(distances_local)
@@ -75,7 +75,7 @@ R_downstream_ = size(N_downstream_per_region_local[N_downstream_per_region_local
 @everywhere const DistBin = $(DistBin_local)
 @everywhere const filter_N_upstream = $(filter_N_upstream_local)
 @everywhere const N_rho = $(50)
-@everywhere const epsilon = $(coefs[1, "value"])
+@everywhere const epsilon = $(only(coefs[coefs.stats .== "epsilon", "value"]))
 @everywhere const lambda = $(0.5)
 @everywhere const nu = $(0.2)
 @everywhere const nu_s = $(ones(S_) .* 2.5)
