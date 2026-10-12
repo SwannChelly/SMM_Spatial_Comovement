@@ -486,6 +486,11 @@ if run_step4
         base_seed     = 1_000_000,
         append_N_s    = GRANULAR,    # see the Step-2 call: N_s is a parameter too
         N_s_base_seed = 7_200_000,
+        # Opt-in cross-language dump for test/test_jacobian_crosslang.py: set
+        # JAC_DUMP_REPS=2 (≈90 MB of draws per replication at N_RHO_INFERENCE = 10⁴).
+        dump_dir      = parse(Int, get(ENV, "JAC_DUMP_REPS", "0")) > 0 ?
+                        joinpath(output_folder, "step3", "jacobian_crosslang") : nothing,
+        dump_reps     = parse(Int, get(ENV, "JAC_DUMP_REPS", "0")),
         # Differentiate the untargeted count distribution Ḡ_s(K) alongside the moments.
         # Free: it rides the SAME evaluations and is split off before anything is saved,
         # so `jacobian_all*.npy` and every consumer that slices by moment index are

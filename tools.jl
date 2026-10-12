@@ -1541,7 +1541,9 @@ function compute_jacobian(theta::Vector{Float64};
                           N_s_K::Int = 10,
                           N_s_base_seed::Int = 7_000_000,
                           draw_method::Symbol = INFERENCE_DRAW_METHOD,
-                          G_curve_out::Union{Nothing, Base.RefValue{Any}} = nothing)
+                          G_curve_out::Union{Nothing, Base.RefValue{Any}} = nothing,
+                          dump_dir::Union{Nothing, String} = nothing,
+                          dump_reps::Int = 2)
     indices   = param_indices === nothing ? collect(1:length(theta)) : param_indices
     n_perturb = length(indices)
     # Columns the returned Jacobian will carry: the perturbed θ coordinates, plus the
@@ -1757,6 +1759,7 @@ function compute_jacobian(theta::Vector{Float64};
 
     println("Computing Jacobian: $K replications × $(2 * n_perturb + 1) evaluations each...")
     flush(stdout)
+    dump_dir === nothing || mkpath(dump_dir)
 
     # Each replication produces (J_k, J_elast_k). Distribute over k via pmap;
     # within a replication, the 2·n_perturb + 1 evaluations are sequential
@@ -1831,6 +1834,16 @@ function compute_jacobian(theta::Vector{Float64};
                 J_rich_k[:, kk] = (eval_one(pp) .- eval_one(mm)) ./
                                   (2 * (2 * δ) * theta[j])
             end
+        end
+
+        # ── Cross-language dump (opt-in): the draws and this replication's raw
+        # Jacobian, MOMENT rows only (the appended count-curve rows are dropped), so the
+        # Python port can be checked on IDENTICAL draws (jacobian_lib.compare_same_draws).
+        if dump_dir !== nothing && !analytical && k <= dump_reps
+            n_m = N_moments - n_curve_rows
+            NPZ.npzwrite(joinpath(dump_dir, "u_rep$(k).npy"),  u_k)
+            NPZ.npzwrite(joinpath(dump_dir, "m0_rep$(k).npy"), m0_k[1:n_m])
+            NPZ.npzwrite(joinpath(dump_dir, "J_rep$(k).npy"),  J_k[1:n_m, :])
         end
 
         return (J_k, J_elast_k, J_fwd_k, J_bwd_k, J_rich_k, m0_k)
@@ -2001,6 +2014,18 @@ function compute_jacobian(theta::Vector{Float64};
         N_moments     = n_mom_true
         println("  count-curve rows split off: $(size(G_curve_out[],1))×$(size(G_curve_out[],2)) " *
                 "(S = $S sectors × K ∈ $(collect(COUNT_CURVE_K)))")
+    end
+
+    if dump_dir !== nothing && !analytical
+        n_m = N_moments
+        NPZ.npzwrite(joinpath(dump_dir, "J_stack.npy"), J_stack[1:n_m, :, :])
+        NPZ.npzwrite(joinpath(dump_dir, "theta.npy"), theta)
+        NPZ.npzwrite(joinpath(dump_dir, "param_indices.npy"), collect(indices))
+        NPZ.npzwrite(joinpath(dump_dir, "step_rel.npy"), [step_rel])
+        NPZ.npzwrite(joinpath(dump_dir, "n_rho.npy"), [N_RHO_INFERENCE])
+        N_fixed === nothing || NPZ.npzwrite(joinpath(dump_dir, "N_fixed.npy"), N_fixed)
+        println("  cross-language dump written to $dump_dir " *
+                "($(min(dump_reps, K)) replications with draws + the $K-replication stack)")
     end
 
     n_N_cols = 0
