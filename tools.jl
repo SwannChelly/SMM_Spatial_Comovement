@@ -1333,6 +1333,22 @@ function reconcile_sigma_data(Sigma_full::AbstractMatrix, input_folder::String)
     return Sigma_data
 end
 
+"""
+    estimator_N_hat(theta) -> Vector{Int}
+
+The variety counts `N̂_s` as the ESTIMATOR profiles them at `theta`: the integer
+bisection on `Ḡ_s(0)` evaluated on the optimisation draws `U_DRAWS`, i.e. exactly what
+the loss used at θ̂. It is the `N` coordinate of the extended parameter set θ⁺ — the same
+vector `write_post_hoc` saves as `post_hoc_N_hat.npy` and the Python reporting simulates
+with. Every evaluation on INDEPENDENT draws (Σ_sim, the Jacobian replications) must hold
+`N` at this value: re-running the bisection on each draw set would re-calibrate `N` to
+that set's `q̂`, so `Ḡ_s(0)` would be pulled back towards its target on every draw and
+the simulation noise of the count moment would be measured at a different θ⁺ each time.
+"""
+estimator_N_hat(theta::Vector{Float64}) =
+    granular_report(theta; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS).N_hat
+
+
 function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::String;
                                    K::Int=10_000,
                                    output_folder::String=".",
@@ -1359,12 +1375,21 @@ function build_step3_weight_matrix(theta_hat_1::Vector{Float64}, input_folder::S
     println("Estimating Σ_sim from K=$K SMM evaluations at θ̂_1...")
     flush(stdout)
 
+    # Hold the variety counts at their θ⁺ value (the estimator's N̂_s at θ̂_1): Σ_sim
+    # is the variance of the simulated moments at a FIXED extended parameter set, so N
+    # must not be re-profiled on each independent draw set. T needs no such care: it is
+    # a coordinate of θ̂_1 (the profiled T* under profile_T) and full_SMM never
+    # re-inverts it.
+    N_fixed_sim = GRANULAR ? estimator_N_hat(theta_hat_1) : nothing
+    GRANULAR && println("  N̂_s held fixed at θ⁺ for every draw set: $(N_fixed_sim)")
+
     M_sim_rows = pmap(1:K) do k
         # Σ_sim uses the INFERENCE draw count (N_RHO_INFERENCE), decoupled from the
         # optimization draw count N_rho (full_SMM sizes itself off size(u_draws,1)).
         u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, draw_method;
                                   randomise=true, rng=MersenneTwister(k))
-        _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k)
+        _, moms = full_SMM(theta_hat_1; u_draws=u_k, sample_weights=w_k,
+                           N_fixed=N_fixed_sim)
         return moments_to_vec(moms)[gb_indices]
     end
     M_sim = reduce(hcat, M_sim_rows)'   # (K, n_gb)
@@ -1547,11 +1572,12 @@ function compute_jacobian(theta::Vector{Float64};
     # probability one), so under GRANULAR the count is pinned at its θ̂ value for the
     # whole Jacobian.
     #
-    # The pin is computed on the INFERENCE draw design (the same width the replications
-    # use), and its MONTE-CARLO dispersion is measured once here: N̂_s is a bisection on
-    # q̂, so independent draw sets give different N̂_s even at a FIXED θ. That dispersion
-    # is a property of `N_RHO_INFERENCE`, not of θ sitting on a jump, and it is the
-    # number to look at if the count moment looks unstable — raise `N_RHO_INFERENCE`.
+    # The pin is the θ⁺ value — the N̂_s the estimator itself used at θ̂ (`estimator_N_hat`,
+    # the bisection on U_DRAWS, = post_hoc_N_hat.npy) — so every replication differentiates
+    # the SAME extended parameter set the reporting simulates. Its Monte-Carlo dispersion
+    # is still measured here, for information only: N̂_s is a bisection on q̂, so
+    # independent draw sets would give different N̂_s even at a FIXED θ. That dispersion
+    # is a property of `N_RHO_INFERENCE`, not of θ sitting on a jump.
     N_fixed = nothing
     if hold_N_s && GRANULAR && !analytical
         n_probe = min(K, 5)
@@ -1562,11 +1588,15 @@ function compute_jacobian(theta::Vector{Float64};
             granular_report(theta; u_draws=u_k, sample_weights=w_k).N_hat
         end
         N_mat   = reduce(hcat, probes)                      # S × n_probe
-        N_fixed = [round(Int, median(view(N_mat, s, :))) for s in axes(N_mat, 1)]
+        # Pin at the θ⁺ value — the N̂_s the estimator used at θ̂ (bisection on U_DRAWS),
+        # NOT a re-profiled value from the inference draws. The probes above are kept
+        # only to MEASURE how much N̂_s would move if it were re-profiled per draw set.
+        N_fixed = estimator_N_hat(profile_T ? profiled_theta(theta) : theta)
 
-        println("Jacobian: holding N̂_s fixed at $(N_fixed) across all FD perturbations.")
-        println("  N̂_s Monte-Carlo dispersion over $(n_probe) independent draw sets " *
-                "(N_RHO_INFERENCE = $(N_RHO_INFERENCE)):")
+        println("Jacobian: holding N̂_s fixed at its θ⁺ value $(N_fixed) in every " *
+                "replication and every FD perturbation.")
+        println("  For reference, N̂_s re-profiled on $(n_probe) independent draw sets " *
+                "(N_RHO_INFERENCE = $(N_RHO_INFERENCE)) — NOT used:")
         println("    sector      pinned       min       max   spread/pinned")
         worst = 0.0
         for s in axes(N_mat, 1)
