@@ -731,10 +731,16 @@ def _init_worker(model, theta, idx, step, N_fixed, append_N_s, warm_start=True,
 
 
 def jacobian_replication(model, theta, u, idx, step, N_fixed, w=None, append_N_s=True,
-                         warm_start=True):
+                         warm_start=True, cols=None):
     """
     One replication on one draw set: the central log-step difference for every column of
     `idx`, all on the SAME draws (common random numbers), N held at `N_fixed`.
+
+    `cols` (positions into `idx`) restricts the work to a CHUNK of columns, so one
+    replication can be spread over several workers; the other columns come back as zeros
+    and the caller stitches the chunks together. Every chunk recomputes the same base
+    evaluation on the same draws, so a chunked replication is bit-identical to an
+    unchunked one.
 
     Returns (J_k raw, J_elast_k, m0_k, dN_k) where dN_k is the N_s first difference
     m(N+1) - m(N) on these draws (S columns; only block 6 can move).
@@ -743,7 +749,9 @@ def jacobian_replication(model, theta, u, idx, step, N_fixed, w=None, append_N_s
     m0, info = model.moments(theta, u, N_fixed=N_fixed, w=w, full=True)
     base, reg_base = info["sol"], (info["sol"], info["reg"])
     J = np.zeros((m0.size, len(idx)))
-    for j, i in enumerate(idx):
+    todo = range(len(idx)) if cols is None else cols
+    for j in todo:
+        i = idx[j]
         tp, tm = theta.copy(), theta.copy()
         tp[i] = theta[i] * np.exp(step)
         tm[i] = theta[i] * np.exp(-step)
@@ -768,18 +776,32 @@ def jacobian_replication(model, theta, u, idx, step, N_fixed, w=None, append_N_s
 
 
 def _run_rep(args):
-    seed, n_rho, u = args
+    seed, n_rho, u, cols = args
     W = _WORKER
     m = W["model"]
     if u is None:
         u = np.random.default_rng(seed).random((n_rho, m.n_good))
     return jacobian_replication(m, W["theta"], u, W["idx"], W["step"], W["N_fixed"],
-                                append_N_s=W["append_N_s"], warm_start=W["warm_start"])
+                                append_N_s=W["append_N_s"], warm_start=W["warm_start"],
+                                cols=cols)
+
+
+def _plan_chunks(n_cols, n_reps, n_cpu, min_cols=10):
+    """
+    How many column chunks per replication. One when there are at least as many
+    replications as cores (processes across replications already fill the machine);
+    otherwise enough to give every core a job, but never chunks smaller than `min_cols`
+    columns, since each chunk pays for one base evaluation of its own.
+    """
+    if n_reps >= n_cpu:
+        return 1
+    return int(max(1, min(-(-n_cpu // n_reps), n_cols // min_cols)))
 
 
 def python_jacobian(model, theta, N_fixed, K=50, n_rho=10_000, step=1e-2,
                     param_indices=None, base_seed=5_000_000, u_list=None,
-                    append_N_s=True, n_workers=None, warm_start=True, verbose=True):
+                    append_N_s=True, n_workers=None, n_chunks=None, warm_start=True,
+                    verbose=True):
     """
     The averaged Jacobian over K independent draw sets, in `compute_jacobian`'s layout:
     rows = masked moments, columns = `param_indices` (default: Julia's
@@ -789,16 +811,37 @@ def python_jacobian(model, theta, N_fixed, K=50, n_rho=10_000, step=1e-2,
     turns the comparison into an exact one. Returns a dict with the mean, the
     across-replication SD (ddof = 1, as Julia's `std`), the full replication STACK
     (which gives the exact max-|t| distribution) and the per-column replication count.
+
+    Parallelism, two levels:
+      * PROCESSES over (replication, column chunk) jobs -- `n_workers`, default all
+        cores. Replications are independent, and so are columns given the base
+        evaluation, so this scales almost linearly up to K x n_chunks jobs. More workers
+        than cores only adds contention.
+      * NUMBA THREADS inside each process, over cells in the regression kernel -- given
+        the cores left over (cores // workers). Only the regression is threaded; the
+        Ricardian solve and the value block are single-threaded numpy, so a core spent
+        on a process is worth more than a core spent on a thread.
+    `n_chunks` (default: `_plan_chunks`) splits each replication's columns across jobs
+    when there are more cores than replications. Each chunk repeats the base evaluation
+    (~10 s at production size, against ~4 s per column), so the default keeps chunks at
+    10 columns or more. Chunking is bit-identical to running unchunked.
+
+    Memory: each worker holds a draw set and its transformed copies, about 4 x n_rho x
+    n_good x 8 bytes (~0.7 GB at 10 000 draws and 2 250 cells). That, not the core count,
+    is what bounds `n_workers` on a shared machine.
     """
     idx = model.param_indices if param_indices is None else np.asarray(param_indices)
     if u_list is not None:
-        jobs = [(None, None, np.asarray(x, float)) for x in u_list]
+        reps = [(None, None, np.asarray(x, float)) for x in u_list]
     else:
-        jobs = [(base_seed + k, n_rho, None) for k in range(1, K + 1)]
+        reps = [(base_seed + k, n_rho, None) for k in range(1, K + 1)]
     n_cpu = os.cpu_count() or 1
+    if n_chunks is None:
+        n_chunks = _plan_chunks(len(idx), len(reps), n_workers or n_cpu)
+    n_chunks = int(max(1, min(n_chunks, len(idx))))
+    chunks = [c for c in np.array_split(np.arange(len(idx)), n_chunks) if c.size]
+    jobs = [(*r, c) for r in reps for c in chunks]
     n_workers = n_workers or min(len(jobs), n_cpu)
-    # processes across replications, numba threads across cells inside each: split the
-    # cores between them rather than oversubscribe
     args = (model, np.asarray(theta, float), idx, step, N_fixed, append_N_s, warm_start,
             max(1, n_cpu // n_workers))
     if n_workers > 1:
@@ -806,10 +849,19 @@ def python_jacobian(model, theta, N_fixed, K=50, n_rho=10_000, step=1e-2,
         ctx = mp.get_context("spawn")      # numba's OpenMP pool is not fork-safe
         with ProcessPoolExecutor(n_workers, mp_context=ctx, initializer=_init_worker,
                                  initargs=args) as ex:
-            res = list(ex.map(_run_rep, jobs))
+            parts = list(ex.map(_run_rep, jobs))
     else:
         _init_worker(*args)
-        res = [_run_rep(j) for j in jobs]
+        parts = [_run_rep(j) for j in jobs]
+
+    # stitch the chunks of each replication back together (each chunk carries zeros
+    # outside its own columns, and the same m0 and dN)
+    res = []
+    for r in range(len(reps)):
+        group = parts[r * len(chunks):(r + 1) * len(chunks)]
+        J = sum(g[0] for g in group)
+        E = sum(g[1] for g in group)
+        res.append((J, E, group[0][2], group[0][3]))
 
     Jst = np.stack([r[0] for r in res], axis=2)
     Est = np.stack([r[1] for r in res], axis=2)
@@ -840,8 +892,9 @@ def python_jacobian(model, theta, N_fixed, K=50, n_rho=10_000, step=1e-2,
         out["n_N_cols"] = 0
     if verbose:
         print(f"[python jacobian] {out['J'].shape[0]} moments x {out['J'].shape[1]} "
-              f"columns, K = {Kk} draw sets of {jobs[0][1] or jobs[0][2].shape[0]} draws, "
-              f"N held at {list(np.asarray(N_fixed))}")
+              f"columns, K = {Kk} draw sets of {reps[0][1] or reps[0][2].shape[0]} draws, "
+              f"N held at {list(np.asarray(N_fixed))}; {len(jobs)} jobs "
+              f"({len(chunks)} column chunk(s) per replication) on {n_workers} workers")
     return out
 
 

@@ -14,7 +14,9 @@ gates the COMPARATORS on known answers, so a PASS in part B means something:
   A5  the replication: same draws -> bit-identical J; the cached path (winners and the
       regression reused across head-parameter columns) equals a brute-force central
       difference EXACTLY; the warm-started IRLS (default, fast) matches the cold start
-      Julia uses; structural zeros are EXACT; N stays fixed (only block 6 moves with N)
+      Julia uses; splitting a replication's columns across worker processes changes
+      nothing, bit for bit; structural zeros are EXACT; N stays fixed (only block 6
+      moves with N)
   A6  the comparators: Level 1 passes on a self-dump and fails on a planted 1e-5 error;
       Level 2 passes on two independent seeds and fails on a planted 50% column bias;
       Level 3 passes on two seeds and fails on a planted error
@@ -208,6 +210,17 @@ def part_a():
     vN1 = m.moments(th, u, N_fixed=N + 1)
     check("N enters block 6 only (the economy is not re-solved for N)",
           np.array_equal(vN1[other], m01[other]))
+
+    one = jl.python_jacobian(m, th, N, K=3, n_rho=n_rho, base_seed=77, n_workers=1,
+                             n_chunks=1, verbose=False)
+    many = jl.python_jacobian(m, th, N, K=3, n_rho=n_rho, base_seed=77, n_workers=3,
+                              n_chunks=4, verbose=False)
+    check("column chunks over worker processes == one job per replication, bit for bit",
+          np.array_equal(one["J_stack"], many["J_stack"])
+          and np.array_equal(one["m0_stack"], many["m0_stack"]))
+    check("chunk planner: one chunk when replications >= cores, else >= 10 columns each",
+          jl._plan_chunks(200, 50, 48) == 1 and jl._plan_chunks(200, 50, 200) == 4
+          and jl._plan_chunks(25, 2, 64) == 2)
 
     # A6
     print("A6  the comparators on known answers")
