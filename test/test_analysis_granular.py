@@ -817,14 +817,17 @@ def run_checks(ns, ROOT, exp):
                          3 * len(d2["param_block_names"]))
           and set(summ.columns.get_level_values(0)) ==
           {"mean_abs", "max_abs", "share_readable"})
-    # the noise mask: sigma/|epsilon| is 0.1 everywhere by construction here, so nothing
-    # is rejected at 0.5 and everything is at 0.05
-    check("noise-to-signal ratio is sigma/|elasticity|, exact zeros counted as measured",
-          close(ns["jacobian_noise_ratio"](d2)[0, 0], 0.1)
-          and np.all(ns["jacobian_noise_ratio"](d2)[:-S, -S:] == 0.0))
-    check("nothing is masked at the default threshold, everything at a strict one",
-          not ns["jacobian_noise_mask"](d2, noise_max=0.5).any()
-          and ns["jacobian_noise_mask"](d2, noise_max=0.05).mean() > 0.5)
+    # the noise test: sigma/|J| is 0.1 everywhere by construction here, so t is
+    # sqrt(K)/0.1 on the mean of K = 50 replications and nothing is rejected; inflating
+    # sigma 100-fold puts t below 1 and rejects every tested entry
+    sig = ns["jacobian_significance"](d2)
+    check("t = sqrt(K)|J|/sigma, exact zeros untested",
+          close(sig["t"][0, 0], np.sqrt(50) / 0.1)
+          and np.all(np.isnan(sig["t"][:-S, -S:])))
+    noisy = dict(d2, J_sd=d2["J_sd"] * 100.0)
+    check("nothing is masked as measured, every tested entry once sigma is inflated",
+          not ns["jacobian_noise_mask"](d2).any()
+          and ns["jacobian_noise_mask"](noisy)[ns["jacobian_significance"](noisy)["tested"]].all())
     ns["plot_jacobian_triptych"](d2, out_folder=outdir, tag="jac_triptych", show=False)
     check("triptych writes the matrix, the noise map and the purged matrix",
           all(os.path.getsize(os.path.join(

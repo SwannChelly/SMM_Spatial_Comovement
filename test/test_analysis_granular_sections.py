@@ -127,13 +127,29 @@ def gate_identification():
         "J": E / 2.0, "J_elast": E, "J_sd": E_sd / 2.0, "J_elast_sd": E_sd,
     }
 
-    R = NS["jacobian_noise_ratio"](data)
-    assert np.all(R[:, n_par - S:][: n_rows - S] == 0.0), "structural zeros must read 0"
-    assert abs(R[0, 0] - 2.0) < 1e-12, R[0, 0]
-    assert abs(R[1, 1] - 0.1) < 1e-12, R[1, 1]
-    mask = NS["jacobian_noise_mask"](data, noise_max=NS["NOISE_MAX"])
+    # t = sqrt(K)|J|/sigma on the MEAN of K replications (K = 50 theta, 10 N_s)
+    res = NS["jacobian_significance"](data)
+    T = res["t"]
+    assert np.all(np.isnan(T[: n_rows - S, n_par - S:])), "structural zeros are not tested"
+    assert not res["tested"][: n_rows - S, n_par - S:].any()
+    assert abs(T[0, 0] - np.sqrt(50) / 2.0) < 1e-12, T[0, 0]
+    assert abs(T[1, 1] - np.sqrt(50) / 0.1) < 1e-12, T[1, 1]
+    assert abs(T[n_rows - S, n_par - S] - np.sqrt(10) * 0.25 / 0.02) < 1e-12
+    assert res["m"] == int(res["tested"].sum()) < T.size
+    mask = NS["jacobian_noise_mask"](data, alpha=NS["NOISE_ALPHA"])
     assert mask[0, 0] and mask.sum() == 1, mask.sum()
-    print("noise ratio: exact zeros measured, the planted noisy entry is the only mask")
+    # t = 3.5 is significant entry by entry and not once the multiplicity is accounted for
+    assert not NS["jacobian_noise_mask"](data, method="pointwise")[0, 0]
+    from scipy import stats as _st
+    assert abs(res["t_crit"] - _st.t.isf(0.05 / (2 * res["m"]), 49)) < 1e-12
+    # the planted entry fails the FWER test, and the old rule (t > 2 sqrt(K)) sat far above it
+    assert T[0, 0] < res["t_crit"] < 2 * np.sqrt(50)
+    bh = NS["jacobian_significance"](data, method="bh")
+    assert bh["significant"].sum() >= res["significant"].sum()
+    # an explicit replication count overrides the default
+    few = dict(data, jacobian_n_reps=np.full(n_par, 4.0))
+    assert abs(NS["jacobian_significance"](few)["t"][1, 1] - 2.0 / 0.1) < 1e-12
+    print("t-test: structural zeros untested, the planted noisy entry is the only mask")
 
     df = NS["identification_summary"](data)
     assert df["share_exact_zero"].loc["Extensive margin", "Variety count"] == 1.0
@@ -143,7 +159,7 @@ def gate_identification():
     print("identification summary: structural zeros, weak channels and noise separated")
 
     # the channel figure must not let an unmeasurable entry produce a bar
-    axes = NS["plot_channel_elasticities"](data, noise_max=NS["NOISE_MAX"])
+    axes = NS["plot_channel_elasticities"](data, alpha=NS["NOISE_ALPHA"])
     assert len(axes) == 3
 
     out = TMP / "figs"

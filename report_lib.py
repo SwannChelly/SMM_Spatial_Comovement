@@ -782,9 +782,27 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
 JACOBIAN_BOUNDARIES = [-1, -0.1, -0.05, -0.025, -0.01, -0.001,
                        0.001, 0.01, 0.025, 0.05, 0.1, 1]
 
-# An elasticity is unreadable when its Monte-Carlo standard deviation across the K
-# Jacobian replications is at least this fraction of the elasticity itself.
-NOISE_MAX = 0.5
+# Which entries of the Jacobian are distinguishable from zero?
+#
+# The plotted Jacobian is the MEAN of K independent replications (one draw set each,
+# common random numbers inside a replication), so its sampling error is sigma/sqrt(K),
+# not sigma. The test of entry (j,k) is therefore t_jk = sqrt(K_k) |J_jk| / sigma_jk,
+# Student t with K_k - 1 degrees of freedom under the null, and with ~10^4 entries
+# tested at once the critical value must account for the multiplicity. NOISE_TEST:
+#   "bonferroni"  family-wise: P(any displayed entry is noise) <= NOISE_ALPHA. Valid
+#                 under ANY correlation between entries (the replicates share draws
+#                 along rows and columns, so they are correlated), conservative under
+#                 positive correlation. The default.
+#   "bh"          Benjamini-Hochberg: expected SHARE of displayed entries that are noise
+#                 <= NOISE_ALPHA. Valid under positive dependence.
+#   "pointwise"   each entry at level NOISE_ALPHA, no multiplicity correction: about
+#                 NOISE_ALPHA of the true zeros are displayed. For comparison only.
+NOISE_ALPHA = 0.05
+NOISE_TEST = "bonferroni"
+
+# Replication counts main.jl uses when a tree predates `<file>_n_reps.npy`.
+JACOBIAN_K_DEFAULT = 50     # compute_jacobian(K = 50), the theta columns
+N_S_K_DEFAULT = 10          # compute_jacobian(N_s_K = 10), the appended N_s columns
 
 
 def _binned_cmap(boundaries, coarse=False):
@@ -811,36 +829,109 @@ def jacobian_matrix(data, kind="elasticity"):
     return J
 
 
-def jacobian_noise_ratio(data, kind="elasticity"):
+def jacobian_n_reps(data):
     """
-    sigma / |epsilon| entry by entry — the Monte-Carlo standard deviation of the
-    elasticity across the K Jacobian replications, relative to the elasticity itself.
+    Replications behind each Jacobian COLUMN: K for the theta columns, N_s_K for the
+    appended variety counts (they come from a separate, cheaper difference). Read from
+    `<file>_n_reps.npy` when the run wrote it, else main.jl's defaults.
+    """
+    J = np.asarray(jacobian_matrix(data, "raw"), float)
+    n = data.get("jacobian_n_reps")
+    if n is not None:
+        n = np.asarray(n, float).ravel()
+        if n.size != J.shape[1]:
+            raise ValueError(f"jacobian_n_reps has {n.size} entries for "
+                             f"{J.shape[1]} Jacobian columns")
+        return n
+    n_N = int(data.get("n_N_cols") or 0)
+    return np.r_[np.full(J.shape[1] - n_N, JACOBIAN_K_DEFAULT, float),
+                 np.full(n_N, N_S_K_DEFAULT, float)]
 
-    Scale-free: the theta/m rescaling that turns dm/dtheta into an elasticity cancels
-    between numerator and denominator, so this is the same number for the raw and the
-    elasticity Jacobian. An EXACTLY zero entry gets ratio 0 rather than infinity: a
-    structural zero (the N_s columns outside block 6) carries no simulation noise, and
-    conflating it with an unmeasured entry is precisely what this diagnostic is for.
+
+def jacobian_significance(data, alpha=NOISE_ALPHA, method=NOISE_TEST):
     """
-    E = np.asarray(jacobian_matrix(data, kind), float)
-    sd = data.get("J_elast_sd" if "elast" in kind else "J_sd")
+    Entry-by-entry test of H0: dm_j/dtheta_k = 0 on the averaged Jacobian.
+
+    t_jk = sqrt(K_k) |J_jk| / sigma_jk, with sigma the across-replication SD of the RAW
+    derivative. Raw and elasticity give the same t (theta/m is a constant per entry),
+    but the raw SD is the clean one: the saved elasticity SD also carries the noise of
+    the per-replication denominator m_k.
+
+    Entries exactly zero in every replication (J = 0 and sigma = 0) are STRUCTURAL
+    zeros: the moment does not depend on the parameter under common random numbers.
+    They are not tested, do not count towards the multiplicity, and are not flagged as
+    noise. A non-zero entry with sigma = 0 is deterministic and kept.
+
+    Returns a dict: `t`, `p`, `tested`, `significant` (all matrices), `m` (number of
+    tests), and `t_crit`, the critical |t| at the theta columns' degrees of freedom
+    (for bonferroni/pointwise; for bh, the smallest |t| that was retained).
+    """
+    from scipy import stats
+
+    J = np.abs(np.asarray(jacobian_matrix(data, "raw"), float))
+    sd = data.get("J_sd")
     if sd is None:
         raise FileNotFoundError(
             f"no across-replication SD for the Jacobian in {data['folder']}/"
-            f"{data['inference_step']}/ — compute_jacobian writes it as "
-            "jacobian_all*_elasticity_sd.npy when K > 1.")
+            f"{data['inference_step']}/ -- compute_jacobian writes it as "
+            "jacobian_all*_sd.npy when K > 1.")
     sd = np.abs(np.asarray(sd, float))
-    A = np.abs(E)
+    K = np.broadcast_to(jacobian_n_reps(data)[None, :], J.shape)
+
+    structural = (J == 0) & (sd == 0)
+    tested = ~structural
     with np.errstate(divide="ignore", invalid="ignore"):
-        R = sd / A
-    R[(A == 0) & (sd == 0)] = 0.0          # structural zero: measured, and exactly zero
-    R[~np.isfinite(R)] = np.inf            # nonzero noise on a zero signal: unreadable
-    return R
+        t = np.sqrt(K) * J / sd
+    t[(sd == 0) & (J > 0)] = np.inf
+    t[structural] = np.nan
+
+    df = np.maximum(K - 1, 1)
+    p = np.full(J.shape, np.nan)
+    p[tested] = 2 * stats.t.sf(t[tested], df[tested])
+    m = int(tested.sum())
+
+    sig = np.zeros(J.shape, bool)
+    df_theta = float(np.median(df[0])) if J.shape[1] else 1.0
+    if m == 0:
+        t_crit = np.nan
+    elif method == "bonferroni":
+        sig[tested] = p[tested] < alpha / m
+        t_crit = float(stats.t.isf(alpha / (2 * m), df_theta))
+    elif method == "pointwise":
+        sig[tested] = p[tested] < alpha
+        t_crit = float(stats.t.isf(alpha / 2, df_theta))
+    elif method == "bh":
+        pv = p[tested]
+        order = np.argsort(pv)
+        below = pv[order] <= alpha * np.arange(1, m + 1) / m
+        n_rej = int(np.nonzero(below)[0].max() + 1) if below.any() else 0
+        keep = np.zeros(m, bool)
+        keep[order[:n_rej]] = True
+        sig[tested] = keep
+        t_crit = float(np.nanmin(t[sig])) if n_rej else np.inf
+    else:
+        raise ValueError(f"unknown method {method!r}: use 'bonferroni', 'bh' or "
+                         "'pointwise'")
+    return {"t": t, "p": p, "tested": tested, "significant": sig, "m": m,
+            "t_crit": t_crit, "alpha": alpha, "method": method}
 
 
-def jacobian_noise_mask(data, kind="elasticity", noise_max=NOISE_MAX):
-    """True where the elasticity is DROWNED in simulation noise and must not be read."""
-    return jacobian_noise_ratio(data, kind) >= noise_max
+def jacobian_noise_mask(data, kind="elasticity", alpha=NOISE_ALPHA, method=NOISE_TEST):
+    """
+    True where a TESTED entry is not distinguishable from zero: what the figures blank.
+    Structural zeros are False (they are measured, and exactly zero). `kind` is kept for
+    the call signature; the test is scale-free, see `jacobian_significance`.
+    """
+    res = jacobian_significance(data, alpha=alpha, method=method)
+    return res["tested"] & ~res["significant"]
+
+
+def _noise_rule_tex(alpha=NOISE_ALPHA, method=NOISE_TEST):
+    """Short label for titles: which test, at which level."""
+    if alpha is None:
+        return "no noise filter"
+    name = {"bonferroni": "FWER", "bh": "FDR", "pointwise": "pointwise"}[method]
+    return f"{name} {alpha:g}"
 
 
 def _edges(sizes):
@@ -933,19 +1024,22 @@ def _sector_axis(ax, data, block_name="Regional sourcing shares", fontsize=fs(8)
 
 
 def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
-                       mask=None, title=None, save_to=None):
+                       mask=None, title=None, save_to=None, bad_color="#a6a6a6"):
     """
     One heatmap of the whole Jacobian, moment blocks on the rows and parameter blocks on
     the columns — the direct read of which parameter block moves which moment block.
 
-    `mask` (boolean, same shape) blanks entries to white: pass `jacobian_noise_mask(...)`
-    for the third panel of the triptych, i.e. the matrix purged of the entries whose
-    elasticity is not measured precisely enough to be read.
+    `mask` (boolean, same shape) paints entries in `bad_color`: pass
+    `jacobian_noise_mask(...)` for the third panel of the triptych, i.e. the matrix with
+    the entries not distinguishable from zero marked. The colour is a mid grey on
+    purpose -- white would be confused with the central [-0.001, 0.001] bin, which is
+    near-white and means "measured, and small", a different statement from "not
+    measured".
     """
     J = np.asarray(jacobian_matrix(data, kind), float)
     cmap, norm = _binned_cmap(JACOBIAN_BOUNDARIES, coarse=coarse)
     cmap = cmap.copy()
-    cmap.set_bad("white")
+    cmap.set_bad(bad_color)
     M = np.ma.masked_where(np.asarray(mask, bool), J) if mask is not None else J
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
 
@@ -959,7 +1053,8 @@ def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
                  rf"$\hat{{\mu}}_{data['mu']}$   ({J.shape[0]}$\times${J.shape[1]})")
         if mask is not None:
             kept = float((~np.asarray(mask, bool)).mean())
-            title += f"\nnoise-purged: {100 * kept:.1f}% of entries readable"
+            title += (f"\ngrey: not distinguishable from zero "
+                      f"({100 * (1 - kept):.1f}{pct()} of entries)")
     ax.set_title(title, pad=28)
     cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
                         ticks=(None if coarse else JACOBIAN_BOUNDARIES))
@@ -973,47 +1068,55 @@ def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
     return ax
 
 
-def plot_jacobian_noise(data, kind="elasticity", noise_max=NOISE_MAX, figsize=(15, 11),
-                        save_to=None):
+def plot_jacobian_noise(data, kind="elasticity", alpha=NOISE_ALPHA, method=NOISE_TEST,
+                        figsize=(15, 11), save_to=None):
     """
-    The middle panel of the triptych: the noise-to-signal ratio sigma/|epsilon| alone.
+    The middle panel of the triptych: the t-statistic |t| = sqrt(K)|J|/sigma of each
+    entry of the averaged Jacobian, on a log scale, with the critical value of the
+    multiple test marked on the colour bar. Entries that fail are overlaid in black and
+    are exactly the ones the purged panel blanks; structural zeros (not tested) are
+    left white. Read this panel first: it says WHICH parts of the Jacobian are measured
+    at all, before any statement is made about what they show.
+    """
+    from matplotlib.colors import LogNorm
 
-    Dark = the elasticity is well measured relative to its own size; light = it is not.
-    Entries at or above `noise_max` are hatched, and those are exactly the ones the
-    purged panel blanks out. Reading this panel first says WHICH parts of the Jacobian
-    can be interpreted at all, before any statement is made about what they show.
-    """
-    R = jacobian_noise_ratio(data, kind)
-    bad = R >= noise_max
+    res = jacobian_significance(data, alpha=alpha, method=method)
+    T, bad = res["t"], res["tested"] & ~res["significant"]
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
+    finite = T[np.isfinite(T) & (T > 0)]
+    lo = 0.5
+    hi = max(10.0, float(np.nanpercentile(finite, 99))) if finite.size else 10.0
 
     fig, ax = plt.subplots(figsize=figsize)
-    cmap = plt.get_cmap("YlOrRd").copy()
-    cmap.set_over("black")
-    im = ax.matshow(np.clip(R, 0, noise_max * 2), cmap=cmap, aspect="auto",
-                    vmin=0, vmax=noise_max * 2)
-    # mark the failures explicitly, so a reader is not left inferring them from a colour
+    cmap = plt.get_cmap("viridis").copy()
+    cmap.set_bad("white")
+    cmap.set_under(cmap(0.0))
+    cmap.set_over(cmap(1.0))
+    Tm = np.ma.masked_invalid(np.where(np.isinf(T), hi * 10, T))
+    im = ax.matshow(Tm, cmap=cmap, aspect="auto", norm=LogNorm(vmin=lo, vmax=hi))
     ys, xs = np.where(bad)
-    ax.scatter(xs, ys, s=1.5, marker="s", color="black", alpha=0.35, linewidths=0)
+    ax.scatter(xs, ys, s=1.5, marker="s", color="black", alpha=0.6, linewidths=0)
     _block_grid(ax, data, m_edges, p_edges)
-    _axis_labels(ax, data, R.shape)
+    _axis_labels(ax, data, T.shape)
 
-    share = float(bad.mean())
-    ax.set_title(f"Jacobian noise-to-signal $\\sigma/|\\varepsilon|$ — "
-                 f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"\n{100 * share:.1f}{pct()} of entries at or above {noise_max:g} "
-                 "(black squares) — not readable", pad=28)
+    share = bad.sum() / max(res["m"], 1)
+    ax.set_title(f"Jacobian $|t| = \\sqrt{{K}}\\,|J|/\\sigma$ -- {data['industry']}, "
+                 rf"$\hat{{\mu}}_{data['mu']}$"
+                 f"\n{100 * share:.1f}{pct()} of the {res['m']} tested entries not "
+                 f"distinguishable from zero ({_noise_rule_tex(alpha, method)}, "
+                 f"$|t| < {res['t_crit']:.2f}$; black)", pad=28)
     cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
-                        extend="max")
-    cbar.set_label(r"$\sigma_{jk} / |\varepsilon_{jk}|$ across the Jacobian replications"
-                   f"   (threshold {noise_max:g})")
+                        extend="both")
+    if np.isfinite(res["t_crit"]):
+        cbar.ax.axvline(res["t_crit"], color="red", linewidth=2)
+    cbar.set_label(r"$|t|$ of the averaged Jacobian (red: critical value)")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, bbox_inches="tight")
     return ax
 
 
-def plot_jacobian_triptych(data, kind="elasticity", noise_max=NOISE_MAX,
+def plot_jacobian_triptych(data, kind="elasticity", alpha=NOISE_ALPHA,
                            figsize=(15, 11), out_folder=None, tag="jacobian",
                            show=True):
     """
@@ -1025,11 +1128,11 @@ def plot_jacobian_triptych(data, kind="elasticity", noise_max=NOISE_MAX,
         return None if out_folder is None else \
             f"{out_folder}/{name}_{data['industry']}_mu{data['mu']}.pdf"
 
-    mask = jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
+    mask = jacobian_noise_mask(data, kind=kind, alpha=alpha)
     axes = [plot_jacobian_full(data, kind=kind, figsize=figsize, save_to=_p(tag))]
     if show:
         plt.show()
-    axes.append(plot_jacobian_noise(data, kind=kind, noise_max=noise_max,
+    axes.append(plot_jacobian_noise(data, kind=kind, alpha=alpha,
                                     figsize=figsize, save_to=_p(tag + "_noise")))
     if show:
         plt.show()
@@ -1089,17 +1192,18 @@ def plot_jacobian_blocks(data, kind="elasticity", coarse=True, ncols=3,
     return axes[:len(names)]
 
 
-def jacobian_block_summary(data, kind="elasticity", noise_max=NOISE_MAX):
+def jacobian_block_summary(data, kind="elasticity", alpha=NOISE_ALPHA):
     """
     Per (moment block x parameter block): the mean |elasticity|, and the share of the
-    block's entries that are readable at all (noise-to-signal below `noise_max`).
+    block's entries that are readable at all (distinguishable from zero, see
+    `jacobian_significance`; structural zeros count as readable).
 
     A large mean elasticity in a block whose readable share is low is a statement about
     the simulation, not about the model.
     """
     E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
     try:
-        ok = ~jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
+        ok = ~jacobian_noise_mask(data, kind=kind, alpha=alpha)
     except FileNotFoundError:
         ok = np.ones_like(E, dtype=bool)
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
@@ -1257,7 +1361,8 @@ def variance_covariance_summary(data):
 
 # Identification / sensitivity — the elasticity Jacobian read as the experiment
 # "move one parameter, watch the moments", with two thresholds: is there a channel
-# (IDENT_THRESHOLD), and is it measured well enough to see (NOISE_MAX).
+# (IDENT_THRESHOLD), and is it measured well enough to see (the multiple t-test of
+# `jacobian_significance`, at level NOISE_ALPHA).
 #
 # The variety counts N_s are part of the parameter axis: the Julia side appends
 # dm/dN_s to the saved Jacobian, so no re-attachment is done here.
@@ -1273,23 +1378,24 @@ def _blocks_2d(data, M):
             for j in range(len(data["param_block_names"]))}
 
 
-def _readable(data, kind="elasticity", noise_max=NOISE_MAX):
+def _readable(data, kind="elasticity", alpha=NOISE_ALPHA):
     """Boolean matrix: entries whose elasticity is precise enough to be interpreted."""
-    if noise_max is None:
+    if alpha is None:
         return np.ones_like(np.asarray(jacobian_matrix(data, kind), float), dtype=bool)
     try:
-        return ~jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
+        return ~jacobian_noise_mask(data, kind=kind, alpha=alpha)
     except FileNotFoundError:
         return np.ones_like(np.asarray(jacobian_matrix(data, kind), float), dtype=bool)
 
 
 def identification_summary(data, threshold=IDENT_THRESHOLD, kind="elasticity",
-                           noise_max=NOISE_MAX):
+                           alpha=NOISE_ALPHA):
     """
     Per (moment block x parameter block), four numbers that answer four questions:
 
       share_above       is there a channel?  share of entries with |elasticity| >= threshold
-      share_readable    can it be seen?      share whose sigma/|elasticity| < noise_max
+      share_readable    can it be seen?      share distinguishable from zero (t-test,
+                                         NOISE_TEST at alpha)
       share_live        both at once         above the threshold AND readable
       share_exact_zero  is it absent by construction?  share of entries exactly 0
 
@@ -1298,7 +1404,7 @@ def identification_summary(data, threshold=IDENT_THRESHOLD, kind="elasticity",
     whereas an unreadable entry says nothing at all.
     """
     E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+    ok = _readable(data, kind, alpha)
     rows = []
     for (i, j), sub in _blocks_2d(data, E).items():
         sub_ok = _blocks_2d(data, ok)[(i, j)]
@@ -1319,7 +1425,7 @@ def identification_summary(data, threshold=IDENT_THRESHOLD, kind="elasticity",
 
 
 def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
-                            noise_max=NOISE_MAX, figsize=(9, 6), save_to=None):
+                            alpha=NOISE_ALPHA, figsize=(9, 6), save_to=None):
     """
     One cell per (moment block x parameter block), coloured by the share of entries that
     are BOTH above the threshold and readable, annotated with that share, the block's
@@ -1328,7 +1434,7 @@ def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
     count) columns is the identification claim, read off directly.
     """
     E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+    ok = _readable(data, kind, alpha)
     m_names, p_names = data["moment_block_names"], data["param_block_names"]
     blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
     n_m, n_p = len(m_names), len(p_names)
@@ -1363,7 +1469,7 @@ def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
     ax.set_title(f"Identification map — {data['industry']}, "
                  rf"$\hat{{\mu}}_{data['mu']}$"
                  f"\nshare of $|\\varepsilon| \\geq {threshold:g}$ AND "
-                 f"$\\sigma/|\\varepsilon| < {noise_max:g}$", pad=52)
+                 f"significant at {_noise_rule_tex(alpha)}", pad=52)
     cbar = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.03)
     cbar.set_label("share of entries that are both large and measured")
     if save_to:
@@ -1373,7 +1479,7 @@ def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
 
 
 def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity",
-                              noise_max=NOISE_MAX, figsize=(15, 11), save_to=None,
+                              alpha=NOISE_ALPHA, figsize=(15, 11), save_to=None,
                               sector_block="Regional sourcing shares"):
     """
     The whole elasticity Jacobian with two kinds of entry removed: those below the
@@ -1390,7 +1496,7 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
 
     E = np.asarray(jacobian_matrix(data, kind), float)
     A = np.abs(E)
-    ok = _readable(data, kind, noise_max)
+    ok = _readable(data, kind, alpha)
     vmax = A[ok].max() if ok.any() and A[ok].max() > 0 else 1.0
 
     cmap = plt.get_cmap("RdBu_r").copy()
@@ -1420,7 +1526,7 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
 
     kept = float(((A >= threshold) & ok).mean())
     ax.set_title(f"Elasticity Jacobian, $|\\varepsilon| \\geq {threshold:g}$ and "
-                 f"$\\sigma/|\\varepsilon| < {noise_max:g}$ — "
+                 f"significant at {_noise_rule_tex(alpha)} — "
                  f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
                  f"   ({100 * kept:.1f}{pct()} of {A.size} entries shown)", pad=28)
     cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22)
@@ -1435,7 +1541,7 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
 def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative advantage",
                                                   "Variety count"),
                               threshold=IDENT_THRESHOLD, kind="elasticity",
-                              noise_max=NOISE_MAX, stat="max", figsize=(11, 5),
+                              alpha=NOISE_ALPHA, stat="max", figsize=(11, 5),
                               save_to=None):
     """
     One panel per channel: the largest READABLE |elasticity| that channel produces in
@@ -1448,7 +1554,7 @@ def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative adv
     outlier; a block with nothing readable left is marked "n/m".
     """
     E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+    ok = _readable(data, kind, alpha)
     m_names, p_names = data["moment_block_names"], data["param_block_names"]
     blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
     reduce = {"max": np.max, "mean": np.mean}[stat]

@@ -958,7 +958,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     jac_file = "jacobian_all.npy" if mu == 1 else "jacobian_all_step3.npy"
     jac_dir = folder / inf_step
     jac = {k: None for k in ("J", "J_elast", "J_sd", "J_elast_sd",
-                             "jacobian_param_indices")}
+                             "jacobian_param_indices", "jacobian_n_reps")}
     n_N_cols = None
     if "jacobian" in parts:
       for key, suffix in (("J", ""), ("J_elast", "_elasticity"),
@@ -968,6 +968,11 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         jac[key] = np.load(p) if p.exists() else None
       n_N_path = jac_dir / jac_file.replace(".npy", "_n_s_columns.npy")
       n_N_cols = int(np.load(n_N_path).ravel()[0]) if n_N_path.exists() else None
+      # Replications behind each column (K for theta, N_s_K for the variety counts):
+      # the averaged Jacobian's standard error is J_sd / sqrt(this). Absent on trees
+      # written before it existed; report_lib then falls back to main.jl's defaults.
+      n_rep_path = jac_dir / jac_file.replace(".npy", "_n_reps.npy")
+      jac["jacobian_n_reps"] = np.load(n_rep_path).ravel() if n_rep_path.exists() else None
     if jac["J"] is not None:
         n_r, n_c = jac["J"].shape
         if n_N_cols is None:
@@ -1114,6 +1119,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "J": jac["J"], "J_elast": jac["J_elast"], "J_sd": jac["J_sd"],
         "J_elast_sd": jac["J_elast_sd"], "n_N_cols": n_N_cols,
         "jacobian_param_indices": jac["jacobian_param_indices"],
+        "jacobian_n_reps": jac["jacobian_n_reps"],
         # inference
         "Sigma_data": Sigma_data, "Sigma_sim": Sigma_sim, "Omega": Omega,
         "W_step3": W_step3,

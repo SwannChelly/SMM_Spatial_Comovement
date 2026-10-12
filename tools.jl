@@ -2011,6 +2011,12 @@ function compute_jacobian(theta::Vector{Float64};
     # (0 when none were appended), so a reader never has to infer it from the width.
     NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_n_s_columns.npy")),
                  [n_N_cols])
+    # Replications behind each COLUMN of the averaged Jacobian — K for the θ columns,
+    # N_s_K for the appended variety counts — so a reader can form the standard error
+    # of the MEAN, J_sd/√K, rather than reading J_sd (the spread of one replication)
+    # as if it were the precision of the reported matrix.
+    NPZ.npzwrite(joinpath(out_dir, replace(filename, ".npy" => "_n_reps.npy")),
+                 vcat(fill(K, n_perturb), fill(N_s_K, n_N_cols)))
 
     # ── Block-level diagnostic ──────────────────────────────────────────────
     println("\nMean |elasticity| across $K replications, by block:")
