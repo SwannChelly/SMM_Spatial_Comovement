@@ -1113,8 +1113,7 @@ function sigma_beta_gamma_filename(; smm::Bool, aa::Bool = (CA_LEVEL === :aa))
     prefix = aa ? "Sigma_aa_beta_gamma" : "Sigma_beta_gamma"
     link   = REG_METHOD == :cloglog ? "_cloglog" : ""
     n1     = N_REG == 1 ? "_1" : ""
-    fsuf   = smm ? "_f" : ""
-    return prefix * link * n1 * fsuf * ".npy"
+    return prefix * link * n1  * ".npy"
 end
 
 """
