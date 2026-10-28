@@ -243,14 +243,18 @@ function gbar_sector_K(cells, k_counts::AbstractVector{<:Integer}, m::Integer,
 end
 
 """
-    concentrate_N_s(k_counts, m) -> (N_hat, clamped)
+    concentrate_N_s(k_counts, m; target = G_TARGET) -> (N_hat, clamped)
+
+`target` is the Ḡ_s(0) matched: the data by default, a fake world's own realised
+empty-cell share in inference.jl.
 
 Monotone integer bisection on `Ḡ_s(n)` over `[N_LO[s], N_HI[s]]` matching `G_TARGET[s]`.
 `k_counts[g]` is the number of the `m` draws cell `g` wins somewhere downstream (free of
 `N_s`, Lemma 2). `clamped[s] ∈ (:none, :lo, :hi)` records a binding bound — a rejection
 signal for the mechanism, reported per sector.
 """
-function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer)
+function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer;
+                         target::AbstractVector{<:Real} = G_TARGET)
     N_hat   = zeros(Int, S)
     clamped = fill(:none, S)
     lg      = gbar_logfact_table(m)
@@ -262,7 +266,7 @@ function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer)
             continue
         end
         Gs = n -> gbar_sector(cells, k_counts, m, n, lg)
-        tgt = G_TARGET[s]
+        tgt = target[s]
         if Gs(lo0) <= tgt
             N_hat[s], clamped[s] = lo0, :lo
         elseif Gs(hi0) >= tgt
@@ -543,13 +547,23 @@ const _CELL_PERMS = Ref{Union{Nothing, Tuple{Int, Vector{Matrix{Int32}}}}}(nothi
 function cell_perms(m::Int)
     C = _CELL_PERMS[]
     (C !== nothing && C[1] == m) && return C[2]
+    P = draw_cell_perms(m, MersenneTwister(CELL_PERM_SEED + m))
+    _CELL_PERMS[] = (m, P)
+    return P
+end
+
+"""
+    draw_cell_perms(m, rng) -> Vector{Matrix{Int32}}
+
+The permutation set of `cell_perms` from an explicit `rng`, not cached: each fake world
+(inference.jl) draws its own, so its simulated β carries its own simulation noise.
+"""
+function draw_cell_perms(m::Int, rng::AbstractRNG)
     k_max = min(m, maximum(N_HI))
-    rng = MersenneTwister(CELL_PERM_SEED + m)
     P = [Matrix{Int32}(undef, k_max, R_CELL_REG) for _ in 1:S]
     for s in 1:S, j in 1:R_CELL_REG
         P[s][:, j] .= Int32.(randperm(rng, m)[1:k_max])
     end
-    _CELL_PERMS[] = (m, P)
     return P
 end
 
@@ -598,13 +612,14 @@ function cell_cloglog_beta(y::AbstractVector{<:Real}; max_iter::Int = 100)
 end
 
 """
-    cell_cloglog_moment(linkages, N_hat) -> (β̄, n_fail, β_reps)
+    cell_cloglog_moment(linkages, N_hat; perms = cell_perms(m)) -> (β̄, n_fail, β_reps)
 
 Block 4: the mean of `cell_cloglog_beta` over the `R_CELL_REG` nested networks. Failed
 fits are excluded from the mean and counted.
 """
-function cell_cloglog_moment(linkages, N_hat::AbstractVector{<:Integer})
-    P  = cell_perms(size(linkages, 1))
+function cell_cloglog_moment(linkages, N_hat::AbstractVector{<:Integer};
+                             perms::Union{Nothing, Vector{Matrix{Int32}}} = nothing)
+    P  = perms === nothing ? cell_perms(size(linkages, 1)) : perms
     nA = length(REG_CELL_G)
     k  = size(REG_CELL_X, 2)
     y  = Vector{Float64}(undef, nA)

@@ -3,14 +3,16 @@
 # level, cell-level cloglog extensive margin, T profiled out of the search.
 #
 #   Step 1  identity-weighted PSO                          → θ̂_1   (step1/)
-#   Step 2  W_step3 = (Σ_data + Σ_sim)⁻¹, inference at θ̂_1          (step2/)
-#   Step 3  efficient-weighted PSO on [α ; κ] (β → γ → G)   → θ̂_2   (step3/)
-#   Step 4  inference at θ̂_2                                        (step3/inference/)
+#   Step 2  W = Cov(β_world − β_sim)⁻¹ over fake worlds at θ̂_1     (step2/)
+#   Step 3  W-weighted PSO on [α ; κ], loss on block 4      → θ̂_2   (step3/)
+#   Step 4  inference from fake worlds at θ̂_2, whole chain re-estimated
+#           in each                                         (step3/inference_world/)
 #   Post-hoc: the firm-level economy at θ̂_1 and θ̂_2 (suppliers.parquet, ...)
 #
 # Usage: julia main.jl <industry> <n_coef> <n_tau> <n_rho_inf> <relax_n_lo>
-# (run.sh builds the call). Steps 2–4 need `SIGMA_DATA_FILE` in the input folder; without
-# it the run stops after Step 1 and says why.
+# (run.sh builds the call). No data covariance is used: W and the inference both come
+# from worlds drawn from the model (inference.jl). World counts: ENV WORLD_B_W (1000),
+# WORLD_B_INF (500).
 
 using Distributed
 using Dates
@@ -27,7 +29,7 @@ Random.seed!(seed)
 @everywhere using Random
 @everywhere Random.seed!($seed)
 @everywhere using NPZ, DataFrames, CSV, Distributions, Plots, Statistics, Parquet,
-                  QuasiMonteCarlo, LinearAlgebra, Printf, SpecialFunctions
+                  QuasiMonteCarlo, LinearAlgebra, Printf, SpecialFunctions, Optim
 
 @everywhere include("model_CP.jl")
 @everywhere include("profiling.jl")
@@ -40,7 +42,7 @@ Random.seed!(seed)
 industry        = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef          = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau           = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
-n_rho_inference = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10_000
+n_rho_inference = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10_000   # unused since the fake-world inference
 relax_n_lo      = length(ARGS) >= 5 ? lowercase(strip(ARGS[5])) in ("true", "1", "yes") : false
 n_coef in (1, 4, 5) || error("n_coef must be 1, 4 or 5, got $n_coef")
 n_tau in (1, n_coef) || error("n_tau must be 1 (τ = d^α) or n_coef (one α per distance bin), got $n_tau")
@@ -52,8 +54,8 @@ run_step2 = true
 run_step3 = true
 run_step4 = true
 K_loops = 20         # block-coordinate loops per optimisation step
-K_sim   = 10_000     # simulations for Σ_sim
-K_jac   = 50         # draw replications averaged in the Jacobian
+B_w     = parse(Int, get(ENV, "WORLD_B_W", "1000"))    # fake worlds for W (Step 2)
+B_inf   = parse(Int, get(ENV, "WORLD_B_INF", "500"))   # fake worlds for inference (Step 4)
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$(industry)_profiled_aa_gran_kappa" * (relax_n_lo ? "_nlo1" : "") * "_pso"
@@ -86,39 +88,30 @@ if run_step1
 end
 theta_hat_1 = read_params(joinpath(find_last_stage_folder(step1_dir), "best_params.npy"))
 
-############## Steps 2–4 — need the data covariance ##############
+############## Steps 2–4 — fake worlds drawn from the model ##############
 
-Sigma_data, sigma_issue = load_sigma_data()
-if Sigma_data === nothing
-    println("\nSteps 2–4 skipped: $sigma_issue.\nThey need the bootstrap covariance of the inference " *
-            "moments (β_d → β_κ → γ_{s,a} → Ḡ_s(0)) in $(joinpath(input_folder, SIGMA_DATA_FILE)).")
-else
-    if run_step2
-        println("\n" * "="^70 * "\nSTEP 2: efficient weight matrix and inference at θ̂_1\n" * "="^70)
-        W_step3 = build_weight_matrix(theta_hat_1, Sigma_data; K = K_sim)
-        Omega = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
-        run_inference(theta_hat_1, W_step3, Omega, Sigma_data; dest = joinpath(output_folder, "step2"),
-                      industry = industry, K = K_jac, base_seed = 2_000_000, K_sim = K_sim)
-        report_granular(theta_hat_1, joinpath(output_folder, "step2"); industry = industry, label = "theta_1")
-    end
-    W_step3 = NPZ.npzread(joinpath(output_folder, "step2", "W_step3.npy"))
+if run_step2
+    println("\n" * "="^70 * "\nSTEP 2: weight matrix from $B_w fake worlds at θ̂_1\n" * "="^70)
+    world_weight_matrix(theta_hat_1; B = B_w, dest = joinpath(output_folder, "step2"))
+    report_granular(theta_hat_1, joinpath(output_folder, "step2"); industry = industry, label = "theta_1")
+end
+W_world = NPZ.npzread(joinpath(output_folder, "step2", "W_world.npy"))
 
-    if run_step3
-        println("\n" * "="^70 * "\nSTEP 3: efficient-weighted optimisation of [α ; κ]\n" * "="^70)
-        theta_hat_2, _ = run_optimization(; weight_matrix = W_step3, warm_start_params = theta_hat_1,
-                                          output_subfolder = "step3", max_loop = K_loops,
-                                          gamma_beta_only = true, moments_loss_gamma_beta = true)
-        NPZ.npzwrite(joinpath(step3_dir, "theta_hat_2.npy"), theta_hat_2)
-    end
+if run_step3
+    println("\n" * "="^70 * "\nSTEP 3: W-weighted optimisation of [α ; κ] (block 4)\n" * "="^70)
+    theta_hat_2, _ = run_optimization(; weight_matrix = W_world, warm_start_params = theta_hat_1,
+                                      output_subfolder = "step3", max_loop = K_loops,
+                                      gamma_beta_only = true, loss_blocks = [4])
+    NPZ.npzwrite(joinpath(step3_dir, "theta_hat_2.npy"), theta_hat_2)
+end
 
-    if run_step4
-        println("\n" * "="^70 * "\nSTEP 4: inference at θ̂_2\n" * "="^70)
-        theta_hat_2 = read_params(joinpath(step3_dir, "theta_hat_2.npy"))
-        Omega = NPZ.npzread(joinpath(output_folder, "step2", "Omega.npy"))
-        run_inference(theta_hat_2, W_step3, Omega, Sigma_data; dest = step3_dir,
-                      industry = industry, K = K_jac, base_seed = 1_000_000, K_sim = K_sim)
-        report_granular(theta_hat_2, step3_dir; industry = industry, label = "theta_2")
-    end
+if run_step4
+    println("\n" * "="^70 * "\nSTEP 4: inference from $B_inf fake worlds at θ̂_2\n" * "="^70)
+    theta_hat_2 = read_params(joinpath(step3_dir, "theta_hat_2.npy"))
+    world_inference(Vector{Float64}(theta_hat_2), W_world; B = B_inf,
+                    dest = joinpath(step3_dir, "inference_world"),
+                    tcol_names = _tcol_names, sector_names = string.(SECTOR_NAMES))
+    report_granular(theta_hat_2, step3_dir; industry = industry, label = "theta_2")
 end
 
 ############## Post-hoc firm-level economy ##############

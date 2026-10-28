@@ -125,9 +125,18 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
             end
             rv = T_new[s, T_REF_REGION[s]]
             rv > 0 && (T_new[s, cols] ./= rv)
+            # A ZERO-target column (a fake world in which an area active in the data wins
+            # nothing — never on the data) is held fixed relative to the reference: the
+            # ratio-1 update would let the gauge drift it, since the model γ sums to
+            # domestic_share and the target to 1, a common factor the renormalisation
+            # removes from every positive column but not from this one.
+            for c in cols
+                target[c, s] > 0 || (T_new[s, c] = T_par[s, c])
+            end
         end
         max_step = 0.0
         for s in 1:S, c in SECTOR_T_COLS[s]
+            target[c, s] > 0 || continue
             d = abs(log(T_new[s, c]) - log(T_par[s, c]))
             d > max_step && (max_step = d)
         end

@@ -1,403 +1,544 @@
-##### inference.jl — Steps 2 and 4: efficient weighting and inference #####
+##### inference.jl — Steps 2 and 4: weighting and inference from fake worlds #####
 #
-# The inference moments are β → γ → G: [β_d ; β_κ] (BLOCK_RANGES[4]), γ_{s,a}
-# (BLOCK_RANGES[5]) and Ḡ_s(0) (BLOCK_RANGES[6]), in that order everywhere (Σ file,
-# W_step3, Ω, Jacobian rows).
+# The data covariance is not used. Both the weight matrix and the inference come from
+# FAKE WORLDS drawn from the model at an estimate:
 #
-# What is estimated, and how its uncertainty is obtained:
-#   a = [α ; κ]  — on the moment conditions: Jacobian G_a = dm/da along the profiled
-#                  manifold (T follows by Sinkhorn), sandwich variance.
-#   T            — not estimated: T̂ = T*(â, γ̂). Delta method over (â, γ̂) with their
-#                  correlation: the estimation error of â and the data noise of the γ
-#                  target that the inversion matches.
-#   N_s          — calibrated: Ḡ_s(N̂_s; q̂) = Ĝ_s. Implicit-function delta method over
-#                  (Ĝ, â, γ̂).
-# The head (Ω^L, Ω^s, A) is held at θ̂ (it is fixed in Step 3).
+#   Step 2 (`world_weight_matrix`). At θ̂₁ (W = I), draw B worlds: one network of N̂_s
+#   varieties per sector with i.i.d. uniform draws (NOT the estimation's Sobol design).
+#   Each world yields its own "data" (β_b, γ_b, G_b, π_b), computed as on the real data.
+#   T is re-inverted on γ_b with A updated on π_b, N is calibrated on G_b, β is simulated
+#   at μ̂₁ with a seed proper to the world and at the estimation's m, and
+#   e_b = β_b − β_sim is kept. Ω̃ = Cov(e) and W = Ω̃⁻¹, on block 4 only: γ and G are
+#   reproduced exactly by the T inversion and the N bisection, so their weight does not
+#   matter. No derivative is computed. When block 4 has as many entries as (α, κ) the
+#   system is exactly identified and W does not move the point estimate.
+#
+#   Step 4 (`world_inference`). At θ̂₂, draw B worlds and re-run the WHOLE chain in each,
+#   W fixed: T inversion + A update, N calibration, and a local search over (α, κ)
+#   started at the estimate. The B parameter sets give, for every parameter, sd = their
+#   dispersion, a 95% interval = their 2.5/97.5% quantiles, and bias = mean − estimate;
+#   plus the log-T gap between two areas (Toulouse − Paris by default), the within-sector
+#   dispersion of log T, and closed-form counterfactuals recomputed world by world.
+#
+# ── The A update ─────────────────────────────────────────────────────────────
+# Downstream sales are Y_r ∝ (c_r/A_r)^ε δ_r and c_r depends on (α, κ, T) only (upstream
+# wages ≡ 1), so π_r is matched by A in closed form. The update is written RELATIVE to
+# the estimate,
+#
+#     A_b = Â · (c_r(α, κ, T_b)/c_r(α̂, κ̂, T̂)) · (π_b/π̂)^(−1/ε),      A_b ./= A_b[1],
+#
+# with c_r and π̂ from the analytical price solve, so a world identical to the model
+# returns Â exactly. γ depends on A through Y_r, so the T inversion and the A update
+# alternate until A stops moving. Ω^L and Ω^s stay at the estimate.
+#
+# ── Areas that come out empty ────────────────────────────────────────────────
+# A world is ONE network, so an area active in the data can win nothing in it (γ_b = 0).
+# On the data such an area would not be active and its T would be zero; the world does
+# the same: its T is set to `EMPTY_T` and held there by `invert_T_ge`. Such draws are
+# reported as EMPTY rather than as a log T of −69. A world whose REFERENCE area is empty
+# cannot be normalised and is excluded (`:empty_ref`).
+#
+# ── Seeds ────────────────────────────────────────────────────────────────────
+# World b uses seed_world + b for its network and seed_sim + b for its simulator (Sobol
+# draws at N_rho randomised by that seed, and its own R_CELL_REG block-4 permutations).
+# Within a world the simulator is held fixed across the local search (common random
+# numbers), so the world's criterion is deterministic in (α, κ).
 
 using Printf
 using Dates
+using Optim
 
-inference_moment_indices() = vcat(collect(BLOCK_RANGES[4]), collect(BLOCK_RANGES[5]), collect(BLOCK_RANGES[6]))
-
-"""Local (within β → γ → G) ranges of the three inference blocks."""
-function inference_block_layout()
-    n4, n5, n6 = length.(BLOCK_RANGES[4:6])
-    return (1:n4, (n4 + 1):(n4 + n5), (n4 + n5 + 1):(n4 + n5 + n6))
-end
+const EMPTY_T     = 1e-30
+const EMPTY_T_CUT = 1e-20   # the per-sector renormalisation moves EMPTY_T slightly
+const WORLD_PENALTY = 1e12
 
 """
-    gamma_block_cs() -> [(area, sector)] of the γ moments, in moment order (s-major)
-"""
-function gamma_block_cs()
-    off = length(MOMENT_MASK) - T_COL_DIM * S - S
-    return [(c, s) for s in 1:S for c in 1:T_COL_DIM if MOMENT_MASK[off + (s - 1) * T_COL_DIM + c]]
-end
-
-"""
-    _sym_inv(A; floor_rel=1e-10) -> (inv(A), floored::Bool)
+    _sym_inv(A; floor_rel=1e-10) -> inv(A)
 
 Inverse of a symmetric matrix by Cholesky, with an eigenvalue floor at
 `floor_rel × λ_max` when it is not positive definite.
 """
 function _sym_inv(A::AbstractMatrix; floor_rel::Float64 = 1e-10)
     As = Symmetric((Matrix(A) .+ Matrix(A)') ./ 2)
-    M, floored = try
-        (Matrix(inv(cholesky(As))), false)
+    M = try
+        Matrix(inv(cholesky(As)))
     catch
         F = eigen(As)
-        (F.vectors * Diagonal(1.0 ./ max.(F.values, F.values[end] * floor_rel)) * F.vectors', true)
+        F.vectors * Diagonal(1.0 ./ max.(F.values, F.values[end] * floor_rel)) * F.vectors'
     end
-    return (M .+ M') ./ 2, floored
+    return (M .+ M') ./ 2
 end
 
-##################### Step 2: Σ_data, Σ_sim, W ###################
+##################### One fake world ###################
 
 """
-    load_sigma_data() -> (Σ_data, "") or (nothing, reason)
+    draw_world(theta, N_hat, seed) -> NamedTuple
 
-The data (bootstrap) covariance of the inference moments, `SIGMA_DATA_FILE` in the
-input folder, laid out β_d (N_REG) → β_κ (1) → γ (active non-reference areas, s-major)
-→ Ḡ_s(0) (S). Any other size is refused.
+One fake world at `theta`: a single network with `N_hat[s]` varieties per sector
+(i.i.d. draws, weight `1/N̂_s`, rows past `N̂_s` padded at u = 0.5 with weight zero) and
+the statistics computed on it as on the real data:
+
+  * `beta`  — the cell cloglog of `has_sup_ls = 1{cell l wins one of the N̂_s varieties
+              for at least one buyer}`: ONE network, ONE fit (`ok = false` if it fails);
+  * `G`     — per sector, the share of cells hosting no supplier;
+  * `gamma` — the sourcing shares by area, summing to one per sector (the form
+              `invert_T_ge` takes as `target`; `EMP_GAMMA_T_TILDE` on the data);
+  * `pi`    — downstream sales shares, `DOWNSTREAM_REGIONS` order.
 """
-function load_sigma_data()
-    path = joinpath(input_folder, SIGMA_DATA_FILE)
-    isfile(path) || return (nothing, "$path does not exist")
-    Σ = NPZ.npzread(path)
-    n_gb = length(inference_moment_indices())
-    size(Σ) == (n_gb, n_gb) || return (nothing,
-        "$path is $(size(Σ)), expected ($n_gb, $n_gb) = β_d ($N_REG) + β_κ (1) + " *
-        "γ ($(length(BLOCK_RANGES[5]))) + Ḡ_s(0) ($S)")
-    isapprox(Σ, Σ'; atol = 1e-10) || return (nothing, "$path is not symmetric")
-    return (Matrix{Float64}(Σ), "")
+function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
+    N_max = maximum(N_hat)
+    u = generate_draws(N_max, n_good, :mc; randomise = true, rng = MersenneTwister(seed))[1]
+    W = zeros(N_max, n_good)
+    for g in 1:n_good
+        n = N_hat[GOOD_S[g]]
+        W[1:n, g] .= 1.0 / n
+        u[(n + 1):N_max, g] .= 0.5
+    end
+    net = solve_network(theta; u_draws = u, sample_weights = W)
+    has = falses(n_good)
+    @inbounds for g in 1:n_good
+        has[g] = any(view(net.linkages_flat, 1:N_hat[GOOD_S[g]], g))
+    end
+    beta, ok = cell_cloglog_beta(Float64[has[g] for g in REG_CELL_G])
+    G = [isempty(c) ? 0.0 : count(g -> !has[g], c) / length(c) for c in CELLS_OF_SECTOR]
+    X_s = zeros(S)
+    for g in 1:n_good
+        X_s[GOOD_S[g]] += net.X_ls_flat[g]
+    end
+    gam = zeros(T_COL_DIM, S)
+    for g in 1:n_good
+        s = GOOD_S[g]
+        X_s[s] > 0 && (gam[T_GATHER[GOOD_R[g]], s] += net.X_ls_flat[g] / X_s[s])
+    end
+    Yd = net.Y_r[DOWNSTREAM_REGIONS]
+    ref_empty = any(s -> T_REF_REGION[s] > 0 && gam[T_REF_REGION[s], s] <= 0, 1:S)
+    return (beta = beta, ok = ok, G = G, gamma = gam, pi = Yd ./ sum(Yd), ref_empty = ref_empty)
 end
 
 """
-    build_weight_matrix(theta_hat_1, Sigma_data; K) -> W_step3
+    world_reference(theta_hat) -> NamedTuple
 
-`Σ_sim` from `K` re-simulations at θ̂_1 (i.i.d. draws, `N_RHO_INFERENCE` per cell),
-`Ω = Σ_data + Σ_sim` (eigenvalue floor at λ_max/1e8 if cond > 1e10), `W_step3 = Ω⁻¹`.
-Saves `step2/{M_sim, Sigma_data, Sigma_sim, Omega, W_step3}.npy` and `diagnostics.txt`.
+What the A update and the world parameter vectors read off the estimate: the level
+vector itself (its Ω^L, Ω^s are kept), Â normalised, α̂, κ̂, T̂ by area, and the
+analytical c_r and π_r at θ̂.
 """
-function build_weight_matrix(theta_hat_1::Vector{Float64}, Sigma_data::Matrix{Float64}; K::Int = 10_000)
-    gb = inference_moment_indices()
-    println("Estimating Σ_sim from K = $K simulations at θ̂_1...")
-    rows = pmap(1:K) do k
-        u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, :mc; randomise = true, rng = MersenneTwister(k))
-        moments_to_vec(full_SMM(theta_hat_1; u_draws = u_k, sample_weights = w_k)[2])[gb]
-    end
-    M_sim = permutedims(reduce(hcat, rows))
-    Sigma_sim = cov(M_sim; dims = 1)
-    Omega = Sigma_data .+ Sigma_sim
-    Omega = (Omega .+ Omega') ./ 2
-    ev = eigvals(Symmetric(Omega))
-    cond_Ω = maximum(ev) / max(minimum(ev), 1e-300)
-    println("  Ω condition number: $(round(cond_Ω, sigdigits=4))")
-    if cond_Ω > 1e10
-        @warn "Ω is ill-conditioned (κ = $cond_Ω): eigenvalue floor at λ_max/1e8."
-        F = eigen(Symmetric(Omega))
-        Omega = F.vectors * Diagonal(max.(F.values, maximum(ev) / 1e8)) * F.vectors'
-        Omega = (Omega .+ Omega') ./ 2
-    end
-    W = inv(Omega)
-    dir = joinpath(output_folder, "step2"); mkpath(dir)
-    for (f, v) in (("M_sim", M_sim), ("Sigma_data", Sigma_data), ("Sigma_sim", Sigma_sim),
-                   ("Omega", Omega), ("W_step3", W))
-        NPZ.npzwrite(joinpath(dir, "$f.npy"), v)
-    end
-    write(joinpath(dir, "diagnostics.txt"),
-          "K = $K\nlambda_max = $(maximum(ev))\nlambda_min = $(minimum(ev))\ncondition_number = $cond_Ω\n")
-    return W
+function world_reference(theta_hat::AbstractVector)
+    ΩL, Ωs, A, α, κ = normalized_head(theta_hat)
+    Tp = unpack_T_par(theta_hat)
+    pr = compute_prices_analytical(ΩL, Ωs, A, gather_T_to_ze(Tp, κ), build_tau(α))
+    return (theta = collect(Float64, theta_hat), ΩL = ΩL, Ωs = collect(Ωs), A = collect(A),
+            alpha = collect(α), kappa = Float64(κ), T = Matrix(Tp),
+            c = collect(pr.c_r), pi = pr.Y_r ./ sum(pr.Y_r))
 end
 
-##################### Profiled Jacobian ###################
-
 """
-    profiled_jacobian(theta; K=50, base_seed, step_rel=1e-2) -> NamedTuple
+    recalibrate_TA(ref, alpha, kappa, gamma_b, pi_b; T_init, A_init) -> (T, A, converged)
 
-Central finite differences, averaged over `K` i.i.d. draw sets (`N_RHO_INFERENCE` per
-cell; the same draws for every perturbation of a replication), with `N̂_s` pinned at the
-median of its free value over 5 draw sets — `N̂_s(θ)` is a step function, and its
-dispersion across draw sets is simulation noise in q̂, printed here.
-
-Columns, each moving T to the Sinkhorn image `T*` (started from T̂, deterministic):
-  * α_b — log step `α·e^{±δ}` (derivative = Δm / (2δα));
-  * κ   — additive step `±δ` (κ can sit at or below zero);
-  * γ_j — the j-th γ target entry (area c, sector s) moved by `e^{±δ}` with the head
-          fixed (derivative per unit of γ, the units of Σ_data).
-
-Returns the moment Jacobian `G` (all masked moments × columns), its across-replication
-sd, the count-distribution rows `Gc` (vec of S × |COUNT_CURVE_K|), `fT = ∂T*/∂(column)`
-on the identified T entries, the pinned `N_fixed` and the column labels.
+Re-invert T on a world's sourcing shares `gamma_b` and update A on its sales shares
+`pi_b` (see the header), alternating until `max |Δ log A| < tol`. `converged` requires
+every inversion to converge and the alternation to settle.
 """
-function profiled_jacobian(theta::Vector{Float64}; K::Int = 50, base_seed::Int = 0,
-                           step_rel::Float64 = 1e-2)
-    δ = step_rel
-    ΩL, Ωs, A, α, κ = normalized_head(theta)
-    T_hat = unpack_T_par(theta)
-    reduce_T(Tp) = vec(permutedims(Tp))[T_MASK][T_ID_REDUCED]
-
-    # ── pin N̂_s ────────────────────────────────────────────────────────────────
-    n_probe = min(K, 5)
-    N_mat = reduce(hcat, pmap(1:n_probe) do k
-        u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, :mc; randomise = true,
-                                  rng = MersenneTwister(base_seed + k))
-        full_SMM(theta; u_draws = u_k, sample_weights = w_k, return_full = true)[2].N_hat_free
-    end)
-    N_fixed = [round(Int, median(N_mat[s, :])) for s in 1:S]
-    println("Jacobian: N̂_s pinned at $N_fixed (median over $n_probe draw sets of $N_RHO_INFERENCE draws)")
-    spread = [(maximum(N_mat[s, :]) - minimum(N_mat[s, :])) / max(N_fixed[s], 1) for s in 1:S]
-    for s in 1:S
-        @printf("  %-8s pinned %4d  min %4d  max %4d  spread/pinned %.3f\n", SECTOR_NAMES[s],
-                N_fixed[s], minimum(N_mat[s, :]), maximum(N_mat[s, :]), spread[s])
+function recalibrate_TA(ref, alpha, kappa, gamma_b::AbstractMatrix, pi_b::AbstractVector;
+                        T_init::AbstractMatrix = ref.T, A_init::AbstractVector = ref.A,
+                        max_outer::Int = 20, tol::Float64 = 1e-8)
+    T = Matrix{Float64}(T_init)
+    A = Vector{Float64}(A_init)
+    for s in 1:S, c in SECTOR_T_COLS[s]
+        (gamma_b[c, s] <= 0 && c != T_REF_REGION[s]) && (T[s, c] = EMPTY_T)
     end
-    maximum(spread) > 0.10 && @warn "N̂_s varies by up to $(round(100 * maximum(spread), digits=1))% " *
-        "across draw sets at a fixed θ (simulation noise in q̂): raise N_RHO_INFERENCE."
-
-    # ── perturbed parameter vectors (T re-inverted) ──────────────────────────
-    cols = NamedTuple[]
-    for b in 1:N_TAU
-        push!(cols, (label = N_TAU == 1 ? "alpha" : "alpha_$b", kind = :alpha, b = b,
-                     denom = 2δ * α[b]))
+    tau  = build_tau(alpha)
+    pfac = (pi_b ./ ref.pi) .^ (-1 / epsilon)
+    conv = true
+    for _ in 1:max_outer
+        res = invert_T_ge(alpha, ref.ΩL, ref.Ωs, A; kappa = kappa, target = gamma_b, T_init = T)
+        conv &= res.converged
+        T = res.T
+        c = compute_prices_analytical(ref.ΩL, ref.Ωs, A, gather_T_to_ze(T, kappa), tau).c_r
+        A_new = ref.A .* (c ./ ref.c) .* pfac
+        A_new ./= A_new[1]
+        step = maximum(abs.(log.(A_new) .- log.(A)))
+        A = A_new
+        step < tol && return (T = T, A = A, converged = conv)
     end
-    push!(cols, (label = "kappa", kind = :kappa, b = 0, denom = 2δ))
-    for (c, s) in gamma_block_cs()
-        push!(cols, (label = "gamma[$(SECTOR_NAMES[s])-$(c)]", kind = :gamma, b = 0, c = c, s = s,
-                     denom = 2δ * EMP_GAMMA_T[c, s]))
-    end
-    function perturbed(col, sgn)
-        x = copy(theta); αx = copy(α); κx = κ; target = EMP_GAMMA_T
-        if col.kind == :alpha
-            αx[col.b] = α[col.b] * exp(sgn * δ); x[alpha_range()[col.b]] = αx[col.b]
-        elseif col.kind == :kappa
-            κx = κ + sgn * δ; x[kappa_index()] = κx
-        else
-            target = copy(EMP_GAMMA_T); target[col.c, col.s] *= exp(sgn * δ)
-        end
-        res = invert_T_ge(αx, ΩL, Ωs, A; kappa = κx, target = target, T_init = copy(T_hat))
-        res.converged || @warn "invert_T_ge did not converge for column $(col.label) ($(sgn > 0 ? "+" : "−"))"
-        return with_T(x, res.T), res.T
-    end
-    pert = pmap(i -> (perturbed(cols[i], +1), perturbed(cols[i], -1)), 1:length(cols))
-    fT = reduce(hcat, [(reduce_T(p[1][2]) .- reduce_T(p[2][2])) ./ cols[i].denom for (i, p) in enumerate(pert)])
-    θp = [p[1][1] for p in pert]; θm = [p[2][1] for p in pert]
-    denoms = [c.denom for c in cols]
-
-    # ── moment Jacobian ───────────────────────────────────────────────────────
-    println("Jacobian: $K replications × $(2 * length(cols) + 1) evaluations " *
-            "($(N_TAU + 1) [α ; κ] columns, $(length(cols) - N_TAU - 1) γ-target columns)")
-    flush(stdout)
-    reps = pmap(1:K) do k
-        u_k, w_k = generate_draws(N_RHO_INFERENCE, n_good, :mc; randomise = true,
-                                  rng = MersenneTwister(base_seed + 100 + k))
-        ev(p) = (m = full_SMM(p; u_draws = u_k, sample_weights = w_k, N_fixed = N_fixed,
-                              return_full = true)[2]; vcat(moments_to_vec(m), vec(m.G_curve)))
-        reduce(hcat, [(ev(θp[i]) .- ev(θm[i])) ./ denoms[i] for i in eachindex(cols)])
-    end
-    J    = mean(reps)
-    J_sd = K > 1 ? sqrt.(max.(mean([r .^ 2 for r in reps]) .- J .^ 2, 0.0) .* (K / (K - 1))) : zeros(size(J))
-    all(isfinite, J) || error("non-finite Jacobian entries (a collapsed sector or a failed inversion)")
-    nM = length(MOMENT_MASK[MOMENT_MASK])
-    return (G = J[1:nM, :], G_sd = J_sd[1:nM, :], Gc = J[(nM + 1):end, :], fT = fT,
-            N_fixed = N_fixed, labels = [c.label for c in cols])
+    return (T = T, A = A, converged = false)
 end
 
-##################### Inference at an estimate ###################
+"""
+    world_theta(ref, alpha, kappa, T, A) -> level vector: the estimate's Ω, new α, κ, A, T
+"""
+function world_theta(ref, alpha, kappa, T, A)
+    x = copy(ref.theta)
+    x[(S + 2):(S + R_downstream + 1)] = A
+    x[alpha_range()] = alpha
+    x[kappa_index()] = kappa
+    return with_T(x, T)
+end
 
 """
-    run_inference(theta, W, Omega, Sigma_data; dest, industry, K=50, base_seed, K_sim)
+    world_simulator(seed) -> (u, w, perms)
 
-Inference at the profiled estimate `theta`, written under `<dest>/inference/`:
-  * [α ; κ]: efficient `(G'WG)⁻¹` and sandwich `(G'WG)⁻¹ G'WΩWG (G'WG)⁻¹` variances,
-    fitted-moment and residual SEs, Hansen J (`inference_summary.txt`, `J_stat.txt`);
-  * T: `V_T = f_a V_a f_a' + f_γ Σ_γγ f_γ' + f_a C f_γ' + (·)'`, `C = Cov(â, γ̂) = P Σ_data[:, γ]`,
-    `P = (G'WG)⁻¹ G'W` (the influence of the moments on â);
-  * N_s: `dN_s = [dĜ_s − a_s dâ − b_s dγ̂] / D_s`, `D_s = Ḡ_s(N̂+1) − Ḡ_s(N̂)`,
-    `a_s = ∂Ḡ_s/∂a`, `b_s = ∂Ḡ_s/∂γ` (block-6 rows of the Jacobian);
-  * the count distribution Ḡ_s(K): the same substitution with loading `r_s^K = D_s^K/D_s`
-    on the target and residualised structural loadings (`r = 0` for a clamped sector);
-  * `inference_delta.txt`: the a / T / N_s report.
+The simulator of one world: `N_rho` Sobol draws (the estimation's m and design)
+randomised by the world's seed, and the world's own block-4 network permutations.
 """
-function run_inference(theta::Vector{Float64}, W::Matrix{Float64}, Omega::Matrix{Float64},
-                       Sigma_data::Matrix{Float64}; dest::String, industry::String = "",
-                       K::Int = 50, base_seed::Int = 0, K_sim::Int = 0)
-    inf_dir = joinpath(dest, "inference"); mkpath(inf_dir)
-    gb = inference_moment_indices()
-    rβ, rγ, rG = inference_block_layout()
-    n_a = N_TAU + 1
+function world_simulator(seed::Integer)
+    rng = MersenneTwister(seed)
+    u, w = generate_draws(N_rho, n_good, :sobol; randomise = true, rng = rng)
+    return (u = u, w = w, perms = draw_cell_perms(N_rho, rng))
+end
 
-    jac = profiled_jacobian(theta; K = K, base_seed = base_seed)
-    NPZ.npzwrite(joinpath(dest, "jacobian_profiled.npy"), jac.G)
-    NPZ.npzwrite(joinpath(dest, "jacobian_profiled_sd.npy"), jac.G_sd)
-    write(joinpath(dest, "jacobian_profiled_columns.txt"), join(jac.labels, "\n") * "\n")
-    G_a = jac.G[gb, 1:n_a];   G_γ = jac.G[gb, (n_a + 1):end]
-    f_a = jac.fT[:, 1:n_a];   f_γ = jac.fT[:, (n_a + 1):end]
+"""
+    simulate_beta(params, G_target, sim) -> (beta, N_hat, n_fail)
 
-    gr = granular_report(theta)                      # on the estimation draws
-    emp = vec(empirical_moments)[gb]
-    sim = moments_to_vec(full_SMM(theta)[2])[gb]
+Block 4 at `params` on a world's simulator: one Ricardian solve, `N̂_s` calibrated on
+the world's empty-cell shares `G_target`, then the cell cloglog averaged over the
+simulator's networks.
+"""
+function simulate_beta(params::AbstractVector, G_target::AbstractVector, sim)
+    net = solve_network(params; u_draws = sim.u, sample_weights = sim.w)
+    L = net.linkages_flat
+    m = size(L, 1)
+    N_hat, _ = concentrate_N_s(vec(sum(L; dims = 1)), m; target = G_target)
+    beta, n_fail, _ = cell_cloglog_moment(L, N_hat; perms = sim.perms)
+    return beta, N_hat, n_fail
+end
 
-    # ── [α ; κ] ──────────────────────────────────────────────────────────────
-    a_idx = vcat(collect(alpha_range()), kappa_index())
-    a_hat = theta[a_idx]
-    a_lab = PARAM_LABELS[a_idx]
-    V_eff, floored = _sym_inv(G_a' * W * G_a)
-    V_sw = V_eff * (G_a' * W * Omega * W * G_a) * V_eff; V_sw = (V_sw .+ V_sw') ./ 2
-    se_eff = sqrt.(max.(diag(V_eff), 0.0)); se_sw = sqrt.(max.(diag(V_sw), 0.0))
-    Var_m = G_a * V_sw * G_a'; Var_m = (Var_m .+ Var_m') ./ 2
-    se_fit = sqrt.(max.(diag(Var_m), 0.0))
-    se_res = sqrt.(max.(diag(Omega) .- diag(Var_m), 0.0))
-    r = emp .- sim
-    J_stat = (r' * W * r)[1]
-    df = length(gb) - n_a
-    pval = df > 0 ? 1.0 - cdf(Chisq(df), J_stat) : NaN
-    for (f, v) in (("var_theta_efficient", V_eff), ("var_theta_sandwich", V_sw), ("se_theta", se_eff),
-                   ("se_theta_sandwich", se_sw), ("t_stats", a_hat ./ se_sw),
-                   ("ci_95", hcat(a_hat .- 1.96 .* se_sw, a_hat .+ 1.96 .* se_sw)),
-                   ("se_moments_fitted", se_fit), ("se_moment_residuals", se_res))
-        NPZ.npzwrite(joinpath(inf_dir, "$f.npy"), v)
+_failure(err) = (ok = false, reason = Symbol("error: ", first(sprint(showerror, err), 80)))
+function _count_failures(res)
+    fails = Dict{Symbol, Int}()
+    for r in res
+        r.ok || (fails[r.reason] = get(fails, r.reason, 0) + 1)
+    end
+    return fails
+end
+
+##################### Step 2: the weight matrix ###################
+
+function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
+    try
+        world = draw_world(theta_hat, N_hat, seed_w)
+        world.ok        || return (ok = false, reason = :world_fit)
+        world.ref_empty && return (ok = false, reason = :empty_ref)
+        cal = recalibrate_TA(ref, ref.alpha, ref.kappa, world.gamma, world.pi)
+        cal.converged   || return (ok = false, reason = :T_inversion)
+        βs, Nb, nf = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, cal.T, cal.A),
+                                   world.G, world_simulator(seed_s))
+        all(isfinite, βs) || return (ok = false, reason = :sim_fit)
+        return (ok = true, reason = :none, e = world.beta .- βs, beta_world = world.beta,
+                beta_sim = βs, N = Nb, n_fail = nf)
+    catch err
+        return _failure(err)
+    end
+end
+
+"""
+    world_weight_matrix(theta_hat; B = 1000, dest, seed_world, seed_sim) -> (W, Omega, info)
+
+Ω̃ = Cov(e_b) over B fake worlds at `theta_hat` and W = Ω̃⁻¹, on block 4 only (see the
+header). Writes `Omega_world.npy`, `W_world.npy`, `world_residuals.npz` and
+`world_weight_report.txt` under `dest`. Failed worlds are excluded and counted by reason.
+"""
+function world_weight_matrix(theta_hat::Vector{Float64}; B::Int = 1000, dest::AbstractString,
+                             seed_world::Int = 11_000_000, seed_sim::Int = 12_000_000)
+    mkpath(dest)
+    N_hat = granular_report(theta_hat).N_hat
+    ref   = world_reference(theta_hat)
+    println("Fake worlds for the weight matrix: B = $B at θ̂ (N̂_s = $N_hat)")
+    res  = pmap(b -> _world_residual(theta_hat, N_hat, ref, seed_world + b, seed_sim + b), 1:B)
+    good = [r for r in res if r.ok]
+    fails = _count_failures(res)
+    k = length(BLOCK_RANGES[4])
+    length(good) > k + 1 || error("world_weight_matrix: only $(length(good)) of $B worlds usable ($fails)")
+
+    E     = permutedims(reduce(hcat, (r.e for r in good)))           # n_ok × k
+    Omega = cov(E; dims = 1)
+    W     = _sym_inv(Omega)
+    e_bar = vec(mean(E; dims = 1))
+    _, sim = full_SMM(theta_hat)
+    e_data = vec(empirical_moments)[BLOCK_RANGES[4]] .- moments_to_vec(sim)[BLOCK_RANGES[4]]
+
+    NPZ.npzwrite(joinpath(dest, "Omega_world.npy"), Omega)
+    NPZ.npzwrite(joinpath(dest, "W_world.npy"), W)
+    rows_of(f) = permutedims(reduce(hcat, (f(r) for r in good)))
+    NPZ.npzwrite(joinpath(dest, "world_residuals.npz"),
+                 Dict("e" => E, "beta_world" => rows_of(r -> r.beta_world),
+                      "beta_sim" => rows_of(r -> r.beta_sim), "N_hat_world" => rows_of(r -> r.N),
+                      "N_hat" => N_hat, "e_data" => e_data))
+
+    labels = MOMENT_LABELS[collect(BLOCK_RANGES[4])]
+    open(joinpath(dest, "world_weight_report.txt"), "w") do io
+        for out in (stdout, io)
+            println(out, "="^72, "\nWEIGHT MATRIX FROM FAKE WORLDS (block 4 only)  ", now(), "\n", "="^72)
+            @printf(out, "  worlds: %d drawn, %d usable\n", B, length(good))
+            for (r, v) in fails
+                @printf(out, "    excluded (%s): %d\n", string(r), v)
+            end
+            @printf(out, "\n  %-24s %12s %12s %10s %12s\n", "moment", "mean e_b", "sd e_b", "t(mean)", "e_data")
+            for i in 1:k
+                sd = sqrt(Omega[i, i])
+                @printf(out, "  %-24s %12.5f %12.5f %10.2f %12.5f\n", labels[i], e_bar[i], sd,
+                        e_bar[i] / (sd / sqrt(length(good))), e_data[i])
+            end
+            println(out, "\n  Ω̃ = Cov(e_b):")
+            for i in 1:k
+                println(out, "    ", join([@sprintf("%12.4e", Omega[i, j]) for j in 1:k], " "))
+            end
+            println(out, "  correlation:")
+            for i in 1:k
+                println(out, "    ", join([@sprintf("%8.3f", Omega[i, j] / sqrt(Omega[i, i] * Omega[j, j]))
+                                           for j in 1:k], " "))
+            end
+            k == N_TAU + 1 && println(out, "\n  Block 4 has $k entries for $k parameters (α, κ): exactly " *
+                                           "identified, so W does not move the point estimate.")
+            println(out, "\n  A mean residual far from zero (|t| ≫ 2) means the continuum simulator does not\n" *
+                         "  reproduce, on average, the β of a finite world at the same parameters: the\n" *
+                         "  estimator is biased there, and Step 4's bias column measures what it does to θ̂.")
+        end
+    end
+    return W, Omega, (n_ok = length(good), fails = fails, e_bar = e_bar, N_hat = N_hat)
+end
+
+##################### Step 4: the whole chain in each world ###################
+
+# Nelder–Mead start: one vertex per coordinate, displaced by `steps`.
+struct WorldSimplexer <: Optim.Simplexer
+    steps::Vector{Float64}
+end
+function Optim.simplexer(S_::WorldSimplexer, x0::AbstractArray)
+    v = [copy(x0) for _ in 1:(length(x0) + 1)]
+    for i in eachindex(x0)
+        v[i + 1][i] += S_.steps[i]
+    end
+    return v
+end
+
+"""
+    estimate_world(world, ref, W, sim; max_iter) -> NamedTuple
+
+The estimator applied to one fake world. For each candidate (α, κ): T re-inverted on the
+world's γ with A updated on its π, N calibrated on its G, β simulated on the world's
+simulator; criterion `e' W e`, `e = β_world − β_sim`. Nelder–Mead over (α, κ) from the
+estimate, inside the estimation's κ box and α ∈ [1e-4, ALPHA_MAX] (N_TAU = 1) or
+`1 + α_b > 0` (bins). T and A are warm-started from the last converged evaluation of the
+world; the fixed point is unique, so this changes cost, not values.
+"""
+function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
+    nα = N_TAU
+    T_warm = Ref(ref.T); A_warm = Ref(ref.A)
+    unpack_x(x) = (x[1:nα], x[nα + 1])
+    inbox(α, κ) = KAPPA_LO <= κ <= KAPPA_HI &&
+                  (N_TAU == 1 ? 1e-4 <= α[1] <= ALPHA_MAX : all(a -> a > -1, α))
+
+    function crit(x)
+        α, κ = unpack_x(x)
+        inbox(α, κ) || return WORLD_PENALTY
+        cal = try
+            recalibrate_TA(ref, α, κ, world.gamma, world.pi; T_init = T_warm[], A_init = A_warm[])
+        catch
+            return WORLD_PENALTY
+        end
+        cal.converged || return WORLD_PENALTY
+        T_warm[] = cal.T; A_warm[] = cal.A
+        β, _, _ = simulate_beta(world_theta(ref, α, κ, cal.T, cal.A), world.G, sim)
+        all(isfinite, β) || return WORLD_PENALTY
+        e = world.beta .- β
+        return dot(e, W * e)
     end
 
-    # ── T ────────────────────────────────────────────────────────────────────
-    P      = V_eff * G_a' * W
-    Σγγ    = Sigma_data[rγ, rγ]
-    C_aγ   = P * Sigma_data[:, rγ]
-    V_T_a  = f_a * V_sw * f_a'
-    V_T_γ  = f_γ * Σγγ * f_γ'
-    V_T    = V_T_a .+ V_T_γ .+ f_a * C_aγ * f_γ' .+ (f_a * C_aγ * f_γ')'; V_T = (V_T .+ V_T') ./ 2
-    se_T   = sqrt.(max.(diag(V_T), 0.0))
-    se_T_a = sqrt.(max.(diag(V_T_a), 0.0)); se_T_γ = sqrt.(max.(diag(V_T_γ), 0.0))
-    T_lab  = PARAM_LABELS[t_param_start() - 1 .+ T_ID_REDUCED]
-    T_hat  = theta[t_param_start() - 1 .+ T_ID_REDUCED]
-    for (f, v) in (("var_theta_T_delta", V_T), ("se_theta_T_delta", se_T),
-                   ("se_theta_T_delta_alpha", se_T_a), ("se_theta_T_delta_gamma", se_T_γ),
-                   ("t_stats_T_delta", T_hat ./ se_T), ("ci_95_T_delta", hcat(T_hat .- 1.96 .* se_T, T_hat .+ 1.96 .* se_T)),
-                   ("jacobian_T_wrt_alpha", f_a), ("jacobian_T_wrt_gamma", f_γ))
-        NPZ.npzwrite(joinpath(inf_dir, "$f.npy"), v)
+    x0    = vcat(ref.alpha, ref.kappa)
+    steps = vcat(0.1 .* max.(abs.(ref.alpha), 0.05), 0.1)
+    opt = Optim.optimize(crit, x0, NelderMead(initial_simplex = WorldSimplexer(steps)),
+                         Optim.Options(iterations = max_iter))
+    α, κ = unpack_x(Optim.minimizer(opt))
+    f̂ = Optim.minimum(opt)
+    cal = recalibrate_TA(ref, α, κ, world.gamma, world.pi; T_init = T_warm[], A_init = A_warm[])
+    θ = world_theta(ref, α, κ, cal.T, cal.A)
+    _, N, _ = simulate_beta(θ, world.G, sim)
+    return (ok = cal.converged && f̂ < WORLD_PENALTY, alpha = α, kappa = κ, T = cal.T,
+            A = cal.A, N = N, loss = f̂, iters = Optim.iterations(opt), theta = θ)
+end
+
+"""
+    incidence_stats(params; regime = :estimate, radii = (100.0, 200.0)) -> NamedTuple
+
+Closed-form geography of the upstream response at `params` (analytical prices, the
+expected network): for every buyer the flows `X[l, r]` to each upstream ZE, then the
+purchase-weighted mean sourcing distance (km) and the local shares within each radius,
+aggregated over buyers with their upstream purchases (`mean_*`) and at the median buyer
+(`med_*`). `:equal_T` sets every non-empty cell's T to one (`Equal comparative
+advantage`), `:no_trade_cost` sets τ ≡ 1; prices are re-solved in both.
+"""
+function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
+                         radii = (100.0, 200.0))
+    # (not called `theta`: that is the Fréchet shape used below)
+    ΩL, Ωs, A, α, Tvec = unpack_params(params)
+    T_mat = reshape(collect(Tvec), S, R)
+    regime === :equal_T && (T_mat = Float64.(T_mat .> EMPTY_T_CUT))
+    tau = regime === :no_trade_cost ? ones(R, R_downstream) : build_tau(α)
+    pr  = compute_prices_analytical(ΩL, Ωs, A, T_mat, tau)
+    X = zeros(R, R_downstream)
+    for g in 1:n_good
+        s = GOOD_S[g]; l = GOOD_R[g]
+        T_mat[s, l] > 0 || continue
+        for dr in 1:R_downstream
+            Φ = pr.Phi[s, dr]
+            Φ < 1e-300 && continue
+            ex = Ωs[s] * (pr.P_sr[s, dr] / pr.P_r[dr])^(1 - nu) *
+                 (pr.P_r[dr] / pr.c_r[dr])^(1 - lambda) * (1 - ΩL) * pr.mu * pr.Y_r[dr]
+            X[l, dr] += T_mat[s, l] * (W_RS_FLAT[g] * tau[l, dr])^(-theta) / Φ * ex
+        end
+    end
+    dkm  = exp.(LOG_DIST_DOWNSTREAM)
+    tot  = vec(sum(X; dims = 1))
+    dbar = [sum(X[:, dr] .* dkm[:, dr]) / tot[dr] for dr in 1:R_downstream]
+    loc  = [[sum(X[dkm[:, dr] .<= d, dr]) / tot[dr] for dr in 1:R_downstream] for d in radii]
+    w = tot ./ sum(tot)
+    return (mean_dist = dot(w, dbar), med_dist = median(dbar),
+            mean_local = [dot(w, L) for L in loc], med_local = [median(L) for L in loc])
+end
+
+const CF_REGIMES = (:estimate, :equal_T, :no_trade_cost)
+const CF_STATS   = ("mean_dist_km", "med_dist_km", "mean_local_100km", "mean_local_200km",
+                    "med_local_100km", "med_local_200km")
+counterfactual_labels() = [string(rg, ":", nm) for rg in CF_REGIMES for nm in CF_STATS]
+
+"""
+    counterfactual_row(params) -> `incidence_stats` under the three regimes, flattened
+"""
+function counterfactual_row(params::AbstractVector)
+    v = Float64[]
+    for rg in CF_REGIMES
+        st = incidence_stats(params; regime = rg)
+        append!(v, [st.mean_dist, st.med_dist, st.mean_local..., st.med_local...])
+    end
+    return v
+end
+
+function _world_estimate(theta_hat, N_hat, ref, W, seed_w::Int, seed_s::Int, max_iter::Int)
+    try
+        world = draw_world(theta_hat, N_hat, seed_w)
+        world.ok        || return (ok = false, reason = :world_fit)
+        world.ref_empty && return (ok = false, reason = :empty_ref)
+        est = estimate_world(world, ref, W, world_simulator(seed_s); max_iter = max_iter)
+        est.ok || return (ok = false, reason = :estimation)
+        cf = try counterfactual_row(est.theta) catch; fill(NaN, length(counterfactual_labels())) end
+        return (ok = true, reason = :none, est = est, cf = cf)
+    catch err
+        return _failure(err)
+    end
+end
+
+"""
+    world_inference(theta_hat, W; B = 500, dest, tcol_names, gap_codes, ...) -> NamedTuple
+
+Parametric bootstrap at `theta_hat` (see the header). For α, κ, N_s, T (levels and
+logs) and A: estimate, mean over worlds, bias = mean − estimate, sd, 2.5/97.5%
+quantiles; the same for the log-T gap between the areas whose names end in `gap_codes`
+(default Toulouse 7303 and Paris 1101, overridable by ENV `GAP_CODE_A` / `GAP_CODE_B`),
+the within-sector sd of log T, and the counterfactuals of `counterfactual_row` (levels
+and changes against the estimated regime). Writes `world_inference_draws.npz` and
+`world_inference.txt` under `dest`.
+"""
+function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int = 500,
+                         dest::AbstractString,
+                         tcol_names::AbstractVector{<:AbstractString},
+                         sector_names::AbstractVector{<:AbstractString} = string.(1:S),
+                         gap_codes::Tuple{String, String} =
+                             (get(ENV, "GAP_CODE_A", "7303"), get(ENV, "GAP_CODE_B", "1101")),
+                         gap_names::Tuple{String, String} = ("Toulouse", "Paris"),
+                         seed_world::Int = 21_000_000, seed_sim::Int = 22_000_000,
+                         max_iter::Int = 150)
+    mkpath(dest)
+    N_hat = granular_report(theta_hat).N_hat
+    ref   = world_reference(theta_hat)
+    W     = Matrix{Float64}(W)
+    println("Fake worlds for inference: B = $B at θ̂ (Nelder–Mead over (α, κ), ≤ $max_iter iterations)")
+    res  = pmap(b -> _world_estimate(theta_hat, N_hat, ref, W, seed_world + b, seed_sim + b, max_iter), 1:B)
+    good = [r for r in res if r.ok]
+    fails = _count_failures(res)
+    n_ok = length(good)
+    n_ok >= 2 || error("world_inference: only $n_ok of $B worlds usable ($fails)")
+
+    # ── parameter draws ──────────────────────────────────────────────────────
+    t_lbl = ["T[$(sector_names[(fp - 1) ÷ T_COL_DIM + 1])-$(tcol_names[(fp - 1) % T_COL_DIM + 1])]"
+             for fp in findall(T_MASK)]
+    t_red(T) = (v = vec(permutedims(T))[T_MASK]; v[v .<= EMPTY_T_CUT] .= NaN; v)
+    lbl = vcat(["alpha[$i]" for i in 1:N_TAU], ["kappa"], ["N_s[$s]" for s in sector_names],
+               t_lbl, ["A[$i]" for i in 1:R_downstream])
+    row(α, κ, N, T, A) = vcat(α, κ, Float64.(N), t_red(T), A)
+    P   = permutedims(reduce(hcat, (row(r.est.alpha, r.est.kappa, r.est.N, r.est.T, r.est.A) for r in good)))
+    est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A)
+    iT  = findall(l -> startswith(l, "T["), lbl)
+
+    # ── Toulouse − Paris, and the dispersion of log T ───────────────────────
+    find_col(code) = findfirst(n -> endswith(n, code), tcol_names)
+    cA, cB = find_col(gap_codes[1]), find_col(gap_codes[2])
+    gap_sectors = (cA === nothing || cB === nothing) ? Int[] :
+                  [s for s in 1:S if T_ACTIVE[s, cA] && T_ACTIVE[s, cB]]
+    lg(x) = x > EMPTY_T_CUT ? log(x) : NaN
+    gap(T)  = [lg(T[s, cA]) - lg(T[s, cB]) for s in gap_sectors]
+    disp(T) = [(v = filter(isfinite, lg.(T[s, SECTOR_T_COLS[s]])); length(v) > 1 ? std(v) : NaN) for s in 1:S]
+    Gp = isempty(gap_sectors) ? zeros(n_ok, 0) : permutedims(reduce(hcat, (gap(r.est.T) for r in good)))
+    Dp = permutedims(reduce(hcat, (disp(r.est.T) for r in good)))
+
+    # ── counterfactuals: levels and changes against the estimated regime ─────
+    cf_lbl = counterfactual_labels()
+    Cp     = permutedims(reduce(hcat, (r.cf for r in good)))
+    cf_est = counterfactual_row(theta_hat)
+    ns     = length(CF_STATS)
+    Δ(M)   = hcat([M[:, ((k - 1) * ns + 1):(k * ns)] .- M[:, 1:ns] for k in 2:length(CF_REGIMES)]...)
+    Δlbl   = ["Δ " * l for l in cf_lbl[(ns + 1):end]]
+    ΔCp    = Δ(Cp); Δest = vec(Δ(permutedims(cf_est)))
+
+    NPZ.npzwrite(joinpath(dest, "world_inference_draws.npz"),
+                 Dict("params" => P, "estimate" => est, "gap_logT" => Gp, "gap_sectors" => gap_sectors,
+                      "disp_logT" => Dp, "counterfactuals" => Cp, "counterfactuals_est" => cf_est,
+                      "loss" => [r.est.loss for r in good], "iters" => [r.est.iters for r in good],
+                      "thetas" => permutedims(reduce(hcat, (r.est.theta for r in good)))))
+    write(joinpath(dest, "world_inference_labels.txt"), join(lbl, "\n") * "\n")
+
+    function block(io, title, names, M, e)
+        println(io, "\n--- $title ---")
+        @printf(io, "  %-30s %11s %11s %11s %11s %11s %11s\n", "", "estimate", "mean", "bias", "sd", "q2.5", "q97.5")
+        for j in eachindex(names)
+            x = filter(isfinite, M[:, j])
+            isempty(x) && continue
+            q = quantile(x, [0.025, 0.975])
+            @printf(io, "  %-30s %11.4g %11.4g %11.4g %11.4g %11.4g %11.4g\n",
+                    names[j], e[j], mean(x), mean(x) - e[j], std(x), q[1], q[2])
+        end
     end
 
-    # ── N_s ──────────────────────────────────────────────────────────────────
-    N_hat = gr.N_hat
-    lg = gbar_logfact_table(gr.n_draw)
-    Dfd = [gbar_sector(CELLS_OF_SECTOR[s], gr.k_counts, gr.n_draw, N_hat[s] + 1, lg) -
-           gbar_sector(CELLS_OF_SECTOR[s], gr.k_counts, gr.n_draw, N_hat[s], lg) for s in 1:S]
-    Dinv  = Diagonal([abs(d) > 1e-14 ? 1 / d : 0.0 for d in Dfd])
-    A_mat = G_a[rG, :]; B_mat = G_γ[rG, :]
-    Σ_GG  = Sigma_data[rG, rG]; C_aG = P * Sigma_data[:, rG]; Σ_γG = Sigma_data[rγ, rG]
-    Joint = [Σ_GG C_aG' Σ_γG'; C_aG V_sw C_aγ; Σ_γG C_aγ' Σγγ]
-    L   = hcat(Matrix(Dinv), -(Dinv * A_mat), -(Dinv * B_mat))
-    V_N = L * Joint * L'; V_N = (V_N .+ V_N') ./ 2
-    se_N   = sqrt.(max.(diag(V_N), 0.0))
-    se_N_G = sqrt.(max.(diag(Dinv * Σ_GG * Dinv'), 0.0))
-    se_N_a = sqrt.(max.(diag((Dinv * A_mat) * V_sw * (Dinv * A_mat)'), 0.0))
-    se_N_γ = sqrt.(max.(diag((Dinv * B_mat) * Σγγ * (Dinv * B_mat)'), 0.0))
-    for (f, v) in (("var_theta_N_s_delta", V_N), ("se_theta_N_s_delta", se_N),
-                   ("jacobian_N_s_wrt_alpha", A_mat), ("jacobian_N_s_wrt_gamma", B_mat),
-                   ("dGbar_dn_firstdiff", Dfd))
-        NPZ.npzwrite(joinpath(inf_dir, "$f.npy"), v)
+    open(joinpath(dest, "world_inference.txt"), "w") do io
+        for out in (stdout, io)
+            println(out, "="^96, "\nINFERENCE FROM FAKE WORLDS (whole chain re-estimated in each)  ", now(), "\n", "="^96)
+            @printf(out, "  worlds: %d drawn, %d usable; median Nelder–Mead iterations %d\n", B, n_ok,
+                    round(Int, median([r.est.iters for r in good])))
+            for (r, v) in fails
+                @printf(out, "    excluded (%s): %d\n", string(r), v)
+            end
+            println(out, "  sd = dispersion across worlds; CI = 2.5/97.5% quantiles; bias = mean − estimate.")
+            head = setdiff(eachindex(lbl), iT)
+            block(out, "α, κ, N_s, A", lbl[head], P[:, head], est[head])
+            block(out, "T (levels, per-sector reference = 1)", lbl[iT], P[:, iT], est[iT])
+            block(out, "log T", lbl[iT], log.(P[:, iT]), log.(est[iT]))
+            emp = vec(mean(isnan.(P[:, iT]); dims = 1))
+            if any(>(0), emp)
+                println(out, "\n--- share of worlds in which the area wins nothing (T set to 0; excluded above) ---")
+                for j in findall(>(0), emp)
+                    @printf(out, "  %-30s %8.3f\n", lbl[iT][j], emp[j])
+                end
+            end
+            if isempty(gap_sectors)
+                println(out, "\n--- log T gap $(gap_names[1]) − $(gap_names[2]): no area name ends in $gap_codes, " *
+                             "or they are never both active (set GAP_CODE_A / GAP_CODE_B) ---")
+            else
+                block(out, "log T $(gap_names[1]) ($(tcol_names[cA])) − $(gap_names[2]) ($(tcol_names[cB]))",
+                      ["sector $(sector_names[s])" for s in gap_sectors], Gp, gap(ref.T))
+            end
+            block(out, "within-sector sd of log T", ["sector $s" for s in sector_names], Dp, disp(ref.T))
+            block(out, "counterfactuals (closed form, levels)", cf_lbl, Cp, cf_est)
+            block(out, "counterfactuals (change against the estimated regime)", Δlbl, ΔCp, Δest)
+        end
     end
-
-    # ── the count distribution Ḡ_s(K) ─────────────────────────────────────────
-    Ks = collect(COUNT_CURVE_K); nK = length(Ks)
-    rows_K(i) = ((i - 1) * S + 1):(i * S)            # vec over (S, nK) is column-major
-    i0 = findfirst(==(0), Ks)
-    A0 = jac.Gc[rows_K(i0), 1:n_a]; B0 = jac.Gc[rows_K(i0), (n_a + 1):end]
-    # Same estimator, same evaluations: the K = 0 curve rows ARE block 6.
-    maximum(abs.(hcat(A0, B0) .- hcat(A_mat, B_mat))) <= 1e-8 * max(1.0, maximum(abs.(hcat(A_mat, B_mat)))) ||
-        @warn "count curve: the K = 0 rows differ from the block-6 rows of the Jacobian"
-    D_curve = [gbar_sector_K(CELLS_OF_SECTOR[s], gr.k_counts, gr.n_draw, N_hat[s] + 1, KK, lg) -
-               gbar_sector_K(CELLS_OF_SECTOR[s], gr.k_counts, gr.n_draw, N_hat[s], KK, lg)
-               for s in 1:S, KK in Ks]
-    r_curve = [(gr.clamped[s] == :none && abs(Dfd[s]) > 1e-14) ? D_curve[s, i] / Dfd[s] : 0.0
-               for s in 1:S, i in 1:nK]
-    se_curve = zeros(S, nK); V_curve = zeros(S, S, nK)
-    for i in 1:nK
-        Rd = Diagonal(r_curve[:, i])
-        L_K = hcat(Matrix(Rd), jac.Gc[rows_K(i), 1:n_a] .- Rd * A0,
-                   jac.Gc[rows_K(i), (n_a + 1):end] .- Rd * B0)
-        V = L_K * Joint * L_K'; V_curve[:, :, i] = (V .+ V') ./ 2
-        se_curve[:, i] = sqrt.(max.(diag(V_curve[:, :, i]), 0.0))
-    end
-    for (f, v) in (("se_G_curve_delta", se_curve), ("var_G_curve_delta", V_curve),
-                   ("dGbar_dn_curve", D_curve), ("r_curve", r_curve),
-                   ("count_curve_K", Float64.(Ks)), ("G_curve_fitted", gr.G_curve))
-        NPZ.npzwrite(joinpath(inf_dir, "$f.npy"), v)
-    end
-
-    # ── reports ──────────────────────────────────────────────────────────────
-    head_idx = 1:(1 + S + R_downstream)
-    ev = eigvals(Symmetric(G_a' * W * G_a))
-    open(joinpath(inf_dir, "J_stat.txt"), "w") do io
-        @printf(io, "Hansen J-test\n  J statistic : %.6g\n  df          : %d\n  p-value     : %s\n",
-                J_stat, df, isnan(pval) ? "N/A (exactly identified)" : @sprintf("%.6f", pval))
-    end
-    open(joinpath(inf_dir, "inference_summary.txt"), "w") do io
-        println(io, "="^88)
-        println(io, "SMM INFERENCE — profiled estimator   industry: $industry   K_sim: $K_sim   ",
-                Dates.format(now(), "yyyy-mm-dd HH:MM"))
-        println(io, "Moments: β_d, β_κ, γ_{s,a}, Ḡ_s(0) ($(length(gb))). Parameters on the moment " *
-                    "conditions: [α ; κ] ($n_a); T and N_s are calibrated (inference_delta.txt).")
-        println(io, "="^88)
-        @printf(io, "λ_min(G'WG) = %.4e   λ_max = %.4e   cond = %.4e%s\n", minimum(ev), maximum(ev),
-                maximum(ev) / max(minimum(ev), 1e-300), floored ? "   (eigenvalue floor applied)" : "")
-        @printf(io, "\n  %-12s %12s %12s %12s %8s %8s %12s %12s\n", "param", "estimate", "se_eff",
-                "se_sw", "ratio", "t", "CI_lo", "CI_hi")
-        for i in 1:n_a
-            @printf(io, "  %-12s %12.6f %12.6f %12.6f %8.4f %8.3f %12.6f %12.6f\n", a_lab[i], a_hat[i],
-                    se_eff[i], se_sw[i], se_sw[i] / se_eff[i], a_hat[i] / se_sw[i],
-                    a_hat[i] - 1.96 * se_sw[i], a_hat[i] + 1.96 * se_sw[i])
-        end
-        println(io, "\n--- Other parameters (held at θ̂; value only) ---")
-        for i in head_idx
-            @printf(io, "  %-24s %12.6f\n", PARAM_LABELS[i], theta[i])
-        end
-        println(io, "\n--- Moment residual SEs by block (share ≈ 0: well fit; ≈ 1: weakly used) ---")
-        for (name, rng) in zip(("reg_coef", "gamma_ls", "G0"), (rβ, rγ, rG))
-            sd = sqrt.(max.(diag(Omega)[rng], 0.0))
-            @printf(io, "  %-10s mean resid SE %.4e   mean share %.4f\n", name, mean(se_res[rng]),
-                    mean(se_res[rng] ./ max.(sd, 1e-15)))
-        end
-        println(io, "\n--- Per moment ---")
-        for (j, i) in enumerate(gb)
-            @printf(io, "  %-28s emp %10.5f  sim %10.5f  se_fit %.3e  resid_SE %.3e\n",
-                    MOMENT_LABELS[i], emp[j], sim[j], se_fit[j], se_res[j])
-        end
-        @printf(io, "\nHansen J = %.6g, df = %d, p = %s\n", J_stat, df, isnan(pval) ? "N/A" : @sprintf("%.6f", pval))
-        println(io, "\nSEs are conditional on the draws; Σ_data is the bootstrap of the data moments.")
-    end
-    open(joinpath(inf_dir, "inference_delta.txt"), "w") do io
-        println(io, "="^110)
-        println(io, "PROFILED-ESTIMATOR INFERENCE — [α ; κ], T, N_s   industry: $industry")
-        println(io, "="^110)
-        println(io, "\n--- [α ; κ] (inference_summary.txt) ---")
-        for i in 1:n_a
-            @printf(io, "  %-12s %12.6f  se_sw %.6e  t %8.3f  CI [%.6f, %.6f]\n", a_lab[i], a_hat[i],
-                    se_sw[i], a_hat[i] / se_sw[i], a_hat[i] - 1.96 * se_sw[i], a_hat[i] + 1.96 * se_sw[i])
-        end
-        println(io, "\n--- T = T*(â, γ̂): correlated delta method ---")
-        println(io, "  se_T      : total;   se_T_a : [α ; κ] channel only;   se_T_γ : γ-target channel only")
-        @printf(io, "  %-26s %12s %12s %12s %12s %8s %12s %12s\n", "parameter", "estimate", "se_T",
-                "se_T_a", "se_T_γ", "t", "CI_lo", "CI_hi")
-        for i in eachindex(T_hat)
-            @printf(io, "  %-26s %12.6f %12.6e %12.6e %12.6e %8.3f %12.6f %12.6f\n", T_lab[i], T_hat[i],
-                    se_T[i], se_T_a[i], se_T_γ[i], T_hat[i] / se_T[i],
-                    T_hat[i] - 1.96 * se_T[i], T_hat[i] + 1.96 * se_T[i])
-        end
-        println(io, "\n--- N_s: calibrated, dN_s = [dĜ_s − a_s dâ − b_s dγ̂] / D_s ---")
-        println(io, "  se_N_G : count-target channel; se_N_a : [α ; κ]; se_N_γ : γ target. Units: varieties.")
-        @printf(io, "  %-10s %6s %6s %12s %12s %12s %12s %14s\n", "sector", "N̂_s", "clamp", "se_N",
-                "se_N_G", "se_N_a", "se_N_γ", "D_s")
-        for s in 1:S
-            @printf(io, "  %-10s %6d %6s %12.4e %12.4e %12.4e %12.4e %14.6e\n", SECTOR_NAMES[s], N_hat[s],
-                    string(gr.clamped[s]), se_N[s], se_N_G[s], se_N_a[s], se_N_γ[s], Dfd[s])
-        end
-        println(io, "\n--- Count distribution Ḡ_s(K) ± delta-method SE (K = 0 targeted, K ≥ 1 untargeted) ---")
-        for s in 1:S
-            println(io, "  ", rpad(SECTOR_NAMES[s], 10),
-                    join([@sprintf(" K=%d %.3f±%.3f", Ks[i], gr.G_curve[s, i], se_curve[s, i]) for i in 1:nK]))
-        end
-        println(io, "\nThe head (Ω^L, Ω^s, A) is held at θ̂. The system is triangular: â → T̂ → q̂ → N̂_s.")
-    end
-    println("Inference at $dest: Hansen J = $(round(J_stat, sigdigits=5)), df = $df; " *
-            join(["$(a_lab[i]) = $(round(a_hat[i], sigdigits=4)) (se $(round(se_sw[i], sigdigits=3)))" for i in 1:n_a], ", "))
-    return (a_hat = a_hat, se_sw = se_sw, V_sw = V_sw, se_T = se_T, se_N = se_N, J_stat = J_stat)
+    return (draws = P, labels = lbl, estimate = est, n_ok = n_ok, fails = fails)
 end

@@ -316,10 +316,14 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
                           max_iter_initial::Int = 200,
                           max_iter_stage::Int = 50,
                           gamma_beta_only::Bool = false,
-                          moments_loss_gamma_beta::Bool = false)
+                          moments_loss_gamma_beta::Bool = false,
+                          loss_blocks::Union{Nothing, Vector{Int}} = nothing)
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
-    moment_blocks = moments_loss_gamma_beta ? [4, 5, 6] : nothing
+    # `loss_blocks` overrides: Step 3 uses [4] alone with the fake-world W (inference.jl),
+    # γ and G being reproduced exactly by the T inversion and the N bisection.
+    moment_blocks = loss_blocks !== nothing ? loss_blocks :
+                    moments_loss_gamma_beta ? [4, 5, 6] : nothing
     save_stage(folder, params) = (mkpath(folder);
         NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(params, :, 1)))
 

@@ -18,7 +18,7 @@ if [ -z "$1" ]; then
     echo "  industry    : aero, auto, car, both"
     echo "  --n_coef    : distance coefficients of the cell cloglog: 1 (ln d), 4 or 5 bins (default 4)"
     echo "  --n_tau     : trade-cost parameters: 1 (τ = d^α) or n_coef (one α per bin) (default 1)"
-    echo "  --n_rho_inf : draws per cell for inference (Jacobian + Σ_sim) (default 10000)"
+    echo "  --n_rho_inf : UNUSED since inference moved to fake worlds (kept so old calls still parse)"
     echo "  --relax_n_lo: DIAGNOSTIC — force the variety-count lower bound N_LO to 1 instead of"
     echo "                ceil(N_supplier_s / R_downstream); outputs → ..._nlo1_pso/ (default false)"
     exit 1

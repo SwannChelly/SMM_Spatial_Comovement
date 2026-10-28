@@ -530,7 +530,4 @@ let pos_of = Dict{Int,Int}(), k = 0
 end
 @everywhere const GAMMA_REF_MAP = $_gamma_ref_map
 
-# On-disk data covariance of the inference moments, layout β_d (N_REG) → β_κ (1) →
-# γ (active, non-reference areas, s-major) → Ḡ_s(0) (S). Steps 2–4 need it.
-@everywhere const SIGMA_DATA_FILE = $("Sigma_aa_cell_cloglog" * (n_coef == 1 ? "_1" : "") * ".npy")
 println(" constants distributed.")

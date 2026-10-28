@@ -30,7 +30,7 @@ SMM_Spatial_Comovement/
 ├── profiling.jl         # closed-form prices, GE-Sinkhorn inversion T*(α, κ, Ω, A)
 ├── optimizer.jl         # PSO and the staged block-coordinate search
 ├── reporting.jl         # stage reports, run summaries, granular diagnostics, post-hoc economy
-├── inference.jl         # Σ_sim, W, profiled Jacobian, delta methods for T and N_s
+├── inference.jl         # fake worlds: W from Cov(β_world − β_sim), parametric-bootstrap inference
 │
 ├── utils.py, report_lib.py, diffusion_lib.py, granular_lib.py   # Python reporting
 ├── model_report.ipynb, tests_counterfactuals.ipynb, gates.ipynb
@@ -101,9 +101,8 @@ with `stats.csv` (`epsilon`, `labor_share`), `distances.npy`, `filter_N_upstream
 `w_rs.npy`, `regional_wages.npy`, `N_downstream_per_region.npy`, `input_share.npy`,
 `domestic_share.npy`, `emp_gamma_ls.npy`, `X_dr.csv`, `attraction_area_linkages.npy`,
 `G_K.csv`, `cells_ls.csv`, `beta_d_<n>.npy`, `beta_kappa_<n>.npy` (and `beta_d_1.npy`,
-the α prior). Steps 2–4 also need `Sigma_aa_cell_cloglog[_1].npy`, the bootstrap
-covariance of the inference moments in the order β_d → β_κ → γ_{s,a} → Ḡ_s(0); without
-it the run stops after Step 1 and says why.
+the α prior). No data covariance is needed: Steps 2–4 draw their uncertainty from fake
+worlds simulated by the model.
 
 ---
 
@@ -123,7 +122,7 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 | `<industry>` | `aero`, `auto`, `car`, `both` | — | economy (`both` runs aero then auto) |
 | `--n_coef` | `1`, `4`, `5` | `4` | distance coefficients of the cell cloglog (`1` = ln d, else bins) |
 | `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one α per bin) |
-| `--n_rho_inf` | integer | `10000` | draws per cell for inference (Jacobian, Σ_sim) |
+| `--n_rho_inf` | integer | `10000` | unused (inference now from fake worlds, at the estimation's `N_rho`); kept so old calls parse |
 | `--relax_n_lo` | `true`, `false` | `false` | DIAGNOSTIC: N_LO forced to 1 (drops the model's bound) |
 
 Outputs go to `reporting_<industry>_profiled_aa_gran_kappa[_nlo1]_pso/` (log in `logs.log`;
@@ -135,11 +134,15 @@ worker: `WORKER_HEAP_HINT` (default 2G).
 1. **Step 1** — identity-weighted PSO over `[Ω^L, Ω^s, A, α, κ]`, T = T* by Sinkhorn
    inversion of the observed area-level sourcing shares, N_s by integer bisection on the
    zero-supplier share; a joint fit then block-coordinate loops → θ̂₁ (`step1/`).
-2. **Step 2** — `W = (Σ_data + Σ_sim)^{-1}` on β → γ → G at θ̂₁, inference at θ̂₁ (`step2/`).
-3. **Step 3** — `[α ; κ]` re-estimated under W, the rest fixed at θ̂₁ → θ̂₂ (`step3/`).
-4. **Step 4** — inference at θ̂₂ (`step3/inference/`): sandwich SEs and Hansen J for
-   `[α ; κ]`; T and N_s by delta methods (they are calibrated, not estimated); bands for
-   the supplier-count distribution.
+2. **Step 2** — `WORLD_B_W` (1000) fake worlds at θ̂₁: one network of N̂_s varieties with
+   i.i.d. draws, its own β, γ, G, π; T re-inverted with A updated, N calibrated, β
+   simulated with the world's seed; `W = Cov(β_world − β_sim)^{-1}` on block 4 (`step2/`).
+3. **Step 3** — `[α ; κ]` re-estimated under W on block 4, the rest fixed at θ̂₁ → θ̂₂ (`step3/`).
+4. **Step 4** — `WORLD_B_INF` (500) fake worlds at θ̂₂, the whole chain (T, A, N, local
+   search over α, κ) re-run in each (`step3/inference_world/`): sd, 2.5/97.5% quantiles and
+   bias for every parameter, the Toulouse − Paris log-T gap (`GAP_CODE_A/B`), the dispersion
+   of log T, and closed-form counterfactuals (mean sourcing distance, local share at 100/200 km
+   under the estimate, equal T, no trade cost).
 
 Post-hoc: the firm-level economy at θ̂₁ and θ̂₂ (`suppliers.parquet` etc.), the input of
 the Python `check_against_julia`.
