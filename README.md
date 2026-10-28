@@ -9,11 +9,8 @@ in different regions, and shared suppliers create *spatial comovement*. This
 repository calibrates the model's parameters to sourcing and comovement data and
 delivers standard errors and over-identification tests.
 
-Two estimators are provided and share the same model, data, and moments:
-
-- **SMM** (`main.jl`) — simulation-based, robust, the default path.
-- **GMM** (`main_gmm.jl`) — closed-form analytical moments; faster, with exact
-  standard errors.
+The estimator is a three-step efficient SMM (`main.jl`). The previous
+multi-specification code, including the analytical GMM, is kept in `old_version/`.
 
 > **New here?** Read [`documentation/model.md`](documentation/model.md) for the
 > economics and the equations, and [`documentation/optimizer.md`](documentation/optimizer.md)
@@ -25,56 +22,30 @@ Two estimators are provided and share the same model, data, and moments:
 
 ```
 SMM_Spatial_Comovement/
+├── run.sh               # launcher (start here)
+├── pkg.jl               # one-off: installs the Julia packages
+├── main.jl              # Steps 1–4 + post-hoc
+├── load_parameters.jl   # data → constants, moment vector, masks, T starting value
+├── model_CP.jl          # simulated model, cell-level cloglog (block 4), N_s bisection, moments
+├── profiling.jl         # closed-form prices, GE-Sinkhorn inversion T*(α, κ, Ω, A)
+├── optimizer.jl         # PSO and the staged block-coordinate search
+├── reporting.jl         # stage reports, run summaries, granular diagnostics, post-hoc economy
+├── inference.jl         # Σ_sim, W, profiled Jacobian, delta methods for T and N_s
 │
-├── run.sh                  # ← launcher for a calibration (start here)
-├── pkg.jl                  # one-off: installs all Julia packages
+├── utils.py, report_lib.py, diffusion_lib.py, granular_lib.py   # Python reporting
+├── model_report.ipynb, tests_counterfactuals.ipynb, gates.ipynb
+├── analysis.ipynb       # LEGACY notebook (continuum ZE model)
 │
-├── main.jl                 # SMM entry point (simulation-based)
-├── main_gmm.jl             # GMM entry point (analytical, exact SEs)
-│
-├── model_CP.jl             # core model — simulated moments
-├── model_analytical.jl     # core model — closed-form moments (GMM)
-├── load_parameters.jl      # loads data, builds moments, masks, globals
-├── optimizer.jl            # backend-neutral search: staging, bounds, loops
-├── tools.jl                # inference, Jacobian, weight matrix, reporting
-│
-├── analysis.ipynb          # LEGACY post-run analysis (continuum ZE model)
-│
-│   # Python reporting for a --granular=true --ca_level=aa run. The notebooks are
-│   # narrative plus run cells; every function lives in one of the four modules.
-├── utils.py                # loader, theta+, Ricardian geometry, THE ECONOMY
-├── report_lib.py           # moment fit, count curve, Jacobian, identification, untargeted
-├── diffusion_lib.py        # amplification, local share, incidence, IO benchmark
-├── granular_lib.py         # comparative advantage, concentration, portfolios, dispersion
-├── model_report.ipynb          # the FIT of the model to its targets
-├── tests_counterfactuals.ipynb # the tests and the counterfactuals
-├── gates.ipynb                 # the test suite, run with its output in view
-│
-├── optimizers/             # interchangeable search engines (--optimizer=…)
-│   ├── pso_integration.jl      #   Particle Swarm Optimization (default)
-│   └── cmaes_integration.jl    #   CMA-ES
-│
-├── documentation/          # conceptual docs (start with model.md)
-│   ├── model.md
-│   └── optimizer.md
-│
-├── test/                   # validation & diagnostics (run by hand)
-│   ├── run_test.sh
-│   ├── run_internal_validity.jl
-│   ├── run_untargeted_validation.jl
-│   ├── test_extensive_margin.jl
-│   └── test_t_reorder.jl
-│
-├── extras/                 # post-estimation analysis (amplification, Table 2)
-│   ├── untargeted_moments.jl
-│   ├── compute_amplification_weights.jl
-│   └── run_amplification_analysis.jl
-│
-├── CLAUDE.md               # detailed developer/implementation reference + changelog
-└── README.md               # this file
+├── test/                # Python gates for the reporting (Julia tests are in old_version/test/)
+├── documentation/       # conceptual docs (written for the multi-specification code)
+├── old_version/         # the previous multi-specification Julia code, frozen
+└── CLAUDE.md            # implementation reference, invariants, changelog
 ```
 
-Each subfolder contains a short `files.md` describing its files.
+The Julia code estimates one specification: finite varieties `N_s` per sector,
+comparative advantage `T_ls = T_{a(l)s} · n_ls^κ` at the attraction-area level, the
+cell-level cloglog extensive margin, and T profiled out of the search. GMM, the continuum
+and ZE-level models, other optimizers and the diagnostic scripts live in `old_version/`.
 
 ---
 
@@ -125,134 +96,57 @@ number in an assertion can be read against the thing it constrains. The `.py` fi
 restating them, so a gate lives in exactly one place. 259 numbered gates across 10 files,
 all against synthetic fixtures — no run tree, no Julia, no real data.
 
-**Input data.** Each industry needs a `baseline_<industry>/` folder (e.g.
-`baseline_aero/`) holding the empirical inputs — distances, wages, sectoral shares,
-empirical sourcing shares `emp_gamma_ls`, regional shares `emp_pi_r`, the bootstrap
-covariance `Sigma_beta_gamma.npy`, and `stats.csv` (fixed parameters and the α
-prior). `run.sh` checks that this folder exists before launching.
+**Input data.** Each industry needs `baseline_<industry>/` (next to the repository)
+with `stats.csv` (`epsilon`, `labor_share`), `distances.npy`, `filter_N_upstream.{npy,csv}`,
+`w_rs.npy`, `regional_wages.npy`, `N_downstream_per_region.npy`, `input_share.npy`,
+`domestic_share.npy`, `emp_gamma_ls.npy`, `X_dr.csv`, `attraction_area_linkages.npy`,
+`G_K.csv`, `cells_ls.csv`, `beta_d_<n>.npy`, `beta_kappa_<n>.npy` (and `beta_d_1.npy`,
+the α prior). Steps 2–4 also need `Sigma_aa_cell_cloglog[_1].npy`, the bootstrap
+covariance of the inference moments in the order β_d → β_κ → γ_{s,a} → Ḡ_s(0); without
+it the run stops after Step 1 and says why.
 
 ---
 
 ## How to run
 
-Everything goes through **`run.sh`**, launched from the directory that contains both
-this repo folder and the `baseline_<industry>/` data folders.
+From the directory containing the repository and the `baseline_<industry>/` folders:
 
 ```bash
-./run.sh <industry> [options]
+./SMM_Spatial_Comovement/run.sh aero                                   # n_coef=4, n_tau=1
+./SMM_Spatial_Comovement/run.sh aero --n_coef=1 --n_rho_inf=20000
+./SMM_Spatial_Comovement/run.sh aero --relax_n_lo=true                 # diagnostic
+./SMM_Spatial_Comovement/run.sh both
 ```
-
-### Simple example
-
-```bash
-./run.sh auto --n_tau=1 --n_coef=4 --mode=smm --optimizer=pso
-```
-
-This calibrates the **auto** industry by **SMM** using **PSO**, with a single
-power-law trade-cost elasticity α (`--n_tau=1`) matched against four binned distance
-moments (`--n_coef=4`, so the trade-cost block is over-identified).
-
-### Options
 
 | Option | Values | Default | Meaning |
 |--------|--------|---------|---------|
-| `<industry>` | `aero`, `auto`, `car`, `both` | — | which economy (`both` runs aero then auto) |
-| `--n_coef` | `1`, `4`, `5` | `4` | number of distance-regression moments (`reg_coef`) |
-| `--n_tau` | `1`, `4`, `5` | `= n_coef` | number of trade-cost parameters (`1` = power-law α; `4`/`5` = per-bin) |
-| `--mode` | `smm`, `gmm` | `smm` | simulation-based vs. analytical estimator |
-| `--optimizer` | `pso`, `cmaes` | `pso` | search engine (SMM path) |
-| `--draws` | `sobol`, `qmc`, `mc`, `is` | `sobol` | Fréchet draw method (SMM only) |
-| `--n_quad` | integer | `200` | Gauss–Legendre nodes for `reg_coef` (GMM only) |
+| `<industry>` | `aero`, `auto`, `car`, `both` | — | economy (`both` runs aero then auto) |
+| `--n_coef` | `1`, `4`, `5` | `4` | distance coefficients of the cell cloglog (`1` = ln d, else bins) |
+| `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one α per bin) |
+| `--n_rho_inf` | integer | `10000` | draws per cell for inference (Jacobian, Σ_sim) |
+| `--relax_n_lo` | `true`, `false` | `false` | DIAGNOSTIC: N_LO forced to 1 (drops the model's bound) |
 
-Setting `--n_tau` below `--n_coef` (e.g. `--n_tau=1 --n_coef=4`) over-identifies the
-trade-cost block and lets the Hansen J-test speak to model fit.
-
-### More examples
-
-```bash
-./run.sh aero                                  # defaults: SMM, PSO, n_coef=4
-./run.sh aero --n_coef=4 --optimizer=cmaes     # SMM with CMA-ES
-./run.sh aero --n_coef=4 --n_tau=1 --mode=gmm  # analytical GMM, over-identified
-./run.sh both --n_coef=4 --mode=smm            # aero then auto, sequentially
-```
-
-### Monitoring and stopping
-
-`run.sh` launches Julia in the background and prints where the log is:
-
-```bash
-tail -f reporting_aero/logs.log     # SMM   → reporting_<industry>/
-tail -f reporting_gmm_aero/logs.log # GMM   → reporting_gmm_<industry>/
-pkill -f 'julia.*main'              # stop
-```
-
----
+Outputs go to `reporting_<industry>_profiled_aa_gran_kappa[_nlo1]_pso/` (log in `logs.log`;
+stop with `pkill -f 'julia.*main'`). Worker count: `N_WORKERS` (default 50), heap per
+worker: `WORKER_HEAP_HINT` (default 2G).
 
 ## What it computes
 
-Both entry points run a **three-step efficient estimator**:
+1. **Step 1** — identity-weighted PSO over `[Ω^L, Ω^s, A, α, κ]`, T = T* by Sinkhorn
+   inversion of the observed area-level sourcing shares, N_s by integer bisection on the
+   zero-supplier share; a joint fit then block-coordinate loops → θ̂₁ (`step1/`).
+2. **Step 2** — `W = (Σ_data + Σ_sim)^{-1}` on β → γ → G at θ̂₁, inference at θ̂₁ (`step2/`).
+3. **Step 3** — `[α ; κ]` re-estimated under W, the rest fixed at θ̂₁ → θ̂₂ (`step3/`).
+4. **Step 4** — inference at θ̂₂ (`step3/inference/`): sandwich SEs and Hansen J for
+   `[α ; κ]`; T and N_s by delta methods (they are calibrated, not estimated); bands for
+   the supplier-count distribution.
 
-1. **Step 1 — first fit.** Minimize the identity-weighted distance between model and
-   data moments → θ̂₁. The trade-cost elasticity α is **not** searched: it is read from
-   the extensive-margin distance regression (the `prior_alpha` in `stats.csv`). Given
-   that α, the comparative-advantage scales T are initialized by inverting the observed
-   sourcing shares (a closed-form fixed point). From this theory-based starting point a
-   **global joint search** over all parameters runs — under PSO a joint fit plus
-   block-coordinate refinement loops; under CMA-ES a single adaptive run. See
-   [`documentation/optimizer.md`](documentation/optimizer.md).
-2. **Step 2 — efficient weight matrix.** Build `W = (Σ_data + Σ_sim)^{-1}`, where
-   `Σ_data` is the bootstrap moment covariance and `Σ_sim` the simulation covariance
-   at θ̂₁ (GMM uses `Σ_data` only).
-3. **Step 3 — efficient fit.** Re-optimize the trade-cost and comparative-advantage
-   parameters (α, T) under `W`, warm-started at θ̂₁ → θ̂₂.
-4. **Step 4 — inference.** Jacobian at θ̂₂, delta-method standard errors (efficient
-   and sandwich), fitted-moment SEs, and the Hansen J over-identification test. The
-   derivation and the reports are in
-   [`documentation/inference.md`](documentation/inference.md).
-
-Results are written under `reporting_<industry>/` (or `reporting_gmm_<industry>/`),
-one folder per step, with parameter estimates, reports, dashboards, and the
-`inference/` outputs. The exact output layout and file meanings are documented in
-[`CLAUDE.md`](CLAUDE.md).
-
----
-
-## The parameters
-
-**Estimated** (full vector laid out as `[Ω^L | Ω^s | A | α | T]`):
-
-| Symbol | Code name | Meaning |
-|--------|-----------|---------|
-| Ω^L | `agg_labor_share_tech` | labor share in production |
-| Ω^s | `agg_industry_share_tech` | sectoral input shares |
-| A_r | `productivity` | downstream productivity by region |
-| α | `alpha` | trade-cost elasticity — one power-law coefficient (`n_tau=1`) or one per distance bin (`n_tau=4/5`) |
-| T_{sr} | `T` | Fréchet scale — comparative advantage by sector-region |
-
-**Fixed** (calibrated outside the loop, read from `stats.csv`): demand elasticity ε,
-substitution elasticities λ, ν, ν_s, and the Fréchet shape θ.
-
-> **Note on notation.** The only trade-cost parameter is α. The `reg_coef` distance
-> coefficients (block 4 of the moments, sometimes written β in the extensive-margin
-> regression) are **moments the model matches, not parameters it estimates**. The
-> `--n_coef` moments and the `--n_tau` α-parameters are independent counts.
-
----
-
-## Validation and analysis
-
-- **Did the estimator recover the truth?** — `test/run_test.sh` (internal-validity
-  Monte-Carlo).
-- **Out-of-sample fit (Table 2 comovement)** — `test/run_untargeted_validation.jl`.
-- **Amplification (Section 4.3)** — `extras/run_amplification_analysis.jl`.
-
-See the `files.md` in `test/` and `extras/` for details.
+Post-hoc: the firm-level economy at θ̂₁ and θ̂₂ (`suppliers.parquet` etc.), the input of
+the Python `check_against_julia`.
 
 ---
 
 ## Further reading
 
-- [`documentation/model.md`](documentation/model.md) — the model, in equations (incl. the per-sector Sobol draw scheme).
-- [`documentation/optimizer.md`](documentation/optimizer.md) — PSO and CMA-ES.
-- [`documentation/inference.md`](documentation/inference.md) — standard errors, the Jacobian, and the Hansen J-test.
+- [`documentation/model.md`](documentation/model.md), [`optimizer.md`](documentation/optimizer.md), [`inference.md`](documentation/inference.md) — written for the multi-specification code (`old_version/`); the model and the PSO are unchanged, the inference is described in `CLAUDE.md`.
 - [`CLAUDE.md`](CLAUDE.md) — implementation reference, invariants, and changelog.
