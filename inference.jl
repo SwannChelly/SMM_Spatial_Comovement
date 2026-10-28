@@ -441,7 +441,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
                          tcol_names::AbstractVector{<:AbstractString},
                          sector_names::AbstractVector{<:AbstractString} = string.(1:S),
                          seed_world::Int = 21_000_000, seed_sim::Int = 22_000_000,
-                         max_iter::Int = 150)
+                         max_iter::Int = 150, label::AbstractString = "")
     mkpath(dest)
     N_hat = granular_report(theta_hat).N_hat
     ref   = world_reference(theta_hat)
@@ -499,7 +499,8 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
 
     open(joinpath(dest, "world_inference.txt"), "w") do io
         for out in (stdout, io)
-            println(out, "="^96, "\nINFERENCE FROM FAKE WORLDS (whole chain re-estimated in each)  ", now(), "\n", "="^96)
+            println(out, "="^96, "\nINFERENCE FROM FAKE WORLDS (whole chain re-estimated in each)",
+                    isempty(label) ? "" : "  [$label]", "  ", now(), "\n", "="^96)
             @printf(out, "  worlds: %d drawn, %d usable; median Nelder–Mead iterations %d\n", B, n_ok,
                     round(Int, median([r.est.iters for r in good])))
             for (r, v) in fails

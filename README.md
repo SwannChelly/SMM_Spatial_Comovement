@@ -137,6 +137,7 @@ worker: `WORKER_HEAP_HINT` (default 2G).
 2. **Step 2** — `WORLD_B_W` (1000) fake worlds at θ̂₁: one network of N̂_s varieties with
    i.i.d. draws, its own β, γ, G, π; T re-inverted with A updated, N calibrated, β
    simulated with the world's seed; `W = Cov(β_world − β_sim)^{-1}` on block 4 (`step2/`).
+   Then the Step-4 inference at θ̂₁ with Step 1's weighting W = I (`step2/inference_world/`).
 3. **Step 3** — `[α ; κ]` re-estimated under W on block 4, the rest fixed at θ̂₁ → θ̂₂ (`step3/`).
 4. **Step 4** — `WORLD_B_INF` (500) fake worlds at θ̂₂, the whole chain (T, A, N, local
    search over α, κ) re-run in each (`step3/inference_world/`): sd, 2.5/97.5% quantiles and

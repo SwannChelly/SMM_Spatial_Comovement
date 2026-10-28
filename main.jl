@@ -3,7 +3,8 @@
 # level, cell-level cloglog extensive margin, T profiled out of the search.
 #
 #   Step 1  identity-weighted PSO                          → θ̂_1   (step1/)
-#   Step 2  W = Cov(β_world − β_sim)⁻¹ over fake worlds at θ̂_1     (step2/)
+#   Step 2  W = Cov(β_world − β_sim)⁻¹ over fake worlds at θ̂_1     (step2/), and
+#           inference at θ̂_1 from fake worlds, W = I as in Step 1  (step2/inference_world/)
 #   Step 3  W-weighted PSO on [α ; κ], loss on block 4      → θ̂_2   (step3/)
 #   Step 4  inference from fake worlds at θ̂_2, whole chain re-estimated
 #           in each                                         (step3/inference_world/)
@@ -93,6 +94,14 @@ theta_hat_1 = read_params(joinpath(find_last_stage_folder(step1_dir), "best_para
 if run_step2
     println("\n" * "="^70 * "\nSTEP 2: weight matrix from $B_w fake worlds at θ̂_1\n" * "="^70)
     world_weight_matrix(theta_hat_1; B = B_w, dest = joinpath(output_folder, "step2"))
+    # Inference on the Step-1 estimator: the same whole-chain re-estimation as Step 4, at
+    # θ̂_1 and with Step 1's weighting (identity on block 4; γ and G are matched exactly,
+    # A is recalibrated, Ω^L and Ω^s held at θ̂_1 as in Step 4). Seeds disjoint from Step 4.
+    println("\n" * "="^70 * "\nSTEP 2b: inference from $B_inf fake worlds at θ̂_1 (W = I)\n" * "="^70)
+    world_inference(Vector{Float64}(theta_hat_1), Matrix(1.0I, length(BLOCK_RANGES[4]), length(BLOCK_RANGES[4]));
+                    B = B_inf, dest = joinpath(output_folder, "step2", "inference_world"),
+                    tcol_names = _tcol_names, sector_names = string.(SECTOR_NAMES),
+                    seed_world = 31_000_000, seed_sim = 32_000_000, label = "θ̂_1, W = I")
     report_granular(theta_hat_1, joinpath(output_folder, "step2"); industry = industry, label = "theta_1")
 end
 W_world = NPZ.npzread(joinpath(output_folder, "step2", "W_world.npy"))
@@ -110,7 +119,8 @@ if run_step4
     theta_hat_2 = read_params(joinpath(step3_dir, "theta_hat_2.npy"))
     world_inference(Vector{Float64}(theta_hat_2), W_world; B = B_inf,
                     dest = joinpath(step3_dir, "inference_world"),
-                    tcol_names = _tcol_names, sector_names = string.(SECTOR_NAMES))
+                    tcol_names = _tcol_names, sector_names = string.(SECTOR_NAMES),
+                    label = "θ̂_2, W = Ω̃⁻¹")
     report_granular(theta_hat_2, step3_dir; industry = industry, label = "theta_2")
 end
 
