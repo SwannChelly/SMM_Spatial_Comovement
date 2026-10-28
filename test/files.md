@@ -1,5 +1,9 @@
 # `test/` — validation and diagnostic scripts
 
+> **The Julia scripts described below moved to `old_version/test/`** with the rest of the
+> multi-specification code (2026-10-28 light rewrite); they run against `old_version/`.
+> The Python gates (`test_*.py`) stay here and test the reporting modules.
+
 Scripts that check the estimator is doing what it should. None of them is required
 for a production run — they are run by hand when you want to *validate* a result or
 *diagnose* an identification problem. Each one re-uses the same model and data
