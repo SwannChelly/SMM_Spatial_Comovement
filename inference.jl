@@ -17,8 +17,8 @@
 #   W fixed: T inversion + A update, N calibration, and a local search over (α, κ)
 #   started at the estimate. The B parameter sets give, for every parameter, sd = their
 #   dispersion, a 95% interval = their 2.5/97.5% quantiles, and bias = mean − estimate;
-#   plus the log-T gap between two areas (Toulouse − Paris by default), the within-sector
-#   dispersion of log T, and closed-form counterfactuals recomputed world by world.
+#   plus the within-sector dispersion of log T and closed-form counterfactuals
+#   recomputed world by world.
 #
 # ── The A update ─────────────────────────────────────────────────────────────
 # Downstream sales are Y_r ∝ (c_r/A_r)^ε δ_r and c_r depends on (α, κ, T) only (upstream
@@ -428,13 +428,11 @@ function _world_estimate(theta_hat, N_hat, ref, W, seed_w::Int, seed_s::Int, max
 end
 
 """
-    world_inference(theta_hat, W; B = 500, dest, tcol_names, gap_codes, ...) -> NamedTuple
+    world_inference(theta_hat, W; B = 500, dest, tcol_names, ...) -> NamedTuple
 
 Parametric bootstrap at `theta_hat` (see the header). For α, κ, N_s, T (levels and
 logs) and A: estimate, mean over worlds, bias = mean − estimate, sd, 2.5/97.5%
-quantiles; the same for the log-T gap between the areas whose names end in `gap_codes`
-(default Toulouse 7303 and Paris 1101, overridable by ENV `GAP_CODE_A` / `GAP_CODE_B`),
-the within-sector sd of log T, and the counterfactuals of `counterfactual_row` (levels
+quantiles; the same for the within-sector sd of log T and the counterfactuals of `counterfactual_row` (levels
 and changes against the estimated regime). Writes `world_inference_draws.npz` and
 `world_inference.txt` under `dest`.
 """
@@ -442,9 +440,6 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
                          dest::AbstractString,
                          tcol_names::AbstractVector{<:AbstractString},
                          sector_names::AbstractVector{<:AbstractString} = string.(1:S),
-                         gap_codes::Tuple{String, String} =
-                             (get(ENV, "GAP_CODE_A", "7303"), get(ENV, "GAP_CODE_B", "1101")),
-                         gap_names::Tuple{String, String} = ("Toulouse", "Paris"),
                          seed_world::Int = 21_000_000, seed_sim::Int = 22_000_000,
                          max_iter::Int = 150)
     mkpath(dest)
@@ -469,15 +464,9 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A)
     iT  = findall(l -> startswith(l, "T["), lbl)
 
-    # ── Toulouse − Paris, and the dispersion of log T ───────────────────────
-    find_col(code) = findfirst(n -> endswith(n, code), tcol_names)
-    cA, cB = find_col(gap_codes[1]), find_col(gap_codes[2])
-    gap_sectors = (cA === nothing || cB === nothing) ? Int[] :
-                  [s for s in 1:S if T_ACTIVE[s, cA] && T_ACTIVE[s, cB]]
+    # ── the dispersion of log T ──────────────────────────────────────────────
     lg(x) = x > EMPTY_T_CUT ? log(x) : NaN
-    gap(T)  = [lg(T[s, cA]) - lg(T[s, cB]) for s in gap_sectors]
     disp(T) = [(v = filter(isfinite, lg.(T[s, SECTOR_T_COLS[s]])); length(v) > 1 ? std(v) : NaN) for s in 1:S]
-    Gp = isempty(gap_sectors) ? zeros(n_ok, 0) : permutedims(reduce(hcat, (gap(r.est.T) for r in good)))
     Dp = permutedims(reduce(hcat, (disp(r.est.T) for r in good)))
 
     # ── counterfactuals: levels and changes against the estimated regime ─────
@@ -490,7 +479,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     ΔCp    = Δ(Cp); Δest = vec(Δ(permutedims(cf_est)))
 
     NPZ.npzwrite(joinpath(dest, "world_inference_draws.npz"),
-                 Dict("params" => P, "estimate" => est, "gap_logT" => Gp, "gap_sectors" => gap_sectors,
+                 Dict("params" => P, "estimate" => est,
                       "disp_logT" => Dp, "counterfactuals" => Cp, "counterfactuals_est" => cf_est,
                       "loss" => [r.est.loss for r in good], "iters" => [r.est.iters for r in good],
                       "thetas" => permutedims(reduce(hcat, (r.est.theta for r in good)))))
@@ -527,13 +516,6 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
                 for j in findall(>(0), emp)
                     @printf(out, "  %-30s %8.3f\n", lbl[iT][j], emp[j])
                 end
-            end
-            if isempty(gap_sectors)
-                println(out, "\n--- log T gap $(gap_names[1]) − $(gap_names[2]): no area name ends in $gap_codes, " *
-                             "or they are never both active (set GAP_CODE_A / GAP_CODE_B) ---")
-            else
-                block(out, "log T $(gap_names[1]) ($(tcol_names[cA])) − $(gap_names[2]) ($(tcol_names[cB]))",
-                      ["sector $(sector_names[s])" for s in gap_sectors], Gp, gap(ref.T))
             end
             block(out, "within-sector sd of log T", ["sector $s" for s in sector_names], Dp, disp(ref.T))
             block(out, "counterfactuals (closed form, levels)", cf_lbl, Cp, cf_est)

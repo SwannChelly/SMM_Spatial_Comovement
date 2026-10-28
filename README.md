@@ -140,8 +140,7 @@ worker: `WORKER_HEAP_HINT` (default 2G).
 3. **Step 3** — `[α ; κ]` re-estimated under W on block 4, the rest fixed at θ̂₁ → θ̂₂ (`step3/`).
 4. **Step 4** — `WORLD_B_INF` (500) fake worlds at θ̂₂, the whole chain (T, A, N, local
    search over α, κ) re-run in each (`step3/inference_world/`): sd, 2.5/97.5% quantiles and
-   bias for every parameter, the Toulouse − Paris log-T gap (`GAP_CODE_A/B`), the dispersion
-   of log T, and closed-form counterfactuals (mean sourcing distance, local share at 100/200 km
+   bias for every parameter, the dispersion of log T, and closed-form counterfactuals (mean sourcing distance, local share at 100/200 km
    under the estimate, equal T, no trade cost).
 
 Post-hoc: the firm-level economy at θ̂₁ and θ̂₂ (`suppliers.parquet` etc.), the input of
