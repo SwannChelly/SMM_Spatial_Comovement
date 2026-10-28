@@ -132,7 +132,12 @@ end
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Flat-layout helpers
-# Layout: [Ω^L(1), Ω^s(S), A(R_downstream), alpha(N_TAU), T(sum(T_MASK))]
+# Layout: [Ω^L(1), Ω^s(S), A(R_downstream), alpha(N_TAU), κ(N_KAPPA), T(sum(T_MASK))]
+#
+# κ (GRANULAR only) is searched TOGETHER with α: the stage variable "alpha" covers the
+# whole spatial block [α ; κ]. Both shape the within-area allocation of sourcing
+# (distance and density), so refining them jointly is the natural block-coordinate
+# step. `alpha_indices` (the monotone-sort constraint for binned α) covers α only.
 # ═══════════════════════════════════════════════════════════════════════════
 
 """
@@ -150,7 +155,7 @@ function get_param_start_index(param_name::Symbol)
     elseif param_name == :alpha
         return 2 + S + R_downstream
     elseif param_name == :T
-        return 2 + S + R_downstream + N_TAU
+        return t_param_start()
     else
         error("Unknown parameter name: $param_name")
     end
@@ -217,7 +222,7 @@ function train_stage(
     # a full LEVEL vector with that inversion; it is applied in the objective and
     # the final reconstruction. profile_T=false ⇒ every branch below is the
     # historical path, byte-identical.
-    nhead_lvl     = 1 + S + R_downstream + N_TAU         # [Ω^L|Ω^s|A|α] length
+    nhead_lvl     = n_head_params()                      # [Ω^L|Ω^s|A|α|κ] length
     T_PLACEHOLDER = vec(permutedims(T_rs_init))[T_MASK]  # inert filler (overwritten)
 
     # ── Init-anchored search box for α and T ─────────────────────────────────
@@ -262,6 +267,11 @@ function train_stage(
         # with the upper end additionally capped at ALPHA_MAX in levels.
         alpha_anchor = TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha
         alpha_lo, alpha_hi = alpha_box(alpha_anchor)
+        # κ (GRANULAR): absolute box [KAPPA_LO, KAPPA_HI], appended after α.
+        if N_KAPPA == 1
+            alpha_lo = vcat(alpha_lo, KAPPA_LO)
+            alpha_hi = vcat(alpha_hi, KAPPA_HI)
+        end
         # profile_T ⇒ the T (φ) block is dropped from the search space entirely.
         T_lb_block = profile_T ? Float64[] : T_phi_lo
         T_ub_block = profile_T ? Float64[] : T_phi_hi
@@ -298,6 +308,8 @@ function train_stage(
         names = [:agg_labor_share_tech, :agg_industry_share_tech, :productivity, :alpha, :T]
         vals = unpack_params(best_params_prev)
         params_dict = Dict(names .=> vals)
+        # The "alpha" stage variable is the spatial block [α ; κ] (see layout note).
+        N_KAPPA == 1 && (params_dict[:alpha] = vcat(params_dict[:alpha], unpack_kappa(best_params_prev)))
         # `unpack_params` returns T GATHERED onto ZE (length S*R); the search space is
         # the T-PARAMETER space (S × T_COL_DIM — attraction areas under CA_LEVEL=:aa),
         # so take the parameter matrix directly and reduce it to the T_MASK entries,
@@ -311,7 +323,7 @@ function train_stage(
 
         # Check if alpha is fixed — if so, precompute and cache tau
         alpha_is_fixed = !("alpha" in var_list)
-        cached_tau = alpha_is_fixed ? build_tau(params_dict[:alpha]) : nothing
+        cached_tau = alpha_is_fixed ? build_tau(params_dict[:alpha][1:N_TAU]) : nothing
         alpha_is_fixed && println("[stage] Alpha is fixed — tau precomputed and cached")
 
         # Build bounds for selected variables
@@ -336,6 +348,14 @@ function train_stage(
                 lb_v = max.(val .+ log(radius), T_phi_lo)
                 ub_v = min.(val .- log(radius), T_phi_hi)
             elseif v == "alpha"
+                # [α ; κ] under GRANULAR: split off κ and box it on its own (additive,
+                # since κ can sit near or below zero), then box α as before.
+                if N_KAPPA == 1
+                    κv = val[end]; val = val[1:N_TAU]
+                    half = (1 - radius) * (KAPPA_HI - KAPPA_LO) / 2
+                    κlo = max(κv - half, KAPPA_LO); κhi = min(κv + half, KAPPA_HI)
+                    κlo >= κhi && ((κlo, κhi) = (KAPPA_LO, KAPPA_HI))
+                end
                 # Per-stage radius around the incumbent, clamped to the init-anchored box
                 # [×BOUND_LO, min(×BOUND_HI, ALPHA_MAX)] around the α prior (TAU_PRIOR);
                 # falls back to the incumbent as anchor when there is no prior.
@@ -352,6 +372,10 @@ function train_stage(
                           "box to the capped bounds" alpha_incumbent = val[infeasible]
                     lb_v = ifelse.(infeasible, box_lo, lb_v)
                     ub_v = ifelse.(infeasible, box_hi, ub_v)
+                end
+                if N_KAPPA == 1
+                    lb_v = vcat(lb_v, κlo)
+                    ub_v = vcat(ub_v, κhi)
                 end
             else
                 # Standard multiplicative bounds
@@ -688,14 +712,15 @@ function run_optimization(;
         T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
         # New layout: [Ω^L | Ω^s | A | α(N_TAU) | T] — alpha is inserted between A and T
         init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
-        expanding_alpha = [vcat(init_other_prefix, alpha, T_init_nz) for alpha in alpha_candidates]
+        kappa_init = N_KAPPA == 1 ? [KAPPA_PRIOR] : Float64[]
+        expanding_alpha = [vcat(init_other_prefix, alpha, kappa_init, T_init_nz) for alpha in alpha_candidates]
 
         results_ = pmap(p -> parallel_SMM_safe(p; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
                                                W_override=weight_matrix,
                                                analytical=analytical, n_quad=n_quad), expanding_alpha)
 
         if alpha_selection_criterion == "reg_coef"
-            reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, N_REG) for r in results_]
+            reg_coefs_sim = [r !== nothing ? r[2][4] : fill(NaN, length(reg_coef)) for r in results_]
             reg_distances  = [sum((reg_coef .- rc).^2) for rc in reg_coefs_sim]
             best_idx = argmin(reg_distances)
         else

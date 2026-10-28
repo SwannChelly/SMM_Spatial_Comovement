@@ -154,6 +154,7 @@ convergence info; `converged=false` (resid ≥ tol at max_iter) signals the call
 fall back on `T_init`.
 """
 function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
+                     kappa::Real = 0.0,
                      target::AbstractMatrix = EMP_GAMMA_T_TILDE,
                      T_init::AbstractMatrix = copy(T_rs_init),
                      max_iter::Int = 600, tol::Float64 = 1e-9,
@@ -180,7 +181,9 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
 
     for it in 1:max_iter
         iters = it
-        gamma_ze, _, _ = gamma_ls_analytical(Omega_L, Omega_s, A, gather_T_to_ze(T_par), tau)
+        # κ enters through the gather (T_ls = T_{a(l)s} n_ls^κ); the update stays
+        # multiplicative in the area-level T, so the inversion is unchanged otherwise.
+        gamma_ze, _, _ = gamma_ls_analytical(Omega_L, Omega_s, A, gather_T_to_ze(T_par, kappa), tau)
         gamma_model    = aggregate_gamma_to_T(gamma_ze)
 
         T_new .= T_par
@@ -268,8 +271,8 @@ end
 """
     profiled_theta(x_levels) -> Vector{Float64}
 
-Given a full LEVEL parameter vector `x_levels = [Ω^L | Ω^s | A | α | T]`, return a
-copy whose T block is replaced by the profiled `T*(α,Ω,A) = invert_T_ge(...)`. The
+Given a full LEVEL parameter vector `x_levels = [Ω^L | Ω^s | A | α | κ | T]`, return a
+copy whose T block is replaced by the profiled `T*(α,κ,Ω,A) = invert_T_ge(...)`. The
 head is normalized exactly as `unpack_params` reads it (Ω^s ÷ sum, A ÷ A[1]) before
 the inversion, and the reduced T* block is written in s-major `T_MASK` order. This
 is the single interception point the optimizer uses when `profile_T=true`; kept a
@@ -300,9 +303,10 @@ function profiled_theta_full(x_levels::AbstractVector)
     Ωs = x_levels[2:(1 + S)];                      Ωs = Ωs ./ sum(Ωs)
     A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
     α  = x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)]
-    res = invert_T_ge_warm(α, ΩL, Ωs, A)
+    κ  = unpack_kappa(x_levels)
+    res = invert_T_ge_warm(α, ΩL, Ωs, A; kappa = κ)
     xf = copy(x_levels)
-    xf[(2 + S + R_downstream + N_TAU):end] = vec(permutedims(res.T))[T_MASK]
+    xf[t_param_start():end] = vec(permutedims(res.T))[T_MASK]
     return (theta = xf, converged = res.converged, resid = res.resid, iters = res.iters)
 end
 
@@ -346,7 +350,7 @@ function profiled_theta_probe(x_levels::AbstractVector)
         A  = x_levels[(S + 2):(S + R_downstream + 1)]; A  = A ./ A[1]
         α  = collect(Float64, x_levels[(S + R_downstream + 2):(1 + S + R_downstream + N_TAU)])
         α_fallback = α
-        res = invert_T_ge_warm(α, ΩL, Ωs, A)
+        res = invert_T_ge_warm(α, ΩL, Ωs, A; kappa = unpack_kappa(x_levels))
         return (converged = res.converged, alpha = α, iters = res.iters, resid = res.resid)
     catch
         return (converged = false, alpha = α_fallback, iters = -1, resid = Inf)
@@ -363,8 +367,12 @@ from a profiled T (S,R). The reduced T block is `vec(permutedims(T_mat))[T_MASK]
 given (the outer search supplies them raw; unpack_params normalizes Ω^s/A on read,
 so pass them exactly as the particle carries them).
 """
-function assemble_theta(Omega_L::Real, Omega_s, A, alpha, T_mat::AbstractMatrix)
+function assemble_theta(Omega_L::Real, Omega_s, A, alpha, T_mat::AbstractMatrix;
+                        kappa::Union{Nothing, Real} = nothing)
+    N_KAPPA == 1 && kappa === nothing &&
+        error("assemble_theta: the layout carries κ (N_KAPPA = 1); pass `kappa`.")
     T_red = vec(permutedims(T_mat))[T_MASK]
+    κ_blk = N_KAPPA == 1 ? [Float64(kappa)] : Float64[]
     return vcat(Float64(Omega_L), collect(Float64, Omega_s), collect(Float64, A),
-                collect(Float64, alpha), collect(Float64, T_red))
+                collect(Float64, alpha), κ_blk, collect(Float64, T_red))
 end

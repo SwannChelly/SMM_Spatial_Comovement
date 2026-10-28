@@ -266,7 +266,13 @@ end
 
 Unpack parameter vector into model components (paper notation).
 
-Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | T(sum(T_MASK))]
+Parameter vector layout: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | κ(N_KAPPA) | T(sum(T_MASK))]
+
+`N_KAPPA` is 1 under `GRANULAR` and 0 otherwise, so the legacy layout is unchanged.
+κ is the density elasticity of comparative advantage, `T_{ls} = T_{a(l)s} n_{ls}^κ`,
+with `n_{ls}` the observed number of upstream firms of the cell (`LOG_N_LS`, zero
+outside the simulated cells). It is applied in the gather below, so every consumer of
+the ZE-level `T` sees it and nothing downstream of `unpack_params` changes.
 
 The T block lives in the **T-COLUMN space** (`T_COL_DIM` wide): upstream ZE under
 `CA_LEVEL == :ze`, attraction areas under `:aa`. It is scattered s-major into an
@@ -294,8 +300,9 @@ function unpack_params(params)
     A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
     alpha = params[(S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)]
+    kappa = unpack_kappa(params)
 
-    T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
+    T_reduced = params[t_param_start():end]
     # eltype(params) (not a hard-coded Float64) so ForwardDiff Duals survive the
     # scatter into T_full — byte-identical for Float64 params.
     T_full = zeros(eltype(params), T_COL_DIM * S)
@@ -309,21 +316,35 @@ function unpack_params(params)
         end
     end
 
-    # Gather T columns onto ZE. Identity (and a plain copy) under :ze.
-    if CA_LEVEL === :aa
-        T_mat = Matrix{eltype(T_par)}(undef, S, R)
-        @inbounds for l in 1:R
-            c = T_GATHER[l]
-            for s in 1:S
-                T_mat[s, l] = T_par[s, c]
-            end
-        end
-    else
-        T_mat = T_par
-    end
+    # Gather T columns onto ZE, times n_ls^κ. Identity (and a plain copy) under :ze.
+    T_mat = gather_T_to_ze(T_par, kappa)
 
     return Omega_L, Omega_s, A, alpha, vec(T_mat)
 end
+
+
+"""
+    t_param_start() -> Int
+
+First index of the reduced T block in the full parameter vector,
+`[Ω^L | Ω^s | A | α | κ | T]`.
+"""
+t_param_start() = S + R_downstream + 2 + N_TAU + N_KAPPA
+
+"""
+    n_head_params() -> Int
+
+Length of the head `[Ω^L | Ω^s | A | α | κ]`, i.e. everything before the T block.
+"""
+n_head_params() = 1 + S + R_downstream + N_TAU + N_KAPPA
+
+"""
+    unpack_kappa(params) -> scalar
+
+The density elasticity κ (`T_{ls} = T_{a(l)s} n_{ls}^κ`). Zero when `N_KAPPA == 0`,
+which makes the gather an exact identity.
+"""
+unpack_kappa(params) = N_KAPPA == 1 ? params[S + R_downstream + 2 + N_TAU] : zero(eltype(params))
 
 
 """
@@ -336,7 +357,7 @@ delta-method iterate on, since those live in parameter space. Identical to
 `reshape(unpack_params(params)[5], S, R)` under `CA_LEVEL == :ze`.
 """
 function unpack_T_par(params)
-    T_reduced = params[(S + R_downstream + 2 + N_TAU):end]
+    T_reduced = params[t_param_start():end]
     T_full = zeros(eltype(params), T_COL_DIM * S)
     T_full[T_MASK] = T_reduced
     T_par = permutedims(reshape(T_full, T_COL_DIM, S))
@@ -351,18 +372,22 @@ end
 
 
 """
-    gather_T_to_ze(T_par) -> Matrix (S × R)
+    gather_T_to_ze(T_par, kappa = 0) -> Matrix (S × R)
 
 Broadcast the T-column parameters onto the upstream ZE the model actually simulates:
-`T[s, l] = T_par[s, T_GATHER[l]]`. The identity under `:ze`.
+`T[s, l] = T_par[s, T_GATHER[l]] · n_{ls}^κ`. The identity under `:ze` (κ is only
+defined under `GRANULAR`, which requires `:aa`). With `kappa == 0` the density factor
+is skipped entirely, so the legacy path is untouched bit for bit.
 """
-function gather_T_to_ze(T_par::AbstractMatrix)
+function gather_T_to_ze(T_par::AbstractMatrix, kappa = 0.0)
     CA_LEVEL === :ze && return T_par
-    T_mat = Matrix{eltype(T_par)}(undef, S, R)
+    FT = promote_type(eltype(T_par), typeof(kappa))
+    T_mat = Matrix{FT}(undef, S, R)
+    with_n = !iszero(kappa)
     @inbounds for l in 1:R
         c = T_GATHER[l]
         for s in 1:S
-            T_mat[s, l] = T_par[s, c]
+            T_mat[s, l] = with_n ? T_par[s, c] * exp(kappa * LOG_N_LS[s, l]) : T_par[s, c]
         end
     end
     return T_mat
@@ -626,17 +651,17 @@ end
 """
     full_to_search(p) / search_to_full(x)
 
-Convert a full LEVEL parameter vector `[Ω^L | Ω^s | A | α | T(N_T_REDUCED)]` to/from
-the full SEARCH vector `[Ω^L | Ω^s | A | α | φ(N_T_FREE)]`. Only the trailing T
+Convert a full LEVEL parameter vector `[Ω^L | Ω^s | A | α | κ | T(N_T_REDUCED)]` to/from
+the full SEARCH vector `[Ω^L | Ω^s | A | α | κ | φ(N_T_FREE)]`. Only the trailing T
 block is transformed; the head is untouched. Search vector is shorter by the
 number of active sectors.
 """
 function full_to_search(p::AbstractVector)
-    nhead = 1 + S + R_downstream + N_TAU
+    nhead = n_head_params()
     return vcat(p[1:nhead], t_levels_to_free_phi(p[(nhead + 1):end]))
 end
 function search_to_full(x::AbstractVector)
-    nhead = 1 + S + R_downstream + N_TAU
+    nhead = n_head_params()
     return vcat(x[1:nhead], t_free_phi_to_levels(x[(nhead + 1):end]))
 end
 
@@ -1540,6 +1565,138 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
     return β
 end
 
+##################### Block 4 under GRANULAR: the cell-level cloglog ###################
+#
+# The data run ONE cloglog per (sector, ZE) cell, on the regression set 𝒜 (active
+# cells, d > 0): `has_sup_ls = 1{K_ls > 0}` on the distance regressor(s) and ln n_ls,
+# with a sector × attraction-area fixed effect, groups without variation in y dropped.
+# The model moment is the AVERAGE of that same statistic over R possible networks:
+#
+#     K^{(j)}_ls = #{ρ ∈ S_{s,j}(N̂_s) : cell l wins ρ for at least one buyer}
+#     y^{(j)}_ls = 1{K^{(j)}_ls > 0},       M_4 = (1/R) Σ_j β̂(y^{(j)})
+#
+# `S_{s,j}(N)` is the first N entries of a random permutation π_{s,j} of the m
+# simulated varieties, drawn once and held fixed (common random numbers, like the u
+# draws). "Wins for at least one buyer" is exactly `linkages_flat[ρ, g]`, so nothing
+# beyond the ordinary Ricardian solve is needed. Averaging the statistic, not taking
+# the statistic of the average, is what matches a data moment computed on ONE network:
+# β̂ is nonlinear, so E[β̂(y)] ≠ β̂(E[y]). The permutations are nested in N, so moving
+# N̂_s by one adds one variety to every network and changes nothing else.
+
+"""
+    cell_perms(m) -> Vector{Matrix{Int32}}
+
+Per sector, a `(k_max × R_CELL_REG)` matrix whose column j is the first `k_max`
+entries of a random permutation of `1:m` (`k_max = min(m, maximum(N_HI))`, the
+largest variety count the bisection can return). Deterministic in `(m, CELL_PERM_SEED)`
+and cached per worker on `m`, so the criterion stays a deterministic function of θ.
+A different `m` (another draw count) gets its own fixed set.
+"""
+const _CELL_PERMS = Ref{Union{Nothing, Tuple{Int, Vector{Matrix{Int32}}}}}(nothing)
+
+function cell_perms(m::Int)
+    C = _CELL_PERMS[]
+    (C !== nothing && C[1] == m) && return C[2]
+    k_max = min(m, maximum(N_HI))
+    rng = MersenneTwister(CELL_PERM_SEED + m)
+    P = [Matrix{Int32}(undef, k_max, R_CELL_REG) for _ in 1:S]
+    for s in 1:S, j in 1:R_CELL_REG
+        P[s][:, j] .= Int32.(randperm(rng, m)[1:k_max])
+    end
+    _CELL_PERMS[] = (m, P)
+    return P
+end
+
+"""
+    cell_cloglog_beta(y; max_iter = 100) -> (β, ok::Bool)
+
+The data statistic on the regression set 𝒜: cloglog of `y` (length `N_REG_CELLS`,
+one entry per cell of 𝒜, in `REG_CELL_G` order) on `REG_CELL_X` (distance bins or
+ln d, then ln n), with the sector × AA fixed effect `REG_CELL_FE` absorbed. Groups
+without variation in `y` are dropped first — their fixed effect diverges and they carry
+no information on the slopes, exactly as in the data code. `y` may be fractional (the
+expected-network diagnostic); then no group is degenerate unless it is constant.
+
+`ok = false` when the IRLS did not converge within `max_iter` or returned a
+non-finite coefficient (quasi-separation on a slope, which dropping groups cannot fix).
+"""
+function cell_cloglog_beta(y::AbstractVector{<:Real}; max_iter::Int = 100)
+    n  = length(y)
+    ng = REG_CELL_N_FE
+    sy = zeros(ng); sy2 = zeros(ng); cnt = zeros(Int, ng)
+    @inbounds for i in 1:n
+        f = REG_CELL_FE[i]
+        sy[f] += y[i]; cnt[f] += 1
+    end
+    # A group is informative iff its outcome is not constant: for 0/1 y that is
+    # 0 < Σy < count; for fractional y it is a non-zero within-group spread.
+    keep = falses(n)
+    @inbounds for i in 1:n
+        f = REG_CELL_FE[i]
+        keep[i] = 0 < sy[f] < cnt[f]
+    end
+    if !all(v -> v == 0 || v == 1, y)
+        @inbounds for i in 1:n
+            f = REG_CELL_FE[i]; μf = sy[f] / cnt[f]
+            sy2[f] += (y[i] - μf)^2
+        end
+        @inbounds for i in 1:n
+            keep[i] = sy2[REG_CELL_FE[i]] > 0
+        end
+    end
+    idx = findall(keep)
+    k = size(REG_CELL_X, 2)
+    length(idx) <= k && return (fill(NaN, k), false)
+    it = Ref(0)
+    β = _cloglog_irls(view(y, idx), REG_CELL_X[idx, :], ones(length(idx)),
+                      REG_CELL_FE[idx]; max_iter = max_iter, iters_out = it)
+    ok = all(isfinite, β) && it[] < max_iter
+    return (β, ok)
+end
+
+"""
+    cell_cloglog_moment(linkages, N_hat) -> (β̄, n_fail, β_reps)
+
+Block 4 under `GRANULAR`: the mean of `cell_cloglog_beta` over the `R_CELL_REG`
+nested random networks of `N̂_s` varieties each (see the note above). Replications
+whose fit fails are excluded from the mean and COUNTED (`n_fail`), never silently
+replaced; if all fail the moment is NaN. `β_reps` is `k × R_CELL_REG` (NaN columns
+for the failures), kept for diagnostics.
+"""
+function cell_cloglog_moment(linkages, N_hat::AbstractVector{<:Integer})
+    m  = size(linkages, 1)
+    P  = cell_perms(m)
+    nA = length(REG_CELL_G)
+    k  = size(REG_CELL_X, 2)
+    y  = Vector{Float64}(undef, nA)
+    reps = fill(NaN, k, R_CELL_REG)
+    acc = zeros(k); n_ok = 0
+    @inbounds for j in 1:R_CELL_REG
+        for i in 1:nA
+            g = REG_CELL_G[i]
+            s = GOOD_S[g]
+            Ps = P[s]
+            N = min(N_hat[s], size(Ps, 1))
+            hit = false
+            for t in 1:N
+                if linkages[Ps[t, j], g] != 0
+                    hit = true
+                    break
+                end
+            end
+            y[i] = hit ? 1.0 : 0.0
+        end
+        β, ok = cell_cloglog_beta(y)
+        if ok
+            reps[:, j] .= β
+            acc .+= β
+            n_ok += 1
+        end
+    end
+    β̄ = n_ok > 0 ? acc ./ n_ok : fill(NaN, k)
+    return (β̄, R_CELL_REG - n_ok, reps)
+end
+
 ##################### Streaming (cell-level) regression design ###################
 
 """
@@ -2257,18 +2414,25 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     # decomposition instead of reading a materialised z (see `logz_resid`), which is what
     # allows the streaming kernel and lets `z_flat` be dropped upstream. Both links take
     # them, so both get the streaming path.
-    reg_fun = REG_METHOD == :cloglog ? fast_cloglog_regression : fast_weighted_regression
-
-    reg_all = reg_fun(linkages_flat, z_flat, sw;
-                      include_control      = REG_INCLUDE_CONTROL,
-                      include_size_control = REG_INCLUDE_SIZE,
-                      return_size_coef     = REG_INCLUDE_SIZE,
-                      u_draws              = network.u_draws,
-                      logz_const           = network.logz_const,
-                      inv_theta            = 1.0 / theta)
-    reg_coef = reg_all[1:N_REG]
-    # The log-z coefficient is a free over-identifying test (Prop. 1(c): it equals −θ).
-    b_logz   = REG_INCLUDE_SIZE ? reg_all[N_REG + 1] : NaN
+    # Under GRANULAR the firm-level regression is gone: block 4 is the CELL-level
+    # cloglog averaged over R networks of N̂_s varieties, which needs N̂_s and is
+    # therefore computed in 4b below.
+    reg_coef = Float64[]
+    b_logz   = NaN
+    reg_fail = 0
+    if !GRANULAR
+        reg_fun = REG_METHOD == :cloglog ? fast_cloglog_regression : fast_weighted_regression
+        reg_all = reg_fun(linkages_flat, z_flat, sw;
+                          include_control      = REG_INCLUDE_CONTROL,
+                          include_size_control = REG_INCLUDE_SIZE,
+                          return_size_coef     = REG_INCLUDE_SIZE,
+                          u_draws              = network.u_draws,
+                          logz_const           = network.logz_const,
+                          inv_theta            = 1.0 / theta)
+        reg_coef = reg_all[1:N_REG]
+        # The log-z coefficient is a free over-identifying test (Prop. 1(c): it equals −θ).
+        b_logz   = REG_INCLUDE_SIZE ? reg_all[N_REG + 1] : NaN
+    end
 
     # ─────────────────────────────────────────────────────────────────────────
     # 4b. GRANULAR: profile the variety count, then the count moment — both from q̂
@@ -2319,6 +2483,10 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
         # (`compute_jacobian`) is the only place that can tell the two apart, and it
         # reports the dispersion once.
         N_hat = N_fixed === nothing ? N_hat_free : copy(N_fixed)
+
+        # Block 4: the cell-level cloglog [β_d ; β_κ], averaged over R_CELL_REG nested
+        # random networks of N̂_s varieties drawn from the winner matrix.
+        reg_coef, reg_fail, _ = cell_cloglog_moment(linkages_flat, N_hat)
 
         # Block 6: Ḡ_s(0) over the cells inside active attraction areas — empty cells
         # included, since those ARE the K = 0 mass (finite_sample2.tex §3.2).
@@ -2373,12 +2541,13 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
         N_hat_free        = N_hat_free,                 # the bisection value BEFORE any pin
         clamped           = clamped,                    # :none / :lo / :hi per sector
         q_hat             = q_hat,                      # win-somewhere probability per cell
-        b_logz            = b_logz,                     # log-z coefficient (should equal −θ)
+        b_logz            = b_logz,                     # log-z coefficient (legacy firm-level only; NaN under GRANULAR)
         # APPENDED, never inserted: positional indices 1–6 into this NamedTuple are the
         # six moment blocks and must not move.
         G_curve           = G_curve,                    # S × |COUNT_CURVE_K| count pmf
         k_counts          = k_counts_o,                 # wins per cell, for gbar_* at any K
         n_draw            = n_draw_o,                   # the m behind k_counts
+        reg_fail          = reg_fail,                   # failed cell-cloglog replications (GRANULAR)
     )
 end
 
@@ -2414,7 +2583,9 @@ function SMM(params, simulation=false; precomputed_tau::Union{Nothing, Matrix{Fl
     # The predicate is the one the regressions themselves use, so the two cannot
     # disagree; the `u_draws === nothing` case is the legacy random-Fréchet branch, which
     # has no log-z decomposition and always needs the dense path.
-    need_z = !REG_STREAMING[] || (REG_INCLUDE_SIZE && u_draws === nothing)
+    # Under GRANULAR block 4 reads only the winner matrix (cell-level cloglog), so z
+    # is never needed.
+    need_z = !GRANULAR && (!REG_STREAMING[] || (REG_INCLUDE_SIZE && u_draws === nothing))
 
     # Solve network
     network = solve_network(params, return_firm_level=false, precomputed_tau=precomputed_tau,
@@ -2478,7 +2649,20 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
     # Expected supplier count per cell, K_ls ~ Bin(N̂_s, q̂_ls) ⇒ E[K] = N̂_s q̂.
     EK = [m.N_hat[GOOD_S[g]] * m.q_hat[g] for g in 1:n_good]
 
+    # Block 4 diagnostics. `beta_expected` is β̂(E[y]): the same cloglog on the
+    # fractional outcome E[y_ls] = 1 − Ḡ_cell(N̂_s) (the unbiased gbar estimator), i.e.
+    # the coefficient of the EXPECTED network. Its gap to the moment E[β̂(y)] is what
+    # the granularity of a single network adds to block 4. `reg_sd` is the spread of
+    # β̂ across the R networks.
+    lg = gbar_logfact_table(m.n_draw)
+    Ey = [1.0 - gbar_cell(m.k_counts[g], m.n_draw, m.N_hat[GOOD_S[g]], lg) for g in REG_CELL_G]
+    beta_expected, _ = cell_cloglog_beta(Ey)
+    _, _, reps = cell_cloglog_moment(network.linkages_flat, m.N_hat)
+    reg_sd = [std(filter(isfinite, reps[i, :])) for i in 1:size(reps, 1)]
+
     return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, b_logz = m.b_logz,
+            reg_coef = m.reg_coef, reg_fail = m.reg_fail, reg_sd = reg_sd,
+            beta_expected = beta_expected,
             G0 = m.G0, G_target = collect(G_TARGET), N_count = N_count, EK = EK,
             G_curve = m.G_curve, k_counts = m.k_counts, n_draw = m.n_draw,
             K_values = collect(COUNT_CURVE_K))

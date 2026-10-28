@@ -88,8 +88,8 @@ R_down_ = size(N_downstream_per_region_local[N_downstream_per_region_local .!= 0
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
 @everywhere const theta               = $(1.768)#1.768
-# α prior = empirical cloglog distance slope / θ (the same value TAU_PRIOR uses).
-@everywhere const P_alpha             = $(_require_stat(coefs, "reg_coef_cloglog_1") / theta)
+# P_alpha (the α prior) is bound in SECTION 2b, once GRANULAR is known: the prior
+# comes from a different regression in the two modes.
 
 println("\n Lambda = $lambda — Labor / CI share")
 println("\n Epsilon = $epsilon — Sales elasticity")
@@ -179,6 +179,39 @@ end
 # specification. `granular_report` reports the clamp status either way, so the
 # two runs are directly comparable sector by sector.
 @everywhere const RELAX_N_LO = $(relax_n_lo_local)
+
+# ── κ and the cell-level extensive margin (GRANULAR only) ────────────────────
+# Under GRANULAR comparative advantage is T_{ls} = T_{a(l)s} · n_ls^κ, with n_ls the
+# observed number of upstream firms of the cell (cells_ls.csv) and κ ONE scalar common
+# to all sectors. It sits right after α in the parameter vector:
+#     [Ω^L | Ω^s | A | α(N_TAU) | κ(N_KAPPA) | T]
+# and N_KAPPA = 0 outside GRANULAR, so the legacy layout is unchanged.
+#
+# Block 4 becomes the CELL-level cloglog of 1{K_ls > 0} on distance and ln n_ls with a
+# sector × AA fixed effect, the model moment being its average over R_CELL_REG
+# networks of N̂_s varieties drawn from the winner matrix (model_CP.jl,
+# cell_cloglog_moment). The firm-level regression is not used under GRANULAR.
+@everywhere const N_KAPPA        = $(granular_local ? 1 : 0)
+@everywhere const R_CELL_REG     = 100
+@everywhere const CELL_PERM_SEED = 4_242_000
+# Search box for κ, in levels. κ = 1 is the Eaton–Kortum benchmark in which T is a
+# stock of ideas proportional to the number of firms; the box leaves room on both
+# sides of it and of zero.
+@everywhere const KAPPA_LO = -1.0
+@everywhere const KAPPA_HI =  3.0
+
+# ── α prior (P_alpha) ────────────────────────────────────────────────────────
+# Legacy: the firm-level cloglog distance slope on `not_supply` (+θα), stats.csv.
+# GRANULAR: the cell-level slope on `has_sup` (beta_d_1.npy = −θα), hence the sign.
+if granular_local
+    _bd1_path = joinpath(input_folder, "beta_d_1.npy")
+    isfile(_bd1_path) || error("granular=true needs $(_bd1_path) (the cell-level cloglog " *
+                               "slope on ln d) for the α prior.")
+    _alpha_prior_local = -Float64(vec(NPZ.npzread(_bd1_path))[1]) / theta
+else
+    _alpha_prior_local = _require_stat(coefs, "reg_coef_cloglog_1") / theta
+end
+@everywhere const P_alpha = $(_alpha_prior_local)
 println("\nGRANULAR = $granular_local ; CA_LEVEL = :$ca_level_local" *
         (relax_n_lo_local ? " ; RELAX_N_LO = true (N_LO forced to 1 — the model's " *
                             "lower bound N^obs_s/R_downstream is NOT imposed)" : ""))
@@ -678,14 +711,38 @@ include_control_local = (@isdefined(include_control)) ? Bool(include_control) : 
 #       cloglog on `not_supply`, log distance and log own productivity, with an
 #       area×sector fixed effect — and the log-z coefficient (= −θ) comes back as a
 #       free over-identifying diagnostic.
+# GRANULAR: the firm-level regression is not run at all (block 4 is the cell-level
+# cloglog), so neither flag has any effect; both are set false so nothing upstream
+# builds the log-z regressor for it.
 reg_include_control_local = ca_level_local == :aa ? false : include_control_local
-reg_include_size_local    = ca_level_local == :aa ? true  : !include_control_local
+reg_include_size_local    = granular_local ? false : (ca_level_local == :aa ? true : !include_control_local)
 @everywhere const REG_INCLUDE_CONTROL = $(reg_include_control_local)
 @everywhere const REG_INCLUDE_SIZE    = $(reg_include_size_local)
 println("reg_method = :$reg_method_local ; include_control (control group) = $include_control_local " *
         "⇒ effective (control rows, log-z size control) = ($reg_include_control_local, $reg_include_size_local)")
 
-if reg_method_local == :cloglog
+kappa_prior_local = 0.0
+if granular_local
+    # Cell-level cloglog targets (data notebook, "Aggrégation au niveau de la cellule"):
+    # beta_d_<n>.npy = distance coefficient(s) (ln d for n = 1, the 50-100 / 100-150 /
+    # 150-200 / 200+ bins against 0-50 km for n = 4), beta_kappa_<n>.npy = ln n_ls.
+    # Block 4 = [β_d (N_REG) ; β_κ (1)]. N_REG keeps its meaning: the number of
+    # DISTANCE regressors.
+    _bd = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_d_$(n_coef).npy"))))
+    _bk = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_kappa_$(n_coef).npy"))))
+    length(_bd) == n_coef || error("beta_d_$(n_coef).npy has $(length(_bd)) entries, expected $n_coef")
+    length(_bk) == 1      || error("beta_kappa_$(n_coef).npy has $(length(_bk)) entries, expected 1")
+    reg_coef_local = vcat(_bd, _bk)
+    # κ prior: the continuous-distance specification's ln n coefficient (≈ κ when q is
+    # small and the fixed effect absorbs N_s, T_a and market access).
+    _bk1_path = joinpath(input_folder, "beta_kappa_1.npy")
+    kappa_prior_local = Float64(vec(NPZ.npzread(isfile(_bk1_path) ? _bk1_path :
+                        joinpath(input_folder, "beta_kappa_$(n_coef).npy")))[1])
+    kappa_prior_local = clamp(kappa_prior_local, -0.9, 2.9)
+    println("Block 4 (cell-level cloglog) target: β_d = $(round.(_bd, digits=4)), " *
+            "β_κ = $(round(_bk[1], digits=4)) ; priors α₀ = $(round(P_alpha, digits=4)), " *
+            "κ₀ = $(round(kappa_prior_local, digits=4))")
+elseif reg_method_local == :cloglog
     if n_coef == 1
         _rc = _read_named_value(coefs, "reg_coef_cloglog_1")
         _rc === nothing && error("reg_method=:cloglog with n_coef=1 needs a `reg_coef_cloglog_1` " *
@@ -707,8 +764,17 @@ end
 # N_TAU: number of trade-cost parameters (length of α in unpack_params/build_tau).
 # For standard runs n_tau == n_coef so N_TAU == N_REG; the split enables N_TAU=1
 # (power-law τ = d^α) with N_REG=4 (four binned reg-coef moments, over-identified).
-n_reg = length(reg_coef_local)   # actual moment count from loaded data
-@everywhere N_REG = $(n_reg)
+n_reg = length(reg_coef_local)   # actual moment count from loaded data (block-4 length)
+# N_REG = number of DISTANCE coefficients. Equal to the block-4 length in legacy mode;
+# under GRANULAR block 4 also carries β_κ, so it is N_REG + 1.
+@everywhere N_REG = $(granular_local ? n_coef : n_reg)
+@everywhere const KAPPA_PRIOR = $(kappa_prior_local)
+# Names of the block-4 coefficients, for the reports (report.txt, granular diagnostics,
+# MOMENT_LABELS). Legacy labels are unchanged.
+_dist_labels = N_REG == 5 ? ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"] :
+               N_REG == 4 ? ["]50,100]", "]100,150]", "]150,200]", ">200"] :
+               (granular_local && N_REG == 1) ? ["ln d"] : ["Bin $i" for i in 1:N_REG]
+@everywhere const REG_COEF_LABELS = $(granular_local ? vcat(_dist_labels, "ln n") : _dist_labels)
 @everywhere N_TAU = $(n_tau)
 
 
@@ -893,6 +959,135 @@ LOG_CLOSEST_DIST_local    = log.(max.(closest_plant_dist_local, 1.0))
 println("Constants distributed. N_moments=$N_moments, n_good=$n_good_local")
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SECTION 10a — CELLS: FIRM COUNTS n_ls AND THE CELL-LEVEL REGRESSION SET (GRANULAR)
+#
+# cells_ls.csv is written by the data notebook ("Aggrégation au niveau de la
+# cellule"): one row per active (sector, ZE) cell with d > 0, carrying n_ls (upstream
+# firms of the cell, suppliers included, 2019) and has_sup = 1{K_ls > 0}.
+#
+#   LOG_N_LS (S, R)   ln n_ls on every simulated cell, 0 elsewhere. It enters T
+#                     through the gather T_ls = T_{a(l)s} n_ls^κ, so EVERY cell of
+#                     CELL_MASK needs it.
+#   REG_CELL_*        the regression set 𝒜 = CELL_MASK ∩ {d > 0}: the good index of
+#                     each cell, its regressors [distance bins or ln d | ln n] and its
+#                     sector × attraction-area fixed effect. Fixed by the sampling
+#                     plan, identical in the data and in the model; groups without
+#                     variation in y are dropped per realisation (cell_cloglog_beta).
+#
+# The ZE keys are normalised to 4-character strings on both sides, so a column read
+# as an integer by CSV ("51") and one read as a string ("0051") match.
+# ═══════════════════════════════════════════════════════════════════════════
+_ze_key(x) = (t = strip(string(x)); v = tryparse(Int, t); v === nothing ? t : lpad(string(v), 4, '0'))
+
+log_n_ls_local   = zeros(Float64, S_, R_full)
+reg_cell_g_local = Int[]
+reg_cell_fe_local = Int[]
+reg_cell_x_local = zeros(Float64, 0, n_reg)
+reg_cell_y_local = Float64[]
+if granular_local
+    _cells_path = joinpath(input_folder, "cells_ls.csv")
+    isfile(_cells_path) || error("granular=true requires $(_cells_path) (the cell table " *
+                                 "with n_ls and has_sup written by the data notebook).")
+    _cdf = CSV.read(_cells_path, DataFrame)
+    for c in ("A129", "ze2010", "n_ls", "has_sup")
+        c in names(_cdf) || error("cells_ls.csv has no `$c` column; has $(names(_cdf))")
+    end
+    _fdf_grid = CSV.read(joinpath(input_folder, "filter_N_upstream.csv"), DataFrame)
+    _sec_keys = sort(unique(string.(_fdf_grid.A129)))
+    _ze_keys  = sort(unique(_ze_key.(_fdf_grid.ze2010)))
+    length(_sec_keys) == S_ && length(_ze_keys) == R_full || error(
+        "filter_N_upstream.csv covers $(length(_sec_keys)) sectors × $(length(_ze_keys)) ZE, " *
+        "but filter_N_upstream.npy is ($S_, $R_full): cannot map cells_ls.csv onto the grid.")
+    _s_of = Dict(k => i for (i, k) in enumerate(_sec_keys))
+    _l_of = Dict(k => i for (i, k) in enumerate(_ze_keys))
+
+    _has_n   = falses(S_, R_full)
+    _y_cell  = fill(NaN, S_, R_full)
+    _d_data  = fill(NaN, S_, R_full)
+    _off_grid = 0; _off_mask = 0
+    for row in eachrow(_cdf)
+        sk = string(row.A129); lk = _ze_key(row.ze2010)
+        (haskey(_s_of, sk) && haskey(_l_of, lk)) || (global _off_grid += 1; continue)
+        si = _s_of[sk]; li = _l_of[lk]
+        cell_mask_local[si, li] || (global _off_mask += 1; continue)
+        n = Float64(row.n_ls)
+        n >= 1 || error("cells_ls.csv: n_ls = $n < 1 for cell ($sk, $lk)")
+        log_n_ls_local[si, li] = log(n)
+        _has_n[si, li] = true
+        _y_cell[si, li] = Float64(row.has_sup)
+        "dist_com_w_arithmetic" in names(_cdf) && (_d_data[si, li] = Float64(row.dist_com_w_arithmetic))
+    end
+    _off_grid > 0 && @warn "cells_ls.csv: $_off_grid rows have a sector or ZE outside the model grid (ignored)."
+    _off_mask > 0 && @warn "cells_ls.csv: $_off_mask rows are not simulated cells (CELL_MASK) — ignored."
+    _missing_n = [(s, l) for s in 1:S_, l in 1:R_full if cell_mask_local[s, l] && !_has_n[s, l]]
+    isempty(_missing_n) || error(
+        "$(length(_missing_n)) simulated cells have no n_ls in cells_ls.csv (first: " *
+        "$(first(_missing_n, min(5, length(_missing_n))))). Every cell of CELL_MASK needs n_ls, since " *
+        "T_ls = T_a n_ls^κ. If they are the d = 0 cells dropped before the export, write " *
+        "cells_ls.csv before that filter (the regression set applies d > 0 itself).")
+
+    # Distances: the model's own (distance to the nearest downstream region), compared
+    # with the data's dist_com_w_arithmetic where available.
+    _dgap = [abs(_d_data[s, l] - closest_plant_dist_local[l])
+             for s in 1:S_, l in 1:R_full if _has_n[s, l] && isfinite(_d_data[s, l])]
+    if !isempty(_dgap)
+        @printf("cells_ls.csv vs model nearest-downstream distance: max |Δd| = %.3g km over %d cells\n",
+                maximum(_dgap), length(_dgap))
+        maximum(_dgap) > 1e-3 && @warn "cell distances in cells_ls.csv differ from distances.npy " *
+            "(max gap $(maximum(_dgap)) km): the regressors would not be the data's."
+    end
+
+    # Regression set 𝒜 and its design, in cell (good) order.
+    _fe_id = Dict{Tuple{Int,Int},Int}()
+    _rows_x = Vector{Vector{Float64}}()
+    _n_d0 = 0
+    for g in 1:n_good_local
+        si = GOOD_S_local[g]; li = GOOD_R_local[g]
+        d = closest_plant_dist_local[li]
+        d > 0 || (global _n_d0 += 1; continue)
+        isfinite(_y_cell[si, li]) || continue          # not in the data's regression table
+        x = zeros(Float64, n_reg)
+        if N_REG == 1
+            x[1] = log(d)
+        else
+            b = DistBin_local[li, closest_downstream_region_local[li]]
+            (b > 0 && b <= N_REG) && (x[b] = 1.0)
+        end
+        x[end] = log_n_ls_local[si, li]
+        fe = get!(_fe_id, (si, aa_of_ze_local[li]), length(_fe_id) + 1)
+        push!(reg_cell_g_local, g); push!(reg_cell_fe_local, fe); push!(_rows_x, x)
+        push!(reg_cell_y_local, _y_cell[si, li])
+    end
+    reg_cell_x_local = isempty(_rows_x) ? zeros(0, n_reg) : permutedims(reduce(hcat, _rows_x))
+    println("Cell-level regression set 𝒜: $(length(reg_cell_g_local)) cells " *
+            "($(Int(sum(reg_cell_y_local))) with a supplier in the data), $(length(_fe_id)) " *
+            "sector × AA groups; $_n_d0 simulated cells at d = 0 excluded.")
+end
+@everywhere const LOG_N_LS      = $log_n_ls_local
+@everywhere const REG_CELL_G    = $reg_cell_g_local
+@everywhere const REG_CELL_FE   = $reg_cell_fe_local
+@everywhere const REG_CELL_X    = $reg_cell_x_local
+@everywhere const REG_CELL_N_FE = $(isempty(reg_cell_fe_local) ? 0 : maximum(reg_cell_fe_local))
+@everywhere const REG_CELL_Y_DATA = $reg_cell_y_local
+
+# Consistency check: the Julia kernel on the DATA outcome must reproduce the data
+# notebook's statsmodels coefficients (same cells, same regressors, same FE, same
+# group-drop rule). A gap here means the two sides are not running the same regression.
+if granular_local && !isempty(reg_cell_g_local)
+    _b_chk, _ok_chk = cell_cloglog_beta(reg_cell_y_local)
+    println("\nCell cloglog on the data outcome (Julia kernel) vs the data targets:")
+    for i in 1:n_reg
+        @printf("  %-12s  Julia %9.4f   target %9.4f\n",
+                i <= N_REG ? (N_REG == 1 ? "ln d" : "bin $i") : "ln n", _b_chk[i], reg_coef_local[i])
+    end
+    _gap_chk = maximum(abs.(_b_chk .- reg_coef_local))
+    (_ok_chk && _gap_chk < 1e-3) ||
+        @warn "Julia's cell cloglog on has_sup does not reproduce beta_d/beta_kappa " *
+              "(max gap $(round(_gap_chk, sigdigits=3)), converged = $_ok_chk). Check the " *
+              "regression set, the distance bins and the FE before trusting block 4."
+end
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SECTION 10b — T STARTING VALUES VIA γ_ls INVERSION (TRADE-COST AWARE)
 # Inverts the closed-form sourcing-share map for the comparative-advantage
 # starting point, using the α prior on trade costs and wages ≡ 1.
@@ -932,8 +1127,12 @@ margin Ê (Σ = 1) as Sinkhorn's theorem requires (initialisation.md §2.1). The
 per-sector reference gauge makes the returned T identical to the raw-γ inversion.
 """
 function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
-                             tol::Float64=1e-11, damping::Float64=0.5)
+                             tol::Float64=1e-11, damping::Float64=0.5,
+                             kappa::Real=0.0)
     θ = theta
+    # Density factor n_ls^κ of T_ls = T_{a(l)s} n_ls^κ (GRANULAR). exp(0) = 1 exactly,
+    # so at κ = 0 the iteration is the legacy one bit for bit.
+    nfac = exp.(kappa .* log_n_ls_local)                               # (S, R_full)
     # τ^{-θ}[l, dr] under the power-law prior and wages ≡ 1. Trade costs are ZE-level
     # in both modes; only comparative advantage moves to the area level.
     tau_negθ = exp.((-θ * prior_alpha) .* LOG_DIST_DOWNSTREAM_local)   # (R_full, R_downstream)
@@ -961,7 +1160,7 @@ function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
             # Fréchet scale with the rest of its area (finite_sample2.tex Ass. 2).
             Phi = zeros(Float64, R_down_)
             for l in cells_s, dr in 1:R_down_
-                Phi[dr] += T[s, T_gather_local[l]] * tau_negθ[l, dr]
+                Phi[dr] += T[s, T_gather_local[l]] * nfac[s, l] * tau_negθ[l, dr]
             end
             # γ_col[c] ∝ T[s,c] · M_col[c] with M_col[c] = Σ_{l∈c} Σ_dr τ^{-θ}[l,dr] Ê_dr / Φ[dr]
             # (T factors out of the within-area sum since it is constant there)
@@ -973,7 +1172,7 @@ function invert_T_from_gamma(prior_alpha::Real; max_iter::Int=1000,
                 for dr in 1:R_down_
                     Phi[dr] > 1e-300 && (M += tau_negθ[l, dr] * Ê[dr] / Phi[dr])
                 end
-                M_col[T_gather_local[l]] += M
+                M_col[T_gather_local[l]] += nfac[s, l] * M
             end
             T_new = Dict{Int,Float64}()
             for c in cols_s
@@ -1000,8 +1199,10 @@ end
 # inversion at α = 0 (τ ≡ 1 ⇒ market access M is common within a sector and cancels),
 # so when the α prior is missing we fall back to α = 0 rather than to a second,
 # redundant code path.
-_prior_alpha = _read_prior_alpha(coefs)
-_prior_alpha = _prior_alpha === nothing ? nothing : _prior_alpha / theta
+# Same prior as P_alpha (SECTION 2b): the firm-level slope / θ in legacy mode, the
+# cell-level −β_d / θ under GRANULAR.
+_prior_alpha = granular_local ? P_alpha : _read_prior_alpha(coefs)
+_prior_alpha = (_prior_alpha === nothing || granular_local) ? _prior_alpha : _prior_alpha / theta
 _init_alpha  = _prior_alpha === nothing ? 0.0 : Float64(_prior_alpha)
 if _prior_alpha === nothing
     @warn "prior_alpha (reg_coef_cloglog_1) not found in stats.csv — inverting T at α = 0 " *
@@ -1009,7 +1210,7 @@ if _prior_alpha === nothing
 end
 println("\nInverting T from γ (Sinkhorn) with α = $_init_alpha (wages ≡ 1), " *
         "target = $(ca_level_local == :aa ? "AA-aggregated" : "ZE-level") γ̃")
-T_init_local, iters_used = invert_T_from_gamma(_init_alpha)
+T_init_local, iters_used = invert_T_from_gamma(_init_alpha; kappa = kappa_prior_local)
 let active_vals = T_init_local[T_init_local .> 0]
     (isempty(active_vals) || !all(isfinite, active_vals)) &&
         error("γ-inversion produced a non-finite or empty T starting value — check " *
@@ -1153,7 +1354,7 @@ end
 _excluded = Set{Int}()
 push!(_excluded, 2)              # Ω^s[1]: position 2 in new layout
 push!(_excluded, S_ + 2)         # A[1]:   position S+2 in new layout
-T_param_offset = 1 + S_ + R_down_ + N_TAU
+T_param_offset = 1 + S_ + R_down_ + N_TAU + N_KAPPA
 for s in 1:S_
     ref_r = T_REF_REGION_local[s]
     ref_r == 0 && continue
@@ -1163,7 +1364,7 @@ for s in 1:S_
         push!(_excluded, T_param_offset + t_idx)
     end
 end
-jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_TAU + sum(T_mask_local)) if i ∉ _excluded]
+jacobian_param_indices = [i for i in 1:(1 + S_ + R_down_ + N_TAU + N_KAPPA + sum(T_mask_local)) if i ∉ _excluded]
 println("Jacobian will cover $(length(jacobian_param_indices)) identified parameters ($(length(_excluded)) normalized-out excluded).")
 
 
@@ -1283,8 +1484,12 @@ end
 # block 4: reg_coef (β-distance bins), never masked
 for b in 1:n_reg
     full_pos = n_labor + n_industry + n_pi + b
-    moment_mask_local[full_pos] &&
+    moment_mask_local[full_pos] || continue
+    if granular_local
+        push!(_moment_labels, b <= N_REG ? "beta_d[$(REG_COEF_LABELS[b])]" : "beta_kappa")
+    else
         push!(_moment_labels, n_reg == 1 ? "reg_coef" : "reg_coef[$b]")
+    end
 end
 # T-column names: ZE names under :ze, attraction-area names (anchored on the AA's
 # downstream region) under :aa. Used for both the γ moment labels and the T params.
@@ -1315,6 +1520,7 @@ push!(_param_labels_full, "Omega_L")
 for s in 1:S_;            push!(_param_labels_full, "Omega_s[$(_sector_names[s])]"); end
 for r in 1:R_down_;       push!(_param_labels_full, "A[$(_ze_names[downstream_regions_local[r]])]"); end
 for b in 1:N_TAU;         push!(_param_labels_full, N_TAU == 1 ? "alpha" : "alpha_$b"); end
+N_KAPPA == 1 && push!(_param_labels_full, "kappa")
 # T entries follow vec(permutedims(T)) s-major over (S, T_COL_DIM) restricted to
 # T_MASK. Recover (s, column) for each active T slot in the order T_reduced is laid out.
 for flat_pos in findall(T_mask_local)             # s-major: s outer, column inner
@@ -1322,7 +1528,7 @@ for flat_pos in findall(T_mask_local)             # s-major: s outer, column inn
     c = ((flat_pos - 1) %  T_col_dim_local) + 1
     push!(_param_labels_full, "T[$(_sector_names[s])-$(_tcol_names[c])]")
 end
-@assert length(_param_labels_full) == 1 + S_ + R_down_ + N_TAU + sum(T_mask_local)
+@assert length(_param_labels_full) == 1 + S_ + R_down_ + N_TAU + N_KAPPA + sum(T_mask_local)
 _param_labels = _param_labels_full[jacobian_param_indices]
 @everywhere const PARAM_LABELS = $_param_labels
 println("Built $(length(_moment_labels)) moment labels and $(length(_param_labels)) parameter labels.")

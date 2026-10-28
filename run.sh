@@ -206,11 +206,11 @@ run_industry() {
     if [ "$MODE" = "gmm" ]; then
         local reporting_folder="reporting_gmm_${ind}"
     else
-        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran][_nlo1]_<optimizer>
+        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran_kappa][_nlo1]_<optimizer>
         local reporting_folder="reporting_${ind}"
         [ "$PROFILE_T" = "true" ] && reporting_folder="${reporting_folder}_profiled"
         [ "$CA_LEVEL" = "aa" ]    && reporting_folder="${reporting_folder}_aa"
-        [ "$GRANULAR" = "true" ]  && reporting_folder="${reporting_folder}_gran"
+        [ "$GRANULAR" = "true" ]  && reporting_folder="${reporting_folder}_gran_kappa"
         [ "$GRANULAR" = "true" ] && [ "$RELAX_N_LO" = "true" ] && reporting_folder="${reporting_folder}_nlo1"
         reporting_folder="${reporting_folder}_${OPTIMIZER}"
     fi
@@ -261,11 +261,11 @@ else
     if [ "$MODE" = "gmm" ]; then
         echo "Monitor: tail -f reporting_gmm_${INDUSTRY}/logs.log"
     else
-        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran][_nlo1]_<optimizer>
+        # Must match main.jl: reporting_<ind>[_profiled][_aa][_gran_kappa][_nlo1]_<optimizer>
         monitor_folder="reporting_${INDUSTRY}"
         [ "$PROFILE_T" = "true" ] && monitor_folder="${monitor_folder}_profiled"
         [ "$CA_LEVEL" = "aa" ]    && monitor_folder="${monitor_folder}_aa"
-        [ "$GRANULAR" = "true" ]  && monitor_folder="${monitor_folder}_gran"
+        [ "$GRANULAR" = "true" ]  && monitor_folder="${monitor_folder}_gran_kappa"
         [ "$GRANULAR" = "true" ] && [ "$RELAX_N_LO" = "true" ] && monitor_folder="${monitor_folder}_nlo1"
         monitor_folder="${monitor_folder}_${OPTIMIZER}"
         echo "Monitor: tail -f ${monitor_folder}/logs.log"

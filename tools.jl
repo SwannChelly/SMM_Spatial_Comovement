@@ -267,13 +267,7 @@ function generate_dashboard_report(
     )
 
 
-    bin_labels = if N_REG == 5
-        ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
-    elseif N_REG == 4
-        ["]50,100]", "]100,150]", "]150,200]", ">200"]
-    else
-        ["Bin $i" for i in 1:N_REG]
-    end
+    bin_labels = REG_COEF_LABELS
 
     reg_df = DataFrame(
         bins = bin_labels,
@@ -1148,6 +1142,17 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
                     isempty(info.G0) ? NaN : info.G0[s], G_TARGET[s], info.N_count[s])
         end
         println("="^72)
+        # Block 4 (cell-level cloglog): data target, model moment E[β̂(y)], its spread
+        # across the R networks, and β̂(E[y]) on the expected network. The gap between
+        # the last two is what the granularity of one network adds to the moment.
+        println("  Block 4 — cell-level cloglog  (R = $R_CELL_REG networks, " *
+                "$(info.reg_fail) failed fits)")
+        @printf("  %-14s %10s %12s %10s %14s\n", "coef", "data", "model E[β̂]", "sd_j", "β̂(E[y])")
+        for (i, lab) in enumerate(REG_COEF_LABELS)
+            @printf("  %-14s %10.4f %12.4f %10.4f %14.4f\n", lab, reg_coef[i],
+                    info.reg_coef[i], info.reg_sd[i], info.beta_expected[i])
+        end
+        println("="^72)
 
         NPZ.npzwrite(joinpath(output_folder, "granular_diagnostics.npz"),
                      Dict("N_hat"    => Float64.(info.N_hat),
@@ -1160,6 +1165,10 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
                           "N_count"  => Float64.(info.N_count),
                           "q_hat"    => Float64.(info.q_hat),
                           "b_logz"   => [info.b_logz],
+                          "reg_coef_model"    => Float64.(info.reg_coef),
+                          "reg_coef_sd_reps"  => Float64.(info.reg_sd),
+                          "reg_coef_expected" => Float64.(info.beta_expected),
+                          "reg_fail"          => [Float64(info.reg_fail)],
                           "EK"       => Float64.(info.EK)))
         open(joinpath(output_folder, "granular_diagnostics.txt"), "w") do io
             println(io, "Granular diagnostics", isempty(industry) ? "" : " — $industry",
@@ -1169,7 +1178,11 @@ function report_granular(theta::Vector{Float64}, output_folder::String;
                 println(io, "$s  $(N_LO[s])  $(info.N_hat[s])  $(N_HI[s])  $(info.clamped[s])  " *
                             "$(isempty(info.G0) ? NaN : info.G0[s])  $(G_TARGET[s])  $(info.N_count[s])")
             end
-            println(io, "b_logz = $(info.b_logz)  (should equal -theta)")
+            println(io, "Block 4 (cell-level cloglog, R = $R_CELL_REG, failed fits = $(info.reg_fail))")
+            println(io, "coef  data  model_E[beta]  sd_reps  beta(E[y])")
+            for (i, lab) in enumerate(REG_COEF_LABELS)
+                println(io, "$lab  $(reg_coef[i])  $(info.reg_coef[i])  $(info.reg_sd[i])  $(info.beta_expected[i])")
+            end
         end
         return info
     catch e

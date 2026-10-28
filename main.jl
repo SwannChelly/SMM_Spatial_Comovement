@@ -175,7 +175,7 @@ input_folder  = "./baseline_$industry"
 # granular / :aa likewise get their own tree, so the legacy fit stays reproducible
 # side by side (the V0 gate compares the two).
 output_folder = "./reporting_$industry" * (profile_T ? "_profiled" : "") *
-                (ca_level == :aa ? "_aa" : "") * (granular ? "_gran" : "") *
+                (ca_level == :aa ? "_aa" : "") * (granular ? "_gran_kappa" : "") *
                 (relax_n_lo && granular ? "_nlo1" : "") *
                 "_$optimizer_backend"
 mkpath(output_folder)
@@ -198,9 +198,9 @@ step2_W_path = joinpath(output_folder, "step2", "W_step3.npy")
 A_init = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
 A_init ./= sum(A_init)
 T_init_nz = vec(permutedims(T_rs_init))[T_MASK]   # s-major to match T_MASK
-# New layout: [Ω^L | Ω^s | A | α(N_TAU) | T] — alpha is inserted between A and T
+# Layout: [Ω^L | Ω^s | A | α(N_TAU) | κ(N_KAPPA) | T] — κ only under GRANULAR
 init_other_prefix = vcat([agg_labor_share], agg_industry_share, A_init)
-warm_start = vcat(init_other_prefix, P_alpha, T_init_nz)
+warm_start = vcat(init_other_prefix, P_alpha, (N_KAPPA == 1 ? [KAPPA_PRIOR] : Float64[]), T_init_nz)
 
 
 if run_step1
@@ -220,8 +220,20 @@ if run_step1
 
     NPZ.npzwrite(joinpath(output_folder, "step1", "theta_hat_1.npy"), theta_hat_1)
     println("Step 1 complete. θ̂_1 saved.")
+    # Granular diagnostics at θ̂_1, including block 4 (data vs E[β̂] vs β̂(E[y])).
+    report_granular(theta_hat_1, joinpath(output_folder, "step1");
+                    industry=industry, label="theta_1")
 else
     println("Step 1 skipped (resume).")
+end
+
+# Under GRANULAR the model now carries κ and a cell-level block 4 whose bootstrap
+# covariance has not been rebuilt yet, so Steps 2–4 (Σ_data, W_step3, inference) and
+# the post-hoc block would read a Σ file of the wrong layout. Stop after Step 1.
+if GRANULAR
+    println("\nGRANULAR (κ + cell-level block 4): stopping after Step 1. Steps 2–4 need the " *
+            "cell-level bootstrap Σ (β_d, β_κ, γ, G), which is not built yet.")
+    exit(0)
 end
 
 ############## Load θ̂_1 ##############
