@@ -121,7 +121,7 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 |--------|--------|---------|---------|
 | `<industry>` | `aero`, `auto`, `car`, `both` | — | economy (`both` runs aero then auto) |
 | `--n_coef` | `1`, `4`, `5` | `4` | distance coefficients of the cell cloglog (`1` = ln d, else bins) |
-| `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one α per bin) |
+| `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one distance elasticity per segment between bin centres, nesting d^α) |
 | `--n_rho_inf` | integer | `10000` | unused (inference now from fake worlds, at the estimation's `N_rho`); kept so old calls parse |
 | `--relax_n_lo` | `true`, `false` | `false` | DIAGNOSTIC: N_LO forced to 1 (drops the model's bound) |
 

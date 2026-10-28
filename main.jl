@@ -76,10 +76,9 @@ if run_step1
     println("\n" * "="^70 * "\nSTEP 1: identity-weighted optimisation\n" * "="^70)
     A_init = emp_pi_r_full .^ (1 / abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
     A_init ./= sum(A_init)
-    # α₀ from the data prior; with distance bins, τ_b = 1 + α_b starts at the median of
-    # d^{α₀} over the (cell, buyer) pairs of the bin.
-    alpha_init = N_TAU == 1 ? [P_alpha] :
-        [median(exp.(P_alpha .* LOG_DIST_DOWNSTREAM[DistBin .== b])) - 1 for b in 1:N_TAU]
+    # α₀ from the data prior; with distance bins, the per-segment elasticities computed from
+    # the bin coefficients in load_parameters.jl (ALPHA_BIN_INIT).
+    alpha_init = N_TAU == 1 ? [P_alpha] : copy(ALPHA_BIN_INIT)
     warm_start = vcat(agg_labor_share, agg_industry_share, A_init, alpha_init,
                       KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK])
     theta_hat_1, _ = run_optimization(; warm_start_params = warm_start, output_subfolder = "step1",

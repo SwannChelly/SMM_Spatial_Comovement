@@ -317,16 +317,14 @@ end
 The estimator applied to one fake world. For each candidate (α, κ): T re-inverted on the
 world's γ with A updated on its π, N calibrated on its G, β simulated on the world's
 simulator; criterion `e' W e`, `e = β_world − β_sim`. Nelder–Mead over (α, κ) from the
-estimate, inside the estimation's κ box and α ∈ [1e-4, ALPHA_MAX] (N_TAU = 1) or
-`1 + α_b > 0` (bins). T and A are warm-started from the last converged evaluation of the
+estimate, inside the estimation's κ box and every α_k ∈ [1e-4, ALPHA_MAX]. T and A are warm-started from the last converged evaluation of the
 world; the fixed point is unique, so this changes cost, not values.
 """
 function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
     nα = N_TAU
     T_warm = Ref(ref.T); A_warm = Ref(ref.A)
     unpack_x(x) = (x[1:nα], x[nα + 1])
-    inbox(α, κ) = KAPPA_LO <= κ <= KAPPA_HI &&
-                  (N_TAU == 1 ? 1e-4 <= α[1] <= ALPHA_MAX : all(a -> a > -1, α))
+    inbox(α, κ) = KAPPA_LO <= κ <= KAPPA_HI && all(a -> 1e-4 <= a <= ALPHA_MAX, α)
 
     function crit(x)
         α, κ = unpack_x(x)

@@ -158,16 +158,27 @@ end
 """
     build_tau(alpha) -> τ (R × R_downstream)
 
-`τ = max(d,1)^α` with one α; `1 + α_b` by distance bin otherwise.
+`τ = max(d,1)^α` with one α. With `N_TAU = K` bins, `ln τ` is continuous and piecewise
+linear in `ln d`, with knots at the bin centres `TAU_LOG_KNOTS = ln d̄_0 … ln d̄_K`:
+`α_k` is the distance elasticity of the trade cost on `[d̄_{k-1}, d̄_k]`, `ln τ(d̄_0) = 0`,
+and the end segments extend below `d̄_0` (slope α_1) and above `d̄_K` (slope α_K). With
+every `α_k = α`, `τ = (d/d̄_0)^α`, i.e. `d^α` up to a factor common to all origins of a
+buyer, which cancels in the shares: the power law is nested exactly.
 """
 function build_tau(alpha)
     tau = ones(eltype(alpha), R, R_downstream)
+    x = TAU_LOG_KNOTS
     for r_prime in 1:R, r_d in 1:R_downstream
+        ld = LOG_DIST_DOWNSTREAM[r_prime, r_d]
         if N_TAU == 1
-            tau[r_prime, r_d] = exp(alpha[1] * LOG_DIST_DOWNSTREAM[r_prime, r_d])
+            tau[r_prime, r_d] = exp(alpha[1] * ld)
         else
-            b = DistBin[r_prime, r_d]
-            (b > 0 && b <= N_TAU) && (tau[r_prime, r_d] += alpha[b])
+            lnt = alpha[1] * (min(ld, x[2]) - x[1])
+            for k in 2:N_TAU
+                ld > x[k] || break
+                lnt += alpha[k] * ((k == N_TAU ? ld : min(ld, x[k + 1])) - x[k])
+            end
+            tau[r_prime, r_d] = exp(lnt)
         end
     end
     return tau

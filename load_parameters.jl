@@ -334,7 +334,6 @@ u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, :sobol
 DistBin_local = [distance_bin(distances_downstream_local[i, j], n_coef) for i in 1:R_full, j in 1:R_down_]
 LOG_DIST_DOWNSTREAM_local = log.(max.(distances_downstream_local, 1.0))
 @everywhere const DOWNSTREAM_REGIONS        = $(downstream_regions_local)
-@everywhere const DistBin                   = $(DistBin_local)
 @everywhere const CLOSEST_PLANT_DIST        = $(closest_plant_dist_local)
 @everywhere const CLOSEST_DOWNSTREAM_REGION = $(closest_downstream_region_local)
 @everywhere const LOG_DIST_DOWNSTREAM       = $LOG_DIST_DOWNSTREAM_local
@@ -468,6 +467,43 @@ function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
     end
     return T
 end
+# ── Binned trade costs: one distance elasticity per segment between bin centres ──
+# The bins are the regression's (base 0–50 km, or 0–20 km with five bins); the last is
+# closed at the largest distance to the nearest downstream region (the regression's
+# distance). Centres d̄_0 … d̄_K are the knots of build_tau. Starting values from the
+# data: ln τ_0 = 0, ln τ_b = −β_b/θ, α_k = Δ ln τ / Δ ln d̄ between successive centres;
+# a non-positive slope (β rising there) takes the previous segment's value, the first
+# segment's floor being the scalar prior α₀ = −β_d/θ.
+_tau_log_knots  = Float64[]
+_alpha_bin_init = Float64[]
+if n_tau > 1
+    n_tau == n_coef || error("n_tau must be 1 or n_coef ($n_coef), got $n_tau")
+    _edges = n_coef == 5 ? [0.0, 20, 50, 100, 150, 200] : [0.0, 50, 100, 150, 200]
+    _dmax  = maximum(closest_plant_dist_local)
+    _dmax > _edges[end] || error("no cell lies beyond $(_edges[end]) km (max distance to the " *
+                                 "nearest downstream region $_dmax): the last bin is empty.")
+    _all_edges = vcat(_edges, _dmax)
+    _dbar  = 0.5 .* (_all_edges[1:end-1] .+ _all_edges[2:end])
+    _tau_log_knots = log.(_dbar)
+    _ln_tau = vcat(0.0, -_bd ./ theta)
+    _slope  = diff(_ln_tau) ./ diff(_tau_log_knots)
+    let prev = P_alpha
+        for s_k in _slope
+            prev = s_k > 0 ? s_k : prev
+            push!(_alpha_bin_init, prev)
+        end
+    end
+    println(" binned τ: knots d̄ = $(round.(_dbar, digits=1)) km (d_max = $(round(_dmax, digits=1)))")
+    for k in 1:n_tau
+        @printf("   segment %3.0f → %5.0f km: Δln τ = %7.4f  slope %7.4f  α_k init %6.4f%s\n",
+                _dbar[k], _dbar[k + 1], _ln_tau[k + 1] - _ln_tau[k], _slope[k], _alpha_bin_init[k],
+                _slope[k] > 0 ? "" : "  (floor)")
+    end
+    any(_alpha_bin_init .> 1.5) && @warn "an α_k starting value exceeds ALPHA_MAX = 1.5; the search box caps it"
+end
+@everywhere const TAU_LOG_KNOTS  = $_tau_log_knots
+@everywhere const ALPHA_BIN_INIT = $_alpha_bin_init
+
 T_init_local = invert_T_from_gamma(P_alpha, kappa_prior_local)
 let v = T_init_local[T_init_local .> 0]
     (isempty(v) || !all(isfinite, v)) && error("γ-inversion produced a non-finite T starting value")
@@ -475,9 +511,10 @@ let v = T_init_local[T_init_local .> 0]
 end
 @everywhere const T_rs_init = $(T_init_local)
 
-# Search box: α in [BOUND_LO, min(BOUND_HI, ALPHA_MAX/α₀)] × α₀ (prior anchor when N_TAU == 1),
-# κ in [KAPPA_LO, KAPPA_HI].
-@everywhere const TAU_PRIOR = $(n_tau == 1 ? [P_alpha] : nothing)
+# Search box: α in [BOUND_LO, min(BOUND_HI, ALPHA_MAX/α₀)] × α₀, anchored on the scalar prior
+# (N_TAU == 1) or the per-segment starting values (bins) — so every α_k > 0; κ in
+# [KAPPA_LO, KAPPA_HI].
+@everywhere const TAU_PRIOR = $(n_tau == 1 ? [P_alpha] : _alpha_bin_init)
 @everywhere const BOUND_LO  = 0.1
 @everywhere const BOUND_HI  = 10
 @everywhere const ALPHA_MAX = 1.5

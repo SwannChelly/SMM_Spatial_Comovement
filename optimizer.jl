@@ -19,24 +19,21 @@ using Printf
 
 """
     parallel_pso_smm(objective, lb, ub; n_particles, max_iter, warm_start_particle,
-                     alpha_indices, t_conv_probe, verbose) -> (best_x, best_f, history)
+                     t_conv_probe, verbose) -> (best_x, best_f, history)
 
 Particle swarm with a scrambled-Sobol initial swarm, reflecting walls, linearly
 decreasing inertia and periodic restarts of stagnant particles. The warm start is
-always one of the particles, so a stage never ends worse than its incumbent. Binned
-α (`alpha_indices`) is kept sorted.
+always one of the particles, so a stage never ends worse than its incumbent.
 """
 function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{Float64};
                           n_particles::Int = 70, max_iter::Int = 100,
                           warm_start_particle::Union{Vector{Float64}, Nothing} = nothing,
                           w_start::Float64 = 0.9, w_end::Float64 = 0.4,
                           c1::Float64 = 1.5, c2::Float64 = 2.5,
-                          alpha_indices::UnitRange = 1:0,
                           bounce_damping::Float64 = 0.5,
                           t_conv_probe::Union{Function, Nothing} = nothing,
                           verbose::Bool = true)
     d = length(lb)
-    sort_alpha(p) = (q = copy(p); q[alpha_indices] = sort(p[alpha_indices]); q)
 
     n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
     particles = if n_random == 0
@@ -45,9 +42,8 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
         net = sobol_scrambled_net(n_random, d, Random.GLOBAL_RNG)
         [lb .+ net[i, :] .* (ub .- lb) for i in 1:n_random]
     end
-    particles = [sort_alpha(p) for p in particles]
     warm_start_particle === nothing ||
-        push!(particles, sort_alpha(clamp.(warm_start_particle, lb, ub)))
+        push!(particles, clamp.(warm_start_particle, lb, ub))
     velocities = [0.1 * (ub .- lb) .* randn(d) for _ in 1:length(particles)]
 
     fitness = Vector{Float64}(pmap(objective, particles))
@@ -70,7 +66,6 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
                                    c2 * r2 .* (g_best .- particles[i]), -v_max, v_max)
             particles[i] = particles[i] .+ velocities[i]
             reflect_bounds!(particles[i], velocities[i], lb, ub, bounce_damping)
-            particles[i] = sort_alpha(particles[i])
         end
 
         fitness = Vector{Float64}(pmap(objective, particles))
@@ -88,7 +83,7 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
         if iter > 30 && iter % 25 == 0
             for i in 1:length(particles)
                 fitness[i] > g_best_fitness * 1.5 || continue
-                particles[i] = sort_alpha(lb .+ rand(d) .* (ub .- lb))
+                particles[i] = lb .+ rand(d) .* (ub .- lb)
                 velocities[i] = 0.1 * (ub .- lb) .* randn(d)
                 p_best[i] = copy(particles[i]); p_best_fitness[i] = Inf
             end
@@ -197,7 +192,6 @@ function train_stage(n_particles::Int, max_iter::Int;
                      moment_blocks::Union{Nothing, Vector{Int}} = nothing)
     nhead = n_head_params()
     T_PLACEHOLDER = vec(permutedims(T_rs_init))[T_MASK]   # overwritten by profiling
-    alpha_indices = 1:0
     cached_tau = nothing
 
     if last_stage_folder === nothing
@@ -206,7 +200,6 @@ function train_stage(n_particles::Int, max_iter::Int;
         a_lo, a_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)
         lb = vcat(0.8 * agg_labor_share, 0.8 .* agg_industry_share, 0.8 .* A, a_lo, KAPPA_LO)
         ub = vcat(1.2 * agg_labor_share, 1.2 .* agg_industry_share, 1.2 .* A, a_hi, KAPPA_HI)
-        alpha_indices = (2 + S + R_downstream):(1 + S + R_downstream + N_TAU)
         best_params_prev = nothing
         var_list = String[]
         warm_start = warm_start_override === nothing ? nothing : warm_start_override[1:nhead]
@@ -234,7 +227,6 @@ function train_stage(n_particles::Int, max_iter::Int;
                 bad = lb_v .>= ub_v           # incumbent above the cap: reset to the full box
                 lb_v = ifelse.(bad, box_lo, lb_v); ub_v = ifelse.(bad, box_hi, ub_v)
                 lb_v = vcat(lb_v, κlo); ub_v = vcat(ub_v, κhi)
-                alpha_indices = (offset + 1):(offset + N_TAU)
             else
                 lb_v = val .* radius; ub_v = val ./ radius
             end
@@ -284,7 +276,7 @@ function train_stage(n_particles::Int, max_iter::Int;
     println("="^60)
     best_x, best_fitness, history = parallel_pso_smm(objective, lb, ub;
         n_particles = n_particles, max_iter = max_iter, warm_start_particle = warm_start,
-        alpha_indices = alpha_indices, t_conv_probe = probe)
+        t_conv_probe = probe)
 
     prof = profiled_theta_full(build_x_full(best_x))
     prof.converged || @warn "invert_T_ge did NOT converge at the stage optimum (no particle " *
