@@ -3,7 +3,7 @@
 # with T_ls = T_{a(l)s} · n_ls^κ, cell-level cloglog extensive margin, T profiled.
 #
 # Expects in the calling scope: input_folder, output_folder, n_coef, n_tau,
-# n_rho_inference, relax_n_lo. Everything is broadcast to the workers with
+# n_rho_inference, relax_n_lo, profile_head. Everything is broadcast to the workers with
 # `@everywhere const`.
 #
 # Parameter vector: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK))]
@@ -74,6 +74,9 @@ _gamma_factor_local = [SpecialFunctions.gamma((theta + 1 - nu_s[s]) / theta)^(1 
 # κ: one density elasticity, T_ls = T_{a(l)s} n_ls^κ, searched jointly with α in an
 # absolute box. Block 4 is averaged over R_CELL_REG nested networks.
 @everywhere const RELAX_N_LO     = $(Bool(relax_n_lo))
+# PROFILE_HEAD: (Ω^L, Ω^s, A) profiled out jointly with T (profiling.jl,
+# `invert_T_head_ge`); the search runs over [α ; κ] only and blocks 1–3 leave the loss.
+@everywhere const PROFILE_HEAD   = $(Bool(profile_head))
 @everywhere const R_CELL_REG     = 100
 @everywhere const CELL_PERM_SEED = 4_242_000
 @everywhere const KAPPA_LO = -1.0

@@ -7,6 +7,7 @@
 #   ./run.sh aero
 #   ./run.sh aero --n_coef=4 --n_tau=1 --n_rho_inf=10000
 #   ./run.sh aero --relax_n_lo=true          # diagnostic: N_LO forced to 1
+#   ./run.sh aero --profile_head=true        # head (Ω^L, Ω^s, A) profiled with T
 #   ./run.sh both
 #
 # The previous, multi-specification code is in old_version/.
@@ -14,24 +15,27 @@
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--n_rho_inf=N] [--relax_n_lo=true|false]"
+    echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--n_rho_inf=N] [--relax_n_lo=true|false] [--profile_head=true|false]"
     echo "  industry    : aero, auto, car, both"
     echo "  --n_coef    : distance coefficients of the cell cloglog: 1 (ln d), 4 or 5 bins (default 4)"
     echo "  --n_tau     : trade-cost parameters: 1 (τ = d^α) or n_coef (one α per bin) (default 1)"
     echo "  --n_rho_inf : UNUSED since inference moved to fake worlds (kept so old calls still parse)"
     echo "  --relax_n_lo: DIAGNOSTIC — force the variety-count lower bound N_LO to 1 instead of"
     echo "                ceil(N_supplier_s / R_downstream); outputs → ..._nlo1_pso/ (default false)"
+    echo "  --profile_head: profile (Ω^L, Ω^s, A) jointly with T; search over [α ; κ] only,"
+    echo "                blocks 1–3 out of the loss; outputs → ..._profhead_pso/ (default false)"
     exit 1
 fi
 
 INDUSTRY="$1"; shift
-N_COEF="4"; N_TAU="1"; N_RHO_INF="10000"; RELAX_N_LO="false"
+N_COEF="4"; N_TAU="1"; N_RHO_INF="10000"; RELAX_N_LO="false"; PROFILE_HEAD="false"
 for arg in "$@"; do
     case "$arg" in
         --n_coef=*)     N_COEF="${arg#--n_coef=}" ;;
         --n_tau=*)      N_TAU="${arg#--n_tau=}" ;;
         --n_rho_inf=*)  N_RHO_INF="${arg#--n_rho_inf=}" ;;
         --relax_n_lo=*) RELAX_N_LO="${arg#--relax_n_lo=}" ;;
+        --profile_head=*) PROFILE_HEAD="${arg#--profile_head=}" ;;
         *) echo "Error: unknown argument '$arg'"; exit 1 ;;
     esac
 done
@@ -42,6 +46,7 @@ if [ "$N_TAU" != "1" ] && [ "$N_TAU" != "$N_COEF" ]; then
 fi
 [[ "$N_RHO_INF" =~ ^[0-9]+$ ]] || { echo "Error: --n_rho_inf must be a positive integer"; exit 1; }
 case "$RELAX_N_LO" in true|false) ;; *) echo "Error: --relax_n_lo must be true or false"; exit 1 ;; esac
+case "$PROFILE_HEAD" in true|false) ;; *) echo "Error: --profile_head must be true or false"; exit 1 ;; esac
 [ "$RELAX_N_LO" = "true" ] && echo "Warning: --relax_n_lo=true drops the model's variety-count lower bound (diagnostic run)."
 
 JULIA_SCRIPT="SMM_Spatial_Comovement/main.jl"
@@ -51,11 +56,12 @@ run_industry() {
     local ind="$1" use_nohup="$2"
     local out="reporting_${ind}_profiled_aa_gran_kappa"
     [ "$RELAX_N_LO" = "true" ] && out="${out}_nlo1"
+    [ "$PROFILE_HEAD" = "true" ] && out="${out}_profhead"
     out="${out}_pso"
     [ -d "baseline_${ind}" ] || { echo "Error: baseline_${ind} not found"; return 1; }
     mkdir -p "$out"
-    local args="$ind $N_COEF $N_TAU $N_RHO_INF $RELAX_N_LO"
-    echo "Starting SMM: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_rho_inf=$N_RHO_INF, relax_n_lo=$RELAX_N_LO). Logs: $out/logs.log"
+    local args="$ind $N_COEF $N_TAU $N_RHO_INF $RELAX_N_LO $PROFILE_HEAD"
+    echo "Starting SMM: $ind (n_coef=$N_COEF, n_tau=$N_TAU, n_rho_inf=$N_RHO_INF, relax_n_lo=$RELAX_N_LO, profile_head=$PROFILE_HEAD). Logs: $out/logs.log"
     if [ "$use_nohup" = "yes" ]; then
         nohup bash -c "julia $JULIA_SCRIPT $args 2>&1 | while IFS= read -r line; do echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] \$line\"; done" >> "$out/logs.log" &
         echo "PID: $!   Monitor: tail -f $out/logs.log   Stop: pkill -f 'julia.*main'"

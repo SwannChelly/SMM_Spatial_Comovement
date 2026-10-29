@@ -31,6 +31,11 @@
 # returns Â exactly. γ depends on A through Y_r, so the T inversion and the A update
 # alternate until A stops moving. Ω^L and Ω^s stay at the estimate.
 #
+# Under PROFILE_HEAD the world is treated as the data are: (T, Ω^L, Ω^s, A) are
+# profiled jointly (`invert_T_head_ge`) on the world's own γ_b, labour share L_b,
+# sector shares Õ_b and sales shares π_b, so the head's sampling noise enters the
+# parameter draws and Ω^L, Ω^s are reported with them.
+#
 # ── Areas that come out empty ────────────────────────────────────────────────
 # A world is ONE network, so an area active in the data can win nothing in it (γ_b = 0).
 # On the data such an area would not be active and its T would be zero; the world does
@@ -83,7 +88,9 @@ the statistics computed on it as on the real data:
   * `G`     — per sector, the share of cells hosting no supplier;
   * `gamma` — the sourcing shares by area, summing to one per sector (the form
               `invert_T_ge` takes as `target`; `EMP_GAMMA_T_TILDE` on the data);
-  * `pi`    — downstream sales shares, `DOWNSTREAM_REGIONS` order.
+  * `pi`    — downstream sales shares, `DOWNSTREAM_REGIONS` order;
+  * `L`, `Os` — the labour share and the sector shares of intermediate spending
+              (blocks 1–2), the head targets under PROFILE_HEAD.
 """
 function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
     N_max = maximum(N_hat)
@@ -112,7 +119,8 @@ function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
     end
     Yd = net.Y_r[DOWNSTREAM_REGIONS]
     ref_empty = any(s -> T_REF_REGION[s] > 0 && gam[T_REF_REGION[s], s] <= 0, 1:S)
-    return (beta = beta, ok = ok, G = G, gamma = gam, pi = Yd ./ sum(Yd), ref_empty = ref_empty)
+    return (beta = beta, ok = ok, G = G, gamma = gam, pi = Yd ./ sum(Yd), ref_empty = ref_empty,
+            L = labor_share(net.c_tilde_r, theta), Os = X_s ./ sum(X_s))
 end
 
 """
@@ -132,19 +140,29 @@ function world_reference(theta_hat::AbstractVector)
 end
 
 """
-    recalibrate_TA(ref, alpha, kappa, gamma_b, pi_b; T_init, A_init) -> (T, A, converged)
+    recalibrate_TA(ref, alpha, kappa, world; T_init, A_init, x_init)
+        -> (T, A, ΩL, Ωs, x, converged)
 
-Re-invert T on a world's sourcing shares `gamma_b` and update A on its sales shares
-`pi_b` (see the header), alternating until `max |Δ log A| < tol`. `converged` requires
-every inversion to converge and the alternation to settle.
+Re-invert T on a world's sourcing shares `world.gamma` and update A on its sales shares
+`world.pi` (see the header), alternating until `max |Δ log A| < tol`; Ω^L, Ω^s are the
+estimate's. Under PROFILE_HEAD, one joint profile on the world's blocks 1–3 and γ
+instead (`x_init`: the head's Newton warm start). `converged` requires every inversion
+to converge and the alternation to settle.
 """
-function recalibrate_TA(ref, alpha, kappa, gamma_b::AbstractMatrix, pi_b::AbstractVector;
+function recalibrate_TA(ref, alpha, kappa, world;
                         T_init::AbstractMatrix = ref.T, A_init::AbstractVector = ref.A,
-                        max_outer::Int = 20, tol::Float64 = 1e-8)
+                        x_init = nothing, max_outer::Int = 20, tol::Float64 = 1e-8)
+    gamma_b, pi_b = world.gamma, world.pi
     T = Matrix{Float64}(T_init)
     A = Vector{Float64}(A_init)
     for s in 1:S, c in SECTOR_T_COLS[s]
         (gamma_b[c, s] <= 0 && c != T_REF_REGION[s]) && (T[s, c] = EMPTY_T)
+    end
+    if PROFILE_HEAD
+        res = invert_T_head_ge(alpha; kappa = kappa, target = gamma_b, T_init = T, x_init = x_init,
+                               tg = head_targets(L = world.L, Os = world.Os, pi = pi_b))
+        return (T = res.T, A = res.A, ΩL = res.Omega_L, Ωs = res.Omega_s, x = res.x,
+                converged = res.converged)
     end
     tau  = build_tau(alpha)
     pfac = (pi_b ./ ref.pi) .^ (-1 / epsilon)
@@ -158,20 +176,22 @@ function recalibrate_TA(ref, alpha, kappa, gamma_b::AbstractMatrix, pi_b::Abstra
         A_new ./= A_new[1]
         step = maximum(abs.(log.(A_new) .- log.(A)))
         A = A_new
-        step < tol && return (T = T, A = A, converged = conv)
+        step < tol && return (T = T, A = A, ΩL = ref.ΩL, Ωs = ref.Ωs, x = nothing, converged = conv)
     end
-    return (T = T, A = A, converged = false)
+    return (T = T, A = A, ΩL = ref.ΩL, Ωs = ref.Ωs, x = nothing, converged = false)
 end
 
 """
-    world_theta(ref, alpha, kappa, T, A) -> level vector: the estimate's Ω, new α, κ, A, T
+    world_theta(ref, alpha, kappa, cal) -> level vector: Ω, A, T from the recalibration
+    `cal` (Ω = the estimate's unless PROFILE_HEAD), new α, κ
 """
-function world_theta(ref, alpha, kappa, T, A)
+function world_theta(ref, alpha, kappa, cal)
     x = copy(ref.theta)
-    x[(S + 2):(S + R_downstream + 1)] = A
+    x[(S + 2):(S + R_downstream + 1)] = cal.A
+    PROFILE_HEAD && (x = with_head(x, cal.ΩL, cal.Ωs, cal.A))
     x[alpha_range()] = alpha
     x[kappa_index()] = kappa
-    return with_T(x, T)
+    return with_T(x, cal.T)
 end
 
 """
@@ -218,9 +238,9 @@ function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
         world = draw_world(theta_hat, N_hat, seed_w)
         world.ok        || return (ok = false, reason = :world_fit)
         world.ref_empty && return (ok = false, reason = :empty_ref)
-        cal = recalibrate_TA(ref, ref.alpha, ref.kappa, world.gamma, world.pi)
+        cal = recalibrate_TA(ref, ref.alpha, ref.kappa, world)
         cal.converged   || return (ok = false, reason = :T_inversion)
-        βs, Nb, nf = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, cal.T, cal.A),
+        βs, Nb, nf = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, cal),
                                    world.G, world_simulator(seed_s))
         all(isfinite, βs) || return (ok = false, reason = :sim_fit)
         return (ok = true, reason = :none, e = world.beta .- βs, beta_world = world.beta,
@@ -323,7 +343,7 @@ world; the fixed point is unique, so this changes cost, not values.
 """
 function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
     nα = N_TAU
-    T_warm = Ref(ref.T); A_warm = Ref(ref.A)
+    T_warm = Ref(ref.T); A_warm = Ref(ref.A); x_warm = Ref{Any}(nothing)
     unpack_x(x) = (sort(x[1:nα]), x[nα + 1])
     inbox(α, κ) = KAPPA_LO <= κ <= KAPPA_HI && all(a -> 1e-4 <= a <= ALPHA_MAX, α)
 
@@ -331,13 +351,13 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
         α, κ = unpack_x(x)
         inbox(α, κ) || return WORLD_PENALTY
         cal = try
-            recalibrate_TA(ref, α, κ, world.gamma, world.pi; T_init = T_warm[], A_init = A_warm[])
+            recalibrate_TA(ref, α, κ, world; T_init = T_warm[], A_init = A_warm[], x_init = x_warm[])
         catch
             return WORLD_PENALTY
         end
         cal.converged || return WORLD_PENALTY
-        T_warm[] = cal.T; A_warm[] = cal.A
-        β, _, _ = simulate_beta(world_theta(ref, α, κ, cal.T, cal.A), world.G, sim)
+        T_warm[] = cal.T; A_warm[] = cal.A; x_warm[] = cal.x
+        β, _, _ = simulate_beta(world_theta(ref, α, κ, cal), world.G, sim)
         all(isfinite, β) || return WORLD_PENALTY
         e = world.beta .- β
         return dot(e, W * e)
@@ -349,11 +369,12 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
                          Optim.Options(iterations = max_iter))
     α, κ = unpack_x(Optim.minimizer(opt))
     f̂ = Optim.minimum(opt)
-    cal = recalibrate_TA(ref, α, κ, world.gamma, world.pi; T_init = T_warm[], A_init = A_warm[])
-    θ = world_theta(ref, α, κ, cal.T, cal.A)
+    cal = recalibrate_TA(ref, α, κ, world; T_init = T_warm[], A_init = A_warm[], x_init = x_warm[])
+    θ = world_theta(ref, α, κ, cal)
     _, N, _ = simulate_beta(θ, world.G, sim)
     return (ok = cal.converged && f̂ < WORLD_PENALTY, alpha = α, kappa = κ, T = cal.T,
-            A = cal.A, N = N, loss = f̂, iters = Optim.iterations(opt), theta = θ)
+            A = cal.A, ΩL = cal.ΩL, Ωs = cal.Ωs, N = N, loss = f̂,
+            iters = Optim.iterations(opt), theta = θ)
 end
 
 """
@@ -456,11 +477,15 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     t_lbl = ["T[$(sector_names[(fp - 1) ÷ T_COL_DIM + 1])-$(tcol_names[(fp - 1) % T_COL_DIM + 1])]"
              for fp in findall(T_MASK)]
     t_red(T) = (v = vec(permutedims(T))[T_MASK]; v[v .<= EMPTY_T_CUT] .= NaN; v)
+    # Ω^L, Ω^s vary across worlds only when they are profiled (PROFILE_HEAD).
+    Ω_lbl = PROFILE_HEAD ? vcat(["Omega_L"], ["Omega_s[$s]" for s in sector_names]) : String[]
+    Ω_row(ΩL, Ωs) = PROFILE_HEAD ? vcat(ΩL, Ωs) : Float64[]
     lbl = vcat(["alpha[$i]" for i in 1:N_TAU], ["kappa"], ["N_s[$s]" for s in sector_names],
-               t_lbl, ["A[$i]" for i in 1:R_downstream])
-    row(α, κ, N, T, A) = vcat(α, κ, Float64.(N), t_red(T), A)
-    P   = permutedims(reduce(hcat, (row(r.est.alpha, r.est.kappa, r.est.N, r.est.T, r.est.A) for r in good)))
-    est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A)
+               t_lbl, ["A[$i]" for i in 1:R_downstream], Ω_lbl)
+    row(α, κ, N, T, A, ΩL, Ωs) = vcat(α, κ, Float64.(N), t_red(T), A, Ω_row(ΩL, Ωs))
+    P   = permutedims(reduce(hcat, (row(r.est.alpha, r.est.kappa, r.est.N, r.est.T, r.est.A,
+                                       r.est.ΩL, r.est.Ωs) for r in good)))
+    est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A, ref.ΩL, ref.Ωs)
     iT  = findall(l -> startswith(l, "T["), lbl)
 
     # ── the dispersion of log T ──────────────────────────────────────────────
@@ -507,7 +532,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
             end
             println(out, "  sd = dispersion across worlds; CI = 2.5/97.5% quantiles; bias = mean − estimate.")
             head = setdiff(eachindex(lbl), iT)
-            block(out, "α, κ, N_s, A", lbl[head], P[:, head], est[head])
+            block(out, PROFILE_HEAD ? "α, κ, N_s, A, Ω^L, Ω^s" : "α, κ, N_s, A", lbl[head], P[:, head], est[head])
             block(out, "T (levels, per-sector reference = 1)", lbl[iT], P[:, iT], est[iT])
             block(out, "log T", lbl[iT], log.(P[:, iT]), log.(est[iT]))
             emp = vec(mean(isnan.(P[:, iT]); dims = 1))

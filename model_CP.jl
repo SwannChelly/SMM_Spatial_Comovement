@@ -659,21 +659,14 @@ end
 ##################### Moments ###################
 
 """
-    compute_moments(network, params; N_fixed=nothing) -> NamedTuple
+    labor_share(c_tilde_r, params) -> aggregate labour cost share (block 1)
 
-Blocks 1–6 (labour share, industry shares, π_r, [β_d ; β_κ], γ_{s,a}, Ḡ_s(0)) and the
-non-moment diagnostics. `N_fixed` pins the variety count (finite differences: N̂_s is a
-step function of θ).
+`c_tilde_r` is the full-length (R) A-adjusted unit cost of a solved network; also used
+by the fake worlds (inference.jl), which measure their own labour share.
 """
-function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing)
+function labor_share(c_tilde_r::AbstractVector, params::AbstractVector)
     Omega_L = params[1]
-    X_ls_flat = network.X_ls_flat
-    c_tilde_r = network.c_tilde_r
-    Y_r = network.Y_r
-    linkages_flat = network.linkages_flat
     active = N_downstream_per_region .!= 0
-
-    # 1. Labour share
     markup = (epsilon - 1) / epsilon
     price_index = sum((c_tilde_r[active] .* markup).^epsilon .* delta_r[active])^(1/epsilon)
     B = (markup / price_index)^(epsilon - 1) * 1.0 / price_index
@@ -691,7 +684,25 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     labor_r = zeros(R)
     labor_r[active] = Omega_L .* (y_r[active] ./ A_full[active]) .*
                       (regional_wages[active] ./ c_r[active]).^(-lambda)
-    agg_labor_share = sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
+    return sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
+end
+
+"""
+    compute_moments(network, params; N_fixed=nothing) -> NamedTuple
+
+Blocks 1–6 (labour share, industry shares, π_r, [β_d ; β_κ], γ_{s,a}, Ḡ_s(0)) and the
+non-moment diagnostics. `N_fixed` pins the variety count (finite differences: N̂_s is a
+step function of θ).
+"""
+function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing)
+    X_ls_flat = network.X_ls_flat
+    c_tilde_r = network.c_tilde_r
+    Y_r = network.Y_r
+    linkages_flat = network.linkages_flat
+    active = N_downstream_per_region .!= 0
+
+    # 1. Labour share
+    agg_labor_share = labor_share(c_tilde_r, params)
 
     # 2. Sector shares X_s / X
     X_ls = zeros(R, S)

@@ -114,6 +114,7 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 ./SMM_Spatial_Comovement/run.sh aero                                   # n_coef=4, n_tau=1
 ./SMM_Spatial_Comovement/run.sh aero --n_coef=1 --n_rho_inf=20000
 ./SMM_Spatial_Comovement/run.sh aero --relax_n_lo=true                 # diagnostic
+./SMM_Spatial_Comovement/run.sh aero --profile_head=true               # head profiled with T
 ./SMM_Spatial_Comovement/run.sh both
 ```
 
@@ -124,8 +125,9 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 | `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one distance elasticity per segment between bin centres, nesting d^α) |
 | `--n_rho_inf` | integer | `10000` | unused (inference now from fake worlds, at the estimation's `N_rho`); kept so old calls parse |
 | `--relax_n_lo` | `true`, `false` | `false` | DIAGNOSTIC: N_LO forced to 1 (drops the model's bound) |
+| `--profile_head` | `true`, `false` | `false` | (Ω^L, Ω^s, A) profiled jointly with T from blocks 1–3; search over [α ; κ] only, blocks 1–3 out of the loss |
 
-Outputs go to `reporting_<industry>_profiled_aa_gran_kappa[_nlo1]_pso/` (log in `logs.log`;
+Outputs go to `reporting_<industry>_profiled_aa_gran_kappa[_nlo1][_profhead]_pso/` (log in `logs.log`;
 stop with `pkill -f 'julia.*main'`). Worker count: `N_WORKERS` (default 50), heap per
 worker: `WORKER_HEAP_HINT` (default 2G).
 
