@@ -1,11 +1,10 @@
 """
 Gates for the reporting sections, now in `utils.py`, `report_lib.py`,
 `diffusion_lib.py` and `granular_lib.py`:
-  1. Identification / sensitivity  — the variety-count columns and the noise mask,
-  2. Untargeted moment             — the PPML distance elasticity of comovement,
-  3. Comparative advantage         — T against distance, within sector,
-  4. Amplification                 — D_r and the share of upstream sales within d km,
-  5. IO benchmark                  — the TES parser and the Leontief multipliers.
+  1. Untargeted moment             — the PPML distance elasticity of comovement,
+  2. Comparative advantage         — T against distance, within sector,
+  3. Amplification                 — D_r and the share of upstream sales within d km,
+  4. IO benchmark                  — the TES parser and the Leontief multipliers.
 
 No Julia and no real data: each gate writes a synthetic run tree with the exact file
 layout the loader expects and then EXECUTES THE NOTEBOOK'S OWN CODE CELLS against it,
@@ -80,95 +79,6 @@ def notebook_namespace():
 
 NS = notebook_namespace()
 
-
-def gate_identification():
-    """
-    The variety-count columns on the parameter axis, and the noise-to-signal mask.
-
-    Julia appends dm/dN_s to the saved Jacobian, so the notebook receives them as
-    ordinary columns; what has to hold here is that the two thresholds do different
-    things — a structural zero must be reported as a zero, an entry whose Monte-Carlo
-    standard deviation swamps it must be reported as unmeasured, and the two must never
-    be pooled.
-    """
-    S, n_AA, n_coef, n_tau, R_d = 3, 4, 4, 1, 4
-    n_gam = 6
-    moment_block_sizes = [1, S - 1, R_d - 1, n_coef, n_gam, S]
-    param_block_sizes = [1, S - 1, R_d - 1, n_tau, n_gam, S]
-    n_rows, n_par = sum(moment_block_sizes), sum(param_block_sizes)
-
-    rng = np.random.default_rng(0)
-    E = rng.normal(0, 0.1, (n_rows, n_par))
-    E_sd = np.abs(E) * 0.1                       # readable everywhere by default
-    # the N_s block: exactly zero outside the zero-supplier rows, diagonal on them
-    E[:, n_par - S:] = 0.0
-    E_sd[:, n_par - S:] = 0.0
-    for k in range(S):
-        E[n_rows - S + k, n_par - S + k] = -0.25
-        E_sd[n_rows - S + k, n_par - S + k] = 0.02
-    # one entry deliberately drowned in noise: large elasticity, larger SD
-    E[0, 0], E_sd[0, 0] = 0.4, 0.8
-
-    data = {
-        "industry": "aero", "mu": 2, "K": 0, "granular": True, "S": S, "n_AA": n_AA,
-        "n_coef": n_coef, "n_tau": n_tau, "folder": TMP / "synthrun",
-        "inference_step": "step3", "n_N_cols": S,
-        "sector_names": [f"S{s}" for s in range(S)],
-        "moment_block_sizes": moment_block_sizes,
-        "param_block_sizes": param_block_sizes,
-        "moment_block_names": ["Labor share", "Industry shares", "Downstream sales",
-                               "Extensive margin", "Regional sourcing shares",
-                               "Zero-supplier share"],
-        "param_block_names": ["Omega_L", "Industry shares", "Productivity",
-                              "Trade cost", "Comparative advantage", "Variety count"],
-        "moment_labels": [f"m{i}" for i in range(n_rows)],
-        "param_labels": [f"p{i}" for i in range(n_par - S)]
-                        + [f"N_s[S{s}]" for s in range(S)],
-        "J": E / 2.0, "J_elast": E, "J_sd": E_sd / 2.0, "J_elast_sd": E_sd,
-    }
-
-    R = NS["jacobian_noise_ratio"](data)
-    assert np.all(R[:, n_par - S:][: n_rows - S] == 0.0), "structural zeros must read 0"
-    assert abs(R[0, 0] - 2.0) < 1e-12, R[0, 0]
-    assert abs(R[1, 1] - 0.1) < 1e-12, R[1, 1]
-    mask = NS["jacobian_noise_mask"](data, noise_max=NS["NOISE_MAX"])
-    assert mask[0, 0] and mask.sum() == 1, mask.sum()
-    print("noise ratio: exact zeros measured, the planted noisy entry is the only mask")
-
-    df = NS["identification_summary"](data)
-    assert df["share_exact_zero"].loc["Extensive margin", "Variety count"] == 1.0
-    assert df["share_above"].loc["Zero-supplier share", "Variety count"] > 0
-    assert df["share_readable"].loc["Labor share", "Omega_L"] < 1.0
-    assert df["share_live"].loc["Labor share", "Omega_L"] == 0.0   # large but unmeasured
-    print("identification summary: structural zeros, weak channels and noise separated")
-
-    # the channel figure must not let an unmeasurable entry produce a bar
-    axes = NS["plot_channel_elasticities"](data, noise_max=NS["NOISE_MAX"])
-    assert len(axes) == 3
-
-    out = TMP / "figs"
-    out.mkdir(exist_ok=True)
-    for fn in ("plot_identification_map", "plot_jacobian_thresholded",
-               "plot_jacobian_noise", "plot_jacobian_full", "plot_jacobian_blocks"):
-        NS[fn](data, save_to=str(out / f"{fn}.png"))
-    print(NS["jacobian_block_summary"](data).round(3).to_string())
-
-    # a run whose Jacobian has no variety-count columns must say so, not plot nonsense
-    plain = dict(data,
-                 param_block_names=data["param_block_names"][:-1],
-                 param_block_sizes=data["param_block_sizes"][:-1],
-                 param_labels=data["param_labels"][:n_par - S],
-                 n_N_cols=0,
-                 J=data["J"][:, :n_par - S], J_elast=E[:, :n_par - S],
-                 J_sd=data["J_sd"][:, :n_par - S], J_elast_sd=E_sd[:, :n_par - S])
-    try:
-        NS["plot_channel_elasticities"](plain)
-    except ValueError as e:
-        print("expected failure without the variety-count columns:", str(e)[:80])
-    else:
-        raise AssertionError("should have raised")
-
-    print("ALL OK")
 
 def gate_untargeted():
     """PPML against statsmodels, then the a_ir panel and the moment end to end."""
@@ -2049,8 +1959,7 @@ def gate_io_benchmark():
 
 
 if __name__ == "__main__":
-    for name, gate in (("identification", gate_identification),
-                       ("untargeted moment", gate_untargeted),
+    for name, gate in (("untargeted moment", gate_untargeted),
                        ("comparative advantage", gate_comparative_advantage),
                        ("amplification", gate_amplification),
                        ("IO benchmark", gate_io_benchmark)):

@@ -61,9 +61,10 @@ julia pkg.jl
 in its first cell — just open and run it, no separate setup needed.
 
 Two notebooks report a granular / attraction-area run, and they split by what they
-answer. `model_report.ipynb` displays the FIT of the model to its targets — the moment
-table, the extensive margin and the zero-supplier share with their standard errors, the
-count curve, the Jacobian, identification, and the untargeted distance elasticity.
+answer. `model_report.ipynb` displays the FIT of the model to its targets and its fake-world
+inference — the moment table (with block 4 = [β_d ; β_κ]), the extensive margin and the
+zero-supplier share against the fake-world noise, the count curve, the weight matrix
+Ω̃, and the 95% intervals of α, κ, N̂_s, the dispersion of log T and the counterfactuals.
 `tests_counterfactuals.ipynb` interrogates the model one test at a time and runs the
 counterfactuals. Set `MU = 1` or `MU = 2` in the Constants cell to read the step-1 or
 the step-3 estimate.

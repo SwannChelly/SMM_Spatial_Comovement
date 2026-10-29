@@ -6,9 +6,11 @@ Standalone and data-free: it writes a SYNTHETIC baseline + reporting tree with t
 exact file layout `main.jl --granular=true --ca_level=aa` produces, then executes the
 NOTEBOOK'S OWN code cells against it and checks the objects the reporting depends on —
 the attraction-area mapping and names, the AA-level gamma aggregation and its s-major
-flattening, MOMENT_MASK, the block split of `best_simulated_moments.npy`, the mu_1 /
-mu_2 folder routing, the beta -> gamma -> G standard-error split, the reference-area
-reconstruction in the gamma panel, and the LaTeX table's contents.
+flattening, MOMENT_MASK, block 4 = [beta_d ; beta_kappa], the block split of
+`best_simulated_moments.npy`, the mu_1 / mu_2 folder routing, the fake-world artefacts
+(block-4 bands from `world_residuals.npz` / `Omega_world.npy`, parameter intervals from
+`world_inference_draws.npz`), the reference-area reconstruction in the gamma panel, and
+the LaTeX table's contents.
 
     python3 test/test_analysis_granular.py
 
@@ -27,8 +29,9 @@ RNG = np.random.default_rng(20260805)
 
 
 S, R, R_D = 4, 12, 3          # sectors, ZE, downstream regions (= n_AA)
-N_REG = 4
+N_REG = 4                     # distance coefficients; block 4 adds beta_kappa
 N_STAGES = 3
+B_WORLDS = 40
 
 
 def build_synthetic_tree(ROOT):
@@ -49,9 +52,9 @@ def build_synthetic_tree(ROOT):
 def _build_industry(ROOT, industry, sectors):
     """Write one industry's baseline + reporting tree; return its expectations."""
     BASE = os.path.join(ROOT, f"baseline_{industry}")
-    RUN = os.path.join(ROOT, f"reporting_{industry}_profiled_aa_gran_pso")
-    for p in (BASE, RUN, f"{RUN}/step1", f"{RUN}/step2", f"{RUN}/step2/inference",
-              f"{RUN}/step3", f"{RUN}/step3/inference"):
+    RUN = os.path.join(ROOT, f"reporting_{industry}_profiled_aa_gran_kappa_pso")
+    for p in (BASE, RUN, f"{RUN}/step1", f"{RUN}/step2", f"{RUN}/step2/inference_world",
+              f"{RUN}/step3", f"{RUN}/step3/inference_world"):
         os.makedirs(p, exist_ok=True)
 
     ze = [f"{100 + i:04d}" for i in range(R)]
@@ -114,8 +117,10 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/domestic_share.npy", domestic_share)
     np.save(f"{BASE}/N_downstream_per_region.npy", N_downstream)
     np.save(f"{BASE}/attraction_area_linkages.npy", AA_link)
-    reg_coef_emp = np.array([0.35, 0.62, 0.81, 1.05])
-    np.save(f"{BASE}/reg_coef_cloglog_{N_REG}.npy", reg_coef_emp)
+    reg_coef_emp = np.array([-0.35, -0.62, -0.81, -1.05, 0.48])   # [beta_d ; beta_kappa]
+    np.save(f"{BASE}/beta_d_{N_REG}.npy", reg_coef_emp[:N_REG])
+    np.save(f"{BASE}/beta_kappa_{N_REG}.npy", reg_coef_emp[N_REG:])
+    N_REG1 = N_REG + 1
 
     # ---- G_K.csv --------------------------------------------------------------
     # G = Pr(K_ls <= K), so the curve must be non-decreasing in K and bounded by 1:
@@ -135,9 +140,7 @@ def _build_industry(ROOT, industry, sectors):
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
 
     # ---- G_K_var.csv: bootstrap variance of the INCREMENTS p_s(K) --------------
-    # Optional file. Its K = 0 column is the SAME object as the G block of Sigma_data
-    # (p_s(0) = G_s(0)), which is what makes it a free consistency check rather than an
-    # extra assumption — planted consistent here, and deliberately broken in one gate.
+    # Optional file: the only source of a band on the count curve.
     G_pmf_emp = np.diff(G_curve_emp, axis=1, prepend=0.0)
     G_pmf_se  = np.array([0.03, 0.05, 0.02, 0.04])[:, None] * (1.0 + 0.2 * np.arange(K_ROWS))
     pd.DataFrame([{"A129": sectors[s], "K": k, "var": G_pmf_se[s, k] ** 2}
@@ -175,7 +178,7 @@ def _build_industry(ROOT, industry, sectors):
     sim_labor = np.array([agg_labor_share * 1.05])
     sim_industry = agg_industry_share * RNG.uniform(0.9, 1.1, S)
     sim_pi = emp_pi_r * RNG.uniform(0.9, 1.1, R_D)
-    sim_reg = reg_coef_emp * RNG.uniform(0.8, 1.2, N_REG)
+    sim_reg = reg_coef_emp * RNG.uniform(0.8, 1.2, N_REG1)
     # The count moment is not free: it is `mean_l C(m-k_l, n)/C(m, n)` at the profiled
     # N_hat_s, over the cells of sector s. The reporting rebuilds the curve from the
     # `q_hat` / `N_hat` the diagnostics npz carries, so the synthetic tree has to be
@@ -205,49 +208,49 @@ def _build_industry(ROOT, industry, sectors):
     stages = np.column_stack([final * (0.7 + 0.15 * k) for k in range(N_STAGES - 1)] + [final])
     np.save(f"{RUN}/step1/best_simulated_moments.npy", stages * 0.95)
     np.save(f"{RUN}/step3/best_simulated_moments.npy", stages)
-    n_par = 1 + S + R_D + 1 + int(AA_ACTIVE.sum())
+    n_par = 1 + S + R_D + 1 + 1 + int(AA_ACTIVE.sum())      # ... | alpha | kappa | T
     np.save(f"{RUN}/step1/best_parameters_list.npy", RNG.random((n_par, N_STAGES)))
     np.save(f"{RUN}/step3/best_parameters_list.npy", RNG.random((n_par, N_STAGES)))
 
     np.save(f"{RUN}/n_reg_coef.npy", np.array(N_REG))
     np.save(f"{RUN}/n_tau.npy", np.array(1))
 
-    # ---- inference artefacts (beta -> gamma -> G ordering) --------------------
+    # ---- fake-world artefacts (inference.jl) ----------------------------------
     gam_free = AA_ACTIVE.copy()
     for s in range(S):
         gam_free[s, T_REF[s]] = False
-    n_gb = N_REG + int(gam_free.sum()) + S
-    A = RNG.normal(size=(n_gb, n_gb)) * 0.05
-    Sigma_data = A @ A.T + np.diag(RNG.uniform(0.001, 0.01, n_gb))
-    np.save(f"{RUN}/step2/Sigma_data.npy", Sigma_data)
-    np.save(f"{RUN}/step2/Sigma_sim.npy", Sigma_data * 0.3)
-    np.save(f"{RUN}/step2/Omega.npy", Sigma_data * 1.3)
-    np.save(f"{RUN}/step2/W_step3.npy", np.linalg.inv(Sigma_data * 1.3))
-
-    # ---- Jacobian: rows = masked moments, cols = identified parameters --------
-    n_mom_kept = 1 + (S - 1) + (R_D - 1) + N_REG + int(gam_free.sum()) + S
-    n_par_id = 1 + (S - 1) + (R_D - 1) + 1 + int(gam_free.sum())
-    J = RNG.normal(size=(n_mom_kept, n_par_id)) * 0.05
-    # The S variety-count columns Julia appends on the right under GRANULAR
-    # (compute_jacobian's `append_N_s`). Only block 6 — the last S rows — may be
-    # nonzero: every other moment is N_s-free by construction, and the loader must
-    # carry those exact zeros through rather than round them.
-    J_N = np.zeros((n_mom_kept, S))
-    for k in range(S):
-        J_N[n_mom_kept - S + k, k] = -0.02 * (k + 1)
-    J_full = np.hstack([J, J_N])
-    J_full_sd = np.hstack([np.abs(J) * 0.1, np.abs(J_N) * 0.1])
-    for st, fn in (("step2", "jacobian_all"), ("step3", "jacobian_all_step3")):
-        np.save(f"{RUN}/{st}/{fn}.npy", J_full)
-        np.save(f"{RUN}/{st}/{fn}_elasticity.npy", J_full * 2.0)
-        np.save(f"{RUN}/{st}/{fn}_sd.npy", J_full_sd)
-        np.save(f"{RUN}/{st}/{fn}_elasticity_sd.npy", J_full_sd * 2.0)
-        np.save(f"{RUN}/{st}/{fn}_param_indices.npy", np.arange(1, n_par_id + 1))
-        np.save(f"{RUN}/{st}/{fn}_n_s_columns.npy", np.array([S]))
+    n_gb = N_REG1 + int(gam_free.sum()) + S
+    # Step 2: block-4 residuals over B worlds at theta_hat_1, Omega = Cov(e), W = inv
+    beta_world = reg_coef_emp + RNG.normal(0, 0.05, (B_WORLDS, N_REG1))
+    beta_sim = beta_world - RNG.normal(0.01, 0.03, (B_WORLDS, N_REG1))
+    e_w = beta_world - beta_sim
+    Omega_w = np.cov(e_w, rowvar=False)
+    np.savez(f"{RUN}/step2/world_residuals.npz", e=e_w, beta_world=beta_world,
+             beta_sim=beta_sim, N_hat_world=np.tile(N_HAT, (B_WORLDS, 1)).astype(float),
+             N_hat=N_HAT.astype(float), e_data=reg_coef_emp - sim_reg)
+    np.save(f"{RUN}/step2/Omega_world.npy", Omega_w)
+    np.save(f"{RUN}/step2/W_world.npy", np.linalg.inv(Omega_w))
+    # Steps 2b / 4: whole-chain re-estimation in each world. Labels as world_inference
+    # writes them: alpha[i], kappa, N_s[s], T[s-AAze] (active cells, s-major), A[i].
+    t_cells = [(s, a) for s in range(S) for a in range(R_D) if AA_ACTIVE[s, a]]
+    t_lbl = [f"T[{sectors[s]}-AA{ze[down_idx[a]]}]" for s, a in t_cells]
+    w_lbl = (["alpha[1]", "kappa"] + [f"N_s[{c}]" for c in sectors] + t_lbl
+             + [f"A[{i + 1}]" for i in range(R_D)])
+    T_est = np.array([1.0 if a == T_REF[s] else RNG.lognormal(0, 0.4) for s, a in t_cells])
+    w_est = np.concatenate([[0.31, 0.52], N_HAT.astype(float), T_est, RNG.uniform(0.8, 1.2, R_D)])
+    for st, shift in (("step2", 0.0), ("step3", 0.01)):
+        P = (w_est + shift) * RNG.lognormal(0, 0.05, (B_WORLDS, w_est.size))
+        P[:3, 2 + S] = np.nan                          # an area that wins nothing in 3 worlds
+        cf_est = RNG.uniform(50, 150, 18)
+        np.savez(f"{RUN}/{st}/inference_world/world_inference_draws.npz",
+                 params=P, estimate=w_est + shift, disp_logT=RNG.uniform(0.2, 0.6, (B_WORLDS, S)),
+                 counterfactuals=cf_est * RNG.lognormal(0, 0.05, (B_WORLDS, 18)),
+                 counterfactuals_est=cf_est, loss=RNG.uniform(0, 1, B_WORLDS),
+                 iters=np.full(B_WORLDS, 60.0), thetas=RNG.random((B_WORLDS, n_par)))
+        with open(f"{RUN}/{st}/inference_world/world_inference_labels.txt", "w") as f:
+            f.write("\n".join(w_lbl) + "\n")
 
     for st in ("step2", "step3"):
-        np.save(f"{RUN}/{st}/inference/se_moments_fitted.npy",
-                np.sqrt(np.diag(Sigma_data)) * (0.5 if st == "step2" else 0.4))
         np.savez(f"{RUN}/{st}/granular_diagnostics.npz",
                  N_hat=N_HAT.astype(float),
                  N_LO=np.array([14.0, 9.0, 17.0, 6.0]),
@@ -258,26 +261,14 @@ def _build_industry(ROOT, industry, sectors):
                  q_hat=q_hat_plant,
                  b_logz=np.array([-1.768]), EK=RNG.uniform(0.1, 3, S))
 
-    # ---- the count-distribution band written by compute_profiled_T_inference ----
-    # A FREE sector's K = 0 entry equals the bootstrap SE of the target (N_hat_s is
-    # calibrated to make the fitted moment EQUAL it, so the two channels cancel rather
-    # than add); a CLAMPED sector's does not (dN_s = 0, the target channel drops out).
-    # Planted that way so the notebook is checked against the structure, not a blob.
-    se_G0_boot = np.sqrt(np.diag(Sigma_data))[-S:]
-    se_curve = np.column_stack([se_G0_boot] +
-                               [se_G0_boot * (0.6 + 0.2 * k) for k in range(1, K_ROWS)])
-    se_curve[3, 0] = 0.777                      # sector 3 is clamped (:lo above)
-    for st in ("step2", "step3"):
-        np.save(f"{RUN}/{st}/inference/se_G_curve_delta.npy", se_curve)
-        np.save(f"{RUN}/{st}/inference/count_curve_K.npy",
-                np.arange(K_ROWS, dtype=float))
-
     # ---- the expectations the test checks against ----------------------------
     expected = {
-        "S": S, "R": R, "n_AA": R_D, "n_coef": N_REG, "n_gb": n_gb,
+        "S": S, "R": R, "n_AA": R_D, "n_coef": N_REG, "n_reg": N_REG1, "n_gb": n_gb,
         "G_curve_emp": G_curve_emp.tolist(), "K_rows": list(range(K_ROWS)),
         "G_pmf_emp": G_pmf_emp.tolist(), "G_pmf_se": G_pmf_se.tolist(),
-        "se_curve": se_curve.tolist(), "se_G0_boot": se_G0_boot.tolist(),
+        "sd_world": beta_world.std(axis=0, ddof=1).tolist(),
+        "sd_resid": np.sqrt(np.diag(Omega_w)).tolist(), "e_bar": e_w.mean(axis=0).tolist(),
+        "W": np.linalg.inv(Omega_w).tolist(), "w_labels": w_lbl, "w_est": w_est.tolist(),
         "N_hat": N_HAT.tolist(), "n_rho": N_RHO,
         "aa_names": [ze[i] for i in down_idx],
         "sector_names": sectors,
@@ -297,7 +288,6 @@ def _build_industry(ROOT, industry, sectors):
         "agg_labor_share": agg_labor_share,
         "n_gamma_kept": int(gam_free.sum()),
         "industry": industry,
-        "n_mom_kept": n_mom_kept, "n_par_id": n_par_id + S, "n_par_theta": n_par_id,
         "ze": ze,
     }
     print(f"synthetic {industry}: {ROOT}  (S={S}, R={R}, n_AA={R_D}, n_gb={n_gb}, gamma kept={int(gam_free.sum())})")
@@ -316,7 +306,8 @@ def run_checks(ns, ROOT, exp):
 
     print("\n=== 1. loader: structure ===")
     d2 = ns["load_granular_data"]("test", mu=2, base=ROOT)
-    check("run folder resolved", d2["folder"].name == "reporting_test_profiled_aa_gran_pso")
+    check("run folder resolved (kappa naming)",
+          d2["folder"].name == "reporting_test_profiled_aa_gran_kappa_pso")
     check("S / R / n_AA", (d2["S"], d2["R"], d2["n_AA"]) == (exp["S"], exp["R"], exp["n_AA"]))
     check("attraction-area names from X_dr.query('downstream').ze2010_downstream",
           d2["aa_names"] == exp["aa_names"], f'{d2["aa_names"]} vs {exp["aa_names"]}')
@@ -332,7 +323,12 @@ def run_checks(ns, ROOT, exp):
     check("gamma rows sum to the domestic share (active cells only)",
           close(np.array(exp["emp_gamma_aa"]).sum(1), exp["domestic_share"], 1e-12))
     check("pi_r", close(d2["empirical_moments_dict"]["emp_pi_r"], exp["emp_pi_r"]))
-    check("reg_coef target", close(d2["empirical_moments_dict"]["reg_coef"], exp["reg_coef"]))
+    check("block 4 target = [beta_d ; beta_kappa]",
+          close(d2["empirical_moments_dict"]["reg_coef"], exp["reg_coef"])
+          and d2["n_reg"] == exp["n_coef"] + 1)
+    check("block 4 labels end with beta_kappa, as load_parameters.jl names them",
+          d2["reg_labels"] == ["beta_d[]50,100]]", "beta_d[]100,150]]", "beta_d[]150,200]]",
+                               "beta_d[>200]", "beta_kappa"])
     check("G0 target from G_K.csv (K = 0 rows)",
           close(d2["empirical_moments_dict"]["G0"], exp["G_target"]))
     check("labor share", close(d2["empirical_moments_dict"]["agg_labor_share"],
@@ -424,28 +420,15 @@ def run_checks(ns, ROOT, exp):
           close(cc.xs(0, level="K")["N_hat"].values, exp["N_hat"]))
     check("residual is simulated - empirical",
           close(cc["residual"].values, cc["simulated"].values - cc["empirical"].values))
-    # ---- standard errors on both series -------------------------------------
-    # The simulated band is Julia's delta method (se_G_curve_delta.npy); the empirical
-    # band is the bootstrap variance of the increments (G_K_var.csv). Neither is
-    # invented: absent its file, the corresponding column must come back all-NaN so the
-    # plot draws bare points rather than a fabricated bar.
-    check("simulated SE read from the delta-method file, per (sector, K)",
-          close(cc["se_simulated"].values.reshape(exp["S"], 4),
-                np.array(exp["se_curve"])))
+    # ---- standard errors -----------------------------------------------------
+    # The empirical band is the bootstrap variance of the increments (G_K_var.csv); the
+    # fake worlds carry no residual on the count curve, so the simulated band is empty
+    # rather than invented.
+    check("no simulated SE on the count curve",
+          bool(np.isnan(cc["se_simulated"].values).all()))
     check("empirical SE read from G_K_var.csv as sqrt(var)",
           close(cc["se_empirical"].values.reshape(exp["S"], 4),
                 np.array(exp["G_pmf_se"])))
-    # The structural claim the band encodes: N_hat_s is calibrated on K = 0, so for a
-    # FREE sector the fitted moment IS the target and the band collapses to the target's
-    # own bootstrap SE — the K = 0 fit carries no information. A CLAMPED sector cannot
-    # move N_hat_s, the target channel drops out, and its band is something else.
-    se0_sim = cc.xs(0, level="K")["se_simulated"].values
-    boot0 = np.array(exp["se_G0_boot"])
-    free = ~cc.xs(0, level="K")["clamped"].values
-    check("at K = 0 a FREE sector's simulated band is the target's bootstrap SE",
-          close(se0_sim[free], boot0[free]))
-    check("at K = 0 the CLAMPED sector's band is NOT the target's bootstrap SE",
-          bool(np.all(np.abs(se0_sim[~free] - boot0[~free]) > 1e-6)))
     check("the clamp flag is carried onto every K of that sector",
           bool((cc["clamped"].values.reshape(exp["S"], 4)[3]).all()) and
           not bool((cc["clamped"].values.reshape(exp["S"], 4)[0]).any()))
@@ -470,9 +453,6 @@ def run_checks(ns, ROOT, exp):
     except KeyError as e:
         check("an absent K raises", "7" in str(e))
 
-    # p_s(0) = G_s(0), so a G_K_var.csv whose K = 0 column disagrees with the G block of
-    # Sigma_data is measuring a different object — most likely the CDF's variance. That
-    # must be SAID, not silently plotted.
     gkv_path = os.path.join(ROOT, "baseline_test", "G_K_var.csv")
     gkv_orig = open(gkv_path).read()
 
@@ -501,19 +481,6 @@ def run_checks(ns, ROOT, exp):
         emp0 = [c for c in axs_z[0].containers if c.get_label() == "Empirical"]
         check("a panel with nonzero variances still draws its bars",
               any(getattr(c, "has_yerr", False) for c in emp0))
-    finally:
-        open(gkv_path, "w").write(gkv_orig)
-
-    try:
-        bad = pd.read_csv(io.StringIO(gkv_orig))
-        bad.loc[bad["K"] == 0, "var"] *= 9.0          # 3x the SE
-        bad.to_csv(gkv_path, index=False)
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
-                              K_values=(0, 1, 2, 3))
-        check("a K = 0 bootstrap variance inconsistent with Sigma_data is flagged",
-              "disagrees with diag(Sigma_data)" in buf.getvalue())
     finally:
         open(gkv_path, "w").write(gkv_orig)
 
@@ -628,7 +595,7 @@ def run_checks(ns, ROOT, exp):
 
     print("\n=== 3. moment mask (must reproduce load_parameters.jl) ===")
     mask, S, nAA = d2["moment_mask"], d2["S"], d2["n_AA"]
-    off_gam = 1 + S + len(exp["emp_pi_r"]) + exp["n_coef"]
+    off_gam = 1 + S + len(exp["emp_pi_r"]) + exp["n_reg"]
     gam_mask = mask[off_gam:off_gam + S * nAA].reshape(S, nAA)
     free = np.array(exp["AA_ACTIVE"])
     for s in range(S):
@@ -654,8 +621,10 @@ def run_checks(ns, ROOT, exp):
     check("mu = 1 reads step1 moments",
           close(d1["simulated_moments_dict"]["reg_coef"],
                 np.array(exp["sim_final"]["reg"]) * 0.95))
-    check("mu = 1 takes its SEs from step2/inference, mu = 2 from step3/inference",
-          not close(d1["se_simulated"]["G0"], d2["se_simulated"]["G0"]))
+    check("mu = 1 reads step2/inference_world, mu = 2 step3/inference_world",
+          d1["world_inference"]["dir"].parts[-2:] == ("step2", "inference_world")
+          and d2["world_inference"]["dir"].parts[-2:] == ("step3", "inference_world")
+          and not close(d1["world_inference"]["estimate"], d2["world_inference"]["estimate"]))
     check("mu = 1 / mu = 2 folder routing",
           (d1["step_dir"], d1["inference_step"], d2["step_dir"], d2["inference_step"])
           == ("step1", "step2", "step3", "step3"))
@@ -665,16 +634,26 @@ def run_checks(ns, ROOT, exp):
     except ValueError:
         check("bad mu rejected", True)
 
-    print("\n=== 5. standard errors (beta -> gamma -> G split) ===")
-    Sig = np.load(os.path.join(ROOT, "reporting_test_profiled_aa_gran_pso", "step2", "Sigma_data.npy"))
-    sd = np.sqrt(np.diag(Sig))
-    check("empirical SE, beta block", close(d2["se_empirical"]["reg_coef"], sd[:exp["n_coef"]]))
-    check("empirical SE, G block", close(d2["se_empirical"]["G0"], sd[-S:]))
-    check("empirical SE, gamma block length",
-          d2["se_empirical"]["gamma_aa"].size == exp["n_gamma_kept"])
-    check("simulated (fitted) SE, beta block",
-          close(d2["se_simulated"]["reg_coef"], sd[:exp["n_coef"]] * 0.4))
-    check("simulated (fitted) SE, G block", close(d2["se_simulated"]["G0"], sd[-S:] * 0.4))
+    print("\n=== 5. block 4 against the fake-world noise ===")
+    check("empirical band = sd(beta_world)", close(d2["se_empirical"]["reg_coef"], exp["sd_world"]))
+    check("simulated band = sqrt(diag Omega_world)",
+          close(d2["se_simulated"]["reg_coef"], exp["sd_resid"]))
+    check("no band on gamma or G0 (matched exactly)",
+          set(d2["se_empirical"]) == {"reg_coef"} and set(d2["se_simulated"]) == {"reg_coef"})
+    check("Step-2 artefacts shared by mu = 1 and mu = 2",
+          close(d1["world_weight"]["Omega"], d2["world_weight"]["Omega"]))
+    fit = ns["block4_fit"](d2)
+    res = np.array(exp["reg_coef"]) - np.array(exp["sim_final"]["reg"])
+    check("block4_fit: residual and t = residual / sd_resid",
+          close(fit["residual"], res) and close(fit["t"], res / np.array(exp["sd_resid"])))
+    check("block4_fit: simulator bias = mean(beta_world - beta_sim)",
+          close(fit["bias"], exp["e_bar"]))
+    W = np.array(exp["W"])
+    check("J = e'We on n_reg - (n_tau + 1) = 3 degrees of freedom, with a p-value",
+          close(fit.attrs["J"], res @ W @ res, 1e-9) and fit.attrs["dof"] == 3
+          and 0.0 <= fit.attrs["J_pvalue"] <= 1.0)
+    check("no J p-value at the Step-1 estimate (W = I there, J is not chi2)",
+          "J_pvalue" not in ns["block4_fit"](d1).attrs)
 
     print("\n=== 6. gamma scatter: reference reconstruction ===")
     x_free, y_free, x_ref, y_ref = ns["gamma_aa_points"](d2)
@@ -703,7 +682,8 @@ def run_checks(ns, ROOT, exp):
     outdir = os.path.join(ROOT, "out")
     os.makedirs(outdir, exist_ok=True)
     for fn, kw in (("plot_gamma_aa", {}), ("plot_pi_r", {}), ("plot_reg_coef", {}),
-                   ("plot_G0", {}), ("plot_count_curve", {"K_values": (0, 1, 2, 3)})):
+                   ("plot_G0", {}), ("plot_count_curve", {"K_values": (0, 1, 2, 3)}),
+                   ("plot_world_weight", {})):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
@@ -716,11 +696,17 @@ def run_checks(ns, ROOT, exp):
         except Exception as e:
             check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
 
+    ax_r = ns["plot_reg_coef"](d2)
+    check("block-4 figure: one tick per moment, ln n last",
+          [t.get_text() for t in ax_r.get_xticklabels()][-1] == r"$\ln n_{ls}$"
+          and len(ax_r.get_xticklabels()) == exp["n_reg"])
+    check("block-4 figure: both series carry bars",
+          all(getattr(c, "has_yerr", False) for c in ax_r.containers))
     check("reg bin labels for n_coef=4 drop the base bin",
           ns["reg_bin_labels"](4) == ns["REG_BIN_LABELS_5"][1:])
     check("reg bin labels for n_coef=5 keep all", len(ns["reg_bin_labels"](5)) == 5)
 
-    print("\n=== 9. LaTeX table: JOINT (two industries), labor + industry only ===")
+    print("\n=== 9. LaTeX table: JOINT (two industries), labor, industry and block 4 ===")
     tex = ns["generate_combined_table"](
         [{"industry": "test", "display_name": "Synthetic A"},
          {"industry": "test2", "display_name": "Synthetic B"}],
@@ -729,7 +715,7 @@ def run_checks(ns, ROOT, exp):
     check("both industries have their own column pair",
           "Synthetic A" in tex and "Synthetic B" in tex
           and tex.count(r"{Emp.} & {Sim.}") == 2)
-    check("column spec has 2 pairs", tex.count("S[table-format=1.4]") == 4)
+    check("column spec has 2 pairs, with room for a sign", tex.count("S[table-format=-1.4]") == 4)
     check("second industry's simulated values present",
           all(f"{v:.4f}" in tex for v in exp["second"]["sim_final"]["industry"]))
     check("disjoint sector sets produce `---` cells", "{---}" in tex)
@@ -739,7 +725,13 @@ def run_checks(ns, ROOT, exp):
               set(exp["sector_names"]) | set(exp["second"]["sector_names"])) == 2 * S)
     check("Panel A present", "Panel A: Aggregate Labor Share" in tex)
     check("Panel B present", "Panel B: Aggregate Industry Shares" in tex)
-    check("no regression-coefficient panel", "Panel C" not in tex and "Regression Coefficients" not in tex)
+    check("Panel C: block 4, beta_d bins then beta_kappa",
+          "Panel C: Extensive Margin" in tex and r"$\beta_\kappa$" in tex
+          and tex.count(r"$\beta_d$: Distance") == exp["n_coef"])
+    check("Panel C values and their fake-world sd in parentheses",
+          all(f"{v:.4f}" in tex for v in exp["sim_final"]["reg"])
+          and all(f"({v:.4f})" in tex for v in exp["sd_resid"])
+          and all(f"({v:.4f})" in tex for v in exp["sd_world"]))
     check("labor share values in the table",
           f'{exp["agg_labor_share"]:.4f}' in tex and f'{exp["sim_final"]["labor"][0]:.4f}' in tex)
     check("all S industry rows present",
@@ -766,7 +758,7 @@ def run_checks(ns, ROOT, exp):
     check("empirical_moments is a column vector",
           g["empirical_moments"].shape == (len(exp["emp_gamma_aa"]) * exp["n_AA"]
                                            + 1 + exp["S"] + len(exp["emp_pi_r"])
-                                           + exp["n_coef"] + exp["S"], 1))
+                                           + exp["n_reg"] + exp["S"], 1))
     check("best_simulated_moments_dict keeps the stage axis LAST (old [..., K] layout)",
           close(g["best_simulated_moments_dict"]["reg_coef"][:, -1], exp["sim_final"]["reg"])
           and g["best_simulated_moments_dict"]["gamma_aa"].shape[:2] == (exp["S"], exp["n_AA"]))
@@ -778,94 +770,51 @@ def run_checks(ns, ROOT, exp):
           close(g["G_target"], exp["G_target"]))
     check("N_supplier_s read", close(g["N_supplier_s"], exp["N_supplier_s"]))
 
-    print("\n=== 12. Jacobian: layout, labels, block grid ===")
-    check("Jacobian loaded", d2["J"] is not None and d2["J_elast"] is not None)
-    check("shape = masked moments x identified parameters",
-          d2["J"].shape == (exp["n_mom_kept"], exp["n_par_id"]))
-    check("moment labels align with the rows",
-          len(d2["moment_labels"]) == d2["J"].shape[0]
-          and sum(d2["moment_block_sizes"]) == d2["J"].shape[0])
-    check("parameter labels align with the columns",
-          len(d2["param_labels"]) == d2["J"].shape[1]
-          and sum(d2["param_block_sizes"]) == d2["J"].shape[1])
-    check("moment blocks: labor, industry-1, pi_r-1, reg_coef, gamma free, G0",
+    print("\n=== 12. labels: block 4 and the kappa column ===")
+    check("moment blocks: labor, industry-1, pi_r-1, [beta_d ; beta_kappa], gamma free, G0",
           list(d2["moment_block_sizes"]) ==
-          [1, S - 1, exp["n_AA"] - 1, exp["n_coef"], exp["n_gamma_kept"], S])
-    check("parameter blocks: Omega_L, Omega_s-1, A-1, alpha, T free, N_s",
-          list(d2["param_block_sizes"]) ==
-          [1, S - 1, exp["n_AA"] - 1, 1, exp["n_gamma_kept"], S])
-    check("the variety counts are the last parameter block",
-          d2["param_block_names"][-1] == "Variety count" and d2["n_N_cols"] == S
-          and [l[:4] for l in d2["param_labels"][-S:]] == ["N_s["] * S)
-    check("param_indices covers the theta columns; the N_s columns are appended after",
-          len(d2["jacobian_param_indices"]) == exp["n_par_theta"]
-          and d2["J"].shape[1] == exp["n_par_theta"] + S)
-    check("the N_s columns are exactly zero outside the zero-supplier block",
-          np.all(d2["J"][:-S, -S:] == 0.0)
-          and np.all(np.diag(d2["J"][-S:, -S:]) != 0.0))
+          [1, S - 1, exp["n_AA"] - 1, exp["n_reg"], exp["n_gamma_kept"], S]
+          and len(d2["moment_labels"]) == sum(d2["moment_block_sizes"]))
+    check("parameter blocks: Omega_L, Omega_s-1, A-1, alpha, kappa, T free",
+          list(d2["param_block_sizes"]) == [1, S - 1, exp["n_AA"] - 1, 1, 1, exp["n_gamma_kept"]]
+          and "kappa" in d2["param_labels"])
     check("gamma moment labels and T parameter labels enumerate the same (s, AA) pairs",
-          [l.replace("gamma[", "") for l in d2["moment_labels"]
-           if l.startswith("gamma[")] ==
+          [l.replace("gamma[", "") for l in d2["moment_labels"] if l.startswith("gamma[")] ==
           [l.replace("T[", "") for l in d2["param_labels"] if l.startswith("T[")])
-    check("mu = 1 reads step2/jacobian_all.npy, mu = 2 step3/jacobian_all_step3.npy",
-          d1["J"] is not None and d1["J"].shape == d2["J"].shape)
-    check("elasticity Jacobian is the one plotted",
-          close(ns["jacobian_matrix"](d2, "elasticity"), d2["J_elast"]))
-    summ = ns["jacobian_block_summary"](d2)
-    check("block summary is moment-blocks x (statistic, parameter-block)",
-          summ.shape == (len(d2["moment_block_names"]),
-                         3 * len(d2["param_block_names"]))
-          and set(summ.columns.get_level_values(0)) ==
-          {"mean_abs", "max_abs", "share_readable"})
-    # the noise mask: sigma/|epsilon| is 0.1 everywhere by construction here, so nothing
-    # is rejected at 0.5 and everything is at 0.05
-    check("noise-to-signal ratio is sigma/|elasticity|, exact zeros counted as measured",
-          close(ns["jacobian_noise_ratio"](d2)[0, 0], 0.1)
-          and np.all(ns["jacobian_noise_ratio"](d2)[:-S, -S:] == 0.0))
-    check("nothing is masked at the default threshold, everything at a strict one",
-          not ns["jacobian_noise_mask"](d2, noise_max=0.5).any()
-          and ns["jacobian_noise_mask"](d2, noise_max=0.05).mean() > 0.5)
-    ns["plot_jacobian_triptych"](d2, out_folder=outdir, tag="jac_triptych", show=False)
-    check("triptych writes the matrix, the noise map and the purged matrix",
-          all(os.path.getsize(os.path.join(
-              outdir, f"jac_triptych{suf}_{d2['industry']}_mu{d2['mu']}.pdf")) > 0
-              for suf in ("", "_noise", "_purged")))
-    for fn in ("plot_jacobian_noise", "plot_identification_map",
-               "plot_channel_elasticities", "plot_jacobian_thresholded"):
-        try:
-            ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"))
-            check(f"{fn} -> pdf", os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0)
-        except Exception as e:
-            check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
-    ident = ns["identification_summary"](d2)
-    check("identification summary separates structural zeros from weak channels",
-          ident["share_exact_zero"].loc["Extensive margin", "Variety count"] == 1.0
-          and ident["share_above"].loc["Zero-supplier share", "Variety count"] > 0)
-    for fn, kw in (("plot_jacobian_full", {}), ("plot_jacobian_blocks", {})):
-        try:
-            ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"), **kw)
-            check(f"{fn} -> pdf", os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0)
-        except Exception as e:
-            check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
 
-    print("\n=== 13. variance-covariance ===")
-    check("Sigma_data / Sigma_sim / Omega / W_step3 loaded",
-          all(d2[k] is not None for k in ("Sigma_data", "Sigma_sim", "Omega", "W_step3")))
-    check("all are n_gb x n_gb",
-          all(d2[k].shape == (exp["n_gb"], exp["n_gb"])
-              for k in ("Sigma_data", "Sigma_sim", "Omega")))
-    vsum = ns["variance_covariance_summary"](d2)
-    check("summary covers the three matrices",
-          set(vsum.index) == {"Sigma_data", "Sigma_sim", "Omega"}
-          and {"trace", "cond", "eig_min", "eig_max"} <= set(vsum.columns))
-    check("trace of Sigma_sim reported correctly",
-          close(vsum.loc["Sigma_sim", "trace"], np.trace(d2["Sigma_sim"]), 1e-9))
-    for fn in ("plot_variance_covariance", "plot_moment_correlation"):
+    print("\n=== 13. fake-world parameter intervals ===")
+    wi = d2["world_inference"]
+    check("draws labelled by world_inference_labels.txt", wi["labels"] == exp["w_labels"])
+    tab = ns["world_param_table"](d2)
+    P = wi["params"]
+    check("estimate / mean / quantiles per parameter",
+          close(tab.loc["kappa", "estimate"], exp["w_est"][1] + 0.01)
+          and close(tab.loc["kappa", "q2.5"], np.quantile(P[:, 1], 0.025))
+          and close(tab.loc["kappa", "bias"], P[:, 1].mean() - tab.loc["kappa", "estimate"]))
+    j_nan = 2 + S
+    check("a world where an area wins nothing is left out of that column only",
+          tab.iloc[j_nan]["n_worlds"] == P.shape[0] - 3 and tab.loc["kappa", "n_worlds"] == P.shape[0])
+    check("prefix filter", list(ns["world_param_table"](d2, prefix=("alpha", "kappa")).index)
+          == ["alpha[1]", "kappa"])
+    lt = ns["world_param_table"](d2, prefix="T[", log_T=True)
+    check("log T is reported in logs", all(i.startswith("log T[") for i in lt.index))
+    disp = ns["world_dispersion_table"](d2)
+    check("dispersion of log T: one row per sector", len(disp) == S)
+    cf = ns["world_counterfactual_table"](d2)
+    check("counterfactuals: 18 levels + 12 changes against the estimate",
+          len(cf) == 30 and cf.index[18].startswith("Δ equal_T:"))
+    check("changes are regime - estimate world by world",
+          close(cf.iloc[18]["estimate"], wi["counterfactuals_est"][6] - wi["counterfactuals_est"][0]))
+    for grp in ("elasticities", "N_s", "disp_logT"):
         try:
-            ns[fn](d2, save_to=os.path.join(outdir, f"{fn}.pdf"))
-            check(f"{fn} -> pdf", os.path.getsize(os.path.join(outdir, f"{fn}.pdf")) > 0)
+            ns["plot_world_ci"](d2, grp, save_to=os.path.join(outdir, f"world_ci_{grp}.pdf"))
+            check(f"plot_world_ci({grp}) -> pdf",
+                  os.path.getsize(os.path.join(outdir, f"world_ci_{grp}.pdf")) > 0)
         except Exception as e:
-            check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
+            check(f"plot_world_ci({grp}) -> pdf", False, f"{type(e).__name__}: {e}")
+    ax_g = ns["plot_G0"](d2)
+    check("plot_G0 prints N_hat_s with its fake-world interval",
+          any("[" in t.get_text() and "N" in t.get_text() for t in ax_g.texts))
 
     print("\n" + "=" * 60)
     print(f"{len(ok)} passed, {len(fail)} failed")

@@ -51,10 +51,10 @@ from _fixture_tree import build as build_tree                         # noqa: E4
 TMP, KW = build_tree()
 
 # NOTHING under step3 but best_parameters_list and post_hoc_N_hat; no
-# best_simulated_moments, no Sigma_*, no jacobian_*, no suppliers.parquet.
+# best_simulated_moments, no fake-world artefacts, no suppliers.parquet.
 data = utils.load_granular_data("test", mu=2, parts=("core", "geography"), **KW)
-for k in ("best_simulated_moments", "J", "Sigma_data", "Omega", "suppliers",
-          "se_empirical", "G_curve_sim"):
+for k in ("best_simulated_moments", "world_weight", "world_inference", "suppliers",
+          "se_empirical"):
     assert data[k] is None, f"{k} was read although its part was not asked for"
 assert data["best_params"] is not None and data["post_hoc_N_hat"] is not None
 assert data["regional_wage"] is not None, "geography was asked for"
@@ -71,10 +71,10 @@ try:
     raise AssertionError("an unknown part was not refused")
 except ValueError:
     pass
-assert utils.resolve_parts("jacobian") == {"jacobian", "moments", "counts"}
-print(f"2 ok  a tree with no moment, inference or Jacobian artefact opens under "
+assert utils.resolve_parts("inference") == {"inference", "moments", "counts"}
+print(f"2 ok  a tree with no moment or inference artefact opens under "
       f"parts=('core','geography'); asking for a part whose files are absent fails, "
-      f"and 'jacobian' pulls in what it is read against")
+      f"and 'inference' pulls in what it is read against")
 
 # --- 3. the parquet-free path --------------------------------------------------------
 assert data["suppliers"] is None                     # there is no parquet in this tree

@@ -326,18 +326,32 @@ INFINITE_REGIME = "Infinite varieties"
 # The block layout, the mask and the meaning of `mu` are documented in the markdown
 # cell above.
 
-# mu -> (folder holding the moments, folder holding the inference)
+# mu -> (folder holding the moments, folder holding the fake-world inference). The
+# inference at theta_hat_1 is Step 2b (W = I, `step2/inference_world/`), the one at
+# theta_hat_2 is Step 4 (W = Omega_world^-1, `step3/inference_world/`).
 MU_DIRS = {1: ("step1", "step2"), 2: ("step3", "step3")}
+
+# The distance regressors of block 4, as load_parameters.jl's REG_COEF_LABELS names them
+# (the base bin is dropped); beta_kappa, the ln n_ls coefficient, follows them.
+REG_DIST_LABELS = {1: ["ln d"], 4: ["]50,100]", "]100,150]", "]150,200]", ">200"],
+                   5: ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]}
 
 
 def reporting_folder(industry, base="..", profile_T=True, ca_level="aa",
-                     granular=True, relax_n_lo=False, optimizer="pso"):
-    """Reproduce main.jl's output_folder naming exactly."""
+                     granular=True, relax_n_lo=False, optimizer="pso",
+                     kappa=True, profile_head=False):
+    """Reproduce main.jl's output_folder naming exactly.
+
+    The current Julia code writes `reporting_<ind>_profiled_aa_gran_kappa[_nlo1][_profhead]_pso`;
+    `kappa=False` addresses a tree written before T_ls = T_a n_ls^kappa (old_version/).
+    """
     name = f"reporting_{industry}"
     name += "_profiled" if profile_T else ""
     name += "_aa" if ca_level == "aa" else ""
     name += "_gran" if granular else ""
+    name += "_kappa" if (kappa and granular) else ""
     name += "_nlo1" if (relax_n_lo and granular) else ""
+    name += "_profhead" if profile_head else ""
     name += f"_{optimizer}"
     return Path(base) / name
 
@@ -441,14 +455,18 @@ def aa_display_names(data):
     return [m.get(str(a), str(a)) for a in data["aa_names"]]
 
 
-PARTS_ALL = ("counts", "moments", "inference", "jacobian", "geography", "firm")
+PARTS_ALL = ("counts", "moments", "inference", "geography", "firm")
 
 # Requesting a part pulls in what it is built from. `moments` needs the count target to
-# complete the empirical vector; `inference` and `jacobian` are read against the moment
-# layout, so both imply it.
+# complete the empirical vector; `inference` is read against the moment layout.
 PART_IMPLIES = {"moments": ("counts",),
-                "inference": ("moments", "counts"),
-                "jacobian": ("moments", "counts")}
+                "inference": ("moments", "counts")}
+
+# The closed-form counterfactuals `world_inference` reports, in its column order
+# (inference.jl, CF_REGIMES x CF_STATS; the npz carries the values, not the labels).
+WORLD_CF_REGIMES = ("estimate", "equal_T", "no_trade_cost")
+WORLD_CF_STATS = ("mean_dist_km", "med_dist_km", "mean_local_100km", "mean_local_200km",
+            "med_local_100km", "med_local_200km")
 
 
 def resolve_parts(parts):
@@ -475,7 +493,7 @@ def resolve_parts(parts):
 
 def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                        granular=True, relax_n_lo=False, optimizer="pso", K=-1,
-                       k_max=None, parts=None):
+                       k_max=None, parts=None, kappa=True, profile_head=False):
     """
     Load everything the granular / attraction-area reporting needs.
 
@@ -500,9 +518,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                                          `sourcing_geometry` and `simulate_economy` need.
                               counts     G_K.csv / G_K_var.csv -> Gbar_s(0) and the curve
                               moments    best_simulated_moments.npy and the block dicts
-                              inference  Sigma_data / Sigma_sim / Omega / W_step3 and the
-                                         fitted-moment standard errors
-                              jacobian   jacobian_all*.npy and its axes
+                              inference  the fake-world artefacts: step2's Omega_world /
+                                         W_world / world_residuals (block 4) and the
+                                         world_inference draws of the estimate `mu`
                               geography  france.gpkg, regional wages
                               firm       suppliers.parquet and Julia's own draws --
                                          needed ONLY by `check_against_julia`, since the
@@ -540,10 +558,12 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
 
     input_folder = Path(base) / f"baseline_{industry}"
     folder = reporting_folder(industry, base=base, profile_T=profile_T, ca_level=ca_level, 
-                              granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer) # Given the argument, construct the folder name. 
+                              granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer,
+                              kappa=kappa, profile_head=profile_head) # Given the argument, construct the folder name.
     if not folder.exists():
         raise FileNotFoundError(f"run folder {folder} not found — check profile_T / ca_level / "
-                                "granular / relax_n_lo / optimizer against main.jl's naming")
+                                "granular / kappa / relax_n_lo / profile_head / optimizer "
+                                "against main.jl's naming")
 
     n_coef = int(np.load(folder / "n_reg_coef.npy")) # Number of regression coefficients. 
     n_tau_path = folder / "n_tau.npy" 
@@ -570,7 +590,17 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     emp_pi_r = X_dr["X_dr"].values[N_downstream != 0].astype(float)
     emp_pi_r = emp_pi_r / emp_pi_r.sum()
 
-    if n_coef == 1:
+    # Block 4. Under kappa it is [beta_d (n_coef) ; beta_kappa (1)], the cell-level cloglog
+    # on the distance regressor(s) and ln n_ls, read exactly as load_parameters.jl does.
+    if kappa:
+        beta_d = np.load(input_folder / f"beta_d_{n_coef}.npy").astype(float).ravel()
+        beta_kappa = np.load(input_folder / f"beta_kappa_{n_coef}.npy").astype(float).ravel()
+        if beta_d.size != n_coef or beta_kappa.size != 1:
+            raise ValueError(f"beta_d_{n_coef}.npy / beta_kappa_{n_coef}.npy have "
+                             f"{beta_d.size} / {beta_kappa.size} entries, expected "
+                             f"{n_coef} / 1")
+        reg_coef = np.concatenate([beta_d, beta_kappa])
+    elif n_coef == 1:
         reg_coef = np.array([_read_named_value(coefs, "reg_coef_cloglog_1")], dtype=float)
     else:
         reg_coef = np.load(input_folder / f"reg_coef_cloglog_{n_coef}.npy").ravel()
@@ -685,9 +715,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # `G_K_var.csv` is `A129, K, var` (or `se`) and carries the BOOTSTRAP variance of
     # p_s(K) = share of cells with EXACTLY K suppliers -- the same object G_pmf holds.
     # It is optional: absent, the empirical panels are drawn without a band, exactly as
-    # before. Sigma_data's count block covers K = 0 only, which is why the rest needs a
-    # file at all; the K = 0 column is therefore a free CONSISTENCY CHECK against it and
-    # is compared below rather than trusted.
+    # before. It is the only source of an empirical band on the count curve: the fake
+    # worlds carry none, since Gbar_s(0) is matched exactly by the N bisection.
     gkv_path = input_folder / "G_K_var.csv"
     if granular and "counts" in parts and gkv_path.exists() and sector_codes is not None:
         gkv = pd.read_csv(gkv_path)
@@ -698,8 +727,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # called `G`, which names the object measured, not the statistic. Whatever is
         # left once A129 and K are removed is taken as a VARIANCE (the file's stated
         # content), and the choice is printed rather than assumed silently -- a variance
-        # read as an SE would be off by orders of magnitude, which is exactly what the
-        # K = 0 check against diag(Sigma_data) below is there to catch.
+        # read as an SE would be off by orders of magnitude.
         _named = {c: c.strip().lower() for c in gkv.columns}
         v_col = next((c for c, n in _named.items()
                       if n in ("var", "variance", "v", "var_g", "g_var")), None)
@@ -837,74 +865,66 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         best_params = best_parameters_list[:, K] if best_parameters_list.ndim > 1 \
             else best_parameters_list
 
-    # --------------------------------------------------------- standard errors
-    # The inference subsystem stacks three moment blocks in a fixed order — the
-    # extensive-margin coefficients, the sourcing shares, the zero-supplier shares (the
-    # "beta, gamma, G" ordering invariant of CLAUDE.md; the arrows used elsewhere in the
-    # code name that stacking order, nothing causal).
-    #   Sigma_data       : the bootstrap covariance of the EMPIRICAL moments — how
-    #                      precisely each target is measured in the data;
-    #   se_moments_fitted: sqrt(diag(G V G')), the SE of the FITTED moment. Under
-    #                      profile_T, V is the SANDWICH covariance of alpha_hat and G the
-    #                      PROFILED Jacobian dm/dalpha (alpha moved, T following through
-    #                      the Sinkhorn inversion), so this is the delta-method
-    #                      propagation of alpha_hat's sandwich SE — not an efficient SE
-    #                      from the free-parameter Jacobian, which under profiling would
-    #                      treat T as free when it is not.
-    n_gamma_kept = int(mask[off_gam:off_gam + S * n_AA].sum())
-    n_gb = reg_coef.size + n_gamma_kept + (S if granular else 0)
-
-    def _gb_split(v, what):
-        v = np.asarray(v).ravel()
-        if v.size != n_gb:
-            raise ValueError(f"{what} has length {v.size}, expected n_gb = {n_gb} "
-                             f"(= {reg_coef.size} beta + {n_gamma_kept} gamma"
-                             + (f" + {S} G0)" if granular else ")"))
-        out = {"reg_coef": v[:reg_coef.size],
-               "gamma_aa": v[reg_coef.size:reg_coef.size + n_gamma_kept]}
-        if granular:
-            out["G0"] = v[-S:]
-        return out
-
-    se_emp, se_sim = None, None
-    sigma_path = folder / "step2" / "Sigma_data.npy"
-    if "inference" in parts and sigma_path.exists():
-        Sigma_data = np.load(sigma_path)
-        se_emp = _gb_split(np.sqrt(np.maximum(np.diag(Sigma_data), 0.0)), "diag(Sigma_data)")
-    else:
-        Sigma_data = None
-    fitted_path = folder / inf_step / "inference" / "se_moments_fitted.npy"
-    if "inference" in parts and fitted_path.exists():
-        se_sim = _gb_split(np.load(fitted_path), "se_moments_fitted.npy")
-
-    # ------- the count DISTRIBUTION: Julia's own fitted curve and its delta-method SE
-    # Written by `compute_profiled_T_inference`. `se_G_curve_delta.npy` is (S, |K|):
-    # for a FREE sector at K = 0 it collapses to the bootstrap SE of the target (the
-    # count moment is fit by construction, so its variance IS the target's); for K >= 1
-    # it is the residualized alpha + gamma propagation plus the scaled target channel;
-    # for a CLAMPED sector N_hat_s cannot move, so the target channel drops out at
-    # every K. Absent (an older run, or a Jacobian reloaded from disk) => the simulated
-    # panels fall back to the Python reconstruction with no band.
-    G_curve_sim, G_curve_sim_se, G_curve_sim_K = None, None, None
-    inf_dir = folder / inf_step / "inference"
-    if granular and "inference" in parts:
-        p_se, p_fit, p_K = (inf_dir / "se_G_curve_delta.npy",
-                            inf_dir / "G_curve_fitted.npy",
-                            inf_dir / "count_curve_K.npy")
-        if p_se.exists():
-            G_curve_sim_se = np.load(p_se)
-        if p_fit.exists():
-            G_curve_sim = np.load(p_fit)
-        if p_K.exists():
-            G_curve_sim_K = [int(round(k)) for k in np.load(p_K).ravel()]
+    # ------------------------------------------- inference: fake worlds (inference.jl)
+    # There is no data covariance any more: W and the inference both come from worlds
+    # drawn from the model.
+    #   step2/world_residuals.npz  at theta_hat_1, one row per usable world: beta_world
+    #       (block 4 fitted on ONE finite world, i.e. a fake dataset), beta_sim (the
+    #       simulator at the same theta, recalibrated on that world), e = beta_world -
+    #       beta_sim, and e_data = data - simulated block 4 at theta_hat_1;
+    #   step2/Omega_world.npy = Cov(e_b) and W_world.npy = its inverse (block 4 only);
+    #   <inf_step>/inference_world/world_inference_draws.npz  the whole chain
+    #       re-estimated in each world at theta_hat_mu: `params` (columns named by
+    #       world_inference_labels.txt), `estimate`, the within-sector sd of log T and
+    #       the closed-form counterfactuals.
+    # Standard errors exist for block 4 only — gamma and Gbar_s(0) are reproduced exactly
+    # by the T inversion and the N bisection, so they carry no fitting error:
+    #   se_empirical = sd(beta_world)          how precisely a dataset like ours measures
+    #                                          beta under the model (Sigma_data's role);
+    #   se_simulated = sqrt(diag Omega_world)  the sd of data - simulator: the band the
+    #                                          block-4 residual is judged against, and
+    #                                          the one W = Omega_world^-1 weights with.
+    n_reg = reg_coef.size
+    world_weight = world_inf = se_emp = se_sim = None
+    ww_path = folder / "step2" / "world_residuals.npz"
+    if "inference" in parts and ww_path.exists():
+        with np.load(ww_path) as z:
+            world_weight = {k: np.asarray(z[k], float) for k in z.files}
+        for k in ("Omega", "W"):
+            p = folder / "step2" / f"{k}_world.npy"
+            world_weight[k] = np.atleast_2d(np.load(p)) if p.exists() else None
+        if world_weight["Omega"] is None:
+            world_weight["Omega"] = np.atleast_2d(np.cov(world_weight["e"], rowvar=False))
+        if world_weight["e"].shape[1] != n_reg or world_weight["Omega"].shape != (n_reg, n_reg):
+            raise ValueError(f"{ww_path.name} / Omega_world.npy cover "
+                             f"{world_weight['e'].shape[1]} block-4 moments, expected "
+                             f"{n_reg} — the run's kappa/n_coef flags and the ones passed "
+                             "here disagree.")
+        se_emp = {"reg_coef": world_weight["beta_world"].std(axis=0, ddof=1)}
+        se_sim = {"reg_coef": np.sqrt(np.clip(np.diag(world_weight["Omega"]), 0.0, None))}
+    wi_dir = folder / inf_step / "inference_world"
+    if "inference" in parts and (wi_dir / "world_inference_draws.npz").exists():
+        with np.load(wi_dir / "world_inference_draws.npz") as z:
+            world_inf = {k: np.asarray(z[k], float) for k in z.files}
+        world_inf["labels"] = [l.strip() for l in
+                               (wi_dir / "world_inference_labels.txt").read_text().splitlines()
+                               if l.strip()]
+        world_inf["cf_labels"] = [f"{r}:{s}" for r in WORLD_CF_REGIMES for s in WORLD_CF_STATS]
+        world_inf["dir"] = wi_dir
+        if world_inf["params"].shape[1] != len(world_inf["labels"]):
+            raise ValueError(f"world_inference_draws.npz has {world_inf['params'].shape[1]} "
+                             f"parameter columns but {len(world_inf['labels'])} labels")
 
     # ----------------------------------------- moment and parameter labels ----
-    # Both axes of the Jacobian, rebuilt exactly as load_parameters.jl SECTION 13 does.
-    #   rows    : the MASKED moment vector, six blocks;
-    #   columns : the IDENTIFIED parameters, layout [Omega_L | Omega_s(S) | A(R_d) |
-    #             alpha(N_TAU) | T(active (s,AA), s-major)], minus the S+2 directions
-    #             the internal normalisations kill (Omega_s[1], A[1], each sector's
-    #             reference T).
+    # Both axes rebuilt as load_parameters.jl SECTION 12 does.
+    #   moments    : the MASKED moment vector, six blocks;
+    #   parameters : the IDENTIFIED parameters, layout [Omega_L | Omega_s(S) | A(R_d) |
+    #                alpha(N_TAU) | kappa | T(active (s,AA), s-major)], minus the S+2
+    #                directions the normalisations kill (Omega_s[1], A[1], each sector's
+    #                reference T).
+    reg_labels = (([f"beta_d[{lab}]" for lab in REG_DIST_LABELS.get(n_coef, range(1, n_coef + 1))]
+                   + ["beta_kappa"]) if kappa else
+                  ([f"reg_coef[{b + 1}]" for b in range(n_coef)] if n_coef > 1 else ["reg_coef"]))
     moment_labels, moment_block_sizes = [], []
     moment_labels.append("labor")
     moment_block_sizes.append(1)
@@ -912,9 +932,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     moment_block_sizes.append(S - 1)
     moment_labels += [f"pi_r[{a}]" for a in aa_names[1:]]
     moment_block_sizes.append(len(aa_names) - 1)
-    moment_labels += ([f"reg_coef[{b + 1}]" for b in range(n_coef)] if n_coef > 1
-                      else ["reg_coef"])
-    moment_block_sizes.append(n_coef)
+    moment_labels += reg_labels
+    moment_block_sizes.append(n_reg)
     gam_free = AA_ACTIVE.copy()
     for s in range(S):
         if T_REF_AA[s] >= 0:
@@ -935,6 +954,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     param_block_sizes.append(len(aa_names) - 1)
     param_labels += (["alpha"] if n_tau == 1 else [f"alpha_{b + 1}" for b in range(n_tau)])
     param_block_sizes.append(n_tau)
+    if kappa:
+        param_labels.append("kappa")
+        param_block_sizes.append(1)
     param_labels += [f"T[{sector_names[s]}-AA{aa_names[a]}]"
                      for s in range(S) for a in range(n_AA) if gam_free[s, a]]
     param_block_sizes.append(int(gam_free.sum()))
@@ -942,62 +964,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     moment_block_names = ["Labor share", "Industry shares", "Downstream sales",
                           "Extensive margin", "Regional sourcing shares"] \
         + (["Zero-supplier share"] if granular else [])
-    param_block_names = ["Omega_L", "Industry shares", "Productivity",
-                         "Trade cost", "Comparative advantage"]
-
-    # ------------------------------------------------------------- Jacobian ---
-    # Rows = the masked moments, columns = the parameters. The full free-parameter
-    # Jacobian is saved for diagnostics at both estimates, even under profile_T (where
-    # INFERENCE runs on the alpha-only profiled Jacobian instead).
-    #
-    # Under GRANULAR the Julia side appends the S VARIETY-COUNT columns dm/dN_s on the
-    # right (compute_jacobian's `append_N_s`): N_s is calibrated by the integer bisection
-    # exactly as T is calibrated by the Sinkhorn inversion, so both belong on the
-    # parameter axis. `<file>_n_s_columns.npy` records how many were appended; older
-    # trees have none, and the width settles it.
-    jac_file = "jacobian_all.npy" if mu == 1 else "jacobian_all_step3.npy"
-    jac_dir = folder / inf_step
-    jac = {k: None for k in ("J", "J_elast", "J_sd", "J_elast_sd",
-                             "jacobian_param_indices")}
-    n_N_cols = None
-    if "jacobian" in parts:
-      for key, suffix in (("J", ""), ("J_elast", "_elasticity"),
-                        ("J_sd", "_sd"), ("J_elast_sd", "_elasticity_sd"),
-                        ("jacobian_param_indices", "_param_indices")):
-        p = jac_dir / jac_file.replace(".npy", f"{suffix}.npy")
-        jac[key] = np.load(p) if p.exists() else None
-      n_N_path = jac_dir / jac_file.replace(".npy", "_n_s_columns.npy")
-      n_N_cols = int(np.load(n_N_path).ravel()[0]) if n_N_path.exists() else None
-    if jac["J"] is not None:
-        n_r, n_c = jac["J"].shape
-        if n_N_cols is None:
-            n_N_cols = n_c - len(param_labels)
-        if (n_r != int(mask.sum()) or n_c != len(param_labels) + n_N_cols
-                or n_N_cols not in (0, S)):
-            raise ValueError(
-                f"{jac_file} is {n_r}x{n_c} but the layout rebuilt here is "
-                f"{int(mask.sum())} moments x {len(param_labels)} parameters "
-                f"(+{n_N_cols} variety counts) — the run's flags and the ones passed "
-                "here disagree.")
-        if n_N_cols:
-            param_labels += [f"N_s[{sector_names[s]}]" for s in range(S)]
-            param_block_sizes.append(S)
-            param_block_names.append("Variety count")
-    else:
-        n_N_cols = n_N_cols or 0
-
-    # --------------------------------------------------- variance-covariance ---
-    # Sigma_data (bootstrap, empirical) and Sigma_sim (K re-simulations) over the same
-    # three-block subsystem; Omega = Sigma_data + Sigma_sim is what the estimator
-    # actually weighted with, and W_step3 = inv(Omega).
-    def _npy(p):
-        return np.load(p) if p.exists() else None
-
-    Sigma_sim = _npy(folder / "step2" / "Sigma_sim.npy") if "inference" in parts else None
-    Omega = _npy(folder / "step2" / "Omega.npy") if "inference" in parts else None
-    W_step3 = _npy(folder / "step2" / "W_step3.npy") if "inference" in parts else None
-    if Omega is None and Sigma_data is not None and Sigma_sim is not None:
-        Omega = Sigma_data + Sigma_sim
+    param_block_names = (["Omega_L", "Industry shares", "Productivity", "Trade cost"]
+                         + (["Density elasticity"] if kappa else [])
+                         + ["Comparative advantage"])
 
     # ------------------------------------------------- granular diagnostics
     granular_diag = None
@@ -1071,6 +1040,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "post_hoc_u": post_hoc_u, "post_hoc_good_sr": post_hoc_good_sr,
         # dimensions
         "S": S, "R": R, "n_AA": n_AA, "n_coef": n_coef, "n_tau": n_tau,
+        "n_reg": n_reg, "kappa": kappa, "profile_head": profile_head,
+        "reg_labels": reg_labels,
         "sector_names": sector_names, "sector_codes": sector_codes, "aa_names": aa_names,
         # structure
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
@@ -1110,16 +1081,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "moment_block_names": moment_block_names,
         "param_labels": param_labels, "param_block_sizes": param_block_sizes,
         "param_block_names": param_block_names,
-        # Jacobian (None when the file is absent)
-        "J": jac["J"], "J_elast": jac["J_elast"], "J_sd": jac["J_sd"],
-        "J_elast_sd": jac["J_elast_sd"], "n_N_cols": n_N_cols,
-        "jacobian_param_indices": jac["jacobian_param_indices"],
-        # inference
-        "Sigma_data": Sigma_data, "Sigma_sim": Sigma_sim, "Omega": Omega,
-        "W_step3": W_step3,
+        # inference: fake worlds (None when the files are absent)
+        "world_weight": world_weight, "world_inference": world_inf,
         "se_empirical": se_emp, "se_simulated": se_sim,
-        "G_curve_sim": G_curve_sim, "G_curve_sim_se": G_curve_sim_se,
-        "G_curve_sim_K": G_curve_sim_K,
         "granular_diagnostics": granular_diag,
     }
 

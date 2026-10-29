@@ -1,9 +1,9 @@
 """
 The fit of the structural model to its targets -- the library behind `model_report.ipynb`.
 
-Moment tables, the sourcing-share and downstream-sales fit, the extensive margin and the
-zero-supplier share with their standard errors, the count curve, the Jacobian and what it
-says about identification, the moment covariance matrices, and the untargeted distance
+Moment tables, the sourcing-share and downstream-sales fit, the extensive margin
+[beta_d ; beta_kappa] and the zero-supplier share against the fake-world noise, the count
+curve, the fake-world weight matrix and parameter intervals, and the untargeted distance
 elasticity of spatial comovement.
 """
 
@@ -23,7 +23,7 @@ from utils import (
     EMPIRICAL_MEAN_LOG_D, NU_S_DEFAULT, THETA_DEFAULT,
     _despine, _read_named_value, fs, get_figsize, load_granular_data, pct,
     reference_color, set_name_axis_fontsize, sim_color, toulouse_color,
-    unpack_estimated_T,
+    unpack_estimated_T, WORLD_CF_STATS,
 )
 
 
@@ -37,6 +37,12 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     LaTeX table with one {Emp., Sim.} column pair per industry.
 
     Panel A: aggregate labor share.  Panel B: aggregate industry shares.
+    Panel C: the extensive margin, block 4 = [beta_d ; beta_kappa] — the cloglog distance
+    coefficient(s) and the ln n_ls (density) coefficient. Under each value, in
+    parentheses, its fake-world standard deviation: sd(beta_world) under Emp. (how
+    precisely a dataset like ours measures the moment) and sqrt(diag Omega_world) under
+    Sim. (the sd of data - model, the scale Step 3's W = Omega_world^-1 weights with).
+    Absent the Step-2 artefacts the parentheses are left out.
 
     industries_config : [{'industry': 'aero', 'display_name': 'Aerospace'}, ...]
     mu                : 1 (step1 best parameters) or 2 (step3 best parameters)
@@ -50,7 +56,7 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
         name_A129 = None
 
     n_ind = len(industries_config)
-    col_spec = "l " + " ".join(["S[table-format=1.4] S[table-format=1.4]"] * n_ind)
+    col_spec = "l " + " ".join(["S[table-format=-1.4] S[table-format=-1.4]"] * n_ind)
     header_row1 = " & " + " & ".join(
         [f"\\multicolumn{{2}}{{c}}{{{c['display_name']}}}" for c in industries_config]) + r" \\"
     cmidrules = " ".join([f"\\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(n_ind)])
@@ -89,12 +95,41 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
                     if len(m) else ["---", "---"])
         panel_B_rows.append(row)
 
+    # --- Panel C: block 4, keyed on the regressor so two industries align ----------
+    def _reg_tex(d):
+        bins = ([r"$\ln d$"] if d["n_coef"] == 1 else
+                [f"Distance {b}" for b in reg_bin_labels(d["n_coef"])])
+        return ([rf"$\beta_d$: {b}" for b in bins]
+                + ([r"$\beta_\kappa$: $\ln n_{ls}$"] if d.get("kappa") else []))
+
+    reg_rows = {}
+    for c in industries_config:
+        d = all_data[c["industry"]]
+        se_e = (d["se_empirical"] or {}).get("reg_coef")
+        se_s = (d["se_simulated"] or {}).get("reg_coef")
+        for i, lab in enumerate(_reg_tex(d)):
+            reg_rows.setdefault(lab, {})[c["industry"]] = (
+                float(d["empirical_moments_dict"]["reg_coef"][i]),
+                float(d["simulated_moments_dict"]["reg_coef"][i]),
+                None if se_e is None else float(se_e[i]),
+                None if se_s is None else float(se_s[i]))
+
     def fmt(v, decimals=4):
         if isinstance(v, str) or (isinstance(v, float) and np.isnan(v)):
             return "{---}"
         return f"{v:.{decimals}f}"
 
+    def fmt_se(v):
+        return "" if v is None or not np.isfinite(v) else f"{{({v:.4f})}}"
+
     mu_label = r"$\hat{\mu}_1$ (Step~1)" if mu == 1 else r"$\hat{\mu}_2$ (Step~3)"
+    # Under --profile_head the head is profiled to blocks 1-3, which then leave the loss:
+    # Panels A-B differ from their targets only by the simulator's Monte-Carlo error.
+    head_note = (r" Panels~A and B are not fitted by the search: the head "
+                 r"$(\Omega^L, \Omega^s, A)$ is profiled out to match them in expectation, "
+                 r"so any gap is Monte-Carlo error."
+                 if any(all_data[c["industry"]].get("profile_head") for c in industries_config)
+                 else "")
     tex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
            r"\caption{Empirical and Simulated Moments: Comparison Across Industries}" "\n"
            r"\label{tab:moments_comparison_combined}" "\n"
@@ -113,15 +148,35 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     for row in panel_B_rows:
         tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
 
+    tex += "\\midrule\n"
+    tex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel C: Extensive Margin "
+            f"(cell-level cloglog)}}}} \\\\\n")
+    tex += "\\midrule\n"
+    for lab, by_ind in reg_rows.items():
+        vals, ses = [], []
+        for c in industries_config:
+            e, m, se_e, se_s = by_ind.get(c["industry"], ("---", "---", None, None))
+            vals += [fmt(e), fmt(m)]
+            ses += [fmt_se(se_e), fmt_se(se_s)]
+        tex += lab + " & " + " & ".join(vals) + " \\\\\n"
+        if any(ses):
+            tex += " & " + " & ".join(ses) + " \\\\\n"
+
     tex += "\\bottomrule\n" + r"\end{tabular}" + "\n\n"
     tex += (r"\vspace{0.3cm}" "\n"
             r"\caption*{\footnotesize \emph{Notes}: Empirical moments against moments simulated "
             r"from the model calibrated on each industry, evaluated at " + mu_label + r". "
             r"``Emp.'' = Empirical, ``Sim.'' = Simulated. Panel~A reports the aggregate labor "
             r"share, Panel~B the sectoral industry shares. ``---'' indicates the sector is not "
-            r"present in that industry's sample. The distance-bin (cloglog) coefficients and the "
-            r"zero-supplier shares $\bar{G}_s(0)$ are reported in separate figures, with standard "
-            r"errors.}" "\n" r"\end{table}" "\n")
+            r"present in that industry's sample. Panel~C reports block~4 of the moment vector, "
+            r"the cell-level cloglog of supplier presence on distance ($\beta_d$) and on the "
+            r"log number of establishments in the cell ($\beta_\kappa$), with a sector "
+            r"$\times$ attraction-area fixed effect. In parentheses: under Emp., the standard "
+            r"deviation of the coefficient across fake worlds drawn from the model at "
+            r"$\hat{\mu}_1$; under Sim., the standard deviation of data minus model across the "
+            r"same worlds, the diagonal of $\tilde\Omega = W^{-1}$." + head_note + r" The "
+            r"zero-supplier shares $\bar{G}_s(0)$, matched exactly by the variety counts, are "
+            r"reported in a separate figure.}" "\n" r"\end{table}" "\n")
 
     if output_file is not None:
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
@@ -266,7 +321,8 @@ def plot_pi_r(data, ax=None, save_to=None):
 # Fit with standard errors: extensive margin, zero-supplier share, count curve
 # ============================================================================
 
-REG_BIN_LABELS_5 = [r"$]0,50]$", r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"]
+# The distance bins of block 4 (load_parameters.jl's REG_COEF_LABELS; base bin dropped).
+REG_BIN_LABELS_5 = [r"$]20,50]$", r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"]
 
 
 def reg_bin_labels(n_coef):
@@ -277,6 +333,11 @@ def reg_bin_labels(n_coef):
     if n_coef == 5:
         return list(REG_BIN_LABELS_5)
     return [rf"$\beta_{{{i + 1}}}$" for i in range(n_coef)]
+
+
+def reg_coef_labels(data):
+    """Tick labels of block 4: the distance regressor(s), then ln n_ls when kappa is on."""
+    return reg_bin_labels(data["n_coef"]) + ([r"$\ln n_{ls}$"] if data.get("kappa") else [])
 
 
 def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
@@ -330,16 +391,25 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
 
 
 def plot_reg_coef(data, ax=None, save_to=None, ci=1.96):
-    """Empirical vs simulated cloglog distance coefficients, with SEs."""
+    """
+    Block 4, empirical vs simulated: the cloglog distance coefficients beta_d and the
+    ln n_ls coefficient beta_kappa, with fake-world 95% bars.
+
+    Empirical bar: +/- ci * sd(beta_world), the model-implied sampling noise of the
+    target. Simulated bar: +/- ci * sqrt(diag Omega_world), the sd of data - simulator,
+    i.e. where the data should fall around the fit if the model is true.
+    """
     emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
     sim = np.asarray(data["simulated_moments_dict"]["reg_coef"], float)
     se_e = data["se_empirical"]["reg_coef"] if data["se_empirical"] else None
     se_s = data["se_simulated"]["reg_coef"] if data["se_simulated"] else None
 
     fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
-    _paired_errorbar(ax, reg_bin_labels(data["n_coef"]), emp, sim, se_e, se_s, ci=ci,
+    _paired_errorbar(ax, reg_coef_labels(data), emp, sim, se_e, se_s, ci=ci,
                      ylabel=r"Extensive margin coefficient",
-                     xlabel="Distance bin (km)")
+                     xlabel="Distance bin (km)" + (r" $\mid$ density" if data.get("kappa") else ""))
+    if data.get("kappa"):           # beta_kappa is a different regressor: set it apart
+        ax.axvline(data["n_coef"] - 0.5, color="black", linewidth=0.6, linestyle=":")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         ax.figure.savefig(save_to, format="pdf", bbox_inches="tight")
@@ -347,13 +417,19 @@ def plot_reg_coef(data, ax=None, save_to=None, ci=1.96):
 
 
 def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
-    """Empirical vs simulated Gbar_s(0) — the share of cells with no supplier."""
+    """
+    Empirical vs simulated Gbar_s(0) — the share of cells with no supplier.
+
+    No bars: N_hat_s is calibrated on this moment by bisection, so the fit is exact up to
+    the integer step and the fake worlds carry no residual for it. Its uncertainty sits
+    in N_hat_s instead, whose 95% fake-world interval is printed next to each sector.
+    """
     if not data["granular"]:
         raise ValueError("Gbar_s(0) only exists under --granular=true")
     emp = np.asarray(data["empirical_moments_dict"]["G0"], float)
     sim = np.asarray(data["simulated_moments_dict"]["G0"], float)
-    se_e = data["se_empirical"]["G0"] if data["se_empirical"] else None
-    se_s = data["se_simulated"]["G0"] if data["se_simulated"] else None
+    se_e = (data["se_empirical"] or {}).get("G0")
+    se_s = (data["se_simulated"] or {}).get("G0")
 
     fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
     _paired_errorbar(ax, data["sector_names"], emp, sim, se_e, se_s, ci=ci,
@@ -365,10 +441,15 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
     if annotate_N and diag is not None and "N_hat" in diag:
         N_hat = np.asarray(diag["N_hat"]).ravel()
         clamped = np.asarray(diag.get("clamped", np.zeros_like(N_hat))).ravel()
+        ci_N = (world_param_table(data, prefix="N_s")
+                if data.get("world_inference") is not None else None)
         top = ax.get_ylim()[1]
         for i, (n, cl) in enumerate(zip(N_hat, clamped)):
-            ax.text(i, top, rf"$\hat{{N}}_s={int(n)}$" + ("*" if cl != 0 else ""),
-                    ha="center", va="bottom", fontsize=fs(12), rotation=45)
+            txt = rf"$\hat{{N}}_s={int(n)}$" + ("*" if cl != 0 else "")
+            key = f"N_s[{data['sector_names'][i]}]"
+            if ci_N is not None and key in ci_N.index:
+                txt += rf" $[{ci_N.at[key, 'q2.5']:.0f}, {ci_N.at[key, 'q97.5']:.0f}]$"
+            ax.text(i, top, txt, ha="center", va="bottom", fontsize=fs(12), rotation=45)
         #ax.set_ylim(ax.get_ylim()[0], top * 1.02)
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -565,19 +646,18 @@ def count_curve(data, K_values=None, tol=1e-9):
     Increments, not the CDF -- see `gbar_cells`. `p_s(0) = G_s(0)`, so the targeted
     panel is the same number under either convention; only `K >= 1` changes.
 
-    Sources, in order of preference:
+    Sources:
 
-    * simulated  -- `<step>/inference/G_curve_fitted.npy`, written by Julia at the same
-      theta_hat and the same pinned `N_hat_s` the delta-method SE was built at. Absent,
-      it is rebuilt here from `q_hat` and `N_hat_s` under the same unbiased convention,
-      with `m = N_rho` RECOVERED from the diagnostics (`max(100, max N_HI)`, the rule in
+    * simulated  -- rebuilt here from `q_hat` and `N_hat_s` (Julia never evaluates the
+      curve beyond K = 0) under the unbiased convention, with `m = N_rho` RECOVERED from the diagnostics (`max(100, max N_HI)`, the rule in
       load_parameters.jl) and the recovery CHECKED twice: `q_hat * m` must be integral
       (it is a win count), and the K = 0 column must reproduce block 6 of the moment
       vector. If either fails the plug-in Binomial pmf is used and `attrs["estimator"]`
       says so.
     * empirical  -- the increments of `G_K.csv`, `p_s(K) = G(K) - G(K-1)`.
 
-    Returns a (sector, K)-indexed DataFrame with both standard errors where available;
+    Returns a (sector, K)-indexed DataFrame. `se_empirical` comes from the optional
+    `G_K_var.csv`; `se_simulated` is all NaN, since the fake worlds carry no band here;
     `df.attrs` carries the estimator, the K = 0 gap against the moment vector, and the
     draw count used.
     """
@@ -635,27 +715,8 @@ def count_curve(data, K_values=None, tol=1e-9):
               "— read it as indicative, and check N_rho against the run's log line.")
         sim, estimator, gap = sim_pi, "plug-in Binomial(N_hat, q_hat)", gap_pi
 
-    # Julia's own curve wins when present: it was evaluated at the same theta_hat and
-    # the same PINNED N_hat_s as the delta-method SE beside it, so the point and its
-    # band cannot drift apart the way a Python reconstruction can.
+    # No simulated band: the fake worlds carry no residual on the count curve.
     sim_se = np.full((S, len(Ks)), np.nan)
-    jK = data.get("G_curve_sim_K")
-    if jK is not None:
-        jc, js = data.get("G_curve_sim"), data.get("G_curve_sim_se")
-        for i, K in enumerate(Ks):
-            if K in jK:
-                c = jK.index(K)
-                if js is not None and js.shape == (S, len(jK)):
-                    sim_se[:, i] = js[:, c]
-                if jc is not None and jc.shape == (S, len(jK)):
-                    d = float(np.nanmax(np.abs(jc[:, c] - sim[:, i])))
-                    if d > 1e-6:
-                        print(f"[count_curve] {data['industry']}: K = {K}, Julia's fitted "
-                              f"curve and the Python reconstruction differ by {d:.2e}; "
-                              "using Julia's (it shares theta_hat and the pinned N_hat_s "
-                              "with the SE). A large gap means N_rho was mis-recovered.")
-                    sim[:, i] = jc[:, c]
-        estimator += " [Julia G_curve_fitted]" if data.get("G_curve_sim") is not None else ""
 
     # ---- empirical: the increments of G_K.csv, and their bootstrap SE if supplied ----
     emp = np.full((S, len(Ks)), np.nan)
@@ -671,23 +732,6 @@ def count_curve(data, K_values=None, tol=1e-9):
     if missing:
         print(f"[count_curve] {data['industry']}: G_K.csv has no row for K = {missing} — "
               "those panels show the simulated curve only.")
-
-    # Free consistency gate: p_s(0) = G_s(0) IS block 6, whose bootstrap variance is
-    # already the G block of Sigma_data. A supplied CSV must agree with it at K = 0.
-    if 0 in Ks and gse is not None and data.get("se_empirical") is not None:
-        ref = np.asarray(data["se_empirical"]["G0"], float)
-        got = emp_se[:, Ks.index(0)]
-        ok = np.isfinite(got) & np.isfinite(ref) & (ref > 0)
-        if ok.any():
-            rel = float(np.nanmax(np.abs(got[ok] - ref[ok]) / ref[ok]))
-            if rel > 0.05:
-                print(f"[count_curve] {data['industry']}: the supplied G_K_var.csv "
-                      f"disagrees with diag(Sigma_data)'s count block at K = 0 by up to "
-                      f"{rel:.1%}. They are the SAME object (p_s(0) = G_s(0)), so one of "
-                      "the two bootstraps is not the one the estimator used — most "
-                      "likely the CSV holds the CDF's variance rather than the "
-                      "increment's, which coincide only at K = 0 if the resampling is "
-                      "identical.")
 
     idx = pd.MultiIndex.from_product([data["sector_names"], Ks], names=["A129", "K"])
     df = pd.DataFrame({"empirical": emp.ravel(),
@@ -717,16 +761,9 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     toward 1: a model whose count distribution is too concentrated puts too much mass at
     low K and too little in the tail, which reads directly as a mismatch at each K.
 
-    Both bands are delta-method / bootstrap objects, and neither is decorative:
-
-    * simulated — `se_G_curve_delta.npy`. At K = 0 for a FREE sector it collapses to the
-      bootstrap SE of the target, because `N_hat_s` is calibrated to make the fitted
-      moment EQUAL the target: the K = 0 fit is not evidence, and the band says so. For
-      a CLAMPED sector `N_hat_s` cannot move, the target channel drops out, and the band
-      is the alpha + gamma propagation instead. For K >= 1 it is the residualized
-      structural loading plus the scaled target channel.
-    * empirical — the bootstrap SE of the increments, from `G_K_var.csv`. Absent, the
-      empirical points are drawn bare rather than with an invented bar.
+    The empirical band is the bootstrap SE of the increments from `G_K_var.csv`; absent,
+    the points are drawn bare. The simulated points carry no band: under the fake-world
+    inference only block 4 has a residual distribution.
 
     `save_to` is a STEM, not a file: K is appended before the extension, so
     `.../count_curve_auto_mu2.pdf` writes `..._K0.pdf`, `..._K1.pdf`, ... One call still
@@ -772,419 +809,86 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
 
 
 # ============================================================================
-# Jacobian -- which parameter moves which moment
+# Fake-world inference -- the weight matrix and the parameter distribution
 # ============================================================================
 
-# Jacobian heatmaps. `kind="elasticity"` is what should be read; "raw" mixes units.
-# The parameter axis carries the variety counts N_s when the run wrote them (see the
-# markdown above); `data["n_N_cols"]` says how many columns they occupy.
+# Everything here reads inference.jl's output (see the loader): the block-4 residuals of
+# Step 2 at theta_hat_1, and the whole-chain re-estimation in each world at theta_hat_mu.
+# Intervals are the 2.5/97.5% quantiles across usable worlds (percentile intervals, as
+# Julia's `world_inference.txt` prints them); bias = mean - estimate.
 
-JACOBIAN_BOUNDARIES = [-1, -0.1, -0.05, -0.025, -0.01, -0.001,
-                       0.001, 0.01, 0.025, 0.05, 0.1, 1]
-
-# An elasticity is unreadable when its Monte-Carlo standard deviation across the K
-# Jacobian replications is at least this fraction of the elasticity itself.
-NOISE_MAX = 0.5
-
-
-def _binned_cmap(boundaries, coarse=False):
-    from matplotlib.colors import BoundaryNorm, ListedColormap
-    if coarse:
-        return ListedColormap(["#2166ac", "#f0f0f0", "#b2182b"]), \
-            BoundaryNorm([-1, -0.1, 0.1, 1], 3)
-    n_bins = len(boundaries) - 1
-    cmap = ListedColormap(plt.get_cmap("RdBu_r")(np.linspace(0, 1, n_bins)))
-    return cmap, BoundaryNorm(boundaries, n_bins)
+def _need(data, key, what):
+    if data.get(key) is None:
+        raise FileNotFoundError(f"{data['folder'].name}: no {what} — run with "
+                                "parts including 'inference', after Steps 2 and 4 of main.jl.")
+    return data[key]
 
 
-def jacobian_matrix(data, kind="elasticity"):
-    """The Jacobian to plot, with a clear error when it is not on disk."""
-    key = {"elasticity": "J_elast", "raw": "J", "sd": "J_sd",
-           "elasticity_sd": "J_elast_sd"}[kind]
-    J = data.get(key)
-    if J is None:
-        step = data["inference_step"]
-        raise FileNotFoundError(
-            f"no Jacobian in {data['folder']}/{step}/ — main.jl writes "
-            f"jacobian_all*.npy at theta_hat_1 (step2) and jacobian_all_step3*.npy at "
-            f"theta_hat_2 (step3); the corresponding inference step must have run.")
-    return J
-
-
-def jacobian_noise_ratio(data, kind="elasticity"):
+def block4_fit(data):
     """
-    sigma / |epsilon| entry by entry — the Monte-Carlo standard deviation of the
-    elasticity across the K Jacobian replications, relative to the elasticity itself.
+    Block 4 ([beta_d ; beta_kappa]) against the fake-world noise, one row per moment.
 
-    Scale-free: the theta/m rescaling that turns dm/dtheta into an elasticity cancels
-    between numerator and denominator, so this is the same number for the raw and the
-    elasticity Jacobian. An EXACTLY zero entry gets ratio 0 rather than infinity: a
-    structural zero (the N_s columns outside block 6) carries no simulation noise, and
-    conflating it with an unmeasured entry is precisely what this diagnostic is for.
+    ``data``, ``simulated``   the target and the fit at theta_hat_mu;
+    ``residual``              data - simulated;
+    ``sd_world``              sd of beta across fake worlds: how precisely a dataset of
+                              ours measures the moment, if the model is true;
+    ``sd_sim``                sd of the simulator's beta across worlds (its Monte-Carlo
+                              noise, with N_s recalibrated in each world);
+    ``sd_resid``              sqrt(diag Omega_world) = sd(beta_world - beta_sim), what
+                              W = Omega_world^-1 weights with;
+    ``t``                     residual / sd_resid;
+    ``bias``, ``t_bias``      mean of beta_world - beta_sim and its t over the worlds: a
+                              continuum simulator that does not reproduce a finite world's
+                              beta on average shows up here, not in the fit.
+
+    `df.attrs` carries the overidentification statistic J = e' W e and, at mu = 2 only,
+    its chi2 p-value on n_reg - (n_tau + 1) degrees of freedom: J is chi2 only at the
+    estimate that minimised it under W = Omega_world^-1 (Step 3), not at the Step-1
+    estimate (W = I). No p-value either when block 4 is just identified, where W does
+    not move the estimate. Omega_world is evaluated at theta_hat_1 and treated as known.
     """
-    E = np.asarray(jacobian_matrix(data, kind), float)
-    sd = data.get("J_elast_sd" if "elast" in kind else "J_sd")
-    if sd is None:
-        raise FileNotFoundError(
-            f"no across-replication SD for the Jacobian in {data['folder']}/"
-            f"{data['inference_step']}/ — compute_jacobian writes it as "
-            "jacobian_all*_elasticity_sd.npy when K > 1.")
-    sd = np.abs(np.asarray(sd, float))
-    A = np.abs(E)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        R = sd / A
-    R[(A == 0) & (sd == 0)] = 0.0          # structural zero: measured, and exactly zero
-    R[~np.isfinite(R)] = np.inf            # nonzero noise on a zero signal: unreadable
-    return R
+    ww = _need(data, "world_weight", "step2/world_residuals.npz")
+    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    sim = np.asarray(data["simulated_moments_dict"]["reg_coef"], float)
+    e_b, Om = ww["e"], ww["Omega"]
+    n_ok = e_b.shape[0]
+    sd_e = np.sqrt(np.clip(np.diag(Om), 0.0, None))
+    bias = e_b.mean(axis=0)
+    df = pd.DataFrame({"data": emp, "simulated": sim, "residual": emp - sim,
+                       "sd_world": ww["beta_world"].std(axis=0, ddof=1),
+                       "sd_sim": ww["beta_sim"].std(axis=0, ddof=1),
+                       "sd_resid": sd_e, "t": (emp - sim) / sd_e,
+                       "bias": bias, "t_bias": bias / (sd_e / np.sqrt(n_ok))},
+                      index=pd.Index(data["reg_labels"], name="moment"))
+    dof = data["n_reg"] - (data["n_tau"] + int(data["kappa"]))
+    W = ww["W"] if ww.get("W") is not None else np.linalg.inv(Om)
+    J = float((emp - sim) @ W @ (emp - sim))
+    df.attrs.update(n_worlds=n_ok, J=J, dof=dof)
+    if dof > 0 and data["mu"] == 2:
+        from scipy.stats import chi2
+        df.attrs["J_pvalue"] = float(chi2.sf(J, dof))
+    return df
 
 
-def jacobian_noise_mask(data, kind="elasticity", noise_max=NOISE_MAX):
-    """True where the elasticity is DROWNED in simulation noise and must not be read."""
-    return jacobian_noise_ratio(data, kind) >= noise_max
-
-
-def _edges(sizes):
-    return np.cumsum([0] + list(sizes))
-
-
-def _tick_every(n, target=25):
-    """Tick stride that keeps roughly `target` labels on an axis of length n."""
-    return max(1, int(np.ceil(n / target)))
-
-
-def _block_grid(ax, data, m_edges, p_edges, block_names=True):
-    """Block separators, plus the block names on the outer margins."""
-    for e in m_edges[1:-1]:
-        ax.axhline(e - 0.5, color="black", linewidth=1.2, alpha=0.6)
-    for e in p_edges[1:-1]:
-        ax.axvline(e - 0.5, color="black", linewidth=1.2, alpha=0.6)
-    if not block_names:
-        return
-    ax_top, ax_right = ax.secondary_xaxis("top"), ax.secondary_yaxis("right")
-    ax_top.set_xticks((p_edges[:-1] + p_edges[1:]) / 2 - 0.5)
-    ax_top.set_xticklabels(data["param_block_names"], fontsize=fs(10), fontweight="bold",
-                           rotation=45)
-    ax_right.set_yticks((m_edges[:-1] + m_edges[1:]) / 2 - 0.5)
-    ax_right.set_yticklabels(data["moment_block_names"], fontsize=fs(10), fontweight="bold")
-
-
-def _axis_labels(ax, data, shape):
-    xs = np.arange(shape[1])[::_tick_every(shape[1])]
-    ax.set_xticks(xs)
-    ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=fs(7))
-    ax.xaxis.set_ticks_position("bottom")
-    ys = np.arange(shape[0])[::_tick_every(shape[0])]
-    ax.set_yticks(ys)
-    ax.set_yticklabels(np.array(data["moment_labels"])[ys], fontsize=fs(7))
-    ax.set_xlabel("Parameter")
-    ax.set_ylabel("Moment")
-
-
-def _sector_subblocks(data, block_name="Regional sourcing shares"):
-    """
-    The (start, stop, sector) runs INSIDE one moment block, read off the labels.
-
-    The gamma rows are labelled `gamma[<sector>-AA<area>]` and stored s-major, so the
-    sector is the text between "gamma[" and the LAST "-AA" and its rows are contiguous.
-    Returns absolute row indices, so the caller can draw on the full matrix without
-    knowing where the block starts. An empty list when the block is absent or its labels
-    do not carry a sector, which is the right behaviour for every other block.
-    """
-    names = list(data["moment_block_names"])
-    if block_name not in names:
-        return []
-    e = _edges(data["moment_block_sizes"])
-    lo, hi = int(e[names.index(block_name)]), int(e[names.index(block_name) + 1])
-    labels = list(data["moment_labels"])[lo:hi]
-
-    def _sector(lab):
-        if not lab.startswith("gamma[") or "-AA" not in lab:
-            return None
-        return lab[len("gamma["):lab.rfind("-AA")]
-
-    runs, start, cur = [], 0, _sector(labels[0]) if labels else None
-    if cur is None:
-        return []
-    for i, lab in enumerate(labels[1:] + [None], start=1):
-        s = _sector(lab) if lab is not None else object()
-        if s != cur:
-            runs.append((lo + start, lo + i, cur))
-            start, cur = i, s
-    return runs
-
-
-def _sector_axis(ax, data, block_name="Regional sourcing shares", fontsize=fs(8)):
-    """
-    Left y axis: one tick per sector of `block_name`, at the middle of its rows, with a
-    thin separator between sectors. Every other row label is dropped -- on a matrix this
-    tall the individual (sector, area) names are unreadable anyway, and what the reader
-    needs from the left margin is which sector a band of rows belongs to.
-    """
-    runs = _sector_subblocks(data, block_name)
-    if not runs:
-        ax.set_yticks([])
-        return runs
-    for lo, hi, _ in runs[1:]:
-        ax.axhline(lo - 0.5, color="black", linewidth=0.5, alpha=0.35, linestyle=":")
-    ax.set_yticks([(lo + hi) / 2 - 0.5 for lo, hi, _ in runs])
-    ax.set_yticklabels([s for _, _, s in runs], fontsize=fontsize)
-    ax.tick_params(axis="y", length=2)
-    return runs
-
-
-def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
-                       mask=None, title=None, save_to=None):
-    """
-    One heatmap of the whole Jacobian, moment blocks on the rows and parameter blocks on
-    the columns — the direct read of which parameter block moves which moment block.
-
-    `mask` (boolean, same shape) blanks entries to white: pass `jacobian_noise_mask(...)`
-    for the third panel of the triptych, i.e. the matrix purged of the entries whose
-    elasticity is not measured precisely enough to be read.
-    """
-    J = np.asarray(jacobian_matrix(data, kind), float)
-    cmap, norm = _binned_cmap(JACOBIAN_BOUNDARIES, coarse=coarse)
-    cmap = cmap.copy()
-    cmap.set_bad("white")
-    M = np.ma.masked_where(np.asarray(mask, bool), J) if mask is not None else J
-    m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-
-    fig, ax = plt.subplots(figsize=figsize)
-    im = ax.matshow(M, cmap=cmap, norm=norm, aspect="auto")
-    _block_grid(ax, data, m_edges, p_edges)
-    _axis_labels(ax, data, J.shape)
-
-    if title is None:
-        title = (f"Jacobian ({kind}) — {data['industry']}, "
-                 rf"$\hat{{\mu}}_{data['mu']}$   ({J.shape[0]}$\times${J.shape[1]})")
-        if mask is not None:
-            kept = float((~np.asarray(mask, bool)).mean())
-            title += f"\nnoise-purged: {100 * kept:.1f}% of entries readable"
-    ax.set_title(title, pad=28)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
-                        ticks=(None if coarse else JACOBIAN_BOUNDARIES))
-    cbar.set_label("Elasticity" if "elast" in kind else "d m / d theta")
-    if not coarse:
-        cbar.ax.set_xticklabels([f"{t:g}" for t in JACOBIAN_BOUNDARIES],
-                                fontsize=fs(8), rotation=45)
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return ax
-
-
-def plot_jacobian_noise(data, kind="elasticity", noise_max=NOISE_MAX, figsize=(15, 11),
-                        save_to=None):
-    """
-    The middle panel of the triptych: the noise-to-signal ratio sigma/|epsilon| alone.
-
-    Dark = the elasticity is well measured relative to its own size; light = it is not.
-    Entries at or above `noise_max` are hatched, and those are exactly the ones the
-    purged panel blanks out. Reading this panel first says WHICH parts of the Jacobian
-    can be interpreted at all, before any statement is made about what they show.
-    """
-    R = jacobian_noise_ratio(data, kind)
-    bad = R >= noise_max
-    m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-
-    fig, ax = plt.subplots(figsize=figsize)
-    cmap = plt.get_cmap("YlOrRd").copy()
-    cmap.set_over("black")
-    im = ax.matshow(np.clip(R, 0, noise_max * 2), cmap=cmap, aspect="auto",
-                    vmin=0, vmax=noise_max * 2)
-    # mark the failures explicitly, so a reader is not left inferring them from a colour
-    ys, xs = np.where(bad)
-    ax.scatter(xs, ys, s=1.5, marker="s", color="black", alpha=0.35, linewidths=0)
-    _block_grid(ax, data, m_edges, p_edges)
-    _axis_labels(ax, data, R.shape)
-
-    share = float(bad.mean())
-    ax.set_title(f"Jacobian noise-to-signal $\\sigma/|\\varepsilon|$ — "
-                 f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"\n{100 * share:.1f}{pct()} of entries at or above {noise_max:g} "
-                 "(black squares) — not readable", pad=28)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
-                        extend="max")
-    cbar.set_label(r"$\sigma_{jk} / |\varepsilon_{jk}|$ across the Jacobian replications"
-                   f"   (threshold {noise_max:g})")
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return ax
-
-
-def plot_jacobian_triptych(data, kind="elasticity", noise_max=NOISE_MAX,
-                           figsize=(15, 11), out_folder=None, tag="jacobian",
-                           show=True):
-    """
-    The three panels together: the elasticity Jacobian, the noise-to-signal map, and the
-    Jacobian purged of the entries the map rejects. Saves `<tag>`, `<tag>_noise` and
-    `<tag>_purged` under `out_folder` when one is given.
-    """
-    def _p(name):
-        return None if out_folder is None else \
-            f"{out_folder}/{name}_{data['industry']}_mu{data['mu']}.pdf"
-
-    mask = jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
-    axes = [plot_jacobian_full(data, kind=kind, figsize=figsize, save_to=_p(tag))]
-    if show:
-        plt.show()
-    axes.append(plot_jacobian_noise(data, kind=kind, noise_max=noise_max,
-                                    figsize=figsize, save_to=_p(tag + "_noise")))
-    if show:
-        plt.show()
-    axes.append(plot_jacobian_full(data, kind=kind, figsize=figsize, mask=mask,
-                                   save_to=_p(tag + "_purged")))
-    if show:
-        plt.show()
-    return axes
-
-
-def plot_jacobian_blocks(data, kind="elasticity", coarse=True, ncols=3,
-                         figsize=(18, 12), mask=None, save_to=None):
-    """One panel per MOMENT block, columns spanning all parameters."""
-    J = np.asarray(jacobian_matrix(data, kind), float)
-    cmap, norm = _binned_cmap(JACOBIAN_BOUNDARIES, coarse=coarse)
-    cmap = cmap.copy()
-    cmap.set_bad("white")
-    if mask is not None:
-        J = np.ma.masked_where(np.asarray(mask, bool), J)
-    m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-    blocks = np.split(J, m_edges[1:-1], axis=0)
-    names = data["moment_block_names"]
-
-    nrows = int(np.ceil(len(names) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, constrained_layout=True)
-    axes = np.atleast_1d(axes).ravel()
-
-    for i, (name, block) in enumerate(zip(names, blocks)):
-        ax = axes[i]
-        im = ax.matshow(block, cmap=cmap, norm=norm, aspect="auto")
-        for e in p_edges[1:-1]:
-            ax.axvline(e - 0.5, color="black", linewidth=1.2, alpha=0.5)
-
-        cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.12)
-        cbar.set_label("Elasticity", fontsize=fs(9))
-        ax.set_title(f"{name}\n({block.shape[0]}x{block.shape[1]})",
-                     fontsize=fs(13), fontweight="bold", pad=12)
-        ax.set_xlabel("Parameter", fontsize=fs(10))
-
-        xs = np.arange(block.shape[1])[::_tick_every(block.shape[1], 20)]
-        ax.set_xticks(xs)
-        ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=fs(7))
-        ax.xaxis.set_ticks_position("bottom")
-
-        row_labels = np.array(data["moment_labels"][m_edges[i]:m_edges[i + 1]])
-        ys = np.arange(block.shape[0])[::_tick_every(block.shape[0], 20)]
-        ax.set_yticks(ys)
-        ax.set_yticklabels(row_labels[ys], fontsize=fs(7))
-
-    for ax in axes[len(names):]:
-        ax.axis("off")
-    fig.suptitle(f"Jacobian by moment block — {data['industry']}, "
-                 rf"$\hat{{\mu}}_{data['mu']}$", fontsize=fs(18), fontweight="bold")
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return axes[:len(names)]
-
-
-def jacobian_block_summary(data, kind="elasticity", noise_max=NOISE_MAX):
-    """
-    Per (moment block x parameter block): the mean |elasticity|, and the share of the
-    block's entries that are readable at all (noise-to-signal below `noise_max`).
-
-    A large mean elasticity in a block whose readable share is low is a statement about
-    the simulation, not about the model.
-    """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    try:
-        ok = ~jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
-    except FileNotFoundError:
-        ok = np.ones_like(E, dtype=bool)
-    m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-    rows = []
-    for i, mname in enumerate(data["moment_block_names"]):
-        for j, pname in enumerate(data["param_block_names"]):
-            sl = (slice(m_edges[i], m_edges[i + 1]), slice(p_edges[j], p_edges[j + 1]))
-            sub, sub_ok = E[sl], ok[sl]
-            rows.append({"moment_block": mname, "param_block": pname,
-                         "mean_abs": sub.mean() if sub.size else np.nan,
-                         "max_abs": sub.max() if sub.size else np.nan,
-                         "share_readable": sub_ok.mean() if sub.size else np.nan})
-    df = pd.DataFrame(rows)
-    return df.set_index(["moment_block", "param_block"]).unstack("param_block") \
-             .reindex(index=data["moment_block_names"]) \
-             .reindex(columns=data["param_block_names"], level=1)
-
-
-# ============================================================================
-# Variance-covariance of the moments
-# ============================================================================
-
-# The three moment covariance matrices, and the correlations they imply.
-
-def _gb_edges(data):
-    """
-    Block edges of the inference subsystem and their names.
-
-    The three blocks are stacked in a fixed order — extensive-margin coefficients,
-    sourcing shares, zero-supplier shares — on both axes of every Sigma / Omega / W on
-    disk. That order is the "beta, gamma, G" ordering invariant of CLAUDE.md.
-    """
-    n_beta = data["n_coef"]
-    n_gam = int(np.asarray(data["moment_block_sizes"])[4])
-    sizes = [n_beta, n_gam] + ([data["S"]] if data["granular"] else [])
-    names = ["reg_coef", "gamma", "G0"][:len(sizes)]
-    return np.cumsum([0] + sizes), names
-
-
-def _cov_panel(ax, M, data, title, mode="cov", pct=95):
-    """One matrix panel with the block grid drawn on; `mode` is "cov" or "corr"."""
+def plot_world_weight(data, figsize=(13, 5.5), save_to=None):
+    """Omega_world = Cov(beta_world - beta_sim) as a covariance and as a correlation."""
     from matplotlib.colors import TwoSlopeNorm
-    edges, names = _gb_edges(data)
-    if mode == "corr":
-        d = np.sqrt(np.clip(np.diag(M), 1e-300, None))
-        M = M / np.outer(d, d)
-        im = ax.matshow(M, cmap="RdBu_r", vmin=-1, vmax=1)
-    else:
-        v = np.percentile(np.abs(M), pct)
-        v = v if v > 0 else (np.abs(M).max() or 1.0)
-        im = ax.matshow(M, cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v))
-    for e in edges[1:-1]:
-        ax.axhline(e - 0.5, color="black", linewidth=0.8, alpha=0.6)
-        ax.axvline(e - 0.5, color="black", linewidth=0.8, alpha=0.6)
-    ticks = (edges[:-1] + edges[1:]) / 2 - 0.5
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(names, fontsize=fs(9))
-    ax.set_yticks(ticks)
-    ax.set_yticklabels(names, fontsize=fs(9), rotation=90, va="center")
-    ax.set_title(title, pad=14)
-    return im
-
-
-def _cov_matrices(data):
-    return [("$\\Sigma_{sim}$ (simulation noise)", data.get("Sigma_sim")),
-            ("$\\Sigma_{data}$ (bootstrap)", data.get("Sigma_data")),
-            ("$\\Omega = \\Sigma_{data} + \\Sigma_{sim}$", data.get("Omega"))]
-
-
-def plot_variance_covariance(data, figsize=(16, 5.5), pct=95, save_to=None):
-    """Sigma_sim, Sigma_data and Omega side by side, each on its own diverging scale."""
-    mats = _cov_matrices(data)
-    if all(m is None for _, m in mats):
-        raise FileNotFoundError(f"no Sigma_*/Omega in {data['folder']}/step2/ — "
-                                "build_step3_weight_matrix writes them in Step 2.")
-    fig, axes = plt.subplots(1, len(mats), figsize=figsize)
-    for ax, (title, M) in zip(np.atleast_1d(axes), mats):
-        if M is None:
-            ax.axis("off")
-            ax.set_title(title + "\n(absent)")
-            continue
-        im = _cov_panel(ax, M, data, title, mode="cov", pct=pct)
+    Om = _need(data, "world_weight", "step2/world_residuals.npz")["Omega"]
+    d = np.sqrt(np.clip(np.diag(Om), 1e-300, None))
+    labels = reg_coef_labels(data)          # math labels: safe under usetex
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    v = np.abs(Om).max() or 1.0
+    for ax, M, title, kw in (
+            (axes[0], Om, r"$\tilde\Omega = \mathrm{Cov}(\hat\beta_b - \beta^{sim}_b)$",
+             {"norm": TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v)}),
+            (axes[1], Om / np.outer(d, d), "correlation", {"vmin": -1, "vmax": 1})):
+        im = ax.matshow(M, cmap="RdBu_r", **kw)
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=90, fontsize=fs(9))
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(labels, fontsize=fs(9))
+        ax.set_title(title, pad=14)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.suptitle(f"Moment variance-covariance — {data['industry']} "
-                 "(extensive margin, sourcing shares, zero-supplier shares)", fontsize=fs(14))
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1192,320 +896,124 @@ def plot_variance_covariance(data, figsize=(16, 5.5), pct=95, save_to=None):
     return axes
 
 
-def plot_moment_correlation(data, figsize=(16, 5.5), save_to=None):
-    """
-    The same three matrices as CORRELATIONS, on a common [-1, 1] scale.
-
-    Rescaling by the diagonal removes the magnitude — which the covariance figure is
-    there to show — and leaves the dependence structure, so the three are comparable:
-    whether the bootstrap error of the sourcing shares is correlated across areas,
-    whether the simulator's noise is (it is, through the shared draws), and which of the
-    two Omega inherits its structure from.
-    """
-    mats = _cov_matrices(data)
-    if all(m is None for _, m in mats):
-        raise FileNotFoundError(f"no Sigma_*/Omega in {data['folder']}/step2/")
-    fig, axes = plt.subplots(1, len(mats), figsize=figsize)
-    for ax, (title, M) in zip(np.atleast_1d(axes), mats):
-        if M is None:
-            ax.axis("off")
-            ax.set_title(title + "\n(absent)")
-            continue
-        im = _cov_panel(ax, M, data, title, mode="corr")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.suptitle(f"Moment CORRELATION — {data['industry']} "
-                 "(same three matrices, rescaled by their own diagonal)", fontsize=fs(14))
-    fig.tight_layout()
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return axes
-
-
-def variance_covariance_summary(data):
-    """
-    How much of the weighting is simulation noise, and how well conditioned is Omega?
-
-    `trace(Sigma_sim)/trace(Sigma_data)` is the share of total moment variance that comes
-    from the simulation rather than the data — raise `--n_rho_inf` if it is not small.
-    `mean_abs_offdiag_corr` is the average absolute off-diagonal correlation, the same
-    thing the correlation figure shows, as one number per matrix. The condition numbers
-    say whether inverting Omega to build W is safe.
-    """
-    out = {}
-    for name in ("Sigma_data", "Sigma_sim", "Omega"):
-        M = data.get(name)
-        if M is None:
-            continue
-        ev = np.linalg.eigvalsh((M + M.T) / 2)
-        d = np.sqrt(np.clip(np.diag(M), 1e-300, None))
-        C = M / np.outer(d, d)
-        off = ~np.eye(C.shape[0], dtype=bool)
-        out[name] = {"trace": float(np.trace(M)),
-                     "eig_min": float(ev.min()), "eig_max": float(ev.max()),
-                     "cond": float(ev.max() / ev.min()) if ev.min() > 0 else np.inf,
-                     "mean_abs_offdiag_corr": float(np.abs(C[off]).mean())}
-    if "Sigma_sim" in out and "Sigma_data" in out and out["Sigma_data"]["trace"] != 0:
-        out["Sigma_sim"]["share_of_data_trace"] = \
-            out["Sigma_sim"]["trace"] / out["Sigma_data"]["trace"]
-    return pd.DataFrame(out).T
-
-
-# ============================================================================
-# Identification / sensitivity
-# ============================================================================
-
-# Identification / sensitivity — the elasticity Jacobian read as the experiment
-# "move one parameter, watch the moments", with two thresholds: is there a channel
-# (IDENT_THRESHOLD), and is it measured well enough to see (NOISE_MAX).
-#
-# The variety counts N_s are part of the parameter axis: the Julia side appends
-# dm/dN_s to the saved Jacobian, so no re-attachment is done here.
-
-IDENT_THRESHOLD = 0.01
-
-
-def _blocks_2d(data, M):
-    """M split into (moment block x parameter block) sub-matrices."""
-    m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-    return {(i, j): M[m_edges[i]:m_edges[i + 1], p_edges[j]:p_edges[j + 1]]
-            for i in range(len(data["moment_block_names"]))
-            for j in range(len(data["param_block_names"]))}
-
-
-def _readable(data, kind="elasticity", noise_max=NOISE_MAX):
-    """Boolean matrix: entries whose elasticity is precise enough to be interpreted."""
-    if noise_max is None:
-        return np.ones_like(np.asarray(jacobian_matrix(data, kind), float), dtype=bool)
-    try:
-        return ~jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
-    except FileNotFoundError:
-        return np.ones_like(np.asarray(jacobian_matrix(data, kind), float), dtype=bool)
-
-
-def identification_summary(data, threshold=IDENT_THRESHOLD, kind="elasticity",
-                           noise_max=NOISE_MAX):
-    """
-    Per (moment block x parameter block), four numbers that answer four questions:
-
-      share_above       is there a channel?  share of entries with |elasticity| >= threshold
-      share_readable    can it be seen?      share whose sigma/|elasticity| < noise_max
-      share_live        both at once         above the threshold AND readable
-      share_exact_zero  is it absent by construction?  share of entries exactly 0
-
-    The last two are the pair worth reading together: an exact zero is the model saying
-    the channel does not exist (the N_s columns outside block 6, asserted in Julia),
-    whereas an unreadable entry says nothing at all.
-    """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+def _quantile_table(names, M, est):
     rows = []
-    for (i, j), sub in _blocks_2d(data, E).items():
-        sub_ok = _blocks_2d(data, ok)[(i, j)]
-        rows.append({
-            "moment_block": data["moment_block_names"][i],
-            "param_block": data["param_block_names"][j],
-            "share_above": float((sub >= threshold).mean()) if sub.size else np.nan,
-            "share_readable": float(sub_ok.mean()) if sub.size else np.nan,
-            "share_live": float(((sub >= threshold) & sub_ok).mean()) if sub.size else np.nan,
-            "max_abs": float(sub.max()) if sub.size else np.nan,
-            "mean_abs": float(sub.mean()) if sub.size else np.nan,
-            "share_exact_zero": float((sub == 0).mean()) if sub.size else np.nan,
-        })
-    df = pd.DataFrame(rows)
-    return df.set_index(["moment_block", "param_block"]).unstack("param_block") \
-             .reindex(index=data["moment_block_names"]) \
-             .reindex(columns=data["param_block_names"], level=1)
+    for j, name in enumerate(names):
+        x = M[:, j][np.isfinite(M[:, j])]
+        if x.size == 0:
+            continue
+        q = np.quantile(x, [0.025, 0.975])
+        rows.append({"parameter": name, "estimate": est[j], "mean": x.mean(),
+                     "bias": x.mean() - est[j], "sd": x.std(ddof=1) if x.size > 1 else np.nan,
+                     "q2.5": q[0], "q97.5": q[1], "n_worlds": x.size})
+    return pd.DataFrame(rows).set_index("parameter")
 
 
-def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
-                            noise_max=NOISE_MAX, figsize=(9, 6), save_to=None):
+def world_param_table(data, prefix=None, log_T=False):
     """
-    One cell per (moment block x parameter block), coloured by the share of entries that
-    are BOTH above the threshold and readable, annotated with that share, the block's
-    max |elasticity|, and — when it is not 100% — the share of the block that is readable
-    at all. A near-diagonal pattern down the (Trade cost, Comparative advantage, Variety
-    count) columns is the identification claim, read off directly.
+    The fake-world distribution of every re-estimated parameter, Julia's report as a frame.
+
+    `prefix` keeps the labels that start with it (e.g. "alpha", "kappa", "N_s", "T[");
+    `log_T=True` reports T in logs. An area that wins nothing in a world has T = NaN there
+    and is left out of that column's quantiles (`n_worlds` says how many remain).
     """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
-    m_names, p_names = data["moment_block_names"], data["param_block_names"]
-    blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
-    n_m, n_p = len(m_names), len(p_names)
+    wi = _need(data, "world_inference", "inference_world/world_inference_draws.npz")
+    labels, P, est = wi["labels"], wi["params"], wi["estimate"].ravel()
+    keep = [j for j, l in enumerate(labels) if prefix is None
+            or any(l.startswith(p) for p in np.atleast_1d(prefix))]
+    names = [labels[j] for j in keep]
+    M, e = P[:, keep], est[keep]
+    if log_T:
+        isT = np.array([n.startswith("T[") for n in names])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            M[:, isT], e[isT] = np.log(M[:, isT]), np.log(e[isT])
+        names = [f"log {n}" if n.startswith("T[") else n for n in names]
+    return _quantile_table(names, M, e)
 
-    def _grid(fn):
-        return np.array([[fn(blocks[(i, j)], blocks_ok[(i, j)])
-                          if blocks[(i, j)].size else np.nan
-                          for j in range(n_p)] for i in range(n_m)])
 
-    live = _grid(lambda s, o: ((s >= threshold) & o).mean())
-    mx = _grid(lambda s, o: s.max())
-    read = _grid(lambda s, o: o.mean())
+def world_dispersion_table(data):
+    """Within-sector sd of log T across areas: the comparative-advantage spread, with CIs."""
+    wi = _need(data, "world_inference", "inference_world/world_inference_draws.npz")
+    D = np.atleast_2d(wi["disp_logT"])
+    # the estimate's own dispersion, from its T columns (reference areas included)
+    labels, est = wi["labels"], wi["estimate"].ravel()
+    d_est = []
+    for s in data["sector_names"]:
+        v = np.array([est[j] for j, l in enumerate(labels) if l.startswith(f"T[{s}-")])
+        v = np.log(v[np.isfinite(v) & (v > 0)])
+        d_est.append(v.std(ddof=1) if v.size > 1 else np.nan)
+    return _quantile_table([f"sd log T [{s}]" for s in data["sector_names"]], D,
+                           np.asarray(d_est))
 
-    fig, ax = plt.subplots(figsize=figsize)
-    im = ax.matshow(live, cmap="Blues", vmin=0, vmax=1, aspect="auto")
-    for i in range(n_m):
-        for j in range(n_p):
-            if not np.isfinite(live[i, j]):
-                continue
-            txt = f"{100 * live[i, j]:.0f}{pct()}\nmax {mx[i, j]:.3g}"
-            if read[i, j] < 0.999:
-                txt += f"\n({100 * read[i, j]:.0f}{pct()} readable)"
-            ax.text(j, i, txt, ha="center", va="center", fontsize=fs(8),
-                    color="white" if live[i, j] > 0.55 else "black")
-    ax.set_xticks(range(n_p))
-    ax.set_xticklabels(p_names, rotation=30, ha="left", fontsize=fs(10))
-    ax.xaxis.set_ticks_position("top")
-    ax.set_yticks(range(n_m))
-    ax.set_yticklabels(m_names, fontsize=fs(10))
-    ax.set_xlabel("Parameter block")
-    ax.set_ylabel("Moment block")
-    ax.set_title(f"Identification map — {data['industry']}, "
-                 rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"\nshare of $|\\varepsilon| \\geq {threshold:g}$ AND "
-                 f"$\\sigma/|\\varepsilon| < {noise_max:g}$", pad=52)
-    cbar = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.03)
-    cbar.set_label("share of entries that are both large and measured")
+
+def world_counterfactual_table(data):
+    """
+    The closed-form counterfactuals of `world_inference`, levels and changes, with CIs.
+
+    Regimes: the estimate, equal comparative advantage (every non-empty T set to one) and
+    no trade cost (tau = 1); statistics: mean and median-buyer sourcing distance (km) and
+    local shares within 100 / 200 km. The change rows are regime minus estimate, world by
+    world, so their interval carries the covariance between the two.
+    """
+    wi = _need(data, "world_inference", "inference_world/world_inference_draws.npz")
+    C, c_est, lab = np.atleast_2d(wi["counterfactuals"]), wi["counterfactuals_est"].ravel(), \
+        wi["cf_labels"]
+    ns = len(WORLD_CF_STATS)
+    base, base_e = C[:, :ns], c_est[:ns]
+    dC = np.hstack([C[:, k:k + ns] - base for k in range(ns, C.shape[1], ns)])
+    d_e = np.concatenate([c_est[k:k + ns] - base_e for k in range(ns, C.shape[1], ns)])
+    return pd.concat([_quantile_table(lab, C, c_est),
+                      _quantile_table([f"Δ {l}" for l in lab[ns:]], dC, d_e)])
+
+
+def plot_world_ci(data, group="elasticities", ax=None, save_to=None):
+    """
+    Forest plot: each parameter's estimate with its 95% fake-world interval.
+
+    group = "elasticities"  the trade-cost elasticities alpha_k and the density
+                            elasticity kappa (one axis: both are elasticities);
+            "N_s"           the variety counts N_hat_s, by sector;
+            "disp_logT"     the within-sector sd of log T, by sector.
+    The diamond is the estimate, the bar the [2.5%, 97.5%] quantiles, the open circle the
+    mean across worlds — a mean far from the marker is the estimator's bias at theta_hat.
+    """
+    if group == "elasticities":
+        tab = world_param_table(data, prefix=("alpha", "kappa"))
+        ticks = [(r"$\kappa$" if n == "kappa" else
+                  (r"$\alpha$" if data["n_tau"] == 1 else
+                   rf"$\alpha_{{{n[n.index('[') + 1:-1]}}}$")) for n in tab.index]
+        ylabel = "Elasticity"
+    elif group == "N_s":
+        tab = world_param_table(data, prefix="N_s")
+        ticks, ylabel = data["sector_names"], r"$\hat N_s$"
+    elif group == "disp_logT":
+        tab = world_dispersion_table(data)
+        ticks, ylabel = data["sector_names"], r"sd of $\log T_{as}$ within sector"
+    else:
+        raise ValueError(f"unknown group {group!r}")
+    fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
+    x = np.arange(len(tab))
+    lo, hi = tab["q2.5"].values, tab["q97.5"].values
+    # the interval is drawn on its own: with a biased estimator the estimate can sit
+    # outside its own percentile interval, which an offset errorbar cannot show
+    ax.errorbar(x, (lo + hi) / 2, yerr=(hi - lo) / 2, fmt="none", ecolor=sim_color,
+                capsize=3, label=r"95$\%$ interval across worlds")
+    ax.plot(x, tab["estimate"].values, "D", color=sim_color, ms=6, mec="black", mew=0.5,
+            linestyle="none", label="Estimate")
+    ax.plot(x, tab["mean"].values, "o", mfc="none", mec="black", ms=6, linestyle="none",
+            label="Mean across worlds")
+    ax.set_xticks(x)
+    ax.set_xticklabels(ticks, rotation=45 if group != "elasticities" else 0,
+                       ha="right" if group != "elasticities" else "center")
+    ax.set_xlim(-0.6, len(tab) - 0.4)
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="y", linestyle="dashed", alpha=0.5)
+    ax.legend(frameon=False)
+    _despine(ax)
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
+        ax.figure.savefig(save_to, format="pdf", bbox_inches="tight")
     return ax
-
-
-def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity",
-                              noise_max=NOISE_MAX, figsize=(15, 11), save_to=None,
-                              sector_block="Regional sourcing shares"):
-    """
-    The whole elasticity Jacobian with two kinds of entry removed: those below the
-    threshold (grey — a channel too small to matter) and those drowned in simulation
-    noise (white — nothing was measured). What is left is the set of channels through
-    which a parameter can actually be identified, on a symmetric log colour scale so
-    three orders of magnitude of live channel stay distinguishable.
-
-    The margins carry only the block names (top and right); the left axis names the
-    sectors of `sector_block`, separated by a thin rule, so a row band can be attributed
-    to an industry without the figure listing every commuting zone.
-    """
-    from matplotlib.colors import SymLogNorm
-
-    E = np.asarray(jacobian_matrix(data, kind), float)
-    A = np.abs(E)
-    ok = _readable(data, kind, noise_max)
-    vmax = A[ok].max() if ok.any() and A[ok].max() > 0 else 1.0
-
-    cmap = plt.get_cmap("RdBu_r").copy()
-    cmap.set_bad("#f2f2f2")                     # below threshold
-    small = np.ma.masked_where(A < threshold, E)
-    M = np.ma.masked_where(~ok, small)          # unreadable painted white on top
-    m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.set_facecolor("white")
-    im = ax.matshow(M, cmap=cmap, aspect="auto",
-                    norm=SymLogNorm(linthresh=threshold, vmin=-vmax, vmax=vmax, base=10))
-    # the noise-rejected cells, drawn white over the grey "below threshold" background
-    ys, xs = np.where(~ok)
-    ax.scatter(xs, ys, s=2.0, marker="s", color="white", linewidths=0)
-    _block_grid(ax, data, m_edges, p_edges)
-    # No per-moment / per-parameter tick labels: on a matrix this size the individual
-    # (sector, area) names are unreadable and they crowd out the only labels that are
-    # actually read, the block names on the top and right margins (drawn by
-    # `_block_grid`). The left margin instead carries the sector bands of the regional
-    # sourcing block, which is the one place the row order has content the eye can use.
-    ax.set_xticks([])
-    ax.xaxis.set_ticks_position("bottom")
-    _sector_axis(ax, data, sector_block)
-    ax.set_xlabel("Parameter")
-    ax.set_ylabel("Sector (regional sourcing shares)")
-
-    kept = float(((A >= threshold) & ok).mean())
-    ax.set_title(f"Elasticity Jacobian, $|\\varepsilon| \\geq {threshold:g}$ and "
-                 f"$\\sigma/|\\varepsilon| < {noise_max:g}$ — "
-                 f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"   ({100 * kept:.1f}{pct()} of {A.size} entries shown)", pad=28)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22)
-    cbar.set_label(r"$\varepsilon = \partial \log m / \partial \log \theta$"
-                   "   (symmetric log; grey = below threshold, white = too noisy)")
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return ax
-
-
-def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative advantage",
-                                                  "Variety count"),
-                              threshold=IDENT_THRESHOLD, kind="elasticity",
-                              noise_max=NOISE_MAX, stat="max", figsize=(11, 5),
-                              save_to=None):
-    """
-    One panel per channel: the largest READABLE |elasticity| that channel produces in
-    each moment block, on a log axis, with the threshold drawn in.
-
-    This is the identification paragraph in one picture — alpha tall on the extensive
-    margin, T tall on the sourcing shares, N_s tall on the zero-supplier share and
-    EXACTLY zero (no bar, marked "0") everywhere else. Entries rejected for noise are
-    excluded from the reduction, so a bar cannot be produced by a single unmeasurable
-    outlier; a block with nothing readable left is marked "n/m".
-    """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
-    m_names, p_names = data["moment_block_names"], data["param_block_names"]
-    blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
-    reduce = {"max": np.max, "mean": np.mean}[stat]
-    stat_tex = {"max": r"\max", "mean": r"\mathrm{mean}"}[stat]
-
-    wanted = [p for p in param_blocks if p in p_names]
-    missing = [p for p in param_blocks if p not in p_names]
-    if missing:
-        raise ValueError(f"parameter block(s) {missing} absent — the Jacobian has "
-                         f"{p_names}. Under --granular=true the run must have written "
-                         "the variety-count columns (compute_jacobian append_N_s).")
-
-    vals, unmeasured = {}, {}
-    for p in wanted:
-        j = p_names.index(p)
-        v, nm = [], []
-        for i in range(len(m_names)):
-            sub, sub_ok = blocks[(i, j)], blocks_ok[(i, j)]
-            if sub.size == 0 or not sub_ok.any():
-                v.append(0.0)
-                nm.append(sub.size > 0)
-            else:
-                v.append(float(reduce(sub[sub_ok])))
-                nm.append(False)
-        vals[p], unmeasured[p] = np.array(v), np.array(nm)
-
-    pos = np.concatenate([v[v > 0] for v in vals.values()] or [np.array([threshold])])
-    bottom = (pos.min() / 4) if pos.size else threshold / 10
-
-    fig, axes = plt.subplots(1, len(wanted), figsize=figsize, sharey=True)
-    axes = np.atleast_1d(axes)
-    x = np.arange(len(m_names))
-    for ax, pname in zip(axes, wanted):
-        v_p, nm_p = vals[pname], unmeasured[pname]
-        ax.bar(x, v_p, color=[sim_color if v >= threshold else "0.75" for v in v_p])
-        ax.set_yscale("log")
-        ax.set_ylim(bottom=bottom)
-        ax.axhline(threshold, color=reference_color, linestyle="--", linewidth=1.2)
-        for i, (v, nm) in enumerate(zip(v_p, nm_p)):
-            if v == 0:
-                ax.text(i, bottom * 1.35, "n/m" if nm else "0", ha="center", va="bottom",
-                        fontsize=fs(9), color=reference_color, fontweight="bold")
-        ax.set_xticks(x)
-        ax.set_xticklabels(m_names, rotation=45, ha="right", fontsize=fs(9))
-        ax.set_title(pname, fontsize=fs(13), fontweight="bold")
-        _despine(ax)
-    axes[0].set_ylabel(rf"${stat_tex}_{{j,k}} |\varepsilon_{{jk}}|$ in block (readable only)")
-    fig.suptitle(f"Where each channel acts — {data['industry']}, "
-                 rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"   (dashed: threshold {threshold:g}; \"0\" = exactly zero, "
-                 "\"n/m\" = nothing measured)", fontsize=fs(13))
-    fig.tight_layout()
-    if save_to:
-        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        fig.savefig(save_to, bbox_inches="tight")
-    return axes
-
 
 # ============================================================================
 # Untargeted moment -- the distance elasticity of spatial comovement

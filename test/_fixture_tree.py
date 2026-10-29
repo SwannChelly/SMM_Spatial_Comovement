@@ -1,9 +1,11 @@
 """A minimal but REAL run tree, written to a temporary directory.
 
 It carries exactly the files `parts=("core", "geography")` reads and nothing else -- no
-`best_simulated_moments.npy`, no `Sigma_*`, no `jacobian_*`, no `suppliers.parquet` --
+`best_simulated_moments.npy`, no fake-world artefacts, no `suppliers.parquet` --
 which is what makes the specialised loader and the parquet-free reporting path testable
-without a run.
+without a run. It is a tree in the layout BEFORE T_ls = T_a n_ls^kappa (no kappa in
+best_params, `kappa=False` in KW): the economy code (`extended_parameters`,
+`simulate_economy`) does not read kappa yet.
 """
 import os, tempfile
 import numpy as np
@@ -67,9 +69,9 @@ def build(seed=11):
     np.save(f"{run}/step3/post_hoc_N_hat.npy", np.array([4, 7, 5]))
 
     KW = dict(base=TMP, profile_T=True, ca_level="aa", granular=True,
-              relax_n_lo=False, optimizer="pso")
+              relax_n_lo=False, optimizer="pso", kappa=False)
     return TMP, KW
 
 
 KW_TEMPLATE = dict(profile_T=True, ca_level="aa", granular=True,
-                   relax_n_lo=False, optimizer="pso")
+                   relax_n_lo=False, optimizer="pso", kappa=False)
