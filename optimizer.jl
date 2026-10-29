@@ -8,6 +8,9 @@
 #   "productivity"                                  A
 #   "alpha"                                         [α ; κ]
 #   "agg_labor_share_tech", "agg_industry_share_tech"  Ω^L, Ω^s
+#
+# Under PROFILE_HEAD the head (Ω^L, Ω^s, A) is profiled jointly with T, so every search
+# — the fresh start included — runs over [α ; κ] only.
 
 using Distributed
 using Random
@@ -213,6 +216,13 @@ function train_stage(n_particles::Int, max_iter::Int;
         best_params_prev = nothing
         var_list = String[]
         warm_start = warm_start_override === nothing ? nothing : warm_start_override[1:nhead]
+        # PROFILE_HEAD: the head prefix is a placeholder (profiling overwrites it), so
+        # only [α ; κ] are searched.
+        n_fixed = PROFILE_HEAD ? first(alpha_range()) - 1 : 0
+        head_prefix = PROFILE_HEAD ? (warm_start === nothing ? lb[1:n_fixed] : warm_start[1:n_fixed]) :
+                                     Float64[]
+        lb = lb[(n_fixed + 1):end]; ub = ub[(n_fixed + 1):end]
+        warm_start === nothing || (warm_start = warm_start[(n_fixed + 1):end])
     else
         best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:, 1]
         Ω_L, Ω_s, A_r, α, _ = unpack_params(best_params_prev)
@@ -254,7 +264,7 @@ function train_stage(n_particles::Int, max_iter::Int;
     # α block sorted (see `sorted_box`).
     function build_x_full(x_stage)
         if best_params_prev === nothing
-            x_full = vcat(x_stage, T_PLACEHOLDER)
+            x_full = vcat(head_prefix, x_stage, T_PLACEHOLDER)
         else
             x_full = copy(best_params_prev)
             pos = 1
@@ -287,7 +297,8 @@ function train_stage(n_particles::Int, max_iter::Int;
     end
 
     println("\n" * "="^60)
-    println("PSO stage: ", isempty(var_list) ? "all head parameters" : join(var_list, ", "),
+    println("PSO stage: ", isempty(var_list) ? (PROFILE_HEAD ? "alpha (head profiled)" : "all head parameters") :
+            join(var_list, ", "),
             " | particles $n_particles | iterations $max_iter | dimension $(length(lb))")
     println("="^60)
     best_x, best_fitness, history = parallel_pso_smm(objective, lb, ub;
@@ -307,7 +318,9 @@ end
 
 Step 1 (`gamma_beta_only = false`): a joint fit of the whole head, then `max_loop`
 block-coordinate loops (A, then [α ; κ], then Ω^L/Ω^s), with a radius annealed from
-0.3 to 0.9. Step 3 (`gamma_beta_only = true`): only [α ; κ], the rest fixed at θ̂_1,
+0.3 to 0.9. Under PROFILE_HEAD the fit and every loop are over [α ; κ] only, and the
+loss drops blocks 1–3 (`[4, 5, 6]`): at the profile the SIMULATED blocks 1–3 differ from
+their targets only by the Monte-Carlo error of the realised price indices. Step 3 (`gamma_beta_only = true`): only [α ; κ], the rest fixed at θ̂_1,
 on the inference moments (β → γ → G) with `weight_matrix = W_step3`.
 
 Every stage writes `<step>/<stage>/best_params.npy` (stage 0 = the initial fit,
@@ -331,7 +344,7 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
     # `loss_blocks` overrides: Step 3 uses [4] alone with the fake-world W (inference.jl),
     # γ and G being reproduced exactly by the T inversion and the N bisection.
     moment_blocks = loss_blocks !== nothing ? loss_blocks :
-                    moments_loss_gamma_beta ? [4, 5, 6] : nothing
+                    (moments_loss_gamma_beta || PROFILE_HEAD) ? [4, 5, 6] : nothing
     save_stage(folder, params) = (mkpath(folder);
         NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(params, :, 1)))
 
@@ -351,7 +364,7 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
     save_stage(joinpath(loop_base, "0"), best_params)
     generate_report(joinpath(loop_base, "0"), best_params; variable = "initial fit")
 
-    stage_vars = gamma_beta_only ? (["alpha"],) :
+    stage_vars = (gamma_beta_only || PROFILE_HEAD) ? (["alpha"],) :
         (["productivity"], ["alpha"], ["agg_labor_share_tech", "agg_industry_share_tech"])
     radius_start, radius_end = 0.3, 0.9
     for loop in 1:max_loop
