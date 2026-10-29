@@ -184,7 +184,7 @@ sorted_box(lo, hi) = (sort(lo), sort(hi))
                 radius, weight_matrix, warm_start_override, moment_blocks)
         -> (best_params, best_fitness, history)
 
-Fresh start (`last_stage_folder === nothing`): the whole head, boxed at ±20% of the
+Fresh start (`last_stage_folder === nothing`): the whole head, boxed at `HEAD_*_BOX` × the
 data-based starting values (α within `alpha_box` of its prior, κ in [KAPPA_LO, KAPPA_HI]).
 Continue stage: the listed variables only, in a box of relative radius `radius` around
 the incumbent (clamped to the same outer boxes); everything else fixed at the incumbent.
@@ -206,8 +206,10 @@ function train_stage(n_particles::Int, max_iter::Int;
         A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A ./= sum(A)
         a_lo, a_hi = sorted_box(alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)...)
-        lb = vcat(0.8 * agg_labor_share, 0.8 .* agg_industry_share, 0.8 .* A, a_lo, KAPPA_LO)
-        ub = vcat(1.2 * agg_labor_share, 1.2 .* agg_industry_share, 1.2 .* A, a_hi, KAPPA_HI)
+        lb = vcat(max(HEAD_OMEGA_L_BOX[1] * agg_labor_share, OMEGA_L_MIN),
+                  HEAD_OMEGA_S_BOX[1] .* agg_industry_share, HEAD_A_BOX[1] .* A, a_lo, KAPPA_LO)
+        ub = vcat(min(HEAD_OMEGA_L_BOX[2] * agg_labor_share, OMEGA_L_MAX),
+                  HEAD_OMEGA_S_BOX[2] .* agg_industry_share, HEAD_A_BOX[2] .* A, a_hi, KAPPA_HI)
         best_params_prev = nothing
         var_list = String[]
         warm_start = warm_start_override === nothing ? nothing : warm_start_override[1:nhead]

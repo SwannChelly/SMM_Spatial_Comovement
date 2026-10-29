@@ -521,6 +521,18 @@ end
 @everywhere const BOUND_HI  = 10
 @everywhere const ALPHA_MAX = 1.5
 
+# Step-1 cold-start box of the head [Ω^L | Ω^s | A], as multipliers of its starting
+# values (observed labour share, observed industry shares, analytical A inversion).
+# Those starts are not the structural values: with w ≡ 1 the labour share is
+# Ω_L/(Ω_L + (1−Ω_L)P_r^{1−λ}) and the sector share ∝ Ω_s (P_sr/P_r)^{1−ν}, so Ω^L, Ω^s
+# absorb the price level set by the T gauge and can sit far from the observed shares;
+# the former ±20% box could bind. Ω^L is also clamped to [OMEGA_L_MIN, OMEGA_L_MAX].
+@everywhere const HEAD_OMEGA_L_BOX = (0.25, 4.0)
+@everywhere const OMEGA_L_MIN      = 0.001
+@everywhere const OMEGA_L_MAX      = 0.95
+@everywhere const HEAD_OMEGA_S_BOX = (0.2, 5.0)
+@everywhere const HEAD_A_BOX       = (0.5, 2.0)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 12 — LABELS AND INFERENCE BOOKKEEPING
 # ═══════════════════════════════════════════════════════════════════════════
