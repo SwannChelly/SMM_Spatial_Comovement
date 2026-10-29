@@ -171,6 +171,14 @@ function alpha_box(anchor)
     return (min.(anchor .* BOUND_LO, 0.5 .* hi), hi)
 end
 
+# Binned α must be increasing (α_1 ≤ … ≤ α_K). The objective evaluates the α block
+# SORTED (`build_x_full`), so it is symmetric in the order of the α coordinates and the
+# returned θ is increasing. A sorted point stays in the box when the bounds are sorted
+# too: with lo and hi each increasing, the k-th order statistic of any x ∈ [lo, hi] lies
+# in [lo_k, hi_k]. Sorting the bounds keeps lo ≤ hi entrywise and is a no-op for an
+# increasing anchor, or for N_TAU == 1.
+sorted_box(lo, hi) = (sort(lo), sort(hi))
+
 """
     train_stage(n_particles, max_iter; init_alpha, variable_list, last_stage_folder,
                 radius, weight_matrix, warm_start_override, moment_blocks)
@@ -197,7 +205,7 @@ function train_stage(n_particles::Int, max_iter::Int;
     if last_stage_folder === nothing
         A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A ./= sum(A)
-        a_lo, a_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)
+        a_lo, a_hi = sorted_box(alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)...)
         lb = vcat(0.8 * agg_labor_share, 0.8 .* agg_industry_share, 0.8 .* A, a_lo, KAPPA_LO)
         ub = vcat(1.2 * agg_labor_share, 1.2 .* agg_industry_share, 1.2 .* A, a_hi, KAPPA_HI)
         best_params_prev = nothing
@@ -226,6 +234,7 @@ function train_stage(n_particles::Int, max_iter::Int;
                 lb_v = max.(αv .* (1 - radius), box_lo); ub_v = min.(αv .* (1 + radius), box_hi)
                 bad = lb_v .>= ub_v           # incumbent above the cap: reset to the full box
                 lb_v = ifelse.(bad, box_lo, lb_v); ub_v = ifelse.(bad, box_hi, ub_v)
+                lb_v, ub_v = sorted_box(lb_v, ub_v)
                 lb_v = vcat(lb_v, κlo); ub_v = vcat(ub_v, κhi)
             else
                 lb_v = val .* radius; ub_v = val ./ radius
@@ -239,17 +248,22 @@ function train_stage(n_particles::Int, max_iter::Int;
         @assert length(warm_start) == length(lb)
     end
 
-    # Stage vector → full level vector (T block stale; profiling replaces it).
+    # Stage vector → full level vector (T block stale; profiling replaces it), with the
+    # α block sorted (see `sorted_box`).
     function build_x_full(x_stage)
-        best_params_prev === nothing && return vcat(x_stage, T_PLACEHOLDER)
-        x_full = copy(best_params_prev)
-        pos = 1
-        for v in var_list
-            len = length(params_dict[Symbol(v)])
-            st = param_start(Symbol(v))
-            x_full[st:(st + len - 1)] = x_stage[pos:(pos + len - 1)]
-            pos += len
+        if best_params_prev === nothing
+            x_full = vcat(x_stage, T_PLACEHOLDER)
+        else
+            x_full = copy(best_params_prev)
+            pos = 1
+            for v in var_list
+                len = length(params_dict[Symbol(v)])
+                st = param_start(Symbol(v))
+                x_full[st:(st + len - 1)] = x_stage[pos:(pos + len - 1)]
+                pos += len
+            end
         end
+        sort!(view(x_full, alpha_range()))
         return x_full
     end
 

@@ -472,8 +472,8 @@ end
 # closed at the largest distance to the nearest downstream region (the regression's
 # distance). Centres d̄_0 … d̄_K are the knots of build_tau. Starting values from the
 # data: ln τ_0 = 0, ln τ_b = −β_b/θ, α_k = Δ ln τ / Δ ln d̄ between successive centres;
-# a non-positive slope (β rising there) takes the previous segment's value, the first
-# segment's floor being the scalar prior α₀ = −β_d/θ.
+# a slope below the previous segment's takes the previous value (α_k increasing), the
+# first segment's floor being the scalar prior α₀ = −β_d/θ when its slope is non-positive.
 _tau_log_knots  = Float64[]
 _alpha_bin_init = Float64[]
 if n_tau > 1
@@ -487,9 +487,11 @@ if n_tau > 1
     _tau_log_knots = log.(_dbar)
     _ln_tau = vcat(0.0, -_bd ./ theta)
     _slope  = diff(_ln_tau) ./ diff(_tau_log_knots)
+    # α_k must be increasing (ln τ convex in ln d): a slope below the previous segment's
+    # takes the previous value, so the starting values are a running maximum.
     let prev = P_alpha
-        for s_k in _slope
-            prev = s_k > 0 ? s_k : prev
+        for (k, s_k) in enumerate(_slope)
+            prev = k == 1 ? (s_k > 0 ? s_k : prev) : max(s_k, prev)
             push!(_alpha_bin_init, prev)
         end
     end
@@ -497,7 +499,7 @@ if n_tau > 1
     for k in 1:n_tau
         @printf("   segment %3.0f → %5.0f km: Δln τ = %7.4f  slope %7.4f  α_k init %6.4f%s\n",
                 _dbar[k], _dbar[k + 1], _ln_tau[k + 1] - _ln_tau[k], _slope[k], _alpha_bin_init[k],
-                _slope[k] > 0 ? "" : "  (floor)")
+                _alpha_bin_init[k] == _slope[k] ? "" : "  (floor)")
     end
     any(_alpha_bin_init .> 1.5) && @warn "an α_k starting value exceeds ALPHA_MAX = 1.5; the search box caps it"
 end
