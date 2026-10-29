@@ -679,8 +679,18 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     B = (markup / price_index)^(epsilon - 1) * 1.0 / price_index
     y_r = zeros(R)
     y_r[active] = c_tilde_r[active].^(epsilon - 1) .* delta_r[active] .* B
+    # A_r is Hicks-neutral (y = A·F(ℓ, q), eq. B1): labour demand is
+    # ℓ = Ω_L (w/c)^{-λ} y/A with c the A-free unit cost of the CES bundle, so the
+    # cost share w ℓ/(c̃ y) = Ω_L (w/c)^{1-λ} carries no A — the complement of the
+    # intermediate share (1-Ω_L)(P/c)^{1-λ} solve_network uses. Evaluating it at c̃ = c/A
+    # instead gave Ω_L (w A/c)^{1-λ}, so the two shares did not sum to one and the
+    # A[1] = 1 normalisation leaked into the moment.
+    A_full = zeros(R)
+    A_full[DOWNSTREAM_REGIONS] = params[(S + 2):(S + R_downstream + 1)] ./ params[S + 2]
+    c_r = c_tilde_r .* A_full
     labor_r = zeros(R)
-    labor_r[active] = Omega_L .* y_r[active] .* (regional_wages[active] ./ c_tilde_r[active]).^(-lambda)
+    labor_r[active] = Omega_L .* (y_r[active] ./ A_full[active]) .*
+                      (regional_wages[active] ./ c_r[active]).^(-lambda)
     agg_labor_share = sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
 
     # 2. Sector shares X_s / X
