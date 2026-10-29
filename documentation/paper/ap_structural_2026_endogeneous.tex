@@ -12,7 +12,7 @@ area of region $r'$.
 \paragraph{Demand for final manufacturing products.} Firms in the downstream sector each own the blueprint to produce a unique differentiated variety of the final good. The market for the final good is characterized by monopolistic competition and iso-elastic demand functions:
 $$q_r=\left(\frac{p_r}{P}\right)^{\varepsilon-1}\frac{E}{P}\delta_r$$
 where $q_r$ denotes the quantity demanded of the variety produced in region $r$ at price $p_r$, given nominal consumption $E$ and the downstream sector's price index $P$. $\varepsilon$ measures the price elasticity of sales. Finally, $\delta_r$ is an exogenous component of demand, that varies across downstream suppliers and will later be used to simulate demand shocks and their diffusion along production linkages. To simplify the analysis, we abstract from foreign demand and assume that the domestic market for final consumption goods is perfectly integrated. 
-%\swann{Je ne suis pas super fan de $q_r = (\frac{p_r}{P})^{1-\epsilon}$ je trouve que pour les calculs c'est plus simple d'écrire $q_r = (\frac{p_r}{P})^{-\epsilon}$. Ca permet d'avoir $\epsilon$ comme elasticité et non $\epsilon-1$ et ensuite de ne pas avoir des $2$ qui trainent dans les calculs (notamment l'expression du markup). Dans ce cas on aurait un consommateur final dont la fonction d'utilité serait: $$u(q_1,...,q_R) = \left[\sum_{r= 1}^R \delta_r^{\frac{1}{\varepsilon}}q_r^{\frac{\varepsilon-1}{\varepsilon}}\right]^{\frac{\varepsilon}{\varepsilon-1}}$$} \textbf{IM: C'est toi qui voulais que j'utilise $\varepsilon$ plutôt que l'élasticité de substitution. Dans le cadre conceptuel, $\varepsilon$ est l'élasticité-prix des sales ie l'élasticité de substitution - 1.} \swann{Tu définis $\varepsilon = -\frac{p}{pq}\frac{\partial pq}{\partial p}$ ? Si oui ça ne vérifie pas la relation que tu donnes.} \textbf{C'est pour ça que tu as un -1 ici. Comme on n'écrit jamais le markup, ca n'a pas d'importance mais sinon effectivement le markup vaut $\frac{\sigma}{\sigma-1}=\frac{\varepsilon-1}{\varepsilon}$. Du coup je pense que c'est bien de laisser comme çà.}\swann{Ok, je vois mais je ne suis pas d'accord avec tes calculs. Si tu as $\varepsilon = \sigma -1 \iff \sigma= \varepsilon +1$  alors la fonction de demande est $q_r \sim p_r^{-\sigma} = p_r^{-(\varepsilon+1)}$ et là tu as bien $\frac{\sigma}{\sigma-1}=\frac{\varepsilon-1}{\varepsilon}$.}
+
 
 
 \paragraph{Technology in the downstream sector.} Production of final goods requires the assembly of intermediates, combined with labor, under a nested CES structure:
@@ -55,87 +55,151 @@ that is, $z_{r'\rho s}$ is exactly $\mathrm{Fréchet}(T_{r's},\theta)$. One Fré
 In the baseline specification, comparative advantage is area-specific: $T_{r's}=T_{a(r')s}$ for every $r'\in\mathcal{R}_{a}$, with one parameter per (sector, area). This does not make regions within an area interchangeable. Each runs its own Ricardian competition for each variety, and two regions at different distances from a buyer have different win probabilities. What it removes is unobserved technological heterogeneity within an area, which is what allows the model to explain the same variation the extensive-margin regression uses.
 
 
+\paragraph{The network draw.}\label{app:network-draw}
+A realization of the network, denoted $\Omega$, is one draw of the champion productivities $\{z_{r'\rho s}\}$ for every region, variety and sector. It determines, for each buyer and each variety, which region wins the variety and at which price. With a continuum of varieties, the law of large numbers makes the realized network deterministic. With $N_s$ varieties it is not: two draws of $\Omega$ deliver different winners, and therefore different networks. We write $\mathbb{E}_\Omega$ for the expectation over realizations. The expectation of a realized object is its value in the \textit{expected network}.
+ 
+We use the following convention. Probabilities, and objects evaluated at the expected price index, do not depend on $\Omega$. They are the \cite{EatonKortum2002} expressions, and we write them as usual. Sector-level objects that depend on which supplier wins each variety carry the argument $(\Omega)$. Variety-level objects, indexed by $\rho$, are realizations by nature and are not marked. Table~\ref{tab:app-draw} summarizes the classification.
 \paragraph{Equilibrium.}\label{app:equilibrium}
-The resolution follows the same steps as in \cite{EatonKortum2002}. Given the Fréchet assumption, the minimum price at which suppliers from $(r',s)$ can
-serve market $r$ is distributed according to
-
+% CHANGED: "variety by variety"
+The resolution follows the same steps as in \cite{EatonKortum2002}, applied variety by variety. Given the Fréchet assumption, the minimum price at which suppliers from $(r',s)$ can serve market $r$ with a given variety is distributed according to
+ 
 \begin{equation}
 G_{r'rs}(p)=\Pr\Big(\frac{w_{r's}\tau_{r'rs}}{z_{r'\rho s}}\le p\Big)
 =1-\exp\left\{-T_{r's}(w_{r's}\tau_{r'rs})^{-\theta}p^\theta\right\}.
 \end{equation}
-
-Taking the minimum across potential supplier locations yields the distribution of input prices faced by a downstream firm in region $r$:
+ 
+Taking the minimum across potential supplier locations yields the distribution of the price at which a downstream firm in region $r$ buys a given variety:
 \begin{equation}
 G_{rs}(p) =1-\prod_{r'=1}^{R+1}\left[1-G_{r'rs}(p)\right] =1-\exp\left\{-\Phi_{rs}p^\theta\right\},
 \end{equation}
-
+ 
 where
 \begin{equation}
 \Phi_{rs} = \sum_{a'}T_{a's} \sum_{r'\in\mathcal{R}_{a'}} (w_{r's}\tau_{r'rs})^{-\theta}.
 \label{eq:app-Phi}
 \end{equation}
-
+ 
 The probability that a downstream firm in region $r$ sources a given variety from market $(r',s)$ is therefore
 \begin{equation}
 \gamma_{r'rs} = \frac{ T_{r's}(w_{r's}\tau_{r'rs})^{-\theta} }{ \Phi_{rs} }.
 \label{eq:app-share}
 \end{equation}
-
-Because the conditional distribution of the winning price is identical across origins, $G_{r'rs}(p)=G_{rs}(p)$, this probability is also the expected share of purchases allocated to suppliers located in $r'$. Following \citet{lenoir2023search}, we assume that downstream firms choose their suppliers based on the expected value of the sectoral price index rather than on the realization of the finite-variety CES aggregate. Under this assumption, the equilibrium sectoral price index is the Eaton-Kortum price index:
-
+ 
+These are probabilities over the draw $\Omega$. They do not depend on its realization, nor on $N_s$: each variety runs its own Ricardian competition, with the same odds.
+ 
+\textit{Realized and expected sourcing shares.} In \cite{EatonKortum2002}, the sourcing probability coincide with the sourcing share. With a finite number of varieties, it only coincide in expectation. For a given network realization, each variety is won by a single region, the share of buyer $r$'s sector-$s$ spending going to region $r'$ is therefore a random variable:
 \begin{equation}
-p_{rs} = \Bigg[ \Gamma\Big(\frac{\theta+1-\nu_s}{\theta}\Big) \Bigg]^{\frac{1}{1-\nu_s}} \Phi_{rs}^{-1/\theta}.
+\omega_{r'rs}(\Omega)=\sum_{\rho=1}^{N_s} v_{rs}(\rho,\Omega)\,\mathbf{1}\{r' \text{ wins } \rho \text{ for } r| \Omega \}.
+\label{eq:app-omega}
 \end{equation}
 
-The finite number of varieties affects the level of the CES price index through a standard love-of-variety term. With a finite set of $N_s$ varieties, the sectoral CES price index would include a multiplicative factor $N_s^{1/(1-\nu_s)}$. We write the within-sector aggregator as an average rather than a sum, which normalizes this term to one. Equivalently, this amounts to rescaling the technology parameter according to 
-
+Under the Fréchet assumption, the distribution of the winning price does not depend on the identity of the winner, $G_{r'rs}(p)=G_{rs}(p)$. Draws are independent across varieties, so the winners are independent of the winning prices. The weights $v_{rs}$ depend only on prices, the indicators only on winners, and $\sum_\rho v_{rs}(\rho,\Omega)=1$. Hence
 \begin{equation}
-T_{as}^{\text{avg}} = N_s^{\frac{\theta}{1-\nu_s}}T_{as}^{\text{sum}} .
+\mathbb{E}_\Omega\big[\omega_{r'rs}(\Omega)\big]=\gamma_{r'rs},
+\qquad
+\operatorname{Var}_\Omega\big(\omega_{r'rs}(\Omega)\big)=V_s\,\gamma_{r'rs}(1-\gamma_{r'rs}),
+\qquad
+V_s=\mathbb{E}_\Omega\Big[\sum_\rho v_{rs}(\rho,\Omega)^2\Big]\ge \frac{1}{N_s}.
+\label{eq:app-expected-share}
 \end{equation}
+The sourcing probability $\gamma_{r'rs}$ thus describes the expected network, for any $N_s$. The variance measures how far a realization departs from it. It vanishes as $N_s\to\infty$, where realized and expected networks coincide and the model collapses to \cite{EatonKortum2002}.
+ 
+Following \citet{lenoir2023search}, we assume that downstream firms take sector-level decisions on the expected value of the sectoral price index rather than on the realization of the finite-variety CES aggregate. Within the sector, spending is allocated across varieties at realized prices, through $v_{rs}(\rho)$. The sectoral index is therefore the Eaton-Kortum price index: \swann{Ici c'est important d'avoir en tête que dans le papier avec Clémence l'espérance est utilisée pour l'aléa correspondant au tirage des fournisseurs potentiels. Là $\Omega$ est le tirage des productivités (on tire un nombre fini d'entreprises)}
+ 
+\begin{equation}
+p_{rs} \equiv \Big[\mathbb{E}_\Omega\big[p_{rs}(\Omega)^{1-\nu_s}\big]\Big]^{\frac{1}{1-\nu_s}} = \Bigg[ \Gamma\Big(\frac{\theta+1-\nu_s}{\theta}\Big) \Bigg]^{\frac{1}{1-\nu_s}} \Phi_{rs}^{-1/\theta}.
+\label{eq:app-pindex}
+\end{equation}
+ 
+Because the within-sector aggregator is an average, $\mathbb{E}_\Omega[p_{rs}(\Omega)^{1-\nu_s}]=\mathbb{E}_\Omega[p_{rs}(\rho)^{1-\nu_s}]$ does not depend on $N_s$. Sector spending $x_{rs}$ therefore depends neither on $\Omega$ nor on $N_s$.
+ 
+The finite number of varieties affects the level of the CES price index through a standard love-of-variety term. With a sum rather than an average over the $N_s$ varieties, the sectoral CES price index would include a multiplicative factor $N_s^{1/(1-\nu_s)}$. Writing the within-sector aggregator as an average normalizes this term to one. Equivalently, this amounts to rescaling the technology parameter according to
+ 
+\begin{equation}
+T_{as}^{\text{avg}} = N_s^{\frac{\theta}{\nu_s-1}}T_{as}^{\text{sum}} .
+\end{equation}
+
 
 This normalization does not affect any allocation result: the sourcing probability in \eqref{eq:app-share} depends only on ratios of $T_{as}$ within a sector, so the extensive margin, the relative probability of sourcing across areas, and the moments used for estimation are unchanged. The normalization therefore only fixes the price-level gauge of the model.
-
+ 
 The remaining price indices are
-
+ 
 \begin{equation}
 p_{r} = \Big[\sum_s\Omega_s p_{rs}^{1-\nu}\Big]^{\frac{1}{1-\nu}}, \qquad c_r = \Big[\Omega_Lw_r^{1-\lambda} +(1-\Omega_L)p_r^{1-\lambda}\Big]^{\frac{1}{1-\lambda}} .
 \end{equation}
-
-Finally, bilateral intermediate input purchases are
-
+ 
+Finally, realized bilateral intermediate input purchases are $X_{r'rs}(\Omega)=\omega_{r'rs}(\Omega)\,x_{rs}$. Their expectation is the \cite{EatonKortum2002} flow:
+ 
 \begin{equation}\label{eq:input_flows}
-X_{r'rs} = \gamma_{r'rs}x_{rs} = \gamma_{r'rs} \Omega_s(1-\Omega_L) \left(\frac{p_{rs}}{p_r}\right)^{1-\nu} \left(\frac{p_r}{c_r}\right)^{1-\lambda} \frac{c_ry_r}{A_r}.
+X_{r'rs} \equiv \mathbb{E}_\Omega\big[X_{r'rs}(\Omega)\big] = \gamma_{r'rs}x_{rs} = \gamma_{r'rs} \Omega_s(1-\Omega_L) \left(\frac{p_{rs}}{p_r}\right)^{1-\nu} \left(\frac{p_r}{c_r}\right)^{1-\lambda} \frac{c_ry_r}{A_r}.
 \end{equation}
-
-
-
-\paragraph{The extensive margin of trade.}\label{app:cloglog} To estimate the elasticity of trade cost to the distance we use the extensive margin of trade. Taking the perspective of the supplier, the probability of being the lowest-cost supplier in market $(r,s)$, given location $r'$ and productivity $z$, is
+ 
+The expected flows describe the expected network. Statistics that are linear in the flows, such as area sourcing shares or the average sourcing distance, take the same value in the expected network and on average across realizations. Nonlinear statistics, such as concentration indices, do not: they depend on the dispersion of realizations around the expected network.
+ 
+ 
+\paragraph{The extensive margin of trade.}\label{app:cloglog} To estimate the elasticity of trade cost to the distance we use the extensive margin of trade. Taking the perspective of the supplier, the probability of being the lowest-cost supplier in market $(r,s)$ for a given variety, given location $r'$ and productivity $z$, is
 \begin{equation}
 \rho_{r'rs}(z)=e^{-\Phi_{rs}(w_{r's}\tau_{r'rs})^{\theta}z^{-\theta}}
 =e^{-T_{a(r')s}\gamma^{-1}_{r'rs}z^{-\theta}} .
 \label{eq:app-rho}
 \end{equation}
-
+ 
+Like $\gamma_{r'rs}$, this is a probability over the competitors' draws. It depends neither on the realization $\Omega$ nor on $N_s$.
+ 
 In the limit where there is only one downstream region ($r = a(r')$), the elasticity of trade cost to the distance can be recovered directly from the supply dummy. Indeed, Equation~\eqref{eq:app-rho} implies that $\Pr(\text{no supply} \mid z) = 1 - \exp(-\exp(\eta))$ where $\eta = \ln \Phi_{a(r')s} + \theta \ln w_{r's} + \theta \alpha \ln d_{r'a(r')} - \theta \ln z$. Consequently, the coefficient on the distance of a complementary log log design is the product $\alpha\theta$:
-
+ 
 $$
 \Pr(\text{no supply} \mid z) = 1 - \exp(-\exp(FE_{a(r')s} + \theta \alpha \ln d_{r'a(r')} - \theta \ln z))
 $$
-\paragraph{Granularity and the count moment.} The finite number of varieties $N_s$ allows us to endogenize the occurrence of regions with no suppliers. Let $p_{r's}$ be the probability that a firm in $(r',s)$ supplies the downstream industry. Considering $\mathcal{R}^{+}_{s}$ as the set of regions within active attraction areas, the empirical moment is the share of those regions hosting no suppliers:
-
+ 
+ 
+\paragraph{Granularity and the count moment.} The finite number of varieties $N_s$ allows us to endogenize the occurrence of regions with no suppliers. Let $p_{r's}$ be the probability that region $r'$ wins a given variety of sector $s$ for at least one downstream buyer:
 \begin{equation}
-\mathbb{E}\big[\bar G_{s}(0)\big]=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'}(1-p_{r's})^{N_{s}}.
+p_{r's}\equiv\Pr\Big(\bigcup_{r}\{r' \text{ wins } \rho \text{ for } r\}\Big).
+\label{eq:app-pwin}
+\end{equation}
+Like $\gamma_{r'rs}$, it does not depend on $\Omega$. It has no closed form. The win events of $r'$ across buyers share the same champion draw, so they are positively dependent and $p_{r's}\le 1-\prod_r(1-\gamma_{r'rs})$. We evaluate it by simulation.
+ 
+The number of firms in $(r',s)$ that supply the downstream industry is the number of varieties that $r'$ wins for at least one buyer. It depends on the draw. Varieties are independent, so
+\begin{equation}
+K_{r's}(\Omega)\sim\mathrm{Bin}\big(N_s,p_{r's}\big).
+\label{eq:app-K}
+\end{equation}
+ 
+Considering $\mathcal{R}^{+}_{s}$ as the set of regions within active attraction areas, the empirical moment is the share of those regions hosting no suppliers, $\bar G_{s}(0)(\Omega)=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}\mathbf{1}\{K_{r's}(\Omega)=0\}$. The data provide one realization. Its expectation is
+ 
+\begin{equation}
+\mathbb{E}_\Omega\big[\bar G_{s}(0)(\Omega)\big]=\frac{1}{|\mathcal{R}^{+}_{s}|}\sum_{r'\in\mathcal{R}^{+}_{s}}(1-p_{r's})^{N_{s}}.
 \label{eq:app-count}
 \end{equation}
-
+ 
 At fixed $p_{r's}$, this moment is decreasing in $N_s$, which allows for the identification of the variety count. \\
-
+ 
 Furthermore, because iceberg trade costs do not alter the relative ranking of firms within a region, each variety generates exactly one distinct supplying firm per winning origin. If $N^{\mathrm{obs}}_{s}$ is the number of distinct upstream firms observed to supply the downstream industry, then $N_{s}$ must fall within the range defined by:
 \begin{equation}
 \frac{N^{\mathrm{obs}}_{s}}{R^{D}}\;\le\;N_{s}\;\le\;N^{\mathrm{obs}}_{s},
 \label{eq:app-bounds}
 \end{equation}
 where $R^{D}$ is the number of downstream buyers. The upper bound is reached when every variety is globally sourced from a single origin, while the lower bound occurs when each of the $R^{D}$ buyers sources each variety from a different origin.\footnote{We don't impose a lower bound in the estimation. Since supplier information is recorded at the SIREN level, a multi-establishment firm may generate several establishment-level observations, although not all establishments necessarily supply the downstream industry. Hence $N_s^{obs}$ may overstate the number of model-specific supplier champions and therefore the lower bound. If the true $N_s$ lies below this bound, the constraint prevents the extensive-margin moment from adjusting through, pushing $\alpha$ toward zero.} \swann{Ca c'est la théorie. Quand on fait l'estimation pour l'aéronautique on a beaucoup de secteurs pour lesquels $N_s$ touche la borne inférieure. L'estimation aimerait explorer en dessous de la borne inférieure mais nous ne l'autorisons pas. Diminuer $\alpha$ a le même effet sur $G(0)$ que de diminuer $N_s$ donc l'estimation pousse $\alpha$ vers 0. Je relaxe la borne inférieur pour avoir une meilleure estimation. Je propose dans la footnote une explication pour justifier ce choix de relaxer la lower-bound. }
+ 
+ 
+\begin{table}[htbp]
+\centering
+\caption{Objects that do and do not depend on the network draw}
+\label{tab:app-draw}
+\begin{tabular}{p{0.45\textwidth}p{0.45\textwidth}}
+\hline
+\textbf{Independent of $\Omega$ (Eaton--Kortum)} & \textbf{Depend on $\Omega$ (granular)} \\
+\hline
+Price distributions $G_{r'rs}$, $G_{rs}$; $\Phi_{rs}$ & Winner and winning price $p_{rs}(\rho)$ of each variety \\
+Sourcing probability $\gamma_{r'rs}$ & Variety weights $v_{rs}(\rho)$; realized index $p_{rs}(\Omega)$ \\
+Win probability given productivity $\rho_{r'rs}(z)$ & Realized sourcing share $\omega_{r'rs}(\Omega)$ \\
+Win-anywhere probability $p_{r's}$ & Realized flows $X_{r'rs}(\Omega)$ \\
+Price indices $p_{rs}$, $p_r$, $c_r$; sector spending $x_{rs}$ & Supplier count $K_{r's}(\Omega)$ \\
+Expected flows $X_{r'rs}=\gamma_{r'rs}x_{rs}$ & Share of empty regions $\bar G_s(0)(\Omega)$ \\
+\hline
+\end{tabular}
+\end{table}
 
 
 
@@ -237,7 +301,7 @@ where $\tilde\gamma_{as}$ are the observed sourcing shares. The normalization of
 
 Because trade costs are finite, every area can potentially serve every buyer, so $B$ is a strictly positive matrix. The recovery of $T_{as}$ is therefore equivalent to a Sinkhorn matrix-scaling problem. The positivity of $B$ implies that the associated scaling operator is a contraction. Consequently, the fixed point exists and is unique up to a sector-specific multiplicative normalization. The reference-area normalization removes this remaining degree of freedom, implying that there is a unique vector of comparative advantages consistent with the observed sourcing shares.
 
-In the implementation, expenditure weights are updated after each iteration to account for the general-equilibrium response of prices and sales. This introduces a feedback from $T$ into expenditure shares, so the full algorithm is a fixed-point iteration. We use damping in \eqref{eq:app-sinkhorn} and stop when both sourcing shares and comparative-advantage parameters converge. At the estimated parameters, the inversion converges rapidly from dispersed starting values and recovers the calibrated productivity parameters to numerical precision.
+In the implementation, expenditure weights are updated after each iteration to account for the general-equilibrium response of prices and sales. This introduces a feedback from $T$ into expenditure shares, so the full algorithm is a fixed-point iteration. We use damping in \eqref{eq:app-sinkhorn} and stop when both sourcing shares and comparative-advantage parameters converge. At the estimated parameters, the inversion converges rapidly from dispersed starting values and recovers the calibrated productivity parameters to numerical precision. \swann{Le paramètre de damping est fixé à 0.5. Au départ j'avais mis 0.9 mais quand on a une élasticité de la demande forte comme dans l'aéronautique, la convergence du point fixe n'était pas possible car il y avait beaucoup d'oscillation autour du point fixe.}
 
 \paragraph{Step 2: Win probabilities.}
 For each sector, we simulate $m$ varieties and draw one Fréchet champion for each (region, variety) pair \footnote{The uniform draws entering the inverse-CDF transformation $\varphi_{r'\rho s}=T_{a(r')s}^{1/\theta}(-\log u_{r'\rho s})^{-1/\theta}$ are generated using scrambled Sobol sequences rather than independent pseudo-random draws. Scrambled Sobol sequences are low-discrepancy sequences commonly used for variance reduction, improving the convergence rate of simulation-based estimators and reducing simulation noise. We construct one low-dimensional sequence per sector, with regions as dimensions and varieties as points. This preserves the efficiency of low-discrepancy sampling while avoiding the deterioration of its properties in very high dimensions. Since Ricardian competition compares productivity draws only within sectors, using the same construction across sectors does not affect the allocation of winners. We use independent pseudo-random draws when computing simulation standard errors and numerical derivatives, where independence across replications is required.
@@ -658,6 +722,60 @@ Two implementation notes. First, the profile divides the work: $\{T_{as}\}$, $\O
 
 
 
+
+\subsection{Additional materials}
+\paragraph{Untargeted moment: derivation}\label{apsec:untargeted_moments}
+\swann{Maintenant qu'on est passé à une économie granulaire, je ne suis pas sûr que l'on puisse exploiter facilement la décomposition de l'élasticité qui est obtenue plus bas. Je pense qu'il faut refaire les calculs pour voir comment la finitude du nombre de variétés change la formule. }
+In the model, sales' growth of a supplier $i$ in $(r',s)$ of productivity $z$ is:
+$$
+d\ln x_{it} = \sum_r a_{ri}^D(z,d_{r'r}) d\ln x_{drt} + \delta_i^D
+$$
+hence the correlation $d\ln x_{it}$ and $d\ln x_{drt}$ is $a_{ri}^D(z, d_{r'r}).$ If we estimate:
+\begin{equation}
+        d\ln x_{i,t}^r = \alpha_{i} + \gamma Sup_{i} \times d\ln x_{rd,t}+ \delta Sup_{i} \log(d_{ir})\times d\ln x_{rd,t} + FE_{rs(i),t} +\varepsilon_{i,t}
+\end{equation}
+we recover the average correlation over firms and regions pairs: $\gamma = \mathbb{E}_{r,z,r',s}(\gamma_{rs}(z,d_{r'r}))$ and $\delta = \mathbb{E}_{r, z, r', s}(\delta_{rs}(z,d_{r'r}))$.
+
+The average correlation between a downstream region and an upstream sector is:
+
+\begin{align}
+    \gamma_{rs} &= \mathbb{E}_{z,r',d_{r'r}}(\gamma_{rs}(z, d_{r',r})) \\
+    &= \mathbb{E}_{z,r',d_{r'r}}(a_{ri}^D(z,d_{r'r}) | Sup_i = 1, d_{r'r} = 1) \\
+    &=\mathbb{E}_{z,r',d_{r'r}}(a_{ri}^D(z,d_{r'r}) | \text{i serves r} , d_{r'r} = 1) \mathbb{P}_{z,r',d_{r'r}}(\text{i serves r} | Sup_i = 1)\\
+    &=\mathbb{E}_{z,r',d_{r'r}}(a_{ri}^D(z,d_{r'r}) \frac{\rho_{r'rs}(z)}{\Tilde{\rho}_{r's}(z)}| d_{r'r} = 1) \\
+\end{align}
+
+Similarly, the expression of $\delta$ is obtained from:
+\begin{align}
+    \delta_{rs} &= \frac{d}{d\ln d}\mathbb{E}_{z,r',d_{r'r}}(a_{ri}^D(z,d_{r'r}) | Sup_i = 1, d_{r'r} = d) \\
+    &=\frac{d}{d\ln d}\mathbb{E}_{z,r',d_{r'r}}(a_{ri}^D(z,d) \frac{\rho_{r'rs}(z)}{\Tilde{\rho}_{r's}(z)}| d_{r'r} = d) \\
+\end{align}
+To do the derivation, we assume that the distance is a continuous variable and drop the $r'$ subscript such as $\rho_{r'rs}(z)$ becomes $\rho_{rs}(z,d)$. Similarly, we drop $i$ as firms can be indexed by there productivity. 
+\begin{align}
+    \delta_{rs} &= \frac{d}{d\ln d}\mathbb{E}_{z,r',d}(a_{r}^D(z,d) \frac{\rho_{rs}(z,d)}{\Tilde{\rho}_{r's}(z)}) \\
+    &= \mathbb{E}_{z,r',d}\left(a_{r}^D(z,d) \frac{\rho_{rs}(z,d)}{\Tilde{\rho}_{r's}(z)}(\frac{d\ln \rho_{rs}(z,d)}{d\ln d} + \frac{d\ln a_r^D(z,d)}{d\ln d})\right)\\
+\end{align}
+We introduce $\Lambda_{r'rs}(z,d)$ such as $\ln \rho_{rs}(z,d) = -\Lambda_{r'rs}(z,d)$ and $\frac{d\ln \rho_{rs}(z,d)}{d\ln d} = - \theta\Lambda_{r'rs}(z,d)\frac{d\ln \tau_{r'rs}}{d\ln d}$. Since:
+$$
+a_r^D(z,d) = \frac{\gamma_{r'rs}x_{rs}}{\gamma_{r'rs}x_{rs} + \sum_{r''\neq r} \gamma_{r'r''s}x_{r''s}\rho_{r'rs}(z)}
+$$
+we have 
+\begin{align}
+  \frac{d\ln a_r^D(z,d)}{d\ln d} &= \frac{d\ln \gamma_{r'rs}}{d\ln d}(1-a_r^D(z,d))\\
+&=   -\theta\frac{d\ln \tau_{r'rs}}{d\ln d}(1-a_r^D(z,d))
+\end{align}
+Consequently: 
+\begin{align*}
+    \delta_{rs} &=  -\theta\frac{d\ln \tau_{r'rs}}{d\ln d}\mathbb{E}_{z, r', d}\left(a_{r}^D(z,d) \frac{\rho_{rs}(z,d)}{\Tilde{\rho}_{r's}(z)}(\Lambda_{r'rs} + (1-a_r^D(z,d)))\right)\\
+\end{align*}
+To obtain $\delta$ and $\gamma$ we must take the expectation over all sectors and downstream regions which yield the following ratio:
+$$
+\frac{\delta}{\gamma} \simeq -\theta \mathbb{E}(\frac{d\ln \tau}{d\ln d}) \times \frac{\mathbb{E}(\frac{\rho}{\Tilde{\rho}}a_r^D(\Lambda + 1-a_r^D))}{\mathbb{E}(\frac{\rho}{\Tilde{\rho}}a_r^D | d= 1)}
+$$
+The term $1-a_r^D$ capture the fact that when we increase the distance between a supplier and a downstream region, sales toward this region will be reduced thus increasing the importance of other downstream regions in the portfolio of the supplier. When the distance increases, the probability to serve downstream region $r$ decreases and therefore further reducing the comovement with this region. This is what $\Lambda$ captures.
+
+
+
 \subsection{Additional materials}
 \paragraph{Untargeted moment: derivation}\label{apsec:untargeted_moments}
 
@@ -692,7 +810,7 @@ To do the derivation, we assume that the distance is a continuous variable and d
 \end{align}
 We introduce $\Lambda_{r'rs}(z,d)$ such as $\ln \rho_{rs}(z,d) = -\Lambda_{r'rs}(z,d)$ and $\frac{d\ln \rho_{rs}(z,d)}{d\ln d} = - \theta\Lambda_{r'rs}(z,d)\frac{d\ln \tau_{r'rs}}{d\ln d}$. Since:
 $$
-a_r^D(z,d) = \frac{\gamma_{r'rs}x_{rs}}{\gamma_{r'rs}x_{rs} + \sum_{r''\neq r} \gamma_{r'r''s}x_{r''s}\rho_{r'r''s}(z)}
+a_r^D(z,d) = \frac{\gamma_{r'rs}x_{rs}}{\gamma_{r'rs}x_{rs} + \sum_{r''\neq r} \gamma_{r'r''s}x_{r''s}\rho_{r'rs}(z)}
 $$
 we have 
 \begin{align}
@@ -710,115 +828,32 @@ $$
 The term $1-a_r^D$ capture the fact that when we increase the distance between a supplier and a downstream region, sales toward this region will be reduced thus increasing the importance of other downstream regions in the portfolio of the supplier. When the distance increases, the probability to serve downstream region $r$ decreases and therefore further reducing the comovement with this region. This is what $\Lambda$ captures.
 
 
-\paragraph{Untargeted moment: the granular case}\label{apsec:untargeted_granular}
+\subsection{Model calibration}
 
-The derivation above is written for the continuum, where a ``supplier'' is a
-(region, sector) cell whose sourcing share $\gamma_{r'rs}$ carries the trade elasticity
-$\theta$. Under the granular specification a supplier is one \emph{variety} producer, and
-the substitution pattern enters the moment through a different parameter. Let sector $s$
-have $N_s$ varieties. For each variety $\omega$ and each downstream region $r$ the
-lowest-cost origin wins the whole variety, and the winner prices at
-$p = c_{r'}\tau_{r'r}/z$, so its sales to $r$ are
-\begin{equation*}
-X_{i\to r} \;=\; \mathbf{1}\{i \text{ wins } \omega \text{ in } r\}\;
-\Omega^s(1-\Omega^L)\Big(\tfrac{p}{P_{sr}}\Big)^{1-\nu_s}
-\Big(\tfrac{P_{sr}}{P_{r}}\Big)^{1-\nu}\Big(\tfrac{P_{r}}{c_{r}}\Big)^{1-\lambda}\mu Y_r ,
-\qquad a_{ir}=\frac{X_{i\to r}}{\sum_{r''}X_{i\to r''}} .
-\end{equation*}
+\subsubsection{Untargeted moment}
 
-\emph{The extensive margin is the trade elasticity.} With Fr\'echet draws, the surprisal
-$\Lambda_{r'rs}(z)=\Phi_{-r'}(c_{r'}\tau_{r'r}/z)^{\theta}$ is exponentially distributed
-across draws with rate $k = T_{r'}(c_{r'}\tau_{r'r})^{-\theta}/\Phi_{-r'}$, where
-$\Phi_{-r'}$ excludes the origin's own term. Hence
-$\mathbb{P}(\text{win})=\mathbb{E}(e^{-\Lambda})=k/(1+k)=\gamma_{r'rs}$ and
-\begin{equation}
-\mathbb{E}\big(\Lambda \mid i \text{ wins}\big)
-=\frac{\mathbb{E}(\Lambda e^{-\Lambda})}{\mathbb{E}(e^{-\Lambda})}
-=\frac{1}{1+k}=1-\gamma_{r'rs},
-\label{eq:lambda_win}
-\end{equation}
-so among realised suppliers the extensive term is
-$-\theta\frac{d\ln\tau}{d\ln d}(1-\gamma_{r'rs})$: exactly the elasticity of the
-continuum sourcing share. Granularity does not change the extensive margin.
-
-\emph{The substitution pattern does change.} Conditional on winning, the variety is not
-reallocated across origins --- only its \emph{volume} responds, at the within-sector CES
-elasticity:
-\begin{equation*}
-\frac{d\ln X_{i\to r}}{d\ln d}\Big|_{\text{win}} = (1-\nu_s)\frac{d\ln\tau_{r'r}}{d\ln d},
-\qquad\text{hence}\qquad
-\frac{d\ln a_{ir}}{d\ln d}\Big|_{\text{win}} = (1-\nu_s)\frac{d\ln\tau_{r'r}}{d\ln d}\,(1-a_{ir}),
-\end{equation*}
-the $(1-a)$ portfolio term multiplying $(\nu_s-1)$ rather than $\theta$. Collecting the two
-margins,
-\begin{equation}
-\frac{\delta}{\gamma}\;\simeq\;-\,\mathbb{E}\Big(\frac{d\ln\tau}{d\ln d}\Big)\times
-\frac{\mathbb{E}\Big(\frac{\rho}{\tilde\rho}a_r^D\big[\theta\Lambda+(\nu_s-1)(1-a_r^D)\big]\Big)}
-{\mathbb{E}\Big(\frac{\rho}{\tilde\rho}a_r^D \mid d=1\Big)} .
-\label{eq:dg_granular}
-\end{equation}
-The continuum expression is the special case in which the two terms share the same
-coefficient $\theta$: there, moving a cell away from $r$ reallocates \emph{varieties} as
-well as volumes, and variety reallocation is what carries $\theta$. At the variety level
-that channel is already inside $\Lambda$, and what is left is pure CES substitution. With
-the calibration used here ($\theta=1$, $\nu_s=1.5$) the granular substitution term is half
-the continuum one, $(\nu_s-1)/\theta = 0.5$.
-
-\emph{Two consequences for the estimated counterpart.} First, a regression of $a_{ir}$ on
-$\log d$ that absorbs a supplier fixed effect holds the portfolio total
-$\sum_{r''}X_{i\to r''}$ fixed, so on served cells it recovers $(1-\nu_s)\alpha$ and
-\emph{not} $(1-\nu_s)\alpha(1-a_{ir})$: the portfolio term has to be reintroduced by
-multiplying that coefficient by the measured $\mathbb{E}(1-a)$, which is an observable of
-the simulated economy. Second, \eqref{eq:dg_granular} is a comparative static for one
-supplier--buyer pair, whereas $\delta/\gamma$ is estimated on a cross-section in which
-distant pairs are observed only when the draw and the local competition were favourable.
-That pair-level selection is absorbed by neither a supplier nor a buyer fixed effect, and
-it is specific to the granular economy: pooling the varieties of a cell into a single
-multi-variety firm drives the extensive margin to zero and returns the cross-sectional
-slope to the continuum value $-\theta\alpha$.
-
-
-\paragraph{Granularity: the finite-variety economy against its continuum limit}\label{apsec:granularity}
-
-The post-hoc economy is simulated with the calibrated variety count $\widehat N_{s}$ and is therefore a random object; the table reports the mean over 50 independent realisations, beside the same economy solved at the same $\widehat\theta$ with a variety count large enough to be its $N_{s}\to\infty$ limit.
-
-\begin{center}\footnotesize
-\begin{tabular}{lcc}
-\hline\hline
-& Motor vehicles & Aerospace \\
-\hline
-Varieties sourced by a downstream firm, $\sum_{s}\widehat N_{s}$ & 185 & 99 \\
-Commuting zones reached, finite varieties & 113 & 62 \\
-Commuting zones reached, continuum limit & 273 & 262 \\[0.4em]
-$\mathbb{E}\,L_{r}(100)$, finite varieties & 0.075 & 0.088 \\
-$\mathbb{E}\,L_{r}(100)$, continuum limit & 0.075 & 0.092 \\
-s.d. of $L_{r}(100)$ across realisations & 0.030 & 0.047 \\[0.4em]
-$D_{r}$, finite varieties & 1.848 & 1.873 \\
-$D_{r}$, continuum limit & 1.838 & 1.861 \\
-\hline\hline
-\end{tabular}
-\end{center}
-
-\emph{Notes}: Averages across shocked downstream regions. The local share is invariant in expectation because, under Fr\'echet, the identity of a variety's winner is independent of its realised price; the residual gap in aerospace is the sampling error of 50 realisations. The number of origins is not invariant and cannot be: a shock cannot reach more places than the buyer sources varieties. $D_{r}$ rises with granularity because the within-sector price index is convex in the productivity draws, so a finite basket is on average dearer, and with $\lambda<1$ a dearer input bundle raises the intermediate share of unit cost.
-
-
-
-
-
-
-
-
-
-
-\paragraph{The incidence of a shock, buyer by buyer}\label{app:incidence_buyer}
-The decomposition \eqref{eq:incidence_identity} holds for a spending-weighted average over buyers and for no other aggregator, so Table~\ref{tab:incidence} reports means rather than medians. Figure~\ref{fig:buyer_concentration} shows the cross-buyer distributions behind them: the effective number of supplier regions each buyer reaches, and its own commonality $C_{r}=1-\sum_{s}\theta_{rs}m_{rs}/\bar H_{r}$, where $m_{rs}=\sum_{l}(\omega_{lrs}-\bar\omega_{ls})^{2}$ is that buyer's contribution to the buyer-specific term. $C_{r}$ is not bounded below --- a buyer whose incidence is far from the common one in a sector where the common incidence is itself concentrated can carry $m_{rs}>H_{rs}$ --- so it is a ranking of buyers, not a share, and is drawn as such.
+We assess the ability of our model to reproduce the regional granularity of suppliers we observe in our data. In particular, for $K \in \{1,2,3\}$, we compute the share of regions with exactly $K$ suppliers both in the data and the model and give the results in Figure~\ref{app:untargeted_count}.
 
 \begin{figure}[H]
     \centering
-\caption{Concentration and commonality, buyer by buyer\label{fig:buyer_concentration}}
-    \includegraphics[width = 0.95\linewidth]{figures/buyer_concentration_mu2.pdf}
-    \caption*{\footnotesize \emph{Notes}: One row per shocked commuting zone, ordered by the effective number of supplier regions its shock reaches; the two panels of each industry share that row order. Both statistics are computed on the expected network under the estimated allocation.}
+\caption{Empirical vs. simulated count moments\label{app:untargeted_count}}
+    \begin{tabular}{cc}
+    Motor vehicles &Aerospace\\
+
+        \includegraphics[width = 0.5\linewidth]{figures/emp_sim_count_curve_auto_mu2_K1.pdf}&\includegraphics[width = 0.5\linewidth]{figures/emp_sim_count_curve_aero_mu2_K1.pdf}\\ \vspace{1em}\\
+ \includegraphics[width = 0.5\linewidth]{figures/emp_sim_count_curve_auto_mu2_K2.pdf} &  \includegraphics[width = 0.5\linewidth]{figures/emp_sim_count_curve_aero_mu2_K2.pdf}  \\   \vspace{1em}\\  
+ \includegraphics[width = 0.5\linewidth]{figures/emp_sim_count_curve_auto_mu2_K3.pdf} &  
+ \includegraphics[width = 0.5\linewidth]{figures/emp_sim_count_curve_aero_mu2_K3.pdf}  \\  
+    \end{tabular}
+    \caption*{\footnotesize \emph{Notes}: The figure compares the simulated and empirical share of regions with exactly $K$ suppliers with $K \in \{1,2,3\}$ for the Motor Vehicles (left) and Aerospace (right) industries. Simulated moments are in blue while empirical moments are in red. Standard errors for the simulated points are recovered from the delta method (see Appendix~\ref{app:model-standard_errors}) while standard errors for the empirical points are obtained from bootstrap.  \swann{Quelque fois le bootstrap ne donne pas de region avec $K$ fournisseur. La variance est donc nulle (par exemple G46Z pour l'aéro). }
+    }
 \end{figure}
+
+
+\subsection{Sensitivity analysis}\label{app:sensitivity_analysis}
+
+
+
 
 \subsection{EV eco-score reform: shock construction}\label{app:ev_ecoscore}
  
