@@ -10,12 +10,15 @@ import numpy as np
 import pandas as pd
 
 
+KAPPA = 0.3          # the density elasticity planted in theta_hat (after alpha)
+
+
 def build(seed=11):
     S, R, R_D, n_coef = 3, 8, 4, 4
     rng = np.random.default_rng(seed)
     TMP = tempfile.mkdtemp(prefix="parts_gate_")
     inp = os.path.join(TMP, "baseline_test")
-    run = os.path.join(TMP, "reporting_test_profiled_aa_gran_pso")
+    run = os.path.join(TMP, "reporting_test_profiled_aa_gran_kappa_pso")
     os.makedirs(inp); os.makedirs(os.path.join(run, "step3"))
 
     filt = np.zeros((S, R), dtype=int); filt[:, :6] = 1
@@ -32,7 +35,9 @@ def build(seed=11):
     np.save(f"{inp}/domestic_share.npy", np.full(S, 0.8))
     np.save(f"{inp}/N_downstream_per_region.npy",
             np.array([3, 4, 2, 5] + [0] * (R - R_D), dtype=float))
-    np.save(f"{inp}/reg_coef_cloglog_{n_coef}.npy", rng.normal(0, 1, n_coef))
+    # block 4 = [beta_d ; beta_kappa] (the draw is kept so the RNG stream is unchanged)
+    np.save(f"{inp}/beta_d_{n_coef}.npy", rng.normal(0, 1, n_coef))
+    np.save(f"{inp}/beta_kappa_{n_coef}.npy", np.array([0.4]))
     _D = np.abs(rng.normal(300, 80, (R, R))) + 10.0
     _D = (_D + _D.T) / 2
     np.save(f"{inp}/distances.npy", _D)            # read by `sourcing_geometry`
@@ -51,6 +56,11 @@ def build(seed=11):
                   "K": list(range(4)) * S, "G": np.tile([0.4, 0.7, 0.9, 1.0], S),
                   "N_supplier_s": np.repeat([20, 24, 30], 4)}).to_csv(f"{inp}/G_K.csv",
                                                                      index=False)
+    # cells_ls.csv: n_ls on every simulated cell (T_ls = T_a n_ls^kappa), no RNG draw
+    pd.DataFrame([{"A129": "ABC"[s], "ze2010": 1000 + r, "n_ls": 1 + (s + r) % 5,
+                   "has_sup": int(emp_gamma[s, r] > 0)}
+                  for s in range(S) for r in range(6)]).to_csv(f"{inp}/cells_ls.csv",
+                                                               index=False)
     np.save(f"{run}/n_reg_coef.npy", np.array(n_coef))
     np.save(f"{run}/n_tau.npy", np.array(1))
 
@@ -62,7 +72,7 @@ def build(seed=11):
         AA_ACTIVE[s, aa_of_ze[sup_cells[s]]] = True
     n_T = int(AA_ACTIVE.sum())
     theta_hat = np.concatenate([[0.31], rng.uniform(.2, .5, S), rng.uniform(.8, 1.2, R_D),
-                                [0.4], rng.lognormal(0, .3, n_T)])
+                                [0.4], [KAPPA], rng.lognormal(0, .3, n_T)])
     np.save(f"{run}/step3/best_parameters_list.npy", theta_hat[:, None])
     np.save(f"{run}/step3/post_hoc_N_hat.npy", np.array([4, 7, 5]))
 

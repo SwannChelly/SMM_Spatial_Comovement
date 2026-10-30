@@ -349,7 +349,7 @@ def gate_untargeted():
     np.save(inp_l / "distances.npy", D_l)
     al_l, th_l, R_d_l = 0.35, 1.4, 3
     n_T = int(np.ones((S_l, 3), dtype=bool).sum())
-    bp_l = np.concatenate([[0.1], np.full(S_l, 0.2), np.full(R_d_l, 0.3), [al_l],
+    bp_l = np.concatenate([[0.1], np.full(S_l, 0.2), np.full(R_d_l, 0.3), [al_l], [0.0],
                            T_aa.ravel()])
     data_l = {"industry": "auto", "mu": 1, "S": S_l, "R": R_l, "n_AA": 3, "n_tau": 1,
               "step_dir": "step1", "folder": TMP, "input_folder": inp_l,
@@ -505,7 +505,7 @@ def gate_untargeted():
     S_t, R_t, n_AA_t, alpha_t = 3, 4, 5, 0.37
     aa_active = np.zeros((S_t, n_AA_t), dtype=bool)
     aa_active[:, :2] = True
-    bp = np.concatenate([[0.1], np.full(S_t, 0.2), np.full(R_t, 0.3), [alpha_t],
+    bp = np.concatenate([[0.1], np.full(S_t, 0.2), np.full(R_t, 0.3), [alpha_t], [0.0],
                          np.full(int(aa_active.sum()), 1.0)])
     d_ta = {"best_params": bp, "S": S_t, "n_tau": 1, "aa_names": ["a"] * R_t,
             "AA_ACTIVE": aa_active, "coefs": None, "folder": ".", "step_dir": "step1"}
@@ -656,6 +656,7 @@ def gate_comparative_advantage():
         rng.uniform(0.5, 1.5, S),                  # Omega_s
         rng.uniform(0.5, 1.5, n_AA),               # A (R_downstream == n_AA)
         [ALPHA],                                   # alpha
+        [0.0],                                     # kappa = 0: T_ls = T_a
         T_true[AA_ACTIVE],                         # T, s-major over (S, n_AA)
     ])
 
@@ -1071,7 +1072,7 @@ def gate_amplification():
     T_REF_AA = np.zeros(S, dtype=int)
     T_true = rng.lognormal(0.0, 0.8, (S, n_AA))         # a real spread, so T does work
     best_params = np.concatenate([[0.3], rng.uniform(.1, .3, S), rng.uniform(.1, .3, R_d),
-                                  [ALPHA], T_true.ravel()])
+                                  [ALPHA], [0.0], T_true.ravel()])   # kappa = 0
 
     data = {"industry": "auto", "mu": 2, "S": S, "R": R, "step_dir": "step3",
             "folder": folder, "input_folder": inp,

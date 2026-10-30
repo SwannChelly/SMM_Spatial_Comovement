@@ -331,13 +331,23 @@ MU_DIRS = {1: ("step1", "step2"), 2: ("step3", "step3")}
 
 
 def reporting_folder(industry, base="..", profile_T=True, ca_level="aa",
-                     granular=True, relax_n_lo=False, optimizer="pso"):
-    """Reproduce main.jl's output_folder naming exactly."""
+                     granular=True, relax_n_lo=False, optimizer="pso",
+                     kappa=True, profile_head=False):
+    """Reproduce main.jl's output_folder naming exactly.
+
+    The current Julia code estimates one specification and names its tree
+    `reporting_<ind>_profiled_aa_gran_kappa[_nlo1][_profhead]_pso`. `kappa=False`
+    rebuilds the pre-kappa name (`..._gran[_nlo1]_pso`), whose parameter and moment
+    layouts this loader no longer reads -- it is kept only so the error is a clear
+    layout mismatch rather than a missing folder.
+    """
     name = f"reporting_{industry}"
     name += "_profiled" if profile_T else ""
     name += "_aa" if ca_level == "aa" else ""
     name += "_gran" if granular else ""
+    name += "_kappa" if (kappa and granular) else ""
     name += "_nlo1" if (relax_n_lo and granular) else ""
+    name += "_profhead" if profile_head else ""
     name += f"_{optimizer}"
     return Path(base) / name
 
@@ -354,6 +364,15 @@ def _read_named_value(coefs, name):
             if len(hit):
                 return float(coefs.loc[hit[0], "value"])
     return None
+
+
+def _ze_key(x):
+    """ZE code as load_parameters.jl keys it: 4-character, zero-padded when numeric."""
+    t = str(x).strip()
+    try:
+        return f"{int(float(t)):04d}"
+    except ValueError:
+        return t
 
 
 def _gk_col(G_K, cands):
@@ -475,7 +494,7 @@ def resolve_parts(parts):
 
 def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                        granular=True, relax_n_lo=False, optimizer="pso", K=-1,
-                       k_max=None, parts=None):
+                       k_max=None, parts=None, kappa=True, profile_head=False):
     """
     Load everything the granular / attraction-area reporting needs.
 
@@ -500,9 +519,11 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                                          `sourcing_geometry` and `simulate_economy` need.
                               counts     G_K.csv / G_K_var.csv -> Gbar_s(0) and the curve
                               moments    best_simulated_moments.npy and the block dicts
-                              inference  Sigma_data / Sigma_sim / Omega / W_step3 and the
-                                         fitted-moment standard errors
-                              jacobian   jacobian_all*.npy and its axes
+                              inference  the FAKE-WORLD artefacts: step2/world_residuals.npz,
+                                         Omega_world / W_world (block 4), and the
+                                         parameter draws of <inf_step>/inference_world/
+                              jacobian   jacobian_all*.npy and its axes (no longer
+                                         written by the Julia code; None on a current tree)
                               geography  france.gpkg, regional wages
                               firm       suppliers.parquet and Julia's own draws --
                                          needed ONLY by `check_against_julia`, since the
@@ -539,8 +560,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     step_dir, inf_step = MU_DIRS[mu]
 
     input_folder = Path(base) / f"baseline_{industry}"
-    folder = reporting_folder(industry, base=base, profile_T=profile_T, ca_level=ca_level, 
-                              granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer) # Given the argument, construct the folder name. 
+    folder = reporting_folder(industry, base=base, profile_T=profile_T, ca_level=ca_level,
+                              granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer,
+                              kappa=kappa, profile_head=profile_head)
     if not folder.exists():
         raise FileNotFoundError(f"run folder {folder} not found — check profile_T / ca_level / "
                                 "granular / relax_n_lo / optimizer against main.jl's naming")
@@ -570,10 +592,19 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     emp_pi_r = X_dr["X_dr"].values[N_downstream != 0].astype(float)
     emp_pi_r = emp_pi_r / emp_pi_r.sum()
 
-    if n_coef == 1:
-        reg_coef = np.array([_read_named_value(coefs, "reg_coef_cloglog_1")], dtype=float)
-    else:
-        reg_coef = np.load(input_folder / f"reg_coef_cloglog_{n_coef}.npy").ravel()
+    # Block 4 = [beta_d (n_coef) ; beta_kappa (1)]: the CELL-level cloglog of has_sup on
+    # the distance regressor(s) and ln n_ls, sector x AA fixed effect -- the same files
+    # load_parameters.jl reads, in the same order.
+    beta_d = np.load(input_folder / f"beta_d_{n_coef}.npy").astype(float).ravel()
+    beta_kappa = np.load(input_folder / f"beta_kappa_{n_coef}.npy").astype(float).ravel()
+    if beta_d.size != n_coef or beta_kappa.size != 1:
+        raise ValueError(f"beta_d_{n_coef}.npy has {beta_d.size} entries (expected {n_coef}) "
+                         f"and beta_kappa_{n_coef}.npy {beta_kappa.size} (expected 1)")
+    reg_coef = np.concatenate([beta_d, beta_kappa])
+    reg_coef_labels = (["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
+                       if n_coef == 5 else
+                       ["]50,100]", "]100,150]", "]150,200]", ">200"] if n_coef == 4
+                       else ["ln d"]) + ["ln n"]
 
     # ------------------------------------------------- attraction-area mapping
     AA_link = np.load(input_folder / "attraction_area_linkages.npy")   # (R, R_downstream)
@@ -684,10 +715,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # ------------------- bootstrap variance of the empirical increments (optional)
     # `G_K_var.csv` is `A129, K, var` (or `se`) and carries the BOOTSTRAP variance of
     # p_s(K) = share of cells with EXACTLY K suppliers -- the same object G_pmf holds.
-    # It is optional: absent, the empirical panels are drawn without a band, exactly as
-    # before. Sigma_data's count block covers K = 0 only, which is why the rest needs a
-    # file at all; the K = 0 column is therefore a free CONSISTENCY CHECK against it and
-    # is compared below rather than trusted.
+    # It is optional: absent, the empirical panels are drawn without a band. The Julia
+    # code reads no data covariance, so this file is the only empirical band on the
+    # count curve.
     gkv_path = input_folder / "G_K_var.csv"
     if granular and "counts" in parts and gkv_path.exists() and sector_codes is not None:
         gkv = pd.read_csv(gkv_path)
@@ -698,8 +728,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # called `G`, which names the object measured, not the statistic. Whatever is
         # left once A129 and K are removed is taken as a VARIANCE (the file's stated
         # content), and the choice is printed rather than assumed silently -- a variance
-        # read as an SE would be off by orders of magnitude, which is exactly what the
-        # K = 0 check against diag(Sigma_data) below is there to catch.
+        # read as an SE would be off by orders of magnitude.
         _named = {c: c.strip().lower() for c in gkv.columns}
         v_col = next((c for c, n in _named.items()
                       if n in ("var", "variance", "v", "var_g", "g_var")), None)
@@ -766,6 +795,37 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                 f"  G_K.csv            : {_gk}\n"
                 f"  filter_N_upstream  : {list(sector_names)}\n"
                 "Gbar_s(0) would be attached to the wrong sector (in load_parameters.jl too).")
+
+    # ------------------------------------------- n_ls: the density term of T_ls
+    # T_ls = T_{a(l)s} * n_ls^kappa (load_parameters.jl SECTION 10), so the cell-level
+    # comparative advantage needs ln n_ls on every simulated cell. Keyed exactly as the
+    # Julia loader keys it: sectors by the sorted A129 strings of filter_N_upstream.csv,
+    # ZE by the sorted 4-character codes.
+    log_n_ls = None
+    cells_path = input_folder / "cells_ls.csv"
+    if cells_path.exists() and filter_N_upstream_df is not None:
+        cdf = pd.read_csv(cells_path)
+        sec_keys = sorted(filter_N_upstream_df["A129"].astype(str).unique())
+        ze_keys = sorted(filter_N_upstream_df["ze2010"].map(_ze_key).unique())
+        if len(sec_keys) == S and len(ze_keys) == R:
+            s_of = {k: i for i, k in enumerate(sec_keys)}
+            l_of = {k: i for i, k in enumerate(ze_keys)}
+            log_n_ls = np.zeros((S, R))
+            si = cdf["A129"].astype(str).map(s_of)
+            li = cdf["ze2010"].map(_ze_key).map(l_of)
+            ok = si.notna() & li.notna()
+            si, li = si[ok].astype(int).values, li[ok].astype(int).values
+            n = cdf.loc[ok, "n_ls"].astype(float).values
+            keep = CELL_MASK[si, li]
+            log_n_ls[si[keep], li[keep]] = np.log(np.maximum(n[keep], 1.0))
+            has = np.zeros((S, R), dtype=bool)
+            has[si[keep], li[keep]] = True
+            if (CELL_MASK & ~has).any():
+                print(f"[load] cells_ls.csv has no n_ls for {int((CELL_MASK & ~has).sum())} "
+                      "simulated cells; ln n_ls set to 0 there (Julia refuses such a tree).")
+    elif kappa:
+        print(f"[load] {cells_path} not found: T_ls = T_a n_ls^kappa cannot be gathered "
+              "to cells, so the Ricardian geometry and the economy are unavailable.")
 
     # ------------------------------------------------ FULL empirical moment vector
     blocks_emp = [np.array([agg_labor_share], dtype=float),
@@ -837,72 +897,58 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         best_params = best_parameters_list[:, K] if best_parameters_list.ndim > 1 \
             else best_parameters_list
 
-    # --------------------------------------------------------- standard errors
-    # The inference subsystem stacks three moment blocks in a fixed order — the
-    # extensive-margin coefficients, the sourcing shares, the zero-supplier shares (the
-    # "beta, gamma, G" ordering invariant of CLAUDE.md; the arrows used elsewhere in the
-    # code name that stacking order, nothing causal).
-    #   Sigma_data       : the bootstrap covariance of the EMPIRICAL moments — how
-    #                      precisely each target is measured in the data;
-    #   se_moments_fitted: sqrt(diag(G V G')), the SE of the FITTED moment. Under
-    #                      profile_T, V is the SANDWICH covariance of alpha_hat and G the
-    #                      PROFILED Jacobian dm/dalpha (alpha moved, T following through
-    #                      the Sinkhorn inversion), so this is the delta-method
-    #                      propagation of alpha_hat's sandwich SE — not an efficient SE
-    #                      from the free-parameter Jacobian, which under profiling would
-    #                      treat T as free when it is not.
+    # ------------------------------------------- inference: fake worlds -------
+    # The Julia code reads no data covariance any more: the weighting and the inference
+    # come from FAKE WORLDS drawn from the model (inference.jl).
+    #
+    #   step2/world_residuals.npz  B worlds at theta_hat_1, each ONE network of N_hat_s
+    #       varieties with i.i.d. draws: its own beta (`beta_world`), the continuum
+    #       simulator's beta at the recalibrated (T, A, N) (`beta_sim`), their difference
+    #       `e`, and `e_data` = data - simulated at theta_hat_1. Omega_world = Cov(e),
+    #       W_world = inv(Omega_world), block 4 only.
+    #   <inf_step>/inference_world/world_inference_draws.npz  the WHOLE chain
+    #       re-estimated in each world (step2 at theta_hat_1 with W = I, step3 at
+    #       theta_hat_2 with W_world): one row of `params` per usable world, labelled by
+    #       world_inference_labels.txt (alpha, kappa, N_s, T, A [, Omega_L, Omega_s]).
     n_gamma_kept = int(mask[off_gam:off_gam + S * n_AA].sum())
-    n_gb = reg_coef.size + n_gamma_kept + (S if granular else 0)
-
-    def _gb_split(v, what):
-        v = np.asarray(v).ravel()
-        if v.size != n_gb:
-            raise ValueError(f"{what} has length {v.size}, expected n_gb = {n_gb} "
-                             f"(= {reg_coef.size} beta + {n_gamma_kept} gamma"
-                             + (f" + {S} G0)" if granular else ")"))
-        out = {"reg_coef": v[:reg_coef.size],
-               "gamma_aa": v[reg_coef.size:reg_coef.size + n_gamma_kept]}
-        if granular:
-            out["G0"] = v[-S:]
-        return out
-
-    se_emp, se_sim = None, None
-    sigma_path = folder / "step2" / "Sigma_data.npy"
-    if "inference" in parts and sigma_path.exists():
-        Sigma_data = np.load(sigma_path)
-        se_emp = _gb_split(np.sqrt(np.maximum(np.diag(Sigma_data), 0.0)), "diag(Sigma_data)")
-    else:
-        Sigma_data = None
-    fitted_path = folder / inf_step / "inference" / "se_moments_fitted.npy"
-    if "inference" in parts and fitted_path.exists():
-        se_sim = _gb_split(np.load(fitted_path), "se_moments_fitted.npy")
-
-    # ------- the count DISTRIBUTION: Julia's own fitted curve and its delta-method SE
-    # Written by `compute_profiled_T_inference`. `se_G_curve_delta.npy` is (S, |K|):
-    # for a FREE sector at K = 0 it collapses to the bootstrap SE of the target (the
-    # count moment is fit by construction, so its variance IS the target's); for K >= 1
-    # it is the residualized alpha + gamma propagation plus the scaled target channel;
-    # for a CLAMPED sector N_hat_s cannot move, so the target channel drops out at
-    # every K. Absent (an older run, or a Jacobian reloaded from disk) => the simulated
-    # panels fall back to the Python reconstruction with no band.
-    G_curve_sim, G_curve_sim_se, G_curve_sim_K = None, None, None
-    inf_dir = folder / inf_step / "inference"
-    if granular and "inference" in parts:
-        p_se, p_fit, p_K = (inf_dir / "se_G_curve_delta.npy",
-                            inf_dir / "G_curve_fitted.npy",
-                            inf_dir / "count_curve_K.npy")
-        if p_se.exists():
-            G_curve_sim_se = np.load(p_se)
-        if p_fit.exists():
-            G_curve_sim = np.load(p_fit)
-        if p_K.exists():
-            G_curve_sim_K = [int(round(k)) for k in np.load(p_K).ravel()]
+    world_residuals = Omega_world = W_world = world_inference = None
+    if "inference" in parts:
+        p = folder / "step2" / "world_residuals.npz"
+        if p.exists():
+            with np.load(p) as z:
+                world_residuals = {k: z[k] for k in z.files}
+            for k in ("e", "beta_world", "beta_sim", "N_hat_world"):
+                if k in world_residuals and world_residuals[k].ndim == 1:
+                    world_residuals[k] = world_residuals[k][:, None]
+            if world_residuals["e"].shape[1] != reg_coef.size:
+                raise ValueError(f"{p} carries {world_residuals['e'].shape[1]} block-4 "
+                                 f"entries, the layout rebuilt here has {reg_coef.size}.")
+        for nm in ("Omega_world", "W_world"):
+            q = folder / "step2" / f"{nm}.npy"
+            if q.exists():
+                M = np.atleast_2d(np.load(q))
+                if nm == "Omega_world":
+                    Omega_world = M
+                else:
+                    W_world = M
+        q = folder / inf_step / "inference_world" / "world_inference_draws.npz"
+        lq = q.parent / "world_inference_labels.txt"
+        if q.exists() and lq.exists():
+            with np.load(q) as z:
+                world_inference = {k: z[k] for k in z.files}
+            world_inference["labels"] = [l for l in lq.read_text().splitlines() if l.strip()]
+            P = np.atleast_2d(world_inference["params"])
+            if P.shape[1] != len(world_inference["labels"]):
+                raise ValueError(f"{q.name} has {P.shape[1]} parameter columns but "
+                                 f"{lq.name} lists {len(world_inference['labels'])}.")
+            world_inference["params"] = P
+            world_inference["folder"] = q.parent
 
     # ----------------------------------------- moment and parameter labels ----
     # Both axes of the Jacobian, rebuilt exactly as load_parameters.jl SECTION 13 does.
     #   rows    : the MASKED moment vector, six blocks;
     #   columns : the IDENTIFIED parameters, layout [Omega_L | Omega_s(S) | A(R_d) |
-    #             alpha(N_TAU) | T(active (s,AA), s-major)], minus the S+2 directions
+    #             alpha(N_TAU) | kappa | T(active (s,AA), s-major)], minus the S+2 directions
     #             the internal normalisations kill (Omega_s[1], A[1], each sector's
     #             reference T).
     moment_labels, moment_block_sizes = [], []
@@ -912,9 +958,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     moment_block_sizes.append(S - 1)
     moment_labels += [f"pi_r[{a}]" for a in aa_names[1:]]
     moment_block_sizes.append(len(aa_names) - 1)
-    moment_labels += ([f"reg_coef[{b + 1}]" for b in range(n_coef)] if n_coef > 1
-                      else ["reg_coef"])
-    moment_block_sizes.append(n_coef)
+    moment_labels += [f"beta_d[{lab}]" for lab in reg_coef_labels[:-1]] + ["beta_kappa"]
+    moment_block_sizes.append(reg_coef.size)
     gam_free = AA_ACTIVE.copy()
     for s in range(S):
         if T_REF_AA[s] >= 0:
@@ -934,7 +979,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     param_labels += [f"A[{a}]" for a in aa_names[1:]]                      # A[1] normalised out
     param_block_sizes.append(len(aa_names) - 1)
     param_labels += (["alpha"] if n_tau == 1 else [f"alpha_{b + 1}" for b in range(n_tau)])
-    param_block_sizes.append(n_tau)
+    param_labels += ["kappa"]
+    param_block_sizes.append(n_tau + 1)
     param_labels += [f"T[{sector_names[s]}-AA{aa_names[a]}]"
                      for s in range(S) for a in range(n_AA) if gam_free[s, a]]
     param_block_sizes.append(int(gam_free.sum()))
@@ -985,19 +1031,6 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
             param_block_names.append("Variety count")
     else:
         n_N_cols = n_N_cols or 0
-
-    # --------------------------------------------------- variance-covariance ---
-    # Sigma_data (bootstrap, empirical) and Sigma_sim (K re-simulations) over the same
-    # three-block subsystem; Omega = Sigma_data + Sigma_sim is what the estimator
-    # actually weighted with, and W_step3 = inv(Omega).
-    def _npy(p):
-        return np.load(p) if p.exists() else None
-
-    Sigma_sim = _npy(folder / "step2" / "Sigma_sim.npy") if "inference" in parts else None
-    Omega = _npy(folder / "step2" / "Omega.npy") if "inference" in parts else None
-    W_step3 = _npy(folder / "step2" / "W_step3.npy") if "inference" in parts else None
-    if Omega is None and Sigma_data is not None and Sigma_sim is not None:
-        Omega = Sigma_data + Sigma_sim
 
     # ------------------------------------------------- granular diagnostics
     granular_diag = None
@@ -1080,7 +1113,10 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # scalars / targets
         "epsilon": epsilon, "agg_labor_share": agg_labor_share,
         "agg_industry_share": agg_industry_share, "emp_pi_r": emp_pi_r,
-        "reg_coef": reg_coef, "G_target": G_target, "N_supplier_s": N_supplier_s,
+        "reg_coef": reg_coef, "reg_coef_labels": reg_coef_labels,
+        "beta_d": beta_d, "beta_kappa": float(beta_kappa[0]), "log_n_ls": log_n_ls,
+        "profile_head": profile_head,
+        "G_target": G_target, "N_supplier_s": N_supplier_s,
         # the WHOLE empirical count curve, Pr(K_ls <= K) by (sector, K); only the
         # K = 0 column is targeted, the rest is the untargeted fit check
         "G_curve": G_curve, "G_curve_K": G_curve_K,
@@ -1114,12 +1150,14 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "J": jac["J"], "J_elast": jac["J_elast"], "J_sd": jac["J_sd"],
         "J_elast_sd": jac["J_elast_sd"], "n_N_cols": n_N_cols,
         "jacobian_param_indices": jac["jacobian_param_indices"],
-        # inference
-        "Sigma_data": Sigma_data, "Sigma_sim": Sigma_sim, "Omega": Omega,
-        "W_step3": W_step3,
-        "se_empirical": se_emp, "se_simulated": se_sim,
-        "G_curve_sim": G_curve_sim, "G_curve_sim_se": G_curve_sim_se,
-        "G_curve_sim_K": G_curve_sim_K,
+        # inference: fake worlds (None when the step has not run)
+        "world_residuals": world_residuals, "Omega_world": Omega_world,
+        "W_world": W_world, "world_inference": world_inference,
+        # the pre-world inference objects, no longer written by the Julia code; kept as
+        # None so a function that tests for them degrades instead of raising
+        "Sigma_data": None, "Sigma_sim": None, "Omega": None, "W_step3": None,
+        "se_empirical": None, "se_simulated": None,
+        "G_curve_sim": None, "G_curve_sim_se": None, "G_curve_sim_K": None,
         "granular_diagnostics": granular_diag,
     }
 
@@ -1200,11 +1238,15 @@ def unpack_estimated_T(data):
     `unpack_params` does, plus alpha.
 
     `best_params` is the RAW theta vector, layout
-        [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA), s-major)],
+        [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s,AA), s-major)],
     where the T block carries EVERY active (sector, area) including each sector's
     reference — `unpack_params` divides the sector by its reference entry, which is
     what makes T_{ref,s} = 1 the gauge. The length is asserted against the rebuilt
     layout, so a flag mismatch is an error rather than a silently shifted vector.
+
+    Returns the AREA-level `T` (S, n_AA) and the CELL-level `T_cell` (S, R) the model
+    actually competes with, `T_ls = T_{a(l)s} * n_ls^kappa` (`gather_T_to_ze`), zero
+    outside CELL_MASK.
     """
     bp = data.get("best_params")
     if bp is None:
@@ -1217,21 +1259,31 @@ def unpack_estimated_T(data):
     AA_ACTIVE = data["AA_ACTIVE"]
     R_d = len(data["aa_names"])                       # one area per downstream region
     n_T = int(AA_ACTIVE.sum())
-    expected = 1 + S + R_d + n_tau + n_T
+    expected = 1 + S + R_d + n_tau + 1 + n_T
     if bp.size != expected:
         raise ValueError(
             f"best_params has {bp.size} entries but the layout rebuilt here is "
-            f"{expected} = 1 + {S} + {R_d} + {n_tau} + {n_T} — the run's flags and the "
-            "ones passed here disagree.")
+            f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T} — the run's "
+            "flags and the ones passed here disagree.")
 
-    alpha = bp[1 + S + R_d: 1 + S + R_d + n_tau]
+    off = 1 + S + R_d
+    alpha = bp[off: off + n_tau]
+    kappa = float(bp[off + n_tau])
     T = np.zeros((S, n_AA))
-    T[AA_ACTIVE] = bp[1 + S + R_d + n_tau:]           # C-order on (S, n_AA) == s-major
+    T[AA_ACTIVE] = bp[off + n_tau + 1:]               # C-order on (S, n_AA) == s-major
     for s in range(S):
         ref = data["T_REF_AA"][s]
         if ref >= 0 and T[s, ref] > 0:
             T[s] = T[s] / T[s, ref]
-    return {"T": T, "alpha": alpha, "theta": model_theta(data)}
+    log_n = data.get("log_n_ls")
+    if log_n is None:
+        if kappa != 0.0:
+            raise FileNotFoundError("cells_ls.csv was not read, so T_ls = T_a n_ls^kappa "
+                                    f"cannot be formed at kappa = {kappa:.4g}.")
+        log_n = np.zeros((S, data["R"]))
+    T_cell = T[:, data["aa_of_ze"]] * np.exp(kappa * log_n) * data["CELL_MASK"]
+    return {"T": T, "T_cell": T_cell, "alpha": alpha, "kappa": kappa,
+            "theta": model_theta(data)}
 
 
 def _downstream_ze_index(data):
@@ -1270,8 +1322,9 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
         cells = np.flatnonzero(CELL_MASK[s])                       # 0-based ZE
         if cells.size == 0:
             continue
-        # the ONE line that assumes comparative advantage is constant within an area
-        T_cell = np.ones(cells.size) if equalise_T else est["T"][s, aa_of_ze[cells]]
+        # cell-level comparative advantage T_ls = T_{a(l)s} n_ls^kappa; `equalise_T`
+        # sets every cell to one, as Julia's `:equal_T` regime does
+        T_cell = np.ones(cells.size) if equalise_T else est["T_cell"][s, cells]
         d = np.maximum(D[np.ix_(cells, down - 1)], 1.0)            # (n_cell, R_d)
         psi = T_cell[:, None] * d ** (-theta * a)
         tot = psi.sum(axis=0, keepdims=True)
@@ -1438,11 +1491,11 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
     S, n_AA, n_tau = data["S"], data["n_AA"], data["n_tau"]
     R_d = len(data["aa_names"])
     n_T = int(data["AA_ACTIVE"].sum())
-    expected = 1 + S + R_d + n_tau + n_T
+    expected = 1 + S + R_d + n_tau + 1 + n_T
     if bp.size != expected:
         raise ValueError(
             f"best_params has {bp.size} entries but the layout rebuilt here is "
-            f"{expected} = 1 + {S} + {R_d} + {n_tau} + {n_T}.")
+            f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T}.")
 
     est = unpack_estimated_T(data)                 # T, gauge-fixed, plus alpha and theta
     if theta is None:
@@ -1478,7 +1531,9 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
           "Omega_s": bp[1:1 + S].copy(),
           "A": bp[1 + S:1 + S + R_d].copy(),
           "alpha": est["alpha"].copy(),
+          "kappa": est["kappa"],
           "T": est["T"],                            # (S, n_AA), T[s, ref] = 1
+          "T_cell": est["T_cell"],                  # (S, R), T_a n_ls^kappa
           "N": n_hat[:S].copy(),
           "theta": float(theta), "theta_source": src,
           "nu_s": np.full(S, float(NU_S_DEFAULT)),

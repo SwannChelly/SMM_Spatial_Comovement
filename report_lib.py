@@ -27,6 +27,10 @@ from utils import (
 )
 
 
+# 2.5/97.5% quantiles: the fake-world intervals reported everywhere (inference.jl)
+WORLD_Q = (0.025, 0.975)
+
+
 # ============================================================================
 # Moment table
 # ============================================================================
@@ -37,6 +41,9 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     LaTeX table with one {Emp., Sim.} column pair per industry.
 
     Panel A: aggregate labor share.  Panel B: aggregate industry shares.
+    Panel C: the extensive margin, block 4 = [beta_d ; beta_kappa] -- the cell cloglog
+    of has_sup on the distance regressor(s) and on ln n_ls. Under each simulated
+    coefficient, its 95% fake-world band (`reg_coef_world_table`) when Step 2 has run.
 
     industries_config : [{'industry': 'aero', 'display_name': 'Aerospace'}, ...]
     mu                : 1 (step1 best parameters) or 2 (step3 best parameters)
@@ -50,7 +57,7 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
         name_A129 = None
 
     n_ind = len(industries_config)
-    col_spec = "l " + " ".join(["S[table-format=1.4] S[table-format=1.4]"] * n_ind)
+    col_spec = "l " + " ".join(["S[table-format=-1.4] S[table-format=-1.4]"] * n_ind)
     header_row1 = " & " + " & ".join(
         [f"\\multicolumn{{2}}{{c}}{{{c['display_name']}}}" for c in industries_config]) + r" \\"
     cmidrules = " ".join([f"\\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(n_ind)])
@@ -89,6 +96,26 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
                     if len(m) else ["---", "---"])
         panel_B_rows.append(row)
 
+    # --- Panel C: block 4 -----------------------------------------------------
+    # Rows are keyed on the coefficient LABEL (bins or ln d, then ln n), so two industries
+    # estimated with the same n_coef line up; a label absent from one industry is `---`.
+    c_labels, c_vals, c_bands = [], {}, {}
+    for c in industries_config:
+        d = all_data[c["industry"]]
+        labs = reg_bin_labels(d["n_coef"], with_kappa=True)
+        for l in labs:
+            if l not in c_labels:
+                c_labels.append(l)
+        emp = d["empirical_moments_dict"]["reg_coef"]
+        sim = d["simulated_moments_dict"]["reg_coef"]
+        wt = reg_coef_world_table(d)
+        c_vals[c["industry"]] = {l: (float(e), float(m)) for l, e, m in zip(labs, emp, sim)}
+        c_bands[c["industry"]] = ({} if wt is None else
+                                  {l: (lo, hi) for l, lo, hi in
+                                   zip(labs, wt["band_lo"].values, wt["band_hi"].values)})
+    # ln n last, whatever the order the industries listed the bins in
+    c_labels = [l for l in c_labels if "n_{ls}" not in l] + [l for l in c_labels if "n_{ls}" in l]
+
     def fmt(v, decimals=4):
         if isinstance(v, str) or (isinstance(v, float) and np.isnan(v)):
             return "{---}"
@@ -113,21 +140,130 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     for row in panel_B_rows:
         tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
 
+    tex += "\\midrule\n"
+    tex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel C: Extensive Margin "
+            f"(cell cloglog)}}}} \\\\\n")
+    tex += "\\midrule\n"
+    any_band = False
+    for l in c_labels:
+        name = (r"Density, $\beta_\kappa$ on " + l if "n_{ls}" in l
+                else r"Distance, $\beta_d$ " + l)
+        row, band = [name], [""]
+        for c in industries_config:
+            v = c_vals[c["industry"]].get(l)
+            row += ["---", "---"] if v is None else list(v)
+            b = c_bands[c["industry"]].get(l)
+            band += ["{}", "{}" if b is None else f"{{[{b[0]:.3f}, {b[1]:.3f}]}}"]
+            any_band |= b is not None
+        tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
+        if any(x not in ("", "{}") for x in band):
+            tex += " & ".join(band) + " \\\\\n"
+
     tex += "\\bottomrule\n" + r"\end{tabular}" + "\n\n"
     tex += (r"\vspace{0.3cm}" "\n"
             r"\caption*{\footnotesize \emph{Notes}: Empirical moments against moments simulated "
             r"from the model calibrated on each industry, evaluated at " + mu_label + r". "
             r"``Emp.'' = Empirical, ``Sim.'' = Simulated. Panel~A reports the aggregate labor "
             r"share, Panel~B the sectoral industry shares. ``---'' indicates the sector is not "
-            r"present in that industry's sample. The distance-bin (cloglog) coefficients and the "
-            r"zero-supplier shares $\bar{G}_s(0)$ are reported in separate figures, with standard "
-            r"errors.}" "\n" r"\end{table}" "\n")
+            r"present in that industry's sample. Panel~C reports the cell-level cloglog of the "
+            r"supplier indicator on distance and on the log number of establishments $n_{ls}$, "
+            r"with a sector $\times$ attraction-area fixed effect; the model counterpart is "
+            r"averaged over 100 networks of $\hat N_s$ varieties."
+            + (r" In brackets: the 2.5--97.5\% quantiles of the coefficient in a single "
+               r"finite economy drawn from the model (simulated value plus the fake-world "
+               r"residual $\beta_{world}-\beta_{sim}$ of Step~2)." if any_band else "")
+            + r" The zero-supplier shares $\bar{G}_s(0)$ are reported in a separate figure.}"
+            "\n" r"\end{table}" "\n")
 
     if output_file is not None:
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
         with open(output_file, "w") as f:
             f.write(tex)
         print(f"Combined table saved to: {output_file}")
+    return tex
+
+
+def generate_parameter_table(industries_config, output_file="parameters_combined.tex",
+                             mu=2, q=WORLD_Q, **load_kwargs):
+    """
+    LaTeX table of the searched parameters with their fake-world 95% intervals.
+
+    One {Estimate, 95% interval} column pair per industry; rows alpha (one per segment
+    under binned tau), kappa, then N_hat_s per sector. The interval is the 2.5/97.5%
+    quantiles of the parameter re-estimated in each fake world of the inference step
+    (`<inf_step>/inference_world/`): Step 2 at theta_hat_1 (mu = 1), Step 4 at
+    theta_hat_2 (mu = 2). Below each estimate, in parentheses, the sd across worlds.
+    """
+    all_data = {c["industry"]: load_granular_data(c["industry"], mu=mu, **load_kwargs)
+                for c in industries_config}
+    tabs = {k: world_param_table(d, q=q) for k, d in all_data.items()}
+    n_ind = len(industries_config)
+
+    def _key_label(l, d):
+        if l.startswith("alpha"):
+            return r"$\alpha$" if d["n_tau"] == 1 else rf"$\alpha_{{{l[6:-1]}}}$"
+        if l == "kappa":
+            return r"$\kappa$"
+        return rf"$\hat N_s$, {l[4:-1]}"
+
+    rows = []                                   # (label, {industry: (est, sd, lo, hi)})
+    for c in industries_config:
+        t, d = tabs[c["industry"]], all_data[c["industry"]]
+        if t is None:
+            continue
+        for l in t.index:
+            if not (_is_trade_param(l) or l.startswith("N_s[")):
+                continue
+            key = _key_label(l, d)
+            hit = next((r for r in rows if r[0] == key), None)
+            if hit is None:
+                hit = (key, {})
+                rows.append(hit)
+            r = t.loc[l]
+            hit[1][c["industry"]] = (r["estimate"], r["sd"], r["q_lo"], r["q_hi"])
+
+    col_spec = "l " + " ".join(["c c"] * n_ind)
+    head1 = " & " + " & ".join(rf"\multicolumn{{2}}{{c}}{{{c['display_name']}}}"
+                               for c in industries_config) + r" \\"
+    cmid = " ".join(rf"\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(n_ind))
+    head2 = " & " + " & ".join([r"Estimate & 95\% interval"] * n_ind) + r" \\"
+    mu_label = r"$\hat{\mu}_1$ (Step~1)" if mu == 1 else r"$\hat{\mu}_2$ (Step~3)"
+    tex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
+           r"\caption{Parameter Estimates and Fake-World Confidence Intervals}" "\n"
+           r"\label{tab:parameters_combined}" "\n" r"\small" "\n"
+           r"\begin{tabular}{" + col_spec + "}\n" r"\toprule" "\n"
+           + head1 + "\n" + cmid + "\n" + head2 + "\n" r"\midrule" "\n")
+    for i, (key, vals) in enumerate(rows):
+        if i and key.startswith(r"$\hat N_s$") and not rows[i - 1][0].startswith(r"$\hat N_s$"):
+            tex += r"\midrule" "\n"
+        is_N = key.startswith(r"$\hat N_s$")
+        cells, sds = [key], [""]
+        for c in industries_config:
+            v = vals.get(c["industry"])
+            if v is None:
+                cells += ["---", "---"]; sds += ["", ""]
+                continue
+            e, sd, lo, hi = v
+            f = (lambda x: f"{x:.0f}") if is_N else (lambda x: f"{x:.3f}")
+            cells += [f(e), f"[{f(lo)}, {f(hi)}]"]
+            sds += [f"({sd:.1f})" if is_N else f"({sd:.3f})", ""]
+        tex += " & ".join(cells) + r" \\" "\n" + " & ".join(sds) + r" \\" "\n"
+    nw = {k: (t.attrs["n_worlds"] if t is not None else 0) for k, t in tabs.items()}
+    tex += (r"\bottomrule" "\n" r"\end{tabular}" "\n\n" r"\vspace{0.3cm}" "\n"
+            r"\caption*{\footnotesize \emph{Notes}: Estimates at " + mu_label + r". "
+            r"Inference from fake worlds drawn from the model at the estimate: in each world, "
+            r"one network of $\hat N_s$ varieties with independent draws gives its own data "
+            r"moments, on which the whole estimator is re-run (T and A re-inverted, "
+            r"$N_s$ re-calibrated, $(\alpha,\kappa)$ re-estimated). 95\% interval: "
+            r"2.5--97.5\% quantiles across worlds; standard deviation in parentheses. "
+            r"Usable worlds: " + ", ".join(f"{c['display_name']} {nw[c['industry']]}"
+                                           for c in industries_config) + r".}" "\n"
+            r"\end{table}" "\n")
+    if output_file is not None:
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        with open(output_file, "w") as f:
+            f.write(tex)
+        print(f"Parameter table saved to: {output_file}")
     return tex
 
 
@@ -266,23 +402,15 @@ def plot_pi_r(data, ax=None, save_to=None):
 # Fit with standard errors: extensive margin, zero-supplier share, count curve
 # ============================================================================
 
-REG_BIN_LABELS_5 = [r"$]0,50]$", r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"]
-
-
-def reg_bin_labels(n_coef):
-    if n_coef == 1:
-        return [r"$\log d$"]
-    if n_coef == 4:
-        return REG_BIN_LABELS_5[1:]
-    if n_coef == 5:
-        return list(REG_BIN_LABELS_5)
-    return [rf"$\beta_{{{i + 1}}}$" for i in range(n_coef)]
-
-
 def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
-                     ylabel="", xlabel="", title=None, rotate=0):
+                     ylabel="", xlabel="", title=None, rotate=0,
+                     band_emp=None, band_sim=None, sim_label="Simulated", legend=True):
     """
     Empirical (left) against simulated (right) at each tick, with +/- ci*SE bars.
+
+    `band_emp` / `band_sim` = (lo, hi) arrays draw an ASYMMETRIC interval in data units
+    instead (a fake-world quantile band is not symmetric about the point) and take
+    precedence over the corresponding SE.
 
     A point whose SE is zero, missing or NaN keeps its MARKER and simply gets no bar.
     Drawing it through `errorbar` with a zero yerr would put a bare cap on the marker,
@@ -293,8 +421,19 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
     x = np.arange(len(labels), dtype=float)
     off = 0.12
 
-    def _series(xs, vals, se, **kw):
+    def _series(xs, vals, se, band=None, **kw):
         vals = np.asarray(vals, float)
+        if band is not None:
+            lo, hi = (np.asarray(b, float) for b in band)
+            has = np.isfinite(lo) & np.isfinite(hi) & (hi > lo)
+            if has.any():
+                yerr = np.vstack([np.maximum(vals[has] - lo[has], 0.0),
+                                  np.maximum(hi[has] - vals[has], 0.0)])
+                ax.errorbar(xs[has], vals[has], yerr=yerr, **kw)
+                kw = {**kw, "label": None}
+            if (~has).any():
+                ax.errorbar(xs[~has], vals[~has], yerr=None, **kw)
+            return
         if se is None:
             ax.errorbar(xs, vals, yerr=None, **kw)
             return
@@ -307,14 +446,14 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
         if (~has).any():
             ax.errorbar(xs[~has], vals[~has], yerr=None, **kw)
 
-    _series(x - off, emp, se_emp,
+    _series(x - off, emp, se_emp, band_emp,
             fmt="o", color=toulouse_color, capsize=3, markersize=7,
             markeredgecolor="black", markeredgewidth=0.5, linestyle="none",
             label="Empirical")
-    _series(x + off, sim, se_sim,
+    _series(x + off, sim, se_sim, band_sim,
             fmt="D", color=sim_color, capsize=3, markersize=6,
             markeredgecolor="black", markeredgewidth=0.5, linestyle="none",
-            label="Simulated")
+            label=sim_label)
     #ax.axhline(0, color="black", linewidth=0.6, alpha=0.5)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center")
@@ -324,40 +463,231 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
     if title:
         ax.set_title(title)
     ax.grid(axis="y", linestyle="dashed", alpha=0.5)
-    ax.legend(frameon=False)
+    if legend:
+        ax.legend(frameon=False)
     _despine(ax)
     return ax
 
 
-def plot_reg_coef(data, ax=None, save_to=None, ci=1.96):
-    """Empirical vs simulated cloglog distance coefficients, with SEs."""
-    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
-    sim = np.asarray(data["simulated_moments_dict"]["reg_coef"], float)
-    se_e = data["se_empirical"]["reg_coef"] if data["se_empirical"] else None
-    se_s = data["se_simulated"]["reg_coef"] if data["se_simulated"] else None
+def reg_bin_labels(n_coef, with_kappa=False):
+    """Tick labels of block 4: the distance coefficients, then (optionally) ln n."""
+    d = {1: [r"$\ln d$"],
+         4: [r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"],
+         5: [r"$]20,50]$", r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"]}
+    out = d.get(n_coef, [rf"$\beta_{{{i + 1}}}$" for i in range(n_coef)])
+    return out + ([r"$\ln n_{ls}$"] if with_kappa else [])
 
-    fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
-    _paired_errorbar(ax, reg_bin_labels(data["n_coef"]), emp, sim, se_e, se_s, ci=ci,
-                     ylabel=r"Extensive margin coefficient",
-                     xlabel="Distance bin (km)")
+
+# ---------------------------------------------------------------------------
+# Fake-world confidence bands (inference.jl). Nothing is re-estimated here.
+# ---------------------------------------------------------------------------
+
+def _sim_block4(data):
+    return np.asarray(data["simulated_moments_dict"]["reg_coef"], float)
+
+
+def reg_coef_world_table(data, q=WORLD_Q):
+    """
+    Block 4 = [beta_d ; beta_kappa]: data, simulated, and the fake-world 95% band.
+
+    `step2/world_residuals.npz` holds, for B worlds drawn at theta_hat_1, the residual
+    `e_b = beta_world - beta_sim` (a world's own cell cloglog on ONE network of N_hat_s
+    varieties, minus the continuum simulator at the world's recalibrated T, A, N). Its
+    covariance IS the Omega_world the estimator weights block 4 with. Under the model,
+    the data residual `e_data = data - simulated` is one more draw of `e`, so
+
+        band = simulated + [q_2.5(e), q_97.5(e)]
+
+    is where the model places the DATA moment of a single finite economy. The data point
+    outside the band is a rejection of the fit for that coefficient at 5%. `z` is the
+    same reading in sd units, centred on the world mean of `e` (the continuum simulator's
+    bias against a finite world, the `mean e_b` column of world_weight_report.txt).
+
+    The band is built at theta_hat_1 (Step 2 is the only step that saves the residuals);
+    for mu = 2 it is re-centred on the step-3 simulated moment. Returns None when the
+    residuals are absent.
+    """
+    wr = data.get("world_residuals")
+    if wr is None:
+        return None
+    e = np.asarray(wr["e"], float)
+    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    sim = _sim_block4(data)
+    lo_e, hi_e = np.nanquantile(e, q[0], axis=0), np.nanquantile(e, q[1], axis=0)
+    mu_e, sd_e = np.nanmean(e, axis=0), np.nanstd(e, axis=0, ddof=1)
+    labels = [f"beta_d[{l}]" for l in data["reg_coef_labels"][:-1]] + ["beta_kappa"]
+    df = pd.DataFrame({
+        "data": emp, "simulated": sim, "residual": emp - sim,
+        "world_mean_e": mu_e, "world_sd_e": sd_e,
+        "band_lo": sim + lo_e, "band_hi": sim + hi_e,
+        "z": (emp - sim - mu_e) / sd_e,
+    }, index=pd.Index(labels, name="moment"))
+    df["inside_band"] = (df["data"] >= df["band_lo"]) & (df["data"] <= df["band_hi"])
+    W = data.get("W_world")
+    r = emp - sim
+    J = float(r @ W @ r) if W is not None and W.shape == (emp.size, emp.size) else np.nan
+    # Under the model e_data is one more draw of e, so J is read against the same
+    # quadratic form over the worlds (uncentred on both sides: the simulator's bias
+    # against a finite world is part of what e_data carries too).
+    Jw = (np.einsum("bi,ij,bj->b", e, W, e) if np.isfinite(J) else None)
+    df.attrs.update(n_worlds=int(e.shape[0]), q=q, J=J,
+                    J_pvalue=(float(np.mean(Jw >= J)) if Jw is not None else np.nan))
+    return df
+
+
+def world_param_table(data, select=None, q=WORLD_Q, prefixes=None):
+    """
+    Parameter-level inference from the fake worlds of `<inf_step>/inference_world/`.
+
+    One row per parameter: the estimate, the mean across worlds, bias = mean - estimate,
+    sd, and the 2.5/97.5% quantiles -- the same numbers as Julia's
+    `world_inference.txt`. `select` is a predicate on the label (e.g.
+    `lambda l: l.startswith("alpha") or l == "kappa"`), `prefixes` a tuple of label
+    prefixes (e.g. `("alpha", "kappa", "N_s")`). A T entry that is NaN in a world
+    is an area that won nothing there (T set to zero); `empty_share` counts them and the
+    statistics are over the other worlds, as in Julia's report.
+    """
+    wi = data.get("world_inference")
+    if wi is None:
+        return None
+    lbl, P, est = wi["labels"], np.asarray(wi["params"], float), np.asarray(wi["estimate"], float)
+    keep = [j for j, l in enumerate(lbl) if (select is None or select(l))
+            and (prefixes is None or l.startswith(tuple(prefixes)))]
+    rows = []
+    for j in keep:
+        x = P[:, j]
+        f = x[np.isfinite(x)]
+        rows.append({"parameter": lbl[j], "estimate": est[j],
+                     "mean": f.mean() if f.size else np.nan,
+                     "bias": (f.mean() - est[j]) if f.size else np.nan,
+                     "sd": f.std(ddof=1) if f.size > 1 else np.nan,
+                     "q_lo": np.quantile(f, q[0]) if f.size else np.nan,
+                     "q_hi": np.quantile(f, q[1]) if f.size else np.nan,
+                     "empty_share": float(np.mean(~np.isfinite(x)))})
+    df = pd.DataFrame(rows).set_index("parameter")
+    df.attrs.update(n_worlds=int(P.shape[0]), folder=str(wi.get("folder", "")))
+    return df
+
+
+def _is_trade_param(label):
+    return label.startswith("alpha") or label == "kappa"
+
+
+def _n_hat_world(data):
+    """(B, S) variety counts re-calibrated in each fake world, or None."""
+    wi = data.get("world_inference")
+    if wi is None:
+        return None
+    cols = [wi["labels"].index(f"N_s[{s}]") for s in data["sector_names"]
+            if f"N_s[{s}]" in wi["labels"]]
+    if len(cols) != data["S"]:
+        return None
+    return np.rint(np.asarray(wi["params"], float)[:, cols]).astype(int)
+
+
+def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
+    """
+    Block 4 = [beta_d ; beta_kappa], empirical against simulated, with the 95% fake-world
+    band on the simulated point (`reg_coef_world_table`).
+
+    Two panels sharing nothing but the legend: the distance coefficients (one per bin,
+    or ln d) on the left, the density coefficient on ln n_ls on the right -- the two are
+    on different scales and identify different parameters (alpha and kappa). The data
+    point carries no bar: the Julia code reads no data covariance, and the band already
+    contains the sampling noise of one finite network.
+    """
+    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    sim = _sim_block4(data)
+    tab = reg_coef_world_table(data, q=q)
+    band = None if tab is None else (tab["band_lo"].values, tab["band_hi"].values)
+    nd = data["n_coef"]
+    labels = reg_bin_labels(nd, with_kappa=True)
+    sim_label = "Simulated" + ("" if band is None
+                               else rf" (95\% fake-world band)" if mpl.rcParams.get("text.usetex")
+                               else " (95% fake-world band)")
+
+    if ax is None:
+        fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.62),
+                                gridspec_kw={"width_ratios": [max(nd, 1) + 0.6, 1.6]})
+    else:
+        fig, axs = ax.figure, np.atleast_1d(ax)
+        if axs.size != 2:
+            raise ValueError("plot_reg_coef draws two panels: pass two axes")
+    sl = [slice(0, nd), slice(nd, nd + 1)]
+    for k, (a, s_) in enumerate(zip(axs, sl)):
+        _paired_errorbar(a, labels[s_], emp[s_], sim[s_],
+                         band_sim=None if band is None else (band[0][s_], band[1][s_]),
+                         ylabel=(r"Cell cloglog coefficient" if k == 0 else ""),
+                         xlabel=("Distance bin (km)" if nd > 1 else "") if k == 0 else "Density",
+                         sim_label=sim_label, legend=(k == 0))
+    fig.tight_layout()
+    if tab is not None and not tab["inside_band"].all():
+        out = list(tab.index[~tab["inside_band"]])
+        print(f"[plot_reg_coef] {data['industry']}: data outside the 95% fake-world band "
+              f"for {out}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
-        ax.figure.savefig(save_to, format="pdf", bbox_inches="tight")
-    return ax
+        fig.savefig(save_to, format="pdf", bbox_inches="tight")
+    return axs
 
 
-def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
-    """Empirical vs simulated Gbar_s(0) — the share of cells with no supplier."""
+def g_curve_world_band(data, K_values=(0,), q=WORLD_Q):
+    """
+    (lo, hi) arrays (S, |K|) for the simulated count curve, from the variety counts
+    re-calibrated in each fake world.
+
+    Each world re-calibrates N_s on its own empty-cell share; pushing the B counts
+    through the closed form at the estimate's win probabilities q_hat gives the spread
+    of the fitted curve that the VARIETY-COUNT channel carries. It holds q_hat at
+    theta_hat (the worlds' own (alpha, kappa, T) are not re-simulated here), so it is a
+    lower bound on the full band. None when the worlds or the diagnostics are absent.
+    """
+    Nw = _n_hat_world(data)
+    diag = data.get("granular_diagnostics")
+    if Nw is None or diag is None or "q_hat" not in diag:
+        return None
+    Ks = list(K_values)
+    q_hat = np.asarray(diag["q_hat"], float).ravel()
+    N_HI = np.asarray(diag["N_HI"], float).ravel() if "N_HI" in diag else np.array([100.0])
+    n_rho = max(100, int(round(np.nanmax(N_HI))))
+    k_counts = np.rint(q_hat * n_rho).astype(int)
+    lg = _logfact(n_rho)
+    good_s = _cell_sectors(data)
+    S = data["S"]
+    lo, hi = np.full((S, len(Ks)), np.nan), np.full((S, len(Ks)), np.nan)
+    for s in range(S):
+        cells = good_s == s
+        if not cells.any():
+            continue
+        vals = {}
+        for n in np.unique(Nw[:, s]):
+            vals[n] = [gbar_cells(k_counts[cells], n_rho, n, K, lg).mean() for K in Ks]
+        draws = np.array([vals[n] for n in Nw[:, s]])          # (B, |K|)
+        lo[s], hi[s] = np.quantile(draws, q[0], axis=0), np.quantile(draws, q[1], axis=0)
+    return lo, hi
+
+
+def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
+    """
+    Empirical vs simulated Gbar_s(0) -- the share of cells with no supplier.
+
+    The simulated point carries the 95% band of `g_curve_world_band` (variety-count
+    channel); each sector is annotated with N_hat_s and, when the fake worlds are on
+    disk, its 95% interval across worlds.
+    """
     if not data["granular"]:
         raise ValueError("Gbar_s(0) only exists under --granular=true")
     emp = np.asarray(data["empirical_moments_dict"]["G0"], float)
     sim = np.asarray(data["simulated_moments_dict"]["G0"], float)
-    se_e = data["se_empirical"]["G0"] if data["se_empirical"] else None
-    se_s = data["se_simulated"]["G0"] if data["se_simulated"] else None
+    wb = g_curve_world_band(data, K_values=(0,), q=q)
+    band = None if wb is None else (wb[0][:, 0], wb[1][:, 0])
 
     fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
-    _paired_errorbar(ax, data["sector_names"], emp, sim, se_e, se_s, ci=ci,
-                     ylabel=r"$\bar{G}_s(0)$", rotate=45)
+    _paired_errorbar(ax, data["sector_names"], emp, sim, ci=ci, band_sim=band,
+                     ylabel=r"$\bar{G}_s(0)$", rotate=45,
+                     sim_label="Simulated" if band is None else
+                     ("Simulated (95\\% fake-world band)" if mpl.rcParams.get("text.usetex")
+                      else "Simulated (95% fake-world band)"))
 
     # The profiled variety count is what the model moves to hit this moment, so
     # print it next to each sector — a clamped sector cannot close its own residual.
@@ -365,11 +695,14 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
     if annotate_N and diag is not None and "N_hat" in diag:
         N_hat = np.asarray(diag["N_hat"]).ravel()
         clamped = np.asarray(diag.get("clamped", np.zeros_like(N_hat))).ravel()
+        Nw = _n_hat_world(data)
         top = ax.get_ylim()[1]
         for i, (n, cl) in enumerate(zip(N_hat, clamped)):
-            ax.text(i, top, rf"$\hat{{N}}_s={int(n)}$" + ("*" if cl != 0 else ""),
-                    ha="center", va="bottom", fontsize=fs(12), rotation=45)
-        #ax.set_ylim(ax.get_ylim()[0], top * 1.02)
+            txt = rf"$\hat{{N}}_s={int(n)}$" + ("*" if cl != 0 else "")
+            if Nw is not None:
+                a, b = np.quantile(Nw[:, i], q)
+                txt += rf" $[{int(a)},{int(b)}]$"
+            ax.text(i, top, txt, ha="center", va="bottom", fontsize=fs(12), rotation=45)
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         ax.figure.savefig(save_to, format="pdf", bbox_inches="tight")
@@ -383,6 +716,56 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True):
               f"{data['inference_step']}/granular_diagnostics.npz disagree on "
               "Gbar_s(0) — run g0_consistency(data) for the per-sector table.")
     return ax
+
+
+def plot_parameter_ci(data, save_to=None, q=WORLD_Q):
+    """
+    (alpha, kappa) and N_hat_s with their 95% fake-world intervals.
+
+    Left: the trade-cost elasticity (one per segment under binned tau) and the density
+    elasticity kappa -- the two parameters the search runs over. Right: the variety count
+    of each sector, re-calibrated in every world (its integer jumps are part of the
+    distribution). Points are the estimate, bars the 2.5/97.5% quantiles across worlds,
+    open circles the world mean (its distance to the point is the bias).
+    """
+    tab = world_param_table(data, q=q)
+    if tab is None:
+        raise FileNotFoundError(
+            f"no {data['inference_step']}/inference_world/world_inference_draws.npz under "
+            f"{data['folder']} — run the inference step of main.jl.")
+    head = tab[[_is_trade_param(l) for l in tab.index]]
+    Ns = tab.loc[[f"N_s[{s}]" for s in data["sector_names"]]]
+
+    fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.55),
+                            gridspec_kw={"width_ratios": [len(head) + 0.6, len(Ns) + 0.6]})
+
+    def _draw(a, df, labels, ylabel):
+        x = np.arange(len(df), dtype=float)
+        v = df["estimate"].values
+        a.errorbar(x, v, yerr=np.vstack([np.maximum(v - df["q_lo"].values, 0),
+                                         np.maximum(df["q_hi"].values - v, 0)]),
+                   fmt="o", color=toulouse_color, capsize=3, markersize=7,
+                   markeredgecolor="black", markeredgewidth=0.5, linestyle="none")
+        a.plot(x, df["mean"].values, "o", mfc="none", mec="black", markersize=8)
+        a.set_xticks(x)
+        a.set_xticklabels(labels, rotation=45 if len(df) > 4 else 0,
+                          ha="right" if len(df) > 4 else "center")
+        a.set_xlim(-0.6, len(df) - 0.4)
+        a.set_ylabel(ylabel)
+        a.grid(axis="y", linestyle="dashed", alpha=0.5)
+        _despine(a)
+
+    hl = [(r"$\alpha$" if l == "alpha[1]" and data["n_tau"] == 1 else
+           rf"$\alpha_{{{l[6:-1]}}}$" if l.startswith("alpha") else r"$\kappa$")
+          for l in head.index]
+    _draw(axs[0], head, hl, "Estimate")
+    axs[0].axhline(0, color="black", linewidth=0.6, alpha=0.5)
+    _draw(axs[1], Ns, data["sector_names"], r"$\hat N_s$")
+    fig.tight_layout()
+    if save_to:
+        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
+        fig.savefig(save_to, format="pdf", bbox_inches="tight")
+    return axs
 
 
 G0_TOL = 1e-6
@@ -567,9 +950,7 @@ def count_curve(data, K_values=None, tol=1e-9):
 
     Sources, in order of preference:
 
-    * simulated  -- `<step>/inference/G_curve_fitted.npy`, written by Julia at the same
-      theta_hat and the same pinned `N_hat_s` the delta-method SE was built at. Absent,
-      it is rebuilt here from `q_hat` and `N_hat_s` under the same unbiased convention,
+    * simulated  -- rebuilt here from `q_hat` and `N_hat_s` under the same unbiased convention,
       with `m = N_rho` RECOVERED from the diagnostics (`max(100, max N_HI)`, the rule in
       load_parameters.jl) and the recovery CHECKED twice: `q_hat * m` must be integral
       (it is a win count), and the K = 0 column must reproduce block 6 of the moment
@@ -577,7 +958,10 @@ def count_curve(data, K_values=None, tol=1e-9):
       says so.
     * empirical  -- the increments of `G_K.csv`, `p_s(K) = G(K) - G(K-1)`.
 
-    Returns a (sector, K)-indexed DataFrame with both standard errors where available;
+    The simulated curve carries the 95% fake-world band of `g_curve_world_band`
+    (`sim_lo`, `sim_hi`), the empirical one the bootstrap SE of `G_K_var.csv` if supplied.
+
+    Returns a (sector, K)-indexed DataFrame;
     `df.attrs` carries the estimator, the K = 0 gap against the moment vector, and the
     draw count used.
     """
@@ -635,27 +1019,9 @@ def count_curve(data, K_values=None, tol=1e-9):
               "— read it as indicative, and check N_rho against the run's log line.")
         sim, estimator, gap = sim_pi, "plug-in Binomial(N_hat, q_hat)", gap_pi
 
-    # Julia's own curve wins when present: it was evaluated at the same theta_hat and
-    # the same PINNED N_hat_s as the delta-method SE beside it, so the point and its
-    # band cannot drift apart the way a Python reconstruction can.
-    sim_se = np.full((S, len(Ks)), np.nan)
-    jK = data.get("G_curve_sim_K")
-    if jK is not None:
-        jc, js = data.get("G_curve_sim"), data.get("G_curve_sim_se")
-        for i, K in enumerate(Ks):
-            if K in jK:
-                c = jK.index(K)
-                if js is not None and js.shape == (S, len(jK)):
-                    sim_se[:, i] = js[:, c]
-                if jc is not None and jc.shape == (S, len(jK)):
-                    d = float(np.nanmax(np.abs(jc[:, c] - sim[:, i])))
-                    if d > 1e-6:
-                        print(f"[count_curve] {data['industry']}: K = {K}, Julia's fitted "
-                              f"curve and the Python reconstruction differ by {d:.2e}; "
-                              "using Julia's (it shares theta_hat and the pinned N_hat_s "
-                              "with the SE). A large gap means N_rho was mis-recovered.")
-                    sim[:, i] = jc[:, c]
-        estimator += " [Julia G_curve_fitted]" if data.get("G_curve_sim") is not None else ""
+    # The fake-world band of the simulated curve (variety-count channel).
+    wb = g_curve_world_band(data, K_values=Ks)
+    sim_lo, sim_hi = (np.full((S, len(Ks)), np.nan),) * 2 if wb is None else wb
 
     # ---- empirical: the increments of G_K.csv, and their bootstrap SE if supplied ----
     emp = np.full((S, len(Ks)), np.nan)
@@ -672,28 +1038,11 @@ def count_curve(data, K_values=None, tol=1e-9):
         print(f"[count_curve] {data['industry']}: G_K.csv has no row for K = {missing} — "
               "those panels show the simulated curve only.")
 
-    # Free consistency gate: p_s(0) = G_s(0) IS block 6, whose bootstrap variance is
-    # already the G block of Sigma_data. A supplied CSV must agree with it at K = 0.
-    if 0 in Ks and gse is not None and data.get("se_empirical") is not None:
-        ref = np.asarray(data["se_empirical"]["G0"], float)
-        got = emp_se[:, Ks.index(0)]
-        ok = np.isfinite(got) & np.isfinite(ref) & (ref > 0)
-        if ok.any():
-            rel = float(np.nanmax(np.abs(got[ok] - ref[ok]) / ref[ok]))
-            if rel > 0.05:
-                print(f"[count_curve] {data['industry']}: the supplied G_K_var.csv "
-                      f"disagrees with diag(Sigma_data)'s count block at K = 0 by up to "
-                      f"{rel:.1%}. They are the SAME object (p_s(0) = G_s(0)), so one of "
-                      "the two bootstraps is not the one the estimator used — most "
-                      "likely the CSV holds the CDF's variance rather than the "
-                      "increment's, which coincide only at K = 0 if the resampling is "
-                      "identical.")
-
     idx = pd.MultiIndex.from_product([data["sector_names"], Ks], names=["A129", "K"])
     df = pd.DataFrame({"empirical": emp.ravel(),
                        "simulated": sim.ravel(),
                        "se_empirical": emp_se.ravel(),
-                       "se_simulated": sim_se.ravel(),
+                       "sim_lo": sim_lo.ravel(), "sim_hi": sim_hi.ravel(),
                        "residual": (sim - emp).ravel(),
                        "N_hat": np.repeat(N_hat, len(Ks)),
                        "clamped": np.repeat(clamped != 0, len(Ks)),
@@ -717,14 +1066,11 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     toward 1: a model whose count distribution is too concentrated puts too much mass at
     low K and too little in the tail, which reads directly as a mismatch at each K.
 
-    Both bands are delta-method / bootstrap objects, and neither is decorative:
+    The two bands:
 
-    * simulated — `se_G_curve_delta.npy`. At K = 0 for a FREE sector it collapses to the
-      bootstrap SE of the target, because `N_hat_s` is calibrated to make the fitted
-      moment EQUAL the target: the K = 0 fit is not evidence, and the band says so. For
-      a CLAMPED sector `N_hat_s` cannot move, the target channel drops out, and the band
-      is the alpha + gamma propagation instead. For K >= 1 it is the residualized
-      structural loading plus the scaled target channel.
+    * simulated — the 2.5/97.5% quantiles of the fitted curve across the fake worlds of
+      the inference step, through the variety count each world re-calibrates (q_hat held
+      at the estimate; `g_curve_world_band`).
     * empirical — the bootstrap SE of the increments, from `G_K_var.csv`. Absent, the
       empirical points are drawn bare rather than with an invented bar.
 
@@ -758,9 +1104,11 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     for K in Ks:
         sub = df.xs(K, level="K").reindex(sectors)
         _, ax = plt.subplots(figsize=get_figsize(hf=0.62))
+        band = ((sub["sim_lo"].values, sub["sim_hi"].values)
+                if np.isfinite(sub["sim_lo"].values).any() else None)
         _paired_errorbar(
             ax, sectors, sub["empirical"].values, sub["simulated"].values,
-            _band(sub["se_empirical"].values), _band(sub["se_simulated"].values), ci=ci,
+            _band(sub["se_empirical"].values), None, ci=ci, band_sim=band,
             ylabel=rf"$\bar{{G}}_s({K})$", rotate=45)
         ax.figure.tight_layout()
         if stem:
@@ -1265,6 +1613,64 @@ def variance_covariance_summary(data):
 IDENT_THRESHOLD = 0.01
 
 
+# ---------------------------------------------------------------------------
+# The fake-world weighting of block 4 (Step 2)
+# ---------------------------------------------------------------------------
+
+def plot_world_covariance(data, figsize=None, save_to=None):
+    """
+    Omega_world = Cov(beta_world - beta_sim) over the Step-2 fake worlds, as a covariance
+    (left, annotated) and a correlation (right). This is the whole weighting of the
+    estimator: W_world = inv(Omega_world) on block 4, gamma and G being matched exactly.
+    """
+    from matplotlib.colors import TwoSlopeNorm
+    Om = data.get("Omega_world")
+    if Om is None:
+        raise FileNotFoundError(f"no step2/Omega_world.npy under {data['folder']}")
+    labels = reg_bin_labels(data["n_coef"], with_kappa=True)
+    d = np.sqrt(np.clip(np.diag(Om), 1e-300, None))
+    C = Om / np.outer(d, d)
+    k = Om.shape[0]
+    fig, axs = plt.subplots(1, 2, figsize=figsize or get_figsize(hf=0.5))
+    v = np.abs(Om).max() or 1.0
+    for a, M, norm, fmt in ((axs[0], Om, TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v), "{:.2g}"),
+                            (axs[1], C, TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1), "{:.2f}")):
+        a.matshow(M, cmap="RdBu_r", norm=norm)
+        for i in range(k):
+            for j in range(k):
+                a.text(j, i, fmt.format(M[i, j]), ha="center", va="center", fontsize=fs(8))
+        a.set_xticks(range(k)); a.set_xticklabels(labels, rotation=45, ha="left", fontsize=fs(9))
+        a.set_yticks(range(k)); a.set_yticklabels(labels, fontsize=fs(9))
+    axs[0].set_xlabel(r"$\tilde\Omega$ (covariance)")
+    axs[1].set_xlabel("correlation")
+    fig.tight_layout()
+    if save_to:
+        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
+        fig.savefig(save_to, format="pdf", bbox_inches="tight")
+    return axs
+
+
+def world_weight_summary(data):
+    """
+    `reg_coef_world_table` plus the global reading: J = e_data' W e_data at this step's
+    simulated moments, against the distribution of e_b' W e_b over the world residuals.
+    The worlds are drawn at theta_hat_1 and NOT re-estimated, so this is a reading of
+    the fit at fixed parameters, not Hansen's J (which would re-estimate (alpha, kappa)
+    in each world and lose N_TAU + 1 degrees of freedom). With as many block-4 entries as (alpha, kappa) the system
+    is exactly identified, so J is ~0 at theta_hat_2 by construction and carries no test.
+    """
+    tab = reg_coef_world_table(data)
+    if tab is None:
+        return None
+    k = len(tab)
+    exact = k == data["n_tau"] + 1
+    print(f"{data['industry']} (mu = {data['mu']}): {tab.attrs['n_worlds']} usable worlds; "
+          f"J = {tab.attrs['J']:.3g}, share of worlds with a larger quadratic form "
+          f"{tab.attrs['J_pvalue']:.3f}"
+          + ("  [exactly identified: no over-identification test]" if exact else ""))
+    return tab
+
+
 def _blocks_2d(data, M):
     """M split into (moment block x parameter block) sub-matrices."""
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
@@ -1762,7 +2168,7 @@ def theta_alpha(data):
     bp = np.asarray(bp, dtype=float).ravel()
     S, n_tau = data["S"], data["n_tau"]
     R_d = len(data["aa_names"])
-    expected = 1 + S + R_d + n_tau + int(data["AA_ACTIVE"].sum())
+    expected = 1 + S + R_d + n_tau + 1 + int(data["AA_ACTIVE"].sum())   # + kappa
     if bp.size != expected:
         raise ValueError(f"best_params has {bp.size} entries, layout rebuilt here is "
                          f"{expected} — the run's flags and the ones passed here disagree.")
@@ -2068,10 +2474,8 @@ def attach_lambda(data, panel, min_distance_km=1.0):
               "which is what load_parameters.jl normalises it to anyway.")
 
     wtau = w_rs[:, None] * tau                                # (R, R): (w_{r'} tau_{r'r})
-    # Phi_{rs} = sum over the sector's simulated cells; T is at the AREA level
-    T_ze = np.zeros((S, R))
-    for s in range(S):
-        T_ze[s] = est["T"][s, aa_of_ze]
+    # Phi_{rs} = sum over the sector's simulated cells, at the CELL-level T_a n_ls^kappa
+    T_ze = est["T_cell"]
     contrib = np.where(CELL_MASK[:, :, None], (T_ze[:, :, None]
                                                * wtau[None, :, :] ** (-theta)), 0.0)
     Phi = contrib.sum(axis=1)                                 # (S, R) over origins

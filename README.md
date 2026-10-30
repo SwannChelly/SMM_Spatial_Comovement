@@ -62,8 +62,11 @@ in its first cell — just open and run it, no separate setup needed.
 
 Two notebooks report a granular / attraction-area run, and they split by what they
 answer. `model_report.ipynb` displays the FIT of the model to its targets — the moment
-table, the extensive margin and the zero-supplier share with their standard errors, the
-count curve, the Jacobian, identification, and the untargeted distance elasticity.
+and parameter tables (block 4 = `[beta_d ; beta_kappa]`), the extensive margin and the
+zero-supplier share with their 95% fake-world bands, the count curve, the parameters
+`(alpha, kappa, N_s)` with their fake-world intervals, and the fake-world weighting of
+block 4. It reads `step2/world_residuals.npz`, `step2/Omega_world.npy` and
+`<step>/inference_world/` — no data covariance and no Jacobian.
 `tests_counterfactuals.ipynb` interrogates the model one test at a time and runs the
 counterfactuals. Set `MU = 1` or `MU = 2` in the Constants cell to read the step-1 or
 the step-3 estimate.
