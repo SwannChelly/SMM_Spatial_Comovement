@@ -1120,6 +1120,164 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
 
 
 # ============================================================================
+# Moment sensitivity -- one-parameter profiles (Catherine et al., Figure D.1)
+# ============================================================================
+
+def _sens(data):
+    sens = data.get("sensitivity")
+    if sens is None or not sens.get("profiles"):
+        raise FileNotFoundError(
+            f"no {data['inference_step']}/sensitivity/ profiles under {data['folder']} -- "
+            "main.jl writes them at the end of Step 2 (theta_hat_1) and Step 4 "
+            "(theta_hat_2) unless SENS=0; load with parts including 'sensitivity'.")
+    return sens
+
+
+def _moment_block_of(data, i):
+    """(block index 0..5, position inside the block) of masked moment `i`."""
+    e = np.cumsum([0] + list(data["moment_block_sizes"]))
+    b = int(np.searchsorted(e, i, side="right") - 1)
+    return b, i - e[b]
+
+
+def world_data_band(data, i, q=(0.05, 0.95)):
+    """
+    The 5/95% band of a DATA moment across the Step-2 fake worlds -- the counterpart of
+    Figure D.1's bootstrap band: where one finite economy drawn at theta_hat_1 puts that
+    moment. Available for block 4 (`beta_world`) and block 6 (`G_world`); None otherwise.
+    """
+    wr = data.get("world_residuals")
+    if wr is None:
+        return None
+    b, k = _moment_block_of(data, i)
+    key = {3: "beta_world", 5: "G_world"}.get(b)
+    if key is None or key not in wr:
+        return None
+    x = np.asarray(wr[key], float)[:, k]
+    x = x[np.isfinite(x)]
+    return None if x.size < 2 else tuple(np.quantile(x, q))
+
+
+def _moment_tex(label):
+    if label.startswith("beta_d["):
+        return rf"$\beta_d$ {label[7:-1]}"
+    if label == "beta_kappa":
+        return r"$\beta_\kappa$"
+    if label.startswith("G0["):
+        return rf"$\bar G_s(0)$, {label[3:-1]}"
+    return label.replace("_", r"\_")
+
+
+def _param_tex(label):
+    if label == "alpha":
+        return r"$\alpha$"
+    if label.startswith("alpha"):
+        return rf"$\alpha_{{{label.split('_')[-1]}}}$"
+    if label == "kappa":
+        return r"$\kappa$"
+    if label.startswith("N_s["):
+        return rf"$N_s$, {label[4:-1]}"
+    return label.replace("_", r"\_")
+
+
+def plot_sensitivity_profiles(data, params=None, moments=None, save_to=None, band_sd=2.0,
+                              ncols=None):
+    """
+    One figure per swept parameter, one panel per moment: the model moment against the
+    parameter value, everything else at the estimate (Figure D.1).
+
+    * solid line: the moment on the ESTIMATION draws -- the curve the optimiser saw;
+    * light band: mean +/- `band_sd` sd across the K independent draw sets -- the
+      Monte-Carlo noise of the curve (a jagged solid line inside a smooth band is
+      simulation noise, a jump of the band itself is an integer jump of N_hat_s);
+    * red vertical line: the estimate; black horizontal line: the data moment, with the
+      5/95% band of that moment across the Step-2 fake worlds in grey when available.
+
+    For alpha and kappa, T is re-inverted and N_hat_s re-calibrated at every grid point,
+    as in estimation; for N_s the other sectors' counts are pinned. `moments` overrides
+    the default pairing (alpha -> the distance coefficients, kappa -> beta_kappa,
+    N_s -> its own Gbar_s(0)) with a list of moment labels. `save_to` is a stem: the
+    parameter is appended. Returns {parameter: array of axes}.
+    """
+    sens = _sens(data)
+    labels = data["moment_labels"]
+    want = list(sens["profiles"]) if params is None else list(params)
+    out = {}
+    stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
+    for p in want:
+        pr = sens["profiles"][p]
+        idx = (list(pr["targets"]) if moments is None
+               else [labels.index(m) for m in moments])
+        n = len(idx)
+        nc = ncols or min(n, 3)
+        nr = int(np.ceil(n / nc))
+        w, h = get_figsize(hf=0.62)
+        fig, axs = plt.subplots(nr, nc, figsize=(w * min(nc, 2) / 1.3, h * nr / 1.1 + 0.2),
+                                squeeze=False)
+        g = np.asarray(pr["grid"], float)
+        for a, i in zip(axs.ravel(), idx):
+            ok = np.asarray(pr["converged"], float) > 0
+            y = np.asarray(pr["m_est"], float)[:, i]
+            mu, sd = np.asarray(pr["m_mean"], float)[:, i], np.asarray(pr["m_sd"], float)[:, i]
+            fin = np.isfinite(mu) & np.isfinite(sd)
+            if fin.any():
+                a.fill_between(g[fin], (mu - band_sd * sd)[fin], (mu + band_sd * sd)[fin],
+                               color=sim_color, alpha=0.18, linewidth=0)
+            a.plot(g[ok], y[ok], color=sim_color, marker="o", markersize=3, linewidth=1.4)
+            dat = float(np.asarray(pr["data"], float)[i])
+            band = world_data_band(data, i)
+            if band is not None:
+                a.axhspan(band[0], band[1], color="0.6", alpha=0.3, linewidth=0)
+            a.axhline(dat, color="black", linewidth=1.2)
+            a.axvline(pr["estimate"], color="red", linewidth=1.2)
+            a.set_xlabel(_param_tex(p))
+            a.set_ylabel(_moment_tex(labels[i]))
+            a.grid(linestyle="dashed", alpha=0.4)
+            _despine(a)
+        for a in axs.ravel()[n:]:
+            a.set_visible(False)
+        fig.tight_layout()
+        if stem:
+            path = f"{stem}_{re.sub(r'[^A-Za-z0-9]+', '_', p).strip('_')}{ext or '.pdf'}"
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fig.savefig(path, format="pdf", bbox_inches="tight")
+        out[p] = axs
+    return out
+
+
+def sensitivity_profile_table(data):
+    """
+    One row per (swept parameter, target moment): the slope at the estimate (central
+    difference on the grid, estimation draws), the share of grid steps moving in that
+    direction (`monotone`), whether the model curve crosses the data moment inside the
+    grid, and the noise of the curve at the estimate (sd across draw sets) against its
+    range over the grid (`noise_to_range`; near one, the profile is noise).
+    """
+    sens = _sens(data)
+    rows = []
+    for p, pr in sens["profiles"].items():
+        g = np.asarray(pr["grid"], float)
+        i0 = int(np.argmin(np.abs(g - pr["estimate"])))
+        for i in pr["targets"]:
+            y = np.asarray(pr["m_est"], float)[:, i]
+            sd = np.asarray(pr["m_sd"], float)[:, i]
+            ok = np.isfinite(y)
+            slope = ((y[i0 + 1] - y[i0 - 1]) / (g[i0 + 1] - g[i0 - 1])
+                     if 0 < i0 < g.size - 1 else np.nan)
+            d = np.diff(y[ok])
+            mono = (np.mean(np.sign(d) == np.sign(slope))
+                    if d.size and np.isfinite(slope) else np.nan)
+            r = y[ok] - float(pr["data"][i])
+            rng_ = np.nanmax(y) - np.nanmin(y) if ok.any() else np.nan
+            rows.append({"parameter": p, "moment": data["moment_labels"][i],
+                         "estimate": pr["estimate"], "model": y[i0],
+                         "data": float(pr["data"][i]), "slope": slope, "monotone": mono,
+                         "crosses_data": bool(r.size > 1 and np.any(r[:-1] * r[1:] <= 0)),
+                         "noise_to_range": (sd[i0] / rng_ if rng_ and rng_ > 0 else np.nan)})
+    return pd.DataFrame(rows).set_index(["parameter", "moment"])
+
+
+# ============================================================================
 # Jacobian -- which parameter moves which moment
 # ============================================================================
 
@@ -1153,9 +1311,9 @@ def jacobian_matrix(data, kind="elasticity"):
     if J is None:
         step = data["inference_step"]
         raise FileNotFoundError(
-            f"no Jacobian in {data['folder']}/{step}/ — main.jl writes "
-            f"jacobian_all*.npy at theta_hat_1 (step2) and jacobian_all_step3*.npy at "
-            f"theta_hat_2 (step3); the corresponding inference step must have run.")
+            f"no Jacobian in {data['folder']}/{step}/sensitivity/ — sensitivity.jl writes "
+            "jacobian.npz at theta_hat_1 (step2) and theta_hat_2 (step3) unless SENS=0; "
+            "load with parts including 'sensitivity'.")
     return J
 
 
@@ -1838,8 +1996,10 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
     return ax
 
 
-def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative advantage",
-                                                  "Variety count"),
+CHANNEL_BLOCKS = ("Trade cost", "Density", "Comparative advantage", "Variety count")
+
+
+def plot_channel_elasticities(data, param_blocks=None,
                               threshold=IDENT_THRESHOLD, kind="elasticity",
                               noise_max=NOISE_MAX, stat="max", figsize=(11, 5),
                               save_to=None):
@@ -1856,6 +2016,8 @@ def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative adv
     E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
     ok = _readable(data, kind, noise_max)
     m_names, p_names = data["moment_block_names"], data["param_block_names"]
+    if param_blocks is None:              # kappa's block is the only optional channel
+        param_blocks = tuple(p for p in CHANNEL_BLOCKS if p != "Density" or p in p_names)
     blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
     reduce = {"max": np.max, "mean": np.mean}[stat]
     stat_tex = {"max": r"\max", "mean": r"\mathrm{mean}"}[stat]
@@ -1864,8 +2026,8 @@ def plot_channel_elasticities(data, param_blocks=("Trade cost", "Comparative adv
     missing = [p for p in param_blocks if p not in p_names]
     if missing:
         raise ValueError(f"parameter block(s) {missing} absent — the Jacobian has "
-                         f"{p_names}. Under --granular=true the run must have written "
-                         "the variety-count columns (compute_jacobian append_N_s).")
+                         f"{p_names}. The sensitivity Jacobian must carry these columns "
+                         "(sensitivity.jl sens_columns).")
 
     vals, unmeasured = {}, {}
     for p in wanted:

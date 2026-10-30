@@ -244,7 +244,7 @@ function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
                                    world.G, world_simulator(seed_s))
         all(isfinite, βs) || return (ok = false, reason = :sim_fit)
         return (ok = true, reason = :none, e = world.beta .- βs, beta_world = world.beta,
-                beta_sim = βs, N = Nb, n_fail = nf)
+                beta_sim = βs, N = Nb, n_fail = nf, G = world.G)
     catch err
         return _failure(err)
     end
@@ -282,6 +282,7 @@ function world_weight_matrix(theta_hat::Vector{Float64}; B::Int = 1000, dest::Ab
     NPZ.npzwrite(joinpath(dest, "world_residuals.npz"),
                  Dict("e" => E, "beta_world" => rows_of(r -> r.beta_world),
                       "beta_sim" => rows_of(r -> r.beta_sim), "N_hat_world" => rows_of(r -> r.N),
+                      "G_world" => rows_of(r -> r.G),
                       "N_hat" => N_hat, "e_data" => e_data))
 
     labels = MOMENT_LABELS[collect(BLOCK_RANGES[4])]

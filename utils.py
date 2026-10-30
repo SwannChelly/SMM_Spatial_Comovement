@@ -375,6 +375,75 @@ def _ze_key(x):
         return t
 
 
+SENS_KINDS = {1: "head", 2: "alpha", 3: "kappa", 4: "T", 5: "N"}
+SENS_BLOCK_NAMES = {1: None, 2: "Trade cost", 3: "Density", 4: "Comparative advantage",
+                    5: "Variety count"}
+
+
+def _sens_head_block(label):
+    return ("Omega_L" if label == "Omega_L" else
+            "Industry shares" if label.startswith("Omega_s") else "Productivity")
+
+
+def load_sensitivity(sens_dir, n_moments=None):
+    """
+    Read `<step>/sensitivity/` (sensitivity.jl).
+
+    Returns {"jacobian": {...} or None, "profiles": {label: {...}}, "report": str}.
+    The Jacobian entry carries `J`, `J_est`, `J_sd` (one draw set), `J_se = J_sd/sqrt(K)`
+    (the standard error of the reported mean, which is what the noise-to-signal mask
+    must compare with), the elasticities `J_elast = J * scale_j / m_i` with
+    `scale_j = theta_j` (alpha, T, head, N_s) or 1 for kappa (a semi-elasticity: kappa
+    is an exponent that can sit at zero), their SE, the labels, and the parameter
+    blocks in column order.
+    """
+    sens_dir = Path(sens_dir)
+    out = {"jacobian": None, "profiles": {}, "report": None, "dir": sens_dir}
+    p = sens_dir / "jacobian.npz"
+    if p.exists():
+        with np.load(p) as z:
+            js = {k: z[k] for k in z.files}
+        js["labels"] = [l for l in (sens_dir / "jacobian_param_labels.txt").read_text()
+                        .splitlines() if l.strip()]
+        js["kind"] = np.rint(js["kind"]).astype(int)
+        J, J_sd = np.atleast_2d(js["J"]), np.atleast_2d(js["J_sd"])
+        if n_moments is not None and J.shape[0] != n_moments:
+            raise ValueError(f"{p} has {J.shape[0]} moment rows, the layout rebuilt here "
+                             f"has {n_moments}.")
+        K = max(int(np.ravel(js["K"])[0]), 1)
+        js["J_se"] = J_sd / np.sqrt(K)
+        scale = np.where(js["kind"] == 3, 1.0, np.asarray(js["theta"], float))
+        m = np.asarray(js["m_base"], float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f = scale[None, :] / np.where(np.abs(m) > 1e-12, m, np.nan)[:, None]
+        js["J_elast"], js["J_elast_se"] = J * f, js["J_se"] * np.abs(f)
+        names = [SENS_BLOCK_NAMES[k] or _sens_head_block(l)
+                 for k, l in zip(js["kind"], js["labels"])]
+        bn, bs = [], []
+        for nm in names:
+            if bn and bn[-1] == nm:
+                bs[-1] += 1
+            else:
+                bn.append(nm); bs.append(1)
+        js["block_names"], js["block_sizes"] = bn, bs
+        out["jacobian"] = js
+    idx = sens_dir / "profiles_index.txt"
+    if idx.exists():
+        for line in idx.read_text().splitlines():
+            if not line.strip():
+                continue
+            label, fn = line.split("\t")
+            with np.load(sens_dir / fn) as z:
+                pr = {k: z[k] for k in z.files}
+            pr["targets"] = np.rint(pr["targets"]).astype(int) - 1      # 0-based
+            pr["kind"] = SENS_KINDS[int(np.ravel(pr["kind"])[0])]
+            pr["estimate"] = float(np.ravel(pr["estimate"])[0])
+            out["profiles"][label] = pr
+    rp = sens_dir / "profiles_report.txt"
+    out["report"] = rp.read_text() if rp.exists() else None
+    return out
+
+
 def _gk_col(G_K, cands):
     """Column of G_K.csv by case-insensitive name, mirroring load_parameters.jl's _gk_col."""
     hit = next((c for c in G_K.columns if c.strip().lower() in cands), None)
@@ -460,14 +529,16 @@ def aa_display_names(data):
     return [m.get(str(a), str(a)) for a in data["aa_names"]]
 
 
-PARTS_ALL = ("counts", "moments", "inference", "jacobian", "geography", "firm")
+PARTS_ALL = ("counts", "moments", "inference", "jacobian", "sensitivity", "geography",
+             "firm")
 
 # Requesting a part pulls in what it is built from. `moments` needs the count target to
 # complete the empirical vector; `inference` and `jacobian` are read against the moment
 # layout, so both imply it.
 PART_IMPLIES = {"moments": ("counts",),
                 "inference": ("moments", "counts"),
-                "jacobian": ("moments", "counts")}
+                "jacobian": ("moments", "counts"),
+                "sensitivity": ("moments", "counts")}
 
 
 def resolve_parts(parts):
@@ -1001,36 +1072,30 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # exactly as T is calibrated by the Sinkhorn inversion, so both belong on the
     # parameter axis. `<file>_n_s_columns.npy` records how many were appended; older
     # trees have none, and the width settles it.
-    jac_file = "jacobian_all.npy" if mu == 1 else "jacobian_all_step3.npy"
-    jac_dir = folder / inf_step
+    # The Jacobian and the one-parameter profiles are written by sensitivity.jl under
+    # <inf_step>/sensitivity/ (step2 at theta_hat_1, step3 at theta_hat_2):
+    #   jacobian.npz  J (mean over K independent draw sets), J_sd (sd of ONE draw set's
+    #                 derivative across those sets), J_est (estimation draws), m_base,
+    #                 theta (the column's parameter value), kind (1 head, 2 alpha,
+    #                 3 kappa, 4 T, 5 N_s), K, h.
+    #   profile_<p>.npz  one per swept parameter (see `load_sensitivity`).
+    # The Jacobian REPLACES the parameter axis rebuilt above: its columns are Julia's
+    # (head without the normalised-out entries, alpha, kappa, the identified T, N_s).
     jac = {k: None for k in ("J", "J_elast", "J_sd", "J_elast_sd",
                              "jacobian_param_indices")}
-    n_N_cols = None
-    if "jacobian" in parts:
-      for key, suffix in (("J", ""), ("J_elast", "_elasticity"),
-                        ("J_sd", "_sd"), ("J_elast_sd", "_elasticity_sd"),
-                        ("jacobian_param_indices", "_param_indices")):
-        p = jac_dir / jac_file.replace(".npy", f"{suffix}.npy")
-        jac[key] = np.load(p) if p.exists() else None
-      n_N_path = jac_dir / jac_file.replace(".npy", "_n_s_columns.npy")
-      n_N_cols = int(np.load(n_N_path).ravel()[0]) if n_N_path.exists() else None
-    if jac["J"] is not None:
-        n_r, n_c = jac["J"].shape
-        if n_N_cols is None:
-            n_N_cols = n_c - len(param_labels)
-        if (n_r != int(mask.sum()) or n_c != len(param_labels) + n_N_cols
-                or n_N_cols not in (0, S)):
-            raise ValueError(
-                f"{jac_file} is {n_r}x{n_c} but the layout rebuilt here is "
-                f"{int(mask.sum())} moments x {len(param_labels)} parameters "
-                f"(+{n_N_cols} variety counts) — the run's flags and the ones passed "
-                "here disagree.")
-        if n_N_cols:
-            param_labels += [f"N_s[{sector_names[s]}]" for s in range(S)]
-            param_block_sizes.append(S)
-            param_block_names.append("Variety count")
-    else:
-        n_N_cols = n_N_cols or 0
+    n_N_cols = 0
+    J_est = sensitivity = None
+    sens_dir = folder / inf_step / "sensitivity"
+    if ("jacobian" in parts or "sensitivity" in parts) and sens_dir.exists():
+        sensitivity = load_sensitivity(sens_dir, n_moments=int(mask.sum()))
+        js = sensitivity.get("jacobian")
+        if js is not None:
+            jac.update(J=js["J"], J_sd=js["J_se"], J_elast=js["J_elast"],
+                       J_elast_sd=js["J_elast_se"])
+            J_est = js["J_est"]
+            param_labels = list(js["labels"])
+            param_block_names, param_block_sizes = js["block_names"], js["block_sizes"]
+            n_N_cols = int(np.sum(js["kind"] == 5))
 
     # ------------------------------------------------- granular diagnostics
     granular_diag = None
@@ -1148,7 +1213,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "param_block_names": param_block_names,
         # Jacobian (None when the file is absent)
         "J": jac["J"], "J_elast": jac["J_elast"], "J_sd": jac["J_sd"],
-        "J_elast_sd": jac["J_elast_sd"], "n_N_cols": n_N_cols,
+        "J_elast_sd": jac["J_elast_sd"], "n_N_cols": n_N_cols, "J_est": J_est,
+        "sensitivity": sensitivity,
         "jacobian_param_indices": jac["jacobian_param_indices"],
         # inference: fake worlds (None when the step has not run)
         "world_residuals": world_residuals, "Omega_world": Omega_world,

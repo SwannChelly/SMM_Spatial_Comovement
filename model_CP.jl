@@ -692,9 +692,11 @@ end
 
 Blocks 1–6 (labour share, industry shares, π_r, [β_d ; β_κ], γ_{s,a}, Ḡ_s(0)) and the
 non-moment diagnostics. `N_fixed` pins the variety count (finite differences: N̂_s is a
-step function of θ).
+step function of θ). `perms` replaces the block-4 network permutations (default: the
+estimation's `cell_perms`), so a draw set other than the estimation's carries its own.
 """
-function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing)
+function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing,
+                         perms::Union{Nothing, Vector{Matrix{Int32}}}=nothing)
     X_ls_flat = network.X_ls_flat
     c_tilde_r = network.c_tilde_r
     Y_r = network.Y_r
@@ -729,7 +731,7 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     N_hat_free, clamped = concentrate_N_s(k_counts, n_draw)
     N_hat = N_fixed === nothing ? N_hat_free : copy(N_fixed)
 
-    reg_coef, reg_fail, _ = cell_cloglog_moment(linkages_flat, N_hat)
+    reg_coef, reg_fail, _ = cell_cloglog_moment(linkages_flat, N_hat; perms = perms)
 
     lg = gbar_logfact_table(n_draw)
     G0 = zeros(S)

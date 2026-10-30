@@ -248,7 +248,8 @@ def _build_industry(ROOT, industry, sectors):
     Omega_w = np.cov(e, rowvar=False)
     np.savez(f"{RUN}/step2/world_residuals.npz", e=e, beta_world=beta_sim_w + e,
              beta_sim=beta_sim_w, N_hat_world=np.tile(N_HAT, (B_W, 1)).astype(float),
-             N_hat=N_HAT.astype(float), e_data=reg_coef_emp - sim_reg * 0.95)
+             N_hat=N_HAT.astype(float), e_data=reg_coef_emp - sim_reg * 0.95,
+             G_world=np.clip(G_target[None, :] + RNG.normal(0, 0.03, (B_W, S)), 0, 1))
     np.save(f"{RUN}/step2/Omega_world.npy", Omega_w)
     np.save(f"{RUN}/step2/W_world.npy", np.linalg.inv(Omega_w))
 
@@ -276,6 +277,43 @@ def _build_industry(ROOT, industry, sectors):
             f.write("\n".join(w_lbl) + "\n")
         W_DRAWS[st] = (P.tolist(), est.tolist())
 
+    # ---- sensitivity.jl: the CRN Jacobian and two profiles, at theta_hat_2 ------
+    SD = f"{RUN}/step3/sensitivity"
+    os.makedirs(SD, exist_ok=True)
+    s_lbl = (["Omega_L"] + [f"Omega_s[{x}]" for x in sectors[1:]]
+             + [f"A[{ze[down_idx[a]]}]" for a in range(1, R_D)] + ["alpha", "kappa"]
+             + [f"T[{x}]" for x in range(int(gam_free.sum()))] + [f"N_s[{x}]" for x in sectors])
+    s_kind = ([1.0] * (1 + (S - 1) + (R_D - 1)) + [2.0, 3.0] + [4.0] * int(gam_free.sum())
+              + [5.0] * S)
+    K_S = 4
+    Jd = RNG.normal(size=(K_S, n_mom_kept, len(s_lbl)))
+    Jd[:, :, -S:] = 0.0
+    Jd[:, -S:, -S:] = -0.01 * np.eye(S)[None]                  # N_s moves its own G0 only
+    m_base = RNG.uniform(0.1, 1.0, n_mom_kept)
+    s_theta = np.concatenate([RNG.uniform(0.2, 2.0, len(s_lbl) - S - 0), N_HAT.astype(float)])[:len(s_lbl)]
+    np.savez(f"{SD}/jacobian.npz", J=Jd.mean(0), J_sd=Jd.std(0, ddof=1), J_est=Jd[0],
+             J_draws=Jd, m_base=m_base, m_base_draws=np.tile(m_base, (K_S, 1)),
+             theta=s_theta, N_base=N_HAT.astype(float), h=np.array([0.02]),
+             K=np.array([float(K_S)]), kind=np.array(s_kind))
+    with open(f"{SD}/jacobian_param_labels.txt", "w") as f:
+        f.write("\n".join(s_lbl) + "\n")
+    off4 = 1 + (S - 1) + (R_D - 1)
+    grid_a = 0.3 * 2.0 ** np.linspace(-1, 1, 7)
+    tg_a = np.arange(off4, off4 + N_REG)
+    ma = np.tile(m_base, (7, 1)); ma[:, tg_a] = -grid_a[:, None] * 2.0     # decreasing in alpha
+    grid_n = np.arange(N_HAT[0] - 3, N_HAT[0] + 4, dtype=float)
+    mn = np.tile(m_base, (7, 1)); mn[:, n_mom_kept - S] = 0.9 ** grid_n
+    emp_masked = RNG.uniform(0, 1, n_mom_kept)
+    for fn, grid, M, est, tg, kd in (("profile_alpha.npz", grid_a, ma, 0.3, tg_a, 2.0),
+                                     (f"profile_N_s_{sectors[0]}_.npz", grid_n, mn,
+                                      float(N_HAT[0]), np.array([n_mom_kept - S]), 5.0)):
+        np.savez(f"{SD}/{fn}", grid=grid, m_est=M, m_mean=M + 0.01, m_sd=np.full_like(M, 0.02),
+                 N_est=np.tile(N_HAT, (7, 1)).astype(float), converged=np.ones(7),
+                 estimate=np.array([est]), targets=(tg + 1).astype(float), data=emp_masked,
+                 kind=np.array([kd]))
+    with open(f"{SD}/profiles_index.txt", "w") as f:
+        f.write(f"alpha\tprofile_alpha.npz\nN_s[{sectors[0]}]\tprofile_N_s_{sectors[0]}_.npz\n")
+
     # ---- the expectations the test checks against ----------------------------
     expected = {
         "S": S, "R": R, "n_AA": R_D, "n_coef": N_REG, "n_gb": n_gb,
@@ -283,6 +321,8 @@ def _build_industry(ROOT, industry, sectors):
         "G_pmf_emp": G_pmf_emp.tolist(), "G_pmf_se": G_pmf_se.tolist(),
         "world_e": e.tolist(), "world_labels": w_lbl, "world_draws": W_DRAWS,
         "q_hat": q_hat_plant.tolist(), "N_LS": N_LS.tolist(),
+        "sens_labels": s_lbl, "sens_K": K_S, "sens_Jd": Jd.tolist(), "sens_m": m_base.tolist(),
+        "sens_theta": s_theta.tolist(), "sens_kind": s_kind, "n_gb4": N_REG + 1,
         "N_hat": N_HAT.tolist(), "n_rho": N_RHO,
         "aa_names": [ze[i] for i in down_idx],
         "sector_names": sectors,
@@ -814,7 +854,9 @@ def run_checks(ns, ROOT, exp):
     check("N_supplier_s read", close(g["N_supplier_s"], exp["N_supplier_s"]))
 
     print("\n=== 12. labels: the Julia layout with kappa ===")
-    check("no Jacobian on a current tree (the Julia code no longer writes one)", d2["J"] is None)
+    check("no Jacobian when the sensitivity part is not asked for",
+          ns["load_granular_data"]("test", mu=2, base=ROOT,
+                                   parts=("core", "moments", "inference"))["J"] is None)
     check("moment blocks: labor, industry-1, pi_r-1, [beta_d ; beta_kappa], gamma free, G0",
           list(d2["moment_block_sizes"]) ==
           [1, S - 1, exp["n_AA"] - 1, exp["n_coef"] + 1, exp["n_gamma_kept"], S]
@@ -823,16 +865,70 @@ def run_checks(ns, ROOT, exp):
           [l for l in d2["moment_labels"] if l.startswith("beta")] ==
           ["beta_d[]50,100]]", "beta_d[]100,150]]", "beta_d[]150,200]]", "beta_d[>200]",
            "beta_kappa"])
+    d0 = ns["load_granular_data"]("test", mu=2, base=ROOT, parts=("core", "moments"))
     check("parameter blocks: Omega_L, Omega_s-1, A-1, [alpha ; kappa], T free",
-          list(d2["param_block_sizes"]) ==
+          list(d0["param_block_sizes"]) ==
           [1, S - 1, exp["n_AA"] - 1, 2, exp["n_gamma_kept"]]
-          and "kappa" in d2["param_labels"])
+          and "kappa" in d0["param_labels"])
     check("gamma moment labels and T parameter labels enumerate the same (s, AA) pairs",
-          [l.replace("gamma[", "") for l in d2["moment_labels"]
+          [l.replace("gamma[", "") for l in d0["moment_labels"]
            if l.startswith("gamma[")] ==
-          [l.replace("T[", "") for l in d2["param_labels"] if l.startswith("T[")])
+          [l.replace("T[", "") for l in d0["param_labels"] if l.startswith("T[")])
     ws = ns["world_weight_summary"](d2)
     check("world_weight_summary returns the block-4 table", ws is not None and len(ws) == exp["n_coef"] + 1)
+
+    print("\n=== 13. moment sensitivity: CRN Jacobian and profiles (sensitivity.jl) ===")
+    Jd, K_S = np.array(exp["sens_Jd"]), exp["sens_K"]
+    check("the Jacobian is read from step3/sensitivity and replaces the parameter axis",
+          d2["J"].shape == (exp["n_mom_kept"], len(exp["sens_labels"]))
+          and d2["param_labels"] == exp["sens_labels"])
+    check("parameter blocks in column order, kappa its own block",
+          d2["param_block_names"] == ["Omega_L", "Industry shares", "Productivity",
+                                      "Trade cost", "Density", "Comparative advantage",
+                                      "Variety count"]
+          and list(d2["param_block_sizes"]) == [1, S - 1, exp["n_AA"] - 1, 1, 1,
+                                               exp["n_gamma_kept"], S]
+          and d2["n_N_cols"] == S)
+    check("J is the mean over the K draw sets, its SE = sd / sqrt(K)",
+          close(d2["J"], Jd.mean(0)) and close(d2["J_sd"], Jd.std(0, ddof=1) / np.sqrt(K_S)))
+    sc = np.where(np.array(exp["sens_kind"]) == 3, 1.0, np.array(exp["sens_theta"]))
+    check("elasticity = J * theta_j / m_i, kappa as a semi-elasticity",
+          close(d2["J_elast"], Jd.mean(0) * sc[None, :] / np.array(exp["sens_m"])[:, None]))
+    check("the estimation-draw Jacobian is kept beside the mean", close(d2["J_est"], Jd[0]))
+    pt = ns["sensitivity_profile_table"](d2)
+    check("profile table: one row per (parameter, target moment)",
+          len(pt) == exp["n_coef"] + 1
+          and set(pt.index.get_level_values(0)) == {"alpha", f"N_s[{d2['sector_names'][0]}]"})
+    check("a planted decreasing profile reads as monotone with a negative slope",
+          bool((pt.loc["alpha", "slope"] < 0).all() and (pt.loc["alpha", "monotone"] == 1).all()))
+    i_g0 = exp["n_mom_kept"] - S
+    band = ns["world_data_band"](d2, i_g0)
+    Gw = np.load(os.path.join(ROOT, "reporting_test_profiled_aa_gran_kappa_pso", "step2",
+                              "world_residuals.npz"))["G_world"][:, 0]
+    check("the G0 data band is the 5/95% of the worlds' empty-cell share",
+          band is not None and close(band, np.quantile(Gw, [0.05, 0.95])))
+    check("no data band for a moment the worlds do not record (labor share)",
+          ns["world_data_band"](d2, 0) is None)
+    outd = os.path.join(ROOT, "out")
+    axs = ns["plot_sensitivity_profiles"](d2, save_to=os.path.join(outd, "prof.pdf"))
+    a0 = axs["alpha"].ravel()[0]
+    check("one figure per parameter, one panel per target moment",
+          set(axs) == {"alpha", f"N_s[{d2['sector_names'][0]}]"}
+          and sum(a.get_visible() for a in axs["alpha"].ravel()) == exp["n_coef"])
+    check("each panel: the estimate as a vertical line, the data moment as a horizontal one",
+          any(len(l.get_xdata()) == 2 and np.allclose(l.get_xdata(), 0.3) for l in a0.lines)
+          and any(len(l.get_ydata()) == 2 and np.ptp(l.get_ydata()) == 0
+                  and np.allclose(l.get_xdata(), [0, 1]) for l in a0.lines))
+    check("profile figures written, one file per parameter",
+          os.path.exists(os.path.join(outd, "prof_alpha.pdf"))
+          and os.path.exists(os.path.join(outd, f"prof_N_s_{d2['sector_names'][0]}.pdf")))
+    for fn in ("plot_identification_map", "plot_channel_elasticities", "plot_jacobian_full"):
+        try:
+            ns[fn](d2, save_to=os.path.join(outd, f"{fn}.pdf"))
+            check(f"{fn} on the sensitivity Jacobian -> pdf",
+                  os.path.getsize(os.path.join(outd, f"{fn}.pdf")) > 0)
+        except Exception as e:
+            check(f"{fn} on the sensitivity Jacobian -> pdf", False, f"{type(e).__name__}: {e}")
 
     print("\n" + "=" * 60)
     print(f"{len(ok)} passed, {len(fail)} failed")

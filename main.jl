@@ -8,6 +8,8 @@
 #   Step 3  W-weighted PSO on [α ; κ], loss on block 4      → θ̂_2   (step3/)
 #   Step 4  inference from fake worlds at θ̂_2, whole chain re-estimated
 #           in each                                         (step3/inference_world/)
+#   Steps 2 and 4 end with the moment sensitivity at θ̂_1 / θ̂_2 (sensitivity.jl):
+#           one-parameter profiles and a common-random-numbers Jacobian (<step>/sensitivity/)
 #   Post-hoc: the firm-level economy at θ̂_1 and θ̂_2 (suppliers.parquet, ...)
 #
 # Usage: julia main.jl <industry> <n_coef> <n_tau> <n_rho_inf> <relax_n_lo> <profile_head>
@@ -39,6 +41,7 @@ Random.seed!(seed)
 @everywhere include("optimizer.jl")
 @everywhere include("reporting.jl")
 @everywhere include("inference.jl")
+@everywhere include("sensitivity.jl")
 
 ############## Arguments ##############
 
@@ -60,6 +63,11 @@ run_step4 = true
 K_loops = 20         # block-coordinate loops per optimisation step
 B_w     = parse(Int, get(ENV, "WORLD_B_W", "1000"))    # fake worlds for W (Step 2)
 B_inf   = parse(Int, get(ENV, "WORLD_B_INF", "500"))   # fake worlds for inference (Step 4)
+# Moment sensitivity (sensitivity.jl): one-parameter profiles + CRN Jacobian at θ̂_1
+# (step2/sensitivity) and θ̂_2 (step3/sensitivity). SENS=0 skips it.
+run_sens = get(ENV, "SENS", "1") != "0"
+sens_K   = parse(Int, get(ENV, "SENS_K", "10"))     # independent draw sets
+sens_G   = parse(Int, get(ENV, "SENS_G", "15"))     # profile grid points
 
 input_folder  = "./baseline_$industry"
 output_folder = "./reporting_$(industry)_profiled_aa_gran_kappa" * (relax_n_lo ? "_nlo1" : "") *
@@ -107,6 +115,11 @@ if run_step2
                     tcol_names = _tcol_names, sector_names = string.(SECTOR_NAMES),
                     seed_world = 31_000_000, seed_sim = 32_000_000, label = "θ̂_1, W = I")
     report_granular(theta_hat_1, joinpath(output_folder, "step2"); industry = industry, label = "theta_1")
+    if run_sens
+        println("\n" * "="^70 * "\nSTEP 2c: moment sensitivity at θ̂_1\n" * "="^70)
+        run_sensitivity(Vector{Float64}(theta_hat_1), joinpath(output_folder, "step2", "sensitivity");
+                        K = sens_K, G = sens_G)
+    end
 end
 W_world = NPZ.npzread(joinpath(output_folder, "step2", "W_world.npy"))
 
@@ -126,6 +139,11 @@ if run_step4
                     tcol_names = _tcol_names, sector_names = string.(SECTOR_NAMES),
                     label = "θ̂_2, W = Ω̃⁻¹")
     report_granular(theta_hat_2, step3_dir; industry = industry, label = "theta_2")
+    if run_sens
+        println("\n" * "="^70 * "\nSTEP 4b: moment sensitivity at θ̂_2\n" * "="^70)
+        run_sensitivity(Vector{Float64}(theta_hat_2), joinpath(step3_dir, "sensitivity");
+                        K = sens_K, G = sens_G)
+    end
 end
 
 ############## Post-hoc firm-level economy ##############

@@ -66,7 +66,9 @@ and parameter tables (block 4 = `[beta_d ; beta_kappa]`), the extensive margin a
 zero-supplier share with their 95% fake-world bands, the count curve, the parameters
 `(alpha, kappa, N_s)` with their fake-world intervals, and the fake-world weighting of
 block 4. It reads `step2/world_residuals.npz`, `step2/Omega_world.npy` and
-`<step>/inference_world/` — no data covariance and no Jacobian.
+`<step>/inference_world/` (no data covariance), and the moment sensitivity of
+`<step>/sensitivity/`: one-parameter profiles in the form of Catherine et al.'s Figure
+D.1 and a common-random-numbers Jacobian over every parameter.
 `tests_counterfactuals.ipynb` interrogates the model one test at a time and runs the
 counterfactuals. Set `MU = 1` or `MU = 2` in the Constants cell to read the step-1 or
 the step-3 estimate.
@@ -148,6 +150,11 @@ worker: `WORKER_HEAP_HINT` (default 2G).
    search over α, κ) re-run in each (`step3/inference_world/`): sd, 2.5/97.5% quantiles and
    bias for every parameter, the dispersion of log T, and closed-form counterfactuals (mean sourcing distance, local share at 100/200 km
    under the estimate, equal T, no trade cost).
+
+Steps 2 and 4 end with the **moment sensitivity** (`sensitivity.jl`, `<step>/sensitivity/`):
+one-parameter profiles of α, κ and N_s (T re-inverted at each point) and a Jacobian over
+the head, α, κ, T and N_s by central differences with common random numbers, on the
+estimation draws and `SENS_K` (10) independent draw sets. `SENS=0` skips it.
 
 Post-hoc: the firm-level economy at θ̂₁ and θ̂₂ (`suppliers.parquet` etc.), the input of
 the Python `check_against_julia`.
