@@ -264,7 +264,8 @@ def counterfactual_diffusion_frame(data, alpha=None, equalise_T=False,
     out["upstream_sales"] = X[out["ze2010"].to_numpy() - 1,
                               out["ze2010_downstream"].to_numpy() - 1]
     out["n_links"] = np.nan       # a closed-form allocation has no realised linkages
-    out.attrs["regime"] = ("alpha=0 " if alpha == 0 else "") + ("T equalised" if equalise_T else "")
+    no_tau = alpha is not None and bool(np.all(np.asarray(alpha, dtype=float) == 0))
+    out.attrs["regime"] = ("alpha=0 " if no_tau else "") + ("T equalised" if equalise_T else "")
     out.attrs["value_col"] = value_col
     return out
 
