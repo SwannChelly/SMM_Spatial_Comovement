@@ -954,7 +954,8 @@ def count_curve(data, K_values=None, tol=1e-9):
       (it is a win count), and the K = 0 column must reproduce block 6 of the moment
       vector. If either fails the plug-in Binomial pmf is used and `attrs["estimator"]`
       says so.
-    * empirical  -- the increments of `G_K.csv`, `p_s(K) = G(K) - G(K-1)`.
+    * empirical  -- `G` of `G_K.csv`, the share of cells with EXACTLY K suppliers (read
+      as is: the data pipeline writes the pmf, `G_cs` being its cumulative sum).
 
     The simulated curve carries the 95% fake-world band of `g_curve_world_band`
     (`sim_lo`, `sim_hi`), the empirical one the bootstrap SE of `G_K_var.csv` if supplied.

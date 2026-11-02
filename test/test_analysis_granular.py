@@ -120,19 +120,22 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/beta_kappa_{N_REG}.npy", reg_coef_emp[N_REG:])
 
     # ---- G_K.csv --------------------------------------------------------------
-    # G = Pr(K_ls <= K), so the curve must be non-decreasing in K and bounded by 1:
-    # the reporting reads K = 0 as the targeted moment and K >= 1 as the untargeted
-    # continuation, and both are checked for monotonicity.
+    # As the data pipeline writes it (`t_G`): G = Pr(K_ls == K), the pmf, and G_cs
+    # its cumulative sum. K = 0 is the targeted moment, K >= 1 the untargeted shape.
     G_target = np.array([0.30, 0.45, 0.20, 0.55])
     N_sup = np.array([40, 26, 51, 18])
     K_ROWS = 4
-    G_curve_emp = np.minimum(1.0, G_target[:, None] + 0.1 * np.arange(K_ROWS)[None, :])
+    # decreasing in K in some sectors, which a CDF could not be
+    G_pmf_true = G_target[:, None] * np.array([1.0, 0.8, 0.5, 0.25])[None, :] \
+        + np.array([0.0, 0.10, 0.05, 0.02])[None, :]
+    G_curve_emp = G_pmf_true
     rows = []
     for s in range(S):
         for k in range(K_ROWS):
             # Real column layout: group, A129, G, K, N_supplier_s — `G` is the value
             # column, G = Pr(K_ls <= K), and the K = 0 row is the targeted moment.
             rows.append({"group": s + 1, "A129": sectors[s], "G": G_curve_emp[s, k],
+                         "G_cs": G_curve_emp[s, :k + 1].sum(),
                          "K": k, "N_supplier_s": N_sup[s]})
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
 
@@ -140,7 +143,7 @@ def _build_industry(ROOT, industry, sectors):
     # Optional file. Its K = 0 column is the SAME object as the G block of Sigma_data
     # (p_s(0) = G_s(0)), which is what makes it a free consistency check rather than an
     # extra assumption — planted consistent here, and deliberately broken in one gate.
-    G_pmf_emp = np.diff(G_curve_emp, axis=1, prepend=0.0)
+    G_pmf_emp = G_curve_emp
     G_pmf_se  = np.array([0.03, 0.05, 0.02, 0.04])[:, None] * (1.0 + 0.2 * np.arange(K_ROWS))
     pd.DataFrame([{"A129": sectors[s], "K": k, "var": G_pmf_se[s, k] ** 2}
                   for s in range(S) for k in range(K_ROWS)]
@@ -432,6 +435,23 @@ def run_checks(ns, ROOT, exp):
     finally:
         open(gk_path, "w").write(gk_orig)
 
+    # G_cs pins the convention: a file whose G_cs is not the cumsum of G is refused.
+    gk_path3 = os.path.join(ROOT, "baseline_test", "G_K.csv")
+    gk_orig3 = open(gk_path3).read()
+    try:
+        g = pd.read_csv(io.StringIO(gk_orig3))
+        g["G_cs"] = g["G"]
+        g.to_csv(gk_path3, index=False)
+        raised = False
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ns["load_granular_data"]("test", mu=2, base=ROOT)
+        except ValueError as e:
+            raised = "not the cumulative sum" in str(e)
+        check("a G_K.csv whose G_cs is not the cumsum of G is refused", raised)
+    finally:
+        open(gk_path3, "w").write(gk_orig3)
+
     print("\n=== 2c. the count curve Gbar_s(K), K = 0..3 ===")
     # K = 0 is block 6 of the moment vector and N_hat_s is calibrated on it; K >= 1 is
     # untargeted and exists nowhere on the Julia side, so the notebook rebuilds it from
@@ -441,12 +461,11 @@ def run_checks(ns, ROOT, exp):
     cc = ns["count_curve"](d2, K_values=(0, 1, 2, 3))
     check("curve is indexed by (sector, K)", list(cc.index.names) == ["A129", "K"] and
           len(cc) == exp["S"] * 4)
-    # The panels are INCREMENTS: p_s(K) = Pr[K_ls = K] = G(K) - G(K-1). G_K.csv stores
-    # the CDF, so the empirical series must be its first difference, with p_s(0) = G(0)
-    # — the targeted moment is the same number under either convention.
-    check("empirical curve is the INCREMENT of G_K.csv, p_s(K) = G(K) - G(K-1)",
-          close(cc["empirical"].values.reshape(exp["S"], 4),
-                np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)))
+    # G_K.csv stores the pmf p_s(K) = Pr[K_ls = K] (G_cs is its cumsum): read as is,
+    # never differenced -- differencing gave negative "shares" on the real data.
+    emp_cc = cc["empirical"].values.reshape(exp["S"], 4)
+    check("empirical curve is G of G_K.csv as is (the pmf), not its difference",
+          close(emp_cc, np.array(exp["G_curve_emp"])) and bool((emp_cc >= 0).all()))
     check("the unbiased estimator was used (no fallback)",
           cc.attrs["estimator"].startswith("unbiased"))
     check("N_rho recovered from N_HI as load_parameters.jl fixes it",
@@ -625,18 +644,19 @@ def run_checks(ns, ROOT, exp):
     try:
         g = pd.read_csv(io.StringIO(gk_orig2))
         g = g[~((g["K"] == 2) & (g["A129"] == exp["sector_names"][0]))]
+        g = g.drop(columns="G_cs")   # a dropped row breaks the cumsum by construction
         g.to_csv(gk_path2, index=False)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             cc_gap = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
                                        K_values=(0, 1, 2, 3))
         emp_gap = cc_gap["empirical"].values.reshape(exp["S"], 4)
-        ref = np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)
-        check("a missing K row is read as a flat CDF (increment 0), not two NaNs",
+        ref = np.array(exp["G_curve_emp"])
+        check("a missing K row is read as a share of 0, the neighbours untouched",
               bool(np.isfinite(emp_gap).all()) and abs(emp_gap[0, 2]) < 1e-12
-              and abs(emp_gap[0, 3] - (ref[0, 2] + ref[0, 3])) < 1e-12)
+              and abs(emp_gap[0, 3] - ref[0, 3]) < 1e-12)
         check("and the fill is announced rather than silent",
-              "the CDF is flat there" in buf.getvalue())
+              "read as a share of 0" in buf.getvalue())
         check("other sectors are untouched by one sector's gap",
               close(emp_gap[1:], ref[1:]))
     finally:
