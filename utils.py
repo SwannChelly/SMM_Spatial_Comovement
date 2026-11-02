@@ -635,8 +635,12 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                               granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer,
                               kappa=kappa, profile_head=profile_head)
     if not folder.exists():
-        raise FileNotFoundError(f"run folder {folder} not found — check profile_T / ca_level / "
-                                "granular / relax_n_lo / optimizer against main.jl's naming")
+        found = sorted(p.name for p in Path(base).glob(f"reporting_{industry}_*") if p.is_dir())
+        hint = ("existing trees for this industry: " + ", ".join(found)) if found else \
+               f"no reporting_{industry}_* tree under {Path(base).resolve()}"
+        raise FileNotFoundError(f"run folder {folder} not found — {hint}. Set relax_n_lo "
+                                "(_nlo1) / profile_head (_profhead) to the flags the run was "
+                                "launched with; a tree without _kappa is pre-kappa and not readable.")
 
     n_coef = int(np.load(folder / "n_reg_coef.npy")) # Number of regression coefficients. 
     n_tau_path = folder / "n_tau.npy" 
