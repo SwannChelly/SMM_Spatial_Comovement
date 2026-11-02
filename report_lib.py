@@ -43,7 +43,9 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     Panel A: aggregate labor share.  Panel B: aggregate industry shares.
     Panel C: the extensive margin, block 4 = [beta_d ; beta_kappa] -- the cell cloglog
     of has_sup on the distance regressor(s) and on ln n_ls. Under each simulated
-    coefficient, its 95% fake-world band (`reg_coef_world_table`) when Step 2 has run.
+    coefficient, in parentheses, its fake-world standard deviation (sd of
+    e = beta_world - beta_sim across the Step-2 worlds, `reg_coef_world_table`) when
+    Step 2 has run. beta_kappa is reported here only (`plot_reg_coef` draws beta_d).
     Panel D: the import share of each upstream sector, f_s = 1 - domestic_share, the
     foreign row of the sourcing-share block. It is a PROFILED moment: Phi^F_s is set so
     the closed-form share equals the target exactly, so the simulated share differs from
@@ -126,7 +128,7 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     # --- Panel C: block 4 -----------------------------------------------------
     # Rows are keyed on the coefficient LABEL (bins or ln d, then ln n), so two industries
     # estimated with the same n_coef line up; a label absent from one industry is `---`.
-    c_labels, c_vals, c_bands = [], {}, {}
+    c_labels, c_vals, c_sds = [], {}, {}
     for c in industries_config:
         d = all_data[c["industry"]]
         labs = reg_bin_labels(d["n_coef"], with_kappa=True)
@@ -137,9 +139,8 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
         sim = d["simulated_moments_dict"]["reg_coef"]
         wt = reg_coef_world_table(d)
         c_vals[c["industry"]] = {l: (float(e), float(m)) for l, e, m in zip(labs, emp, sim)}
-        c_bands[c["industry"]] = ({} if wt is None else
-                                  {l: (lo, hi) for l, lo, hi in
-                                   zip(labs, wt["band_lo"].values, wt["band_hi"].values)})
+        c_sds[c["industry"]] = ({} if wt is None else
+                                dict(zip(labs, wt["world_sd_e"].values)))
     # ln n last, whatever the order the industries listed the bins in
     c_labels = [l for l in c_labels if "n_{ls}" not in l] + [l for l in c_labels if "n_{ls}" in l]
 
@@ -171,20 +172,21 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     tex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel C: Extensive Margin "
             f"(cell cloglog)}}}} \\\\\n")
     tex += "\\midrule\n"
-    any_band = False
+    any_sd = False
     for l in c_labels:
         name = (r"Density, $\beta_\kappa$ on " + l if "n_{ls}" in l
                 else r"Distance, $\beta_d$ " + l)
-        row, band = [name], [""]
+        row, sds = [name], [""]
         for c in industries_config:
             v = c_vals[c["industry"]].get(l)
             row += ["---", "---"] if v is None else list(v)
-            b = c_bands[c["industry"]].get(l)
-            band += ["{}", "{}" if b is None else f"{{[{b[0]:.3f}, {b[1]:.3f}]}}"]
-            any_band |= b is not None
+            sd = c_sds[c["industry"]].get(l)
+            ok = sd is not None and np.isfinite(sd)
+            sds += ["{}", f"{{({sd:.4f})}}" if ok else "{}"]
+            any_sd |= ok
         tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
-        if any(x not in ("", "{}") for x in band):
-            tex += " & ".join(band) + " \\\\\n"
+        if any(x not in ("", "{}") for x in sds):
+            tex += " & ".join(sds) + " \\\\\n"
 
     if panel_D_rows:
         tex += "\\midrule\n"
@@ -204,9 +206,9 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
             r"supplier indicator on distance and on the log number of establishments $n_{ls}$, "
             r"with a sector $\times$ attraction-area fixed effect; the model counterpart is "
             r"averaged over 100 networks of $\hat N_s$ varieties."
-            + (r" In brackets: the 2.5--97.5\% quantiles of the coefficient in a single "
-               r"finite economy drawn from the model (simulated value plus the fake-world "
-               r"residual $\beta_{world}-\beta_{sim}$ of Step~2)." if any_band else "")
+            + (r" In parentheses: the standard deviation of the coefficient in a single "
+               r"finite economy drawn from the model, i.e. of the fake-world residual "
+               r"$\beta_{world}-\beta_{sim}$ across the Step~2 worlds." if any_sd else "")
             + (r" Panel~D reports each upstream sector's import share $f_s = 1 - $ domestic "
                r"share (Emp.) against the simulated share of the buyers' spending on that "
                r"sector won by its foreign competitor (Sim.). It is matched exactly by the "
@@ -631,48 +633,44 @@ def _n_hat_world(data):
 
 def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
     """
-    Block 4 = [beta_d ; beta_kappa], empirical against simulated, with the 95% fake-world
-    band on the simulated point (`reg_coef_world_table`).
+    The distance coefficients beta_d of block 4, empirical against simulated, with the
+    95% fake-world band on the simulated point (`reg_coef_world_table`).
 
-    Two panels sharing nothing but the legend: the distance coefficients (one per bin,
-    or ln d) on the left, the density coefficient on ln n_ls on the right -- the two are
-    on different scales and identify different parameters (alpha and kappa). The data
-    point carries no bar: the Julia code reads no data covariance, and the band already
-    contains the sampling noise of one finite network.
+    beta_kappa (ln n_ls) is not drawn: it is on another scale and identifies another
+    parameter, and is reported with its fake-world sd in Panel C of
+    `generate_combined_table`. The data point carries no bar: the Julia code reads no
+    data covariance, and the band already contains the sampling noise of one finite
+    network.
     """
-    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
-    sim = _sim_block4(data)
-    tab = reg_coef_world_table(data, q=q)
-    band = None if tab is None else (tab["band_lo"].values, tab["band_hi"].values)
     nd = data["n_coef"]
-    labels = reg_bin_labels(nd, with_kappa=True)
+    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)[:nd]
+    sim = _sim_block4(data)[:nd]
+    tab = reg_coef_world_table(data, q=q)
+    band = None if tab is None else (tab["band_lo"].values[:nd], tab["band_hi"].values[:nd])
     sim_label = "Simulated" + ("" if band is None
                                else rf" (95\% fake-world band)" if mpl.rcParams.get("text.usetex")
                                else " (95% fake-world band)")
-
     if ax is None:
-        fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.62),
-                                gridspec_kw={"width_ratios": [max(nd, 1) + 0.6, 1.6]})
+        fig, ax = plt.subplots(figsize=get_figsize(hf=0.62))
     else:
-        fig, axs = ax.figure, np.atleast_1d(ax)
-        if axs.size != 2:
-            raise ValueError("plot_reg_coef draws two panels: pass two axes")
-    sl = [slice(0, nd), slice(nd, nd + 1)]
-    for k, (a, s_) in enumerate(zip(axs, sl)):
-        _paired_errorbar(a, labels[s_], emp[s_], sim[s_],
-                         band_sim=None if band is None else (band[0][s_], band[1][s_]),
-                         ylabel=(r"Cell cloglog coefficient" if k == 0 else ""),
-                         xlabel=("Distance bin (km)" if nd > 1 else "") if k == 0 else "Density",
-                         sim_label=sim_label, legend=(k == 0))
+        fig = ax.figure
+    _paired_errorbar(ax, reg_bin_labels(nd), emp, sim, band_sim=band,
+                     ylabel="Cell cloglog coefficient on distance",
+                     xlabel="Distance bin (km)" if nd > 1 else "",
+                     sim_label=sim_label, legend=False)
+    # legend above the axes: inside, it sits on the bands of the far bins
+    ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2)
     fig.tight_layout()
-    if tab is not None and not tab["inside_band"].all():
-        out = list(tab.index[~tab["inside_band"]])
-        print(f"[plot_reg_coef] {data['industry']}: data outside the 95% fake-world band "
-              f"for {out}.")
+    if tab is not None:
+        out = tab.iloc[:nd]
+        out = list(out.index[~out["inside_band"]])
+        if out:
+            print(f"[plot_reg_coef] {data['industry']}: data outside the 95% fake-world band "
+                  f"for {out}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, format="pdf", bbox_inches="tight")
-    return axs
+    return ax
 
 
 # ---------------------------------------------------------------------------
