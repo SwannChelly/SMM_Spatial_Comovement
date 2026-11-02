@@ -1002,15 +1002,26 @@ def gate_comparative_advantage():
     NS["plt"].close(ax_al.figure)
     print("spatial-alignment figure: the drawn line IS the reported slope, hubs named")
 
-    # a binned trade cost has no single elasticity and must say so
-    try:
-        bad = dict(data, n_tau=2,
-                   best_params=np.insert(best_params, 1 + S + n_AA + 1, 0.2))
-        NS["sourcing_geometry"](bad)
-    except ValueError as e:
-        print("\nexpected under N_TAU > 1:", str(e)[:70], "...")
-    else:
-        raise AssertionError("should have raised")
+    # Binned trade costs (N_TAU = K) go through the same geometry. With every alpha_k equal
+    # to alpha, ln tau = alpha (ln d - ln dbar_0): the shift is common to a buyer's
+    # origins, so rho must be the power law's EXACTLY; and alpha = 0 (scalar, broadcast
+    # to every segment) must remove distance altogether, as under the power law.
+    K = 4
+    binned = dict(data, n_tau=K, n_coef=K, best_params=np.insert(
+        best_params, 1 + S + n_AA + 1, [ALPHA] * (K - 1)))
+    g1, gK = NS["sourcing_geometry"](data), NS["sourcing_geometry"](binned)
+    assert gK["alpha"].size == K and gK["knots"].size == K + 1
+    for s_ in g1["by_sector"]:
+        assert np.allclose(gK["by_sector"][s_]["rho"], g1["by_sector"][s_]["rho"],
+                           atol=1e-12), s_
+    assert np.isclose(gK["theta_alpha"], g1["theta_alpha"], rtol=1e-12)
+    g0 = NS["sourcing_geometry"](binned, alpha=0.0)
+    for s_, blk in g0["by_sector"].items():
+        assert np.allclose(blk["log_tau"], 0.0)
+        T_ = blk["T_cell"]
+        assert np.allclose(blk["rho"], (T_ / T_.sum())[:, None] * np.ones(blk["rho"].shape[1]))
+    print("binned tau: equal alpha_k reproduce the power law's rho to 1e-12; alpha = 0 "
+          "removes distance in every segment")
 
     print("\nALL OK")
 

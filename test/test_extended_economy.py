@@ -35,16 +35,20 @@ N_HAT = np.array([4, 10, 30])
 
 
 def sourcing_geometry(data, alpha=None, equalise_T=False):
-    a = ALPHA if alpha is None else float(alpha)
+    a = ALPHA if alpha is None else float(np.ravel(alpha)[0])
     out = {}
     for s in range(S):
         cells = np.flatnonzero(CELL_MASK[s])
         T = np.ones(cells.size) if equalise_T else Tcell[s]
         d = np.maximum(D[np.ix_(cells, buyers - 1)], 1.0)
         psi = T[:, None] * d ** (-THETA * a)
-        out[s] = {"cells": cells, "T_cell": T, "distance": d,
+        # the power law through the same keys the real geometry carries: log tau and
+        # the local elasticity theta * d ln tau / d ln d
+        out[s] = {"cells": cells, "T_cell": T, "distance": d, "log_tau": a * np.log(d),
+                  "elasticity": np.full(d.shape, THETA * a),
                   "rho": psi / psi.sum(0, keepdims=True)}
-    return {"by_sector": out, "alpha": a, "theta": THETA, "downstream": buyers}
+    return {"by_sector": out, "alpha": np.array([a]), "theta": THETA,
+            "theta_alpha": THETA * a, "downstream": buyers}
 
 
 def _parquet_sector_index(data, sup): return sup["A129"].to_numpy().astype(int) - 1
@@ -245,7 +249,8 @@ try:
                      geom={"by_sector": {0: sourcing_geometry(data)["by_sector"][0],
                                          1: {"cells": np.array([], int),
                                              "T_cell": np.array([]),
-                                             "distance": np.zeros((0, buyers.size))},
+                                             "distance": np.zeros((0, buyers.size)),
+                                             "log_tau": np.zeros((0, buyers.size))},
                                          2: sourcing_geometry(data)["by_sector"][2]},
                            "alpha": ALPHA, "theta": THETA, "downstream": buyers})
     raise AssertionError("an empty sector was accepted")

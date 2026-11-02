@@ -13,7 +13,10 @@ import pandas as pd
 KAPPA = 0.3          # the density elasticity planted in theta_hat (after alpha)
 
 
-def build(seed=11):
+def build(seed=11, alpha=(0.4,)):
+    """`alpha` is the trade-cost block: one entry (the power law) or n_coef = 4 segment
+    elasticities (binned tau); it is the only thing that sets N_TAU."""
+    alpha = tuple(float(a) for a in alpha)
     S, R, R_D, n_coef = 3, 8, 4, 4
     rng = np.random.default_rng(seed)
     TMP = tempfile.mkdtemp(prefix="parts_gate_")
@@ -62,7 +65,7 @@ def build(seed=11):
                   for s in range(S) for r in range(6)]).to_csv(f"{inp}/cells_ls.csv",
                                                                index=False)
     np.save(f"{run}/n_reg_coef.npy", np.array(n_coef))
-    np.save(f"{run}/n_tau.npy", np.array(1))
+    np.save(f"{run}/n_tau.npy", np.array(len(alpha)))
 
     n_T = 0
     aa_of_ze = AA.argmax(axis=1)
@@ -72,7 +75,7 @@ def build(seed=11):
         AA_ACTIVE[s, aa_of_ze[sup_cells[s]]] = True
     n_T = int(AA_ACTIVE.sum())
     theta_hat = np.concatenate([[0.31], rng.uniform(.2, .5, S), rng.uniform(.8, 1.2, R_D),
-                                [0.4], [KAPPA], rng.lognormal(0, .3, n_T)])
+                                list(alpha), [KAPPA], rng.lognormal(0, .3, n_T)])
     np.save(f"{run}/step3/best_parameters_list.npy", theta_hat[:, None])
     np.save(f"{run}/step3/post_hoc_N_hat.npy", np.array([4, 7, 5]))
 

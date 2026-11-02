@@ -176,7 +176,7 @@ def ca_distance_equivalence(data):
     exactly, buyer by buyer, and is the one to quote; this table is the summary version.
     """
     geom = sourcing_geometry(data)
-    ta = geom["theta"] * geom["alpha"]
+    ta = geom["theta_alpha"]        # theta*alpha; under binned tau, the mean local elasticity
     caf = comparative_advantage_frame(data)
     rows = []
     for s, blk in geom["by_sector"].items():
@@ -329,7 +329,7 @@ def ca_win_margin(data):
     or sitting in the right region of it matters more.
     """
     geom = sourcing_geometry(data)
-    ta, w = geom["theta"] * geom["alpha"], _buyer_weights(data)
+    ta, w = geom["theta_alpha"], _buyer_weights(data)
     est_T = geom["T"]
     rows = []
     for s, blk in geom["by_sector"].items():
@@ -408,12 +408,12 @@ def ca_variance_decomposition(data):
     """
     The exact split of the dispersion of log psi across competing cells.
 
-    For a given buyer r, log psi_{l,r} = log T_l - theta*alpha*log d_{l,r}, so
+    For a given buyer r, log psi_{l,r} = log T_l - theta*log tau_{l,r}, so
 
-        Var_l(log psi) = Var_l(log T) + (theta*alpha)^2 Var_l(log d)
-                         - 2*theta*alpha*Cov_l(log T, log d)
+        Var_l(log psi) = Var_l(log T) + Var_l(theta log tau) - 2 Cov_l(log T, theta log tau)
 
-    holds with no approximation. Variances are taken ACROSS CELLS at a fixed buyer —
+    holds with no approximation; under the power law theta*log tau = theta*alpha*log d and
+    this is the familiar (theta*alpha)^2 Var(log d) split. Variances are taken ACROSS CELLS at a fixed buyer —
     which is the competition the model actually runs — then averaged over buyers with
     their purchase weights. `sd_logT` against `sd_dist` is the like-for-like size of the
     two forces.
@@ -424,27 +424,27 @@ def ca_variance_decomposition(data):
     `share_covariance` — is the expected reading. `ca_covariance_benchmark` splits it.
     """
     geom = sourcing_geometry(data)
-    ta, w = geom["theta"] * geom["alpha"], _buyer_weights(data)
+    theta, w = geom["theta"], _buyer_weights(data)
     rows = []
     for s, blk in geom["by_sector"].items():
         if blk["cells"].size < 2:
             continue
         logT = np.log(np.maximum(blk["T_cell"], 1e-300))
-        ld = np.log(blk["distance"])                       # (n_cell, R_d)
+        x = theta * blk["log_tau"]                         # (n_cell, R_d), the distance pull
         v_T = float(np.var(logT))
-        v_d = np.var(ld, axis=0)                           # per buyer
-        cov = np.array([np.cov(logT, ld[:, r], bias=True)[0, 1] for r in range(ld.shape[1])])
-        v_psi = v_T + (ta ** 2) * v_d - 2 * ta * cov
+        v_d = np.var(x, axis=0)                            # per buyer
+        cov = np.array([np.cov(logT, x[:, r], bias=True)[0, 1] for r in range(x.shape[1])])
+        v_psi = v_T + v_d - 2 * cov
         vd_bar, cov_bar, vpsi_bar = float(v_d @ w), float(cov @ w), float(v_psi @ w)
         rows.append({
             "sector": data["sector_names"][s],
             "sd_logT": np.sqrt(v_T),
-            "sd_dist": ta * np.sqrt(vd_bar),
-            "ratio_CA_over_distance": np.sqrt(v_T) / (ta * np.sqrt(vd_bar))
+            "sd_dist": np.sqrt(vd_bar),
+            "ratio_CA_over_distance": np.sqrt(v_T) / np.sqrt(vd_bar)
             if vd_bar > 0 else np.inf,
             "share_CA": v_T / vpsi_bar if vpsi_bar > 0 else np.nan,
-            "share_distance": (ta ** 2) * vd_bar / vpsi_bar if vpsi_bar > 0 else np.nan,
-            "share_covariance": -2 * ta * cov_bar / vpsi_bar if vpsi_bar > 0 else np.nan,
+            "share_distance": vd_bar / vpsi_bar if vpsi_bar > 0 else np.nan,
+            "share_covariance": -2 * cov_bar / vpsi_bar if vpsi_bar > 0 else np.nan,
             "sd_log_psi": np.sqrt(vpsi_bar),
         })
     return _by_sector_code(pd.DataFrame(rows).set_index("sector"), data)
@@ -474,7 +474,7 @@ def ca_covariance_benchmark(data):
     vanish, leaving `cov_T == cov_gamma` — the limiting case to check the split against.
     """
     geom = sourcing_geometry(data)
-    ta, w = geom["theta"] * geom["alpha"], _buyer_weights(data)
+    ta, w = geom["theta_alpha"], _buyer_weights(data)
     emp_gamma_aa, aa_of_ze = data["emp_gamma_aa"], data["aa_of_ze"]
     rows = []
     for s, blk in geom["by_sector"].items():
@@ -681,7 +681,7 @@ def ca_distance_leverage(data, n_grid=201, reg=None):
     """
     trapz = getattr(np, "trapezoid", None) or np.trapz
     geom = sourcing_geometry(data)
-    ta, w = geom["theta"] * geom["alpha"], _buyer_weights(data)
+    ta, w = geom["theta_alpha"], _buyer_weights(data)
     ts = np.linspace(0.0, 1.0, int(n_grid))
     rows = []
     for s, blk in geom["by_sector"].items():
@@ -689,7 +689,7 @@ def ca_distance_leverage(data, n_grid=201, reg=None):
             continue
         logT = np.log(np.maximum(blk["T_cell"], 1e-300))[:, None]   # (n_cell, 1)
         d_km = blk["distance"]                                      # (n_cell, R_d), km
-        base = -ta * np.log(d_km)
+        base = -geom["theta"] * blk["log_tau"]                      # -theta*log tau
 
         def allocate(t):
             z = t * logT + base
@@ -888,7 +888,7 @@ def alignment_correlation(data, weights="cell"):
     df = pd.DataFrame(rows)
     df.attrs["weights"] = weights
     df.attrs["industry"] = data["industry"]
-    df.attrs["theta_alpha"] = geom["theta"] * geom["alpha"]
+    df.attrs["theta_alpha"] = geom["theta_alpha"]
     return df
 
 
@@ -1574,6 +1574,13 @@ def concentration_derivatives(data, value_col="share", spend=None, check=True,
     down = np.asarray(geom["downstream"]).astype(int)
     take = np.array([int(np.flatnonzero(down == b)[0]) for b in buyers])
     theta, a = geom["theta"], geom["alpha"]
+    # The trade-cost dial: log tau is homogeneous of degree one in the alpha VECTOR, so
+    # scaling every alpha_k by c gives psi = T exp(-(theta*c*a_bar) L) with
+    # L = log tau(alpha_hat)/a_bar -- and theta*a_bar is the dial. Under the power law
+    # L = log d and the dial is theta*alpha, exactly as before.
+    a_bar = float(np.mean(a))
+    if a_bar <= 0:
+        raise ValueError("concentration_derivatives is taken at a geometry with trade costs.")
 
     rows = []
     for s, blk in geom["by_sector"].items():
@@ -1581,7 +1588,7 @@ def concentration_derivatives(data, value_col="share", spend=None, check=True,
         if rho.size == 0 or rho.sum() == 0:
             continue
         logT = np.log(np.maximum(blk["T_cell"], 1e-300))
-        logd = np.log(np.maximum(blk["distance"][:, take], 1.0))
+        logd = blk["log_tau"][:, take] / a_bar            # = log d under the power law
         h = (rho ** 2).sum(axis=0)
         dT = 2.0 * ((rho * logT[:, None] * rho).sum(axis=0)
                     - (rho * logT[:, None]).sum(axis=0) * h)
@@ -1611,7 +1618,8 @@ def concentration_derivatives(data, value_col="share", spend=None, check=True,
                     continue
                 v[s] = float((pi / pi.sum()) @ (r ** 2).sum(axis=0))
             return pd.Series(v)
-        num = (_h(a + eps / theta) - _h(a - eps / theta)) / (2 * eps)
+        step = eps / (theta * a_bar)
+        num = (_h(a * (1 + step)) - _h(a * (1 - step))) / (2 * eps)
         out["fd_dH_dalphatheta"] = num.reindex(out.index)
         rel = np.nanmax(np.abs(out["fd_dH_dalphatheta"] - out["dH_dalphatheta"])
                         / np.maximum(np.abs(out["dH_dalphatheta"]), 1e-12))

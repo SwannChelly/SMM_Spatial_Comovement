@@ -1359,28 +1359,130 @@ def _downstream_ze_index(data):
     return idx
 
 
+# --- Trade costs: ONE map from (alpha, distance) to log tau, whatever N_TAU is -------
+#
+# `build_tau` (model_CP.jl) is the only definition of tau, and everything below goes
+# through `log_tau`, its port, so a section never writes `alpha * log d` itself:
+#
+#   N_TAU = 1   ln tau = alpha * ln d                          (the power law d^alpha)
+#   N_TAU = K   ln tau continuous and piecewise linear in ln d, slope alpha_k between the
+#               knots ln dbar_{k-1}, ln dbar_k (the bin centres), ln tau(dbar_0) = 0,
+#               end segments extended at alpha_1 and alpha_K.
+#
+# Equal alpha_k give alpha*(ln d - ln dbar_0), i.e. d^alpha up to a factor common to a
+# buyer's origins, which cancels in every share. `alpha` may be passed as a SCALAR, which
+# is broadcast to every segment: `alpha=0` is therefore tau == 1 under any
+# parametrisation, which is what the `No trade cost` regime means.
+
+# Bin edges of the extensive-margin regression, by n_coef (load_parameters.jl).
+TAU_BIN_EDGES = {4: (0.0, 50.0, 100.0, 150.0, 200.0),
+                 5: (0.0, 20.0, 50.0, 100.0, 150.0, 200.0)}
+
+
+def tau_log_knots(data):
+    """
+    `TAU_LOG_KNOTS` exactly as `load_parameters.jl` builds it: the log of the bin CENTRES,
+    the last bin closed at the largest distance from any region to its nearest
+    downstream region. `None` for the power law (N_TAU = 1). Cached on `data`.
+    """
+    n_tau = int(data["n_tau"])
+    if n_tau == 1:
+        return None
+    if data.get("_tau_log_knots") is not None:
+        return data["_tau_log_knots"]
+    n_coef = int(data["n_coef"])
+    if n_tau != n_coef or n_coef not in TAU_BIN_EDGES:
+        raise ValueError(f"n_tau must be 1 or n_coef (4 or 5); got n_tau = {n_tau}, "
+                         f"n_coef = {n_coef}.")
+    D = np.load(data["input_folder"] / "distances.npy")
+    down = _downstream_ze_index(data)
+    d_max = float(np.nanmax(np.nanmin(D[:, down - 1], axis=1)))
+    edges = np.array(TAU_BIN_EDGES[n_coef] + (d_max,))
+    if d_max <= edges[-2]:
+        raise ValueError(f"no region lies beyond {edges[-2]:g} km of its nearest downstream "
+                         f"region (max {d_max:.1f}): the last bin is empty, as Julia refuses.")
+    knots = np.log(0.5 * (edges[:-1] + edges[1:]))
+    try:
+        data["_tau_log_knots"] = knots
+    except TypeError:
+        pass
+    return knots
+
+
+def resolve_alpha(data, alpha=None):
+    """The N_TAU-long alpha vector: the estimate (`None`), a scalar broadcast to every
+    segment, or a full vector."""
+    n_tau = int(data["n_tau"])
+    if alpha is None:
+        return np.asarray(unpack_estimated_T(data)["alpha"], dtype=float).ravel()
+    a = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
+    if a.size == 1:
+        return np.full(n_tau, float(a[0]))
+    if a.size != n_tau:
+        raise ValueError(f"alpha has {a.size} entries against N_TAU = {n_tau}.")
+    return a
+
+
+def log_tau(alpha, log_d, knots=None):
+    """`ln tau` at `log_d` (any shape), the port of `build_tau`. `knots` is
+    `tau_log_knots(data)`; it is ignored (and may be None) when alpha has one entry."""
+    a = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
+    ld = np.asarray(log_d, dtype=float)
+    if a.size == 1:
+        return a[0] * ld
+    x = np.asarray(knots, dtype=float)
+    K = a.size
+    if x.size != K + 1:
+        raise ValueError(f"{K} segment elasticities need {K + 1} knots, got {x.size}.")
+    out = a[0] * (np.minimum(ld, x[1]) - x[0])
+    for k in range(1, K):
+        upper = ld if k == K - 1 else np.minimum(ld, x[k + 1])
+        out = out + np.where(ld > x[k], a[k] * (upper - x[k]), 0.0)
+    return out
+
+
+def tau_elasticity(alpha, log_d, knots=None):
+    """`d ln tau / d ln d` at `log_d`: alpha for the power law, the elasticity of the
+    segment `log_d` falls in when tau is binned (the left one at a knot)."""
+    a = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
+    ld = np.asarray(log_d, dtype=float)
+    if a.size == 1:
+        return np.full(ld.shape, a[0])
+    x = np.asarray(knots, dtype=float)
+    return a[np.searchsorted(x[1:a.size], ld, side="left")]
+
+
 def sourcing_geometry(data, alpha=None, equalise_T=False):
     """
     The exact Ricardian win probabilities `rho[s][l, r]` and the pieces they are built
-    from, per sector, over CELLS l = regions.
+    from, per sector, over CELLS l = regions:
 
-    `alpha=0` switches the distance force off, `equalise_T=True` switches comparative
-    advantage off — the two counterfactuals, both closed form.
+        psi_lr = T_ls * tau_lr^(-theta),   rho_lr = psi_lr / sum_l' psi_l'r,
+
+    with `tau` from `log_tau`, so the same code serves the power law and binned trade
+    costs. `alpha=0` switches the distance force off (every segment, so tau == 1),
+    `equalise_T=True` switches comparative advantage off — the two counterfactuals, both
+    closed form.
+
+    Per sector: `distance` (km, floored at 1 km as LOG_DIST_DOWNSTREAM is), `log_tau`,
+    `elasticity` = theta * d ln tau/d ln d (theta*alpha under the power law), `log_psi`,
+    `rho`. At the top level: `alpha` (N_TAU vector), `alpha_hat`, `knots`, and
+    `theta_alpha`, the ONE scalar for statements written in theta*alpha: exactly
+    theta*alpha under the power law, and under binned tau the rho- and purchase-weighted
+    mean of the local elasticity -- an average, so read it as one.
     """
     est = unpack_estimated_T(data)
-    if est["alpha"].size != 1:
-        raise ValueError(
-            f"N_TAU = {est['alpha'].size}: tau is binned, not the power law d^alpha, so "
-            "there is no single distance elasticity to trade off against T. Re-run the "
-            "reporting on an n_tau = 1 fit for this section.")
-    a = float(est["alpha"][0]) if alpha is None else float(alpha)
+    a = resolve_alpha(data, alpha)
+    knots = tau_log_knots(data)
     theta = est["theta"]
 
     D = np.load(data["input_folder"] / "distances.npy")[:data["R"], :data["R"]]
     down = _downstream_ze_index(data)
     aa_of_ze, CELL_MASK = data["aa_of_ze"], data["CELL_MASK"]
+    w = np.asarray(data.get("emp_pi_r", []), dtype=float).ravel()
+    w = w / w.sum() if w.size == down.size and w.sum() > 0 else np.full(down.size, 1.0 / down.size)
 
-    out = {}
+    out, ta_s = {}, []
     for s in range(data["S"]):
         cells = np.flatnonzero(CELL_MASK[s])                       # 0-based ZE
         if cells.size == 0:
@@ -1389,13 +1491,21 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
         # sets every cell to one, as Julia's `:equal_T` regime does
         T_cell = np.ones(cells.size) if equalise_T else est["T_cell"][s, cells]
         d = np.maximum(D[np.ix_(cells, down - 1)], 1.0)            # (n_cell, R_d)
-        psi = T_cell[:, None] * d ** (-theta * a)
+        ld = np.log(d)
+        lt = log_tau(a, ld, knots)
+        log_psi = np.log(np.maximum(T_cell, 1e-300))[:, None] - theta * lt
+        psi = np.exp(log_psi - log_psi.max(axis=0, keepdims=True))
         tot = psi.sum(axis=0, keepdims=True)
+        rho = np.divide(psi, tot, out=np.zeros_like(psi), where=tot > 0)
+        el = theta * tau_elasticity(a, ld, knots)
+        ta_s.append(float(((rho * el).sum(axis=0)) @ w))
         out[s] = {"cells": cells, "areas": aa_of_ze[cells], "T_cell": T_cell,
-                  "distance": d, "log_psi": np.log(np.maximum(psi, 1e-300)),
-                  "rho": np.divide(psi, tot, out=np.zeros_like(psi), where=tot > 0)}
+                  "distance": d, "log_tau": lt, "elasticity": el,
+                  "log_psi": np.maximum(log_psi, np.log(1e-300)), "rho": rho}
     return {"by_sector": out, "alpha": a, "theta": theta, "T": est["T"],
-            "alpha_hat": float(est["alpha"][0]), "downstream": down}
+            "alpha_hat": np.asarray(est["alpha"], dtype=float).ravel(), "knots": knots,
+            "theta_alpha": float(np.mean(ta_s)) if ta_s else float(theta * a.mean()),
+            "downstream": down}
 
 
 # ============================================================================
@@ -1604,7 +1714,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
           "epsilon": float(data["epsilon"]),
           "delta": np.ones(R_d), "wage": np.ones(data["R"])}
     if verbose:
-        print(f"  [theta+] Omega_L {xp['Omega_L']:.4f}  alpha {float(xp['alpha'][0]):.4f}  "
+        print(f"  [theta+] Omega_L {xp['Omega_L']:.4f}  alpha {np.round(xp['alpha'], 4).tolist()}  "
               f"theta {xp['theta']:.4f} ({src})  N_s {xp['N'].min()}-{xp['N'].max()}  "
               f"eps {xp['epsilon']:.3f}  nu {xp['nu']:g}/{NU_S_DEFAULT:g}  lam {xp['lam']:g}")
     return xp
@@ -1660,7 +1770,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     if xp is None:
         xp = extended_parameters(data, n_hat=n_hat, verbose=verbose)
     g = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T) if geom is None else geom
-    theta, a = xp["theta"], g["alpha"]
+    theta, a = xp["theta"], g["alpha"]                       # a: the N_TAU vector
     nu, lam, Om_L, Om_s = xp["nu"], xp["lam"], xp["Omega_L"], xp["Omega_s"]
     S = data["S"]
     down = np.asarray(g["downstream"]).astype(int)          # 1-based ZE of each buyer
@@ -1718,7 +1828,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
             blk = blocks[s]
             cells, N, nus = blk["cells"], Nv[s], float(xp["nu_s"][s])
             logT = np.log(np.maximum(blk["T_cell"], 1e-300))
-            logd = np.log(np.maximum(blk["distance"], 1.0))          # (cell, buyer)
+            ltau = blk["log_tau"]                                     # (cell, buyer)
             if u_list is None:
                 uu = rng.random((N, cells.size))
             else:
@@ -1734,7 +1844,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
                         f"{(N, cells.size)}: the good order or N_hat disagrees with Julia.")
             # Frechet inverse CDF, Julia's branch exactly: z = T^(1/theta) * (-log(1-u))^(-1/theta)
             logz = logT[None, :] / theta - np.log(-np.log1p(-uu)) / theta
-            lc = a * logd.T[None, :, :] - logz[:, None, :]            # (var, buyer, cell)
+            lc = ltau.T[None, :, :] - logz[:, None, :]                # (var, buyer, cell)
             j = lc.argmin(axis=2)
             p = np.exp(np.take_along_axis(lc, j[:, :, None], axis=2)[:, :, 0])   # (var, buyer)
             # the winner's own productivity, which is the parquet's `productivity` column

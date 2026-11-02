@@ -23,7 +23,7 @@ from utils import (
     EMPIRICAL_MEAN_LOG_D, NU_S_DEFAULT, THETA_DEFAULT,
     _despine, _read_named_value, fs, get_figsize, load_granular_data, pct,
     reference_color, set_name_axis_fontsize, sim_color, toulouse_color,
-    unpack_estimated_T,
+    unpack_estimated_T, log_tau, tau_elasticity, tau_log_knots, sourcing_geometry,
 )
 
 
@@ -2348,12 +2348,14 @@ def theta_alpha(data):
     if bp.size != expected:
         raise ValueError(f"best_params has {bp.size} entries, layout rebuilt here is "
                          f"{expected} — the run's flags and the ones passed here disagree.")
-    if n_tau != 1:
-        raise ValueError(f"N_TAU = {n_tau}: tau is binned, so there is no single distance "
-                         "elasticity. Re-run the reporting on an n_tau = 1 fit.")
     v = _read_named_value(data["coefs"], "theta") if data.get("coefs") is not None else None
     theta = float(v) if v is not None and np.isfinite(v) and v > 0 else THETA_DEFAULT
-    return float(theta) * float(bp[1 + S + R_d])
+    if n_tau == 1:
+        return float(theta) * float(bp[1 + S + R_d])
+    # binned tau: no single elasticity -- the rho- and purchase-weighted mean of the local
+    # one, d ln tau / d ln d, over the competing cells (`sourcing_geometry`)
+    g = sourcing_geometry(data)
+    return float(theta) * g["theta_alpha"] / g["theta"]
 
 
 def estimate_untargeted_moment(data, controls=(), cluster="cluster", panel=None,
@@ -2586,12 +2588,20 @@ def _estimated_T(data):
         ) from e
 
 
+def _pair_tau_elasticity(data, panel, est=None):
+    """d ln tau / d ln d at each panel pair's distance: alpha under the power law, the
+    segment elasticity alpha_k(d_ir) under binned tau (`utils.tau_elasticity`)."""
+    est = _estimated_T(data) if est is None else est
+    return tau_elasticity(est["alpha"], panel["log_distance"].to_numpy(float),
+                          tau_log_knots(data))
+
+
 def attach_lambda(data, panel, min_distance_km=1.0):
     """
     The pair-level surprisal of winning,
 
         Lambda_ir = Phi_{-r', r s} (w_{r's} tau_{r'r})^theta z_i^{-theta},
-        tau_{r'r} = d_{r'r}^alpha,
+        tau_{r'r} = d_{r'r}^alpha  (or the binned tau of `utils.log_tau`),
         Phi_{-r', r s} = Phi_{rs} - T_{a(r') s} (w_{r's} tau_{r'r})^{-theta},
 
     added to the panel as `lambda_ir`. This is the only genuinely new computation of the
@@ -2627,18 +2637,15 @@ def attach_lambda(data, panel, min_distance_km=1.0):
             "the pooled varieties and Lambda is not defined pair by pair. Build the panel "
             "with the default key for the structural moment.")
 
-    est = _estimated_T(data)                       # T (S, n_AA), alpha, theta
-    if est["alpha"].size != 1:
-        raise ValueError(f"N_TAU = {est['alpha'].size}: tau is binned, so there is no "
-                         "single distance elasticity to raise to the power theta.")
-    alpha, theta = float(est["alpha"][0]), float(est["theta"])
+    est = _estimated_T(data)                       # T (S, n_AA), alpha (N_TAU), theta
+    alpha, theta = est["alpha"], float(est["theta"])
     S, R = data["S"], data["R"]
     aa_of_ze = np.asarray(data["aa_of_ze"]).ravel()          # region -> area, 0-based
     CELL_MASK = np.asarray(data["CELL_MASK"], dtype=bool)    # (S, R) simulated cells
 
     D = np.load(data["input_folder"] / "distances.npy")[:R, :R]
     d = np.maximum(D, min_distance_km)
-    tau = d ** alpha                                          # (R, R) origin x buyer
+    tau = np.exp(log_tau(alpha, np.log(d), tau_log_knots(data)))   # (R, R) origin x buyer
 
     w_path = data["input_folder"] / "w_rs.npy"
     if w_path.exists():
@@ -2665,7 +2672,7 @@ def attach_lambda(data, panel, min_distance_km=1.0):
     out["lambda_ir"] = (np.maximum(Phi_minus[s_idx, o_idx, b_idx], 0.0)
                         * wtau[o_idx, b_idx] ** theta * z ** (-theta))
     out.attrs.update(panel.attrs)
-    out.attrs.update({"alpha": alpha, "theta": theta})
+    out.attrs.update({"alpha": np.asarray(alpha, dtype=float), "theta": theta})
     return out
 
 
@@ -2691,8 +2698,9 @@ def structural_eta(data, panel, verbose=True):
     """
     The theoretical moment, from the granular derivation, with no regression.
 
-        dlog a_ir / dlog d = -alpha [ theta * Lambda_ir + (nu_s - 1)(1 - a_ir) ]
+        dlog a_ir / dlog d = -alpha_ir [ theta * Lambda_ir + (nu_s - 1)(1 - a_ir) ]
 
+    with alpha_ir = d ln tau/d ln d at the pair's distance (alpha under the power law),
     averaged with w = a * rho/rho_tilde over the SERVED cells (the derivative is conditional
     on winning; unserved cells carry zero weight, which is asserted rather than assumed).
 
@@ -2703,15 +2711,20 @@ def structural_eta(data, panel, verbose=True):
         raise KeyError("run `attach_lambda(data, panel)` first — the structural moment "
                        "needs the pair-level surprisal.")
     est = _estimated_T(data)
-    alpha, theta = float(est["alpha"][0]), float(est["theta"])
+    theta = float(est["theta"])
     nu_s = model_nu_s(data)
 
     w = _structural_weights(panel)
     lam = panel["lambda_ir"].to_numpy(float)
     a = panel["a_ir"].to_numpy(float)
+    al = _pair_tau_elasticity(data, panel, est)
     W = w.sum()
-    E_lambda = float((w * lam).sum() / W)
-    E_open = float((w * (1.0 - a)).sum() / W)
+    # alpha is the w-weighted local elasticity; E_lambda and E_open are weighted by it too,
+    # so eta_ext = -theta*alpha*E_lambda holds exactly (and reduces to the plain w-means
+    # under the power law, where alpha_ir is constant)
+    alpha = float((w * al).sum() / W)
+    E_lambda = float((w * al * lam).sum() / W) / alpha
+    E_open = float((w * al * (1.0 - a)).sum() / W) / alpha
 
     eta_ext = -theta * alpha * E_lambda
     eta_int = -(nu_s - 1.0) * alpha * E_open
@@ -2810,11 +2823,11 @@ def decompose_gap(data, panel, res, sres, verbose=True):
     out and points at (a) and (b).
     """
     est = _estimated_T(data)
-    alpha, theta = float(est["alpha"][0]), float(est["theta"])
+    theta = float(est["theta"])
     nu_s = model_nu_s(data)
     lam = panel["lambda_ir"].to_numpy(float)
     a = panel["a_ir"].to_numpy(float)
-    deriv = -alpha * (theta * lam + (nu_s - 1.0) * (1.0 - a))
+    deriv = -_pair_tau_elasticity(data, panel, est) * (theta * lam + (nu_s - 1.0) * (1.0 - a))
 
     w = _structural_weights(panel)
     under_w = float((w * deriv).sum() / w.sum())
