@@ -53,7 +53,7 @@ def build(seed=11):
                   "ze2010": list(range(1000, 1000 + R)) * S}).to_csv(
         f"{inp}/filter_N_upstream.csv", index=False)
     pd.DataFrame({"group": 1, "A129": np.repeat(["A", "B", "C"], 4),
-                  "K": list(range(4)) * S, "G": np.tile([0.4, 0.7, 0.9, 1.0], S),
+                  "K": list(range(4)) * S, "G": np.tile([0.4, 0.3, 0.2, 0.1], S),
                   "N_supplier_s": np.repeat([20, 24, 30], 4)}).to_csv(f"{inp}/G_K.csv",
                                                                      index=False)
     # cells_ls.csv: n_ls on every simulated cell (T_ls = T_a n_ls^kappa), no RNG draw

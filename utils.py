@@ -246,7 +246,7 @@ LAMBDA_DEFAULT = 0.5             # lambda, labour against intermediates
 ECONOMY_REPLICATIONS = 1000
 
 # Highest K kept anywhere in the count-curve reporting: the panels, the empirical
-# increments read out of G_K.csv, and the bootstrap variances read out of G_K_var.csv
+# shares read out of G_K.csv, and the bootstrap variances read out of G_K_var.csv
 # are ALL truncated here. Raise it to look further into the tail, but only as far as
 # the data pipeline actually tabulates — G_K_var.csv in particular is usually written
 # for a few low K only, and a K beyond it simply leaves that panel's empirical band
@@ -744,8 +744,10 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     G_pmf_se = None
     gk_path = input_folder / "G_K.csv"
     if granular and "counts" in parts:
-        # G_K.csv is `group, A129, G, K, N_supplier_s`: `G` is the value column,
-        # G = Pr(K_ls <= K), and the K = 0 row is the targeted moment Gbar_s(0).
+        # G_K.csv is the data pipeline's `t_G` (Step 6 of the build): `G` is the share
+        # of a sector's active cells with EXACTLY K suppliers (the pmf, summing to 1
+        # over K), `G_cs` its cumulative sum when present. The K = 0 row is the
+        # targeted moment Gbar_s(0).
         # Names are matched case-insensitively, as load_parameters.jl does.
         #
         # The WHOLE curve is kept, not only the targeted row: G_s(K) for K >= 1 is a
@@ -762,6 +764,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
             raise ValueError(f"G_K.csv covers {len(sector_codes)} sectors, expected S = {S}")
         G_curve_K = sorted({int(k) for k in G_K[c_K].astype(float).round()})
         G_curve = np.full((S, len(G_curve_K)), np.nan)
+        c_cs = next((c for c in G_K.columns if c.strip().lower() == "g_cs"), None)
         for s, code in enumerate(sector_codes):
             sub = G_K[G_K[c_sector] == code]
             k_sub = sub[c_K].astype(float).round().astype(int).values
@@ -773,41 +776,31 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
             G_target[s] = G_curve[s, G_curve_K.index(0)]
             N_supplier_s[s] = float(pd.unique(sub[c_N])[0])
 
-        # The INCREMENTS, p_s(K) = Pr[K_ls = K] = G(K) - G(K-1), which is what the
-        # reporting plots. G_K.csv stores the CDF, but N_hat_s is calibrated on the
-        # K = 0 level, so under a cumulative convention every panel would contain the
-        # fitted level and re-test what is already targeted. The increments isolate the
-        # untargeted content -- the SHAPE of the count distribution. p_s(0) = G_s(0), so
-        # the targeted panel is unchanged.
-        # Truncate at k_max BEFORE differencing (the increment at K needs only K and
-        # K-1, so dropping the tail changes nothing that survives). G_target was already
-        # taken from the K = 0 column above and is unaffected.
+        # G is already the pmf p_s(K) = Pr[K_ls = K], which is what the reporting plots
+        # (the CDF would re-test the fitted K = 0 level in every panel). It is read as
+        # is -- never differenced. When the file carries G_cs, check it is the cumsum
+        # of G: that is the only thing pinning down which convention `G` follows.
+        if c_cs is not None:
+            for code in sector_codes:
+                sub = G_K[G_K[c_sector] == code].sort_values(c_K)
+                gap = np.max(np.abs(np.cumsum(sub[c_G].astype(float).values)
+                                    - sub[c_cs].astype(float).values))
+                if gap > 1e-8:
+                    raise ValueError(f"G_K.csv, A129={code}: G_cs is not the cumulative sum "
+                                     f"of G (max gap {gap:.2e}) -- the pmf reading of G "
+                                     "is then not the pipeline's.")
         keep = [i for i, k in enumerate(G_curve_K) if k <= k_max]
         G_curve_K = [G_curve_K[i] for i in keep]
         G_curve = G_curve[:, keep]
-
-        # A (sector, K) row absent from G_K.csv leaves a NaN in the CDF, and differencing
-        # then poisons TWO increments -- K and K+1 -- so a single missing row silently
-        # erases two empirical points. But G is CUMULATIVE: where no row was written, no
-        # mass was added, so the CDF is simply flat there. Carry the last value forward
-        # (K = 0 is required present, asserted above) and say which cells were filled,
-        # so a gap is visible rather than turning into a hole in the figure.
-        filled = []
-        for s_i in range(S):
-            for j in range(1, len(G_curve_K)):
-                if not np.isfinite(G_curve[s_i, j]) and np.isfinite(G_curve[s_i, j - 1]):
-                    G_curve[s_i, j] = G_curve[s_i, j - 1]
-                    filled.append((sector_codes[s_i], G_curve_K[j]))
-        if filled:
-            print(f"[load] G_K.csv has no row for {filled}; the CDF is flat there (no mass "
-                  "added), so those increments are read as 0 rather than dropped.")
-        # Requires consecutive K from 0; a gap would make the difference meaningless.
-        if G_curve_K == list(range(len(G_curve_K))):
-            G_pmf = np.diff(G_curve, axis=1, prepend=0.0)
-        else:
-            G_pmf = None
-            print(f"[load] G_K.csv has non-consecutive K = {G_curve_K}; the increments "
-                  "p_s(K) = G(K) - G(K-1) are not well defined and are left empty.")
+        # A (sector, K) row absent from G_K.csv is a K no cell has: share 0 (the
+        # pipeline's own convention, Step 13 of the build).
+        miss = ~np.isfinite(G_curve)
+        if miss.any():
+            print(f"[load] G_K.csv has no row for "
+                  f"{[(sector_codes[i], G_curve_K[j]) for i, j in zip(*np.where(miss))]}; "
+                  "read as a share of 0.")
+            G_curve[miss] = 0.0
+        G_pmf = G_curve
 
     # ------------------- bootstrap variance of the empirical increments (optional)
     # `G_K_var.csv` is `A129, K, var` (or `se`) and carries the BOOTSTRAP variance of
