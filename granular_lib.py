@@ -2180,7 +2180,7 @@ def report_granular_factors(table, regime="Both forces"):
     print("\n  spend-weighted over cells")
     print(s.round(4).to_string())
     print(f"\n    In LEVELS the two factors are not comparable — V_s = "
-          f"{s['V_s']:.3f} is an inverse variety count, 1 - H_rs = {s['slack']:.3f} a "
+          f"{s['V_s']:.3f} is an inverse variety count, 1 - H_rs = {s['slack = 1 - H_rs']:.3f} a "
           f"dispersion capped at one — and dividing both by H_rs only moves the "
           f"accident around (slack/H = {s['slack / H_rs (ratio of means)']:.0f} "
           f"against V/H = {s['V_s / H_rs (ratio of means)']:.1f}). A product has no "
@@ -2196,7 +2196,7 @@ def report_granular_factors(table, regime="Both forces"):
           f"the granular term is large on both counts at once and neither factor is "
           f"the story alone.")
     print(f"    The one asymmetry that matters for the counterfactuals: 1 - H_rs is "
-          f"bounded above by one and already at {s['slack']:.3f} of that ceiling, so "
+          f"bounded above by one and already at {s['slack = 1 - H_rs']:.3f} of that ceiling, so "
           f"the dispersion channel can only be taken AWAY (equalising T does exactly "
           f"that), while V_s has no ceiling and is set by the calibrated N_s, which no "
           f"counterfactual here moves.")
