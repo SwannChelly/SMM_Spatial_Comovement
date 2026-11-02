@@ -207,8 +207,8 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
             r"with a sector $\times$ attraction-area fixed effect; the model counterpart is "
             r"averaged over 100 networks of $\hat N_s$ varieties."
             + (r" In parentheses: the standard deviation of the coefficient in a single "
-               r"finite economy drawn from the model, i.e. of the fake-world residual "
-               r"$\beta_{world}-\beta_{sim}$ across the Step~2 worlds." if any_sd else "")
+               r"finite economy drawn from the model, i.e. of the simulated residual "
+               r"$\beta_{world}-\beta_{sim}$ across the Step~2 simulations." if any_sd else "")
             + (r" Panel~D reports each upstream sector's import share $f_s = 1 - $ domestic "
                r"share (Emp.) against the simulated share of the buyers' spending on that "
                r"sector won by its foreign competitor (Sim.). It is matched exactly by the "
@@ -271,7 +271,7 @@ def generate_parameter_table(industries_config, output_file="parameters_combined
     head2 = " & " + " & ".join([r"Estimate & 95\% interval"] * n_ind) + r" \\"
     mu_label = r"$\hat{\mu}_1$ (Step~1)" if mu == 1 else r"$\hat{\mu}_2$ (Step~3)"
     tex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
-           r"\caption{Parameter Estimates and Fake-World Confidence Intervals}" "\n"
+           r"\caption{Parameter Estimates and Confidence Intervals}" "\n"
            r"\label{tab:parameters_combined}" "\n" r"\small" "\n"
            r"\begin{tabular}{" + col_spec + "}\n" r"\toprule" "\n"
            + head1 + "\n" + cmid + "\n" + head2 + "\n" r"\midrule" "\n")
@@ -293,12 +293,12 @@ def generate_parameter_table(industries_config, output_file="parameters_combined
     nw = {k: (t.attrs["n_worlds"] if t is not None else 0) for k, t in tabs.items()}
     tex += (r"\bottomrule" "\n" r"\end{tabular}" "\n\n" r"\vspace{0.3cm}" "\n"
             r"\caption*{\footnotesize \emph{Notes}: Estimates at " + mu_label + r". "
-            r"Inference from fake worlds drawn from the model at the estimate: in each world, "
+            r"Inference from economies simulated from the model at the estimate: in each one, "
             r"one network of $\hat N_s$ varieties with independent draws gives its own data "
             r"moments, on which the whole estimator is re-run (T and A re-inverted, "
             r"$N_s$ re-calibrated, $(\alpha,\kappa)$ re-estimated). 95\% interval: "
-            r"2.5--97.5\% quantiles across worlds; standard deviation in parentheses. "
-            r"Usable worlds: " + ", ".join(f"{c['display_name']} {nw[c['industry']]}"
+            r"2.5--97.5\% quantiles across simulations; standard deviation in parentheses. "
+            r"Usable simulations: " + ", ".join(f"{c['display_name']} {nw[c['industry']]}"
                                            for c in industries_config) + r".}" "\n"
             r"\end{table}" "\n")
     if output_file is not None:
@@ -515,6 +515,17 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
     return ax
 
 
+def _legend_below_xaxis(ax, pad=0.02, ncol=2, size_at_ref=11):
+    """One-row legend centred under the x-axis, just clear of its (rotated) tick labels."""
+    fig = ax.figure
+    fig.canvas.draw()
+    bb = ax.xaxis.get_tightbbox(fig.canvas.get_renderer())
+    y0 = ax.transAxes.inverted().transform((0.0, bb.y0))[1] if bb is not None else -0.15
+    return ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, y0 - pad),
+                     ncol=ncol, fontsize=fs(size_at_ref), handletextpad=0.3,
+                     columnspacing=1.2)
+
+
 def reg_bin_labels(n_coef, with_kappa=False):
     """Tick labels of block 4: the distance coefficients, then (optionally) ln n."""
     d = {1: [r"$\ln d$"],
@@ -648,8 +659,8 @@ def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
     tab = reg_coef_world_table(data, q=q)
     band = None if tab is None else (tab["band_lo"].values[:nd], tab["band_hi"].values[:nd])
     sim_label = "Simulated" + ("" if band is None
-                               else rf" (95\% fake-world band)" if mpl.rcParams.get("text.usetex")
-                               else " (95% fake-world band)")
+                               else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
+                               else " (95% band)")
     if ax is None:
         fig, ax = plt.subplots(figsize=get_figsize(hf=0.62))
     else:
@@ -665,7 +676,7 @@ def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
         out = tab.iloc[:nd]
         out = list(out.index[~out["inside_band"]])
         if out:
-            print(f"[plot_reg_coef] {data['industry']}: data outside the 95% fake-world band "
+            print(f"[plot_reg_coef] {data['industry']}: data outside the 95% simulation band "
                   f"for {out}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -871,8 +882,8 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, q=WORLD_Q)
     has_band = "band_lo" in tab
     band = (tab["band_lo"].to_numpy(), tab["band_hi"].to_numpy()) if has_band else None
     sim_label = "Simulated" + ("" if not has_band
-                               else rf" (95\% fake-world band)" if mpl.rcParams.get("text.usetex")
-                               else " (95% fake-world band)")
+                               else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
+                               else " (95% band)")
     nds = nd + (1 if nd > 1 else 0)
     if density:
         fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.62),
@@ -898,7 +909,7 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, q=WORLD_Q)
                           else "small")
     fig.tight_layout()
     if has_band and not tab["inside_band"].all():
-        print(f"[plot_extensive_ame] {data['industry']}: data outside the 95% fake-world "
+        print(f"[plot_extensive_ame] {data['industry']}: data outside the 95% simulation "
               f"band for {list(tab.index[~tab['inside_band']])}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -961,12 +972,12 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
     _paired_errorbar(ax, data["sector_names"], emp, sim, ci=ci, band_sim=band,
                      ylabel=r"$\bar{G}_s(0)$", rotate=45,
                      sim_label="Simulated" if band is None else
-                     ("Simulated (95\\% fake-world band)" if mpl.rcParams.get("text.usetex")
-                      else "Simulated (95% fake-world band)"), legend=False)
-    # Legend below the rotated tick labels, one row, small: inside the axes it sits on
-    # the low-G sectors.
-    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2,
-              fontsize=fs(11), handletextpad=0.3, columnspacing=1.2)
+                     ("Simulated (95\\% band)" if mpl.rcParams.get("text.usetex")
+                      else "Simulated (95% band)"), legend=False)
+    # Legend OUTSIDE the axes, below the rotated tick labels, one row, small: inside the
+    # axes it sits on the low-G sectors. Anchored to the measured bottom of the x-axis
+    # (ticks + labels) rather than a fixed offset, so it clears the labels at any font.
+    _legend_below_xaxis(ax)
 
     # The profiled variety count is what the model moves to hit this moment, so
     # print it next to each sector — a clamped sector cannot close its own residual.
