@@ -777,12 +777,14 @@ def run_checks(ns, ROOT, exp):
           ns["reg_bin_labels"](4) == ns["reg_bin_labels"](5)[1:])
     check("reg bin labels for n_coef=5 keep all", len(ns["reg_bin_labels"](5)) == 5)
     check("with_kappa appends ln n", ns["reg_bin_labels"](1, with_kappa=True)[-1] == r"$\ln n_{ls}$")
-    axs4 = ns["plot_reg_coef"](d2)
-    sims = [c for c in axs4[1].containers if c.get_label().startswith("Simulated")]
-    yerr = sims[0][2][0].get_segments()[0] if sims and sims[0][2] else None
-    check("plot_reg_coef: distance panel + density panel, the band drawn on beta_kappa",
-          len(axs4) == 2 and yerr is not None
-          and close(sorted([yerr[0][1], yerr[1][1]]), [wt["band_lo"].iloc[-1], wt["band_hi"].iloc[-1]], 1e-9))
+    ax4 = ns["plot_reg_coef"](d2)
+    nd = d2["n_coef"]
+    sims = [c for c in ax4.containers if c.get_label().startswith("Simulated")]
+    seg = sims[0][2][0].get_segments() if sims and sims[0][2] else []
+    check("plot_reg_coef: one panel, beta_d only, the band drawn on each distance bin",
+          len(ax4.get_xticks()) == nd and len(seg) == nd
+          and close(sorted([seg[-1][0][1], seg[-1][1][1]]),
+                    [wt["band_lo"].iloc[nd - 1], wt["band_hi"].iloc[nd - 1]], 1e-9))
 
     print("\n=== 9. LaTeX table: JOINT (two industries), labor + industry only ===")
     tex = ns["generate_combined_table"](
@@ -806,8 +808,8 @@ def run_checks(ns, ROOT, exp):
     check("Panel C: the extensive margin, beta_d bins and beta_kappa",
           "Panel C: Extensive Margin" in tex and r"$\beta_\kappa$" in tex
           and all(f"{v:.4f}" in tex for v in exp["reg_coef"]))
-    check("Panel C carries the 95% fake-world band under each simulated coefficient",
-          f"[{wt['band_lo'].iloc[-1]:.3f}, {wt['band_hi'].iloc[-1]:.3f}]" in tex)
+    check("Panel C carries the fake-world sd under each simulated coefficient, beta_kappa included",
+          all(f"({v:.4f})" in tex for v in wt["world_sd_e"].values))
     ptex = ns["generate_parameter_table"](
         [{"industry": "test", "display_name": "Synthetic A"},
          {"industry": "test2", "display_name": "Synthetic B"}],
