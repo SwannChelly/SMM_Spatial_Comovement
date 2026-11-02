@@ -962,7 +962,11 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
                      ylabel=r"$\bar{G}_s(0)$", rotate=45,
                      sim_label="Simulated" if band is None else
                      ("Simulated (95\\% fake-world band)" if mpl.rcParams.get("text.usetex")
-                      else "Simulated (95% fake-world band)"))
+                      else "Simulated (95% fake-world band)"), legend=False)
+    # Legend below the rotated tick labels, one row, small: inside the axes it sits on
+    # the low-G sectors.
+    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2,
+              fontsize=fs(11), handletextpad=0.3, columnspacing=1.2)
 
     # The profiled variety count is what the model moves to hit this moment, so
     # print it next to each sector — a clamped sector cannot close its own residual.
