@@ -1344,13 +1344,13 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     toward 1: a model whose count distribution is too concentrated puts too much mass at
     low K and too little in the tail, which reads directly as a mismatch at each K.
 
-    The two bands:
-
-    * simulated — the 2.5/97.5% quantiles of the fitted curve across the fake worlds of
-      the inference step, through the variety count each world re-calibrates (q_hat held
-      at the estimate; `g_curve_world_band`).
-    * empirical — the bootstrap SE of the increments, from `G_K_var.csv`. Absent, the
-      empirical points are drawn bare rather than with an invented bar.
+    One band, on the SIMULATED point only: the 2.5/97.5% quantiles of the fitted curve
+    across the simulated economies of the inference step, through the variety count each
+    re-calibrates (q_hat held at the estimate; `g_curve_world_band`). The empirical
+    points carry NO interval: the only one on disk is the bootstrap SE of `G_K_var.csv`,
+    which is not the model-based notion of error the rest of the reporting uses, so it
+    is not drawn (`count_curve` still carries it as `se_empirical`). `ci` is unused and
+    kept so existing calls parse.
 
     `save_to` is a STEM, not a file: K is appended before the extension, so
     `.../count_curve_auto_mu2.pdf` writes `..._K0.pdf`, `..._K1.pdf`, ... One call still
@@ -1386,7 +1386,7 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
                 if np.isfinite(sub["sim_lo"].values).any() else None)
         _paired_errorbar(
             ax, sectors, sub["empirical"].values, sub["simulated"].values,
-            _band(sub["se_empirical"].values), None, ci=ci, band_sim=band,
+            None, None, ci=ci, band_sim=band,          # no interval on the data point
             ylabel=rf"$\bar{{G}}_s({K})$", rotate=45)
         ax.figure.tight_layout()
         if stem:
