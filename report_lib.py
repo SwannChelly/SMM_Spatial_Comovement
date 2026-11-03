@@ -972,8 +972,8 @@ def count_curve(data, K_values=None, tol=1e-9):
     * empirical  -- `G` of `G_K.csv`, the share of cells with EXACTLY K suppliers (read
       as is: the data pipeline writes the pmf, `G_cs` being its cumulative sum).
 
-    The simulated curve carries the 95% fake-world band of `g_curve_world_band`
-    (`sim_lo`, `sim_hi`), the empirical one the bootstrap SE of `G_K_var.csv` if supplied.
+    The simulated curve carries the 95% band of `g_curve_world_band` (`sim_lo`,
+    `sim_hi`); the empirical one carries no interval.
 
     Returns a (sector, K)-indexed DataFrame;
     `df.attrs` carries the estimator, the K = 0 gap against the moment vector, and the
@@ -1037,16 +1037,13 @@ def count_curve(data, K_values=None, tol=1e-9):
     wb = g_curve_world_band(data, K_values=Ks)
     sim_lo, sim_hi = (np.full((S, len(Ks)), np.nan),) * 2 if wb is None else wb
 
-    # ---- empirical: the increments of G_K.csv, and their bootstrap SE if supplied ----
+    # ---- empirical: the shares of G_K.csv (exactly K suppliers), no interval ----
     emp = np.full((S, len(Ks)), np.nan)
-    emp_se = np.full((S, len(Ks)), np.nan)
-    gk, gp, gse = data.get("G_curve_K"), data.get("G_pmf"), data.get("G_pmf_se")
+    gk, gp = data.get("G_curve_K"), data.get("G_pmf")
     if gp is not None and gk is not None:
         for i, K in enumerate(Ks):
             if K in gk:
                 emp[:, i] = gp[:, gk.index(K)]
-                if gse is not None:
-                    emp_se[:, i] = gse[:, gk.index(K)]
     missing = [K for K in Ks if gk is not None and K not in gk]
     if missing:
         print(f"[count_curve] {data['industry']}: G_K.csv has no row for K = {missing} — "
@@ -1055,7 +1052,6 @@ def count_curve(data, K_values=None, tol=1e-9):
     idx = pd.MultiIndex.from_product([data["sector_names"], Ks], names=["A129", "K"])
     df = pd.DataFrame({"empirical": emp.ravel(),
                        "simulated": sim.ravel(),
-                       "se_empirical": emp_se.ravel(),
                        "sim_lo": sim_lo.ravel(), "sim_hi": sim_hi.ravel(),
                        "residual": (sim - emp).ravel(),
                        "N_hat": np.repeat(N_hat, len(Ks)),
@@ -1083,10 +1079,8 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     One band, on the SIMULATED point only: the 2.5/97.5% quantiles of the fitted curve
     across the simulated economies of the inference step, through the variety count each
     re-calibrates (q_hat held at the estimate; `g_curve_world_band`). The empirical
-    points carry NO interval: the only one on disk is the bootstrap SE of `G_K_var.csv`,
-    which is not the model-based notion of error the rest of the reporting uses, so it
-    is not drawn (`count_curve` still carries it as `se_empirical`). `ci` is unused and
-    kept so existing calls parse.
+    points carry NO interval (the data side has no model-based error). `ci` is unused
+    and kept so existing calls parse.
 
     `save_to` is a STEM, not a file: K is appended before the extension, so
     `.../count_curve_auto_mu2.pdf` writes `..._K0.pdf`, `..._K1.pdf`, ... One call still
@@ -1105,13 +1099,6 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
                        f"(it carries K = {available}) — rebuild it with "
                        f"`count_curve(data, K_values={Ks})`.")
     sectors = data["sector_names"]
-
-    def _band(v):
-        # NaN and zero entries are passed through as they are: `_paired_errorbar` keeps
-        # the marker and omits the bar for those, so a sector with no measured variance
-        # is still visible as a point. A column with no SE anywhere gets None.
-        v = np.asarray(v, float)
-        return None if not np.isfinite(v).any() else v
 
     stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
     axes = {}
