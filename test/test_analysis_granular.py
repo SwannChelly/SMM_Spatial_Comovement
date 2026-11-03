@@ -561,10 +561,13 @@ def run_checks(ns, ROOT, exp):
               n_pts == exp["S"])
         check("and none of them carries an error bar",
               not any(getattr(c, "has_yerr", False) for c in emp))
-        # the K = 0 panel, where the variances are nonzero, must still show bars
-        emp0 = [c for c in axs_z[0].containers if c.get_label() == "Empirical"]
-        check("a panel with nonzero variances still draws its bars",
-              any(getattr(c, "has_yerr", False) for c in emp0))
+        # the bootstrap SE of G_K_var.csv is not reported: NO panel draws an empirical
+        # bar, even where the variances are nonzero (they stay in `se_empirical`)
+        emp_all = [c for ax_ in axs_z.values() for c in ax_.containers
+                   if c.get_label() == "Empirical"]
+        check("no empirical interval on any count-curve panel (nonzero variances included)",
+              emp_all and not any(getattr(c, "has_yerr", False) for c in emp_all)
+              and bool(np.isfinite(cc_z.xs(0, level="K")["se_empirical"].values).all()))
     finally:
         open(gkv_path, "w").write(gkv_orig)
 
