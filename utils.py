@@ -245,12 +245,10 @@ LAMBDA_DEFAULT = 0.5             # lambda, labour against intermediates
 # a re-run and improves only `check_against_julia`'s sample, not anything reported.
 ECONOMY_REPLICATIONS = 1000
 
-# Highest K kept anywhere in the count-curve reporting: the panels, the empirical
-# shares read out of G_K.csv, and the bootstrap variances read out of G_K_var.csv
-# are ALL truncated here. Raise it to look further into the tail, but only as far as
-# the data pipeline actually tabulates — G_K_var.csv in particular is usually written
-# for a few low K only, and a K beyond it simply leaves that panel's empirical band
-# empty rather than failing.
+# Highest K kept anywhere in the count-curve reporting: the panels and the empirical
+# shares read out of G_K.csv are truncated here. Raise it to look further into the
+# tail, but only as far as the data pipeline actually tabulates; a K absent from
+# G_K.csv leaves that panel with the simulated curve only.
 #
 # K = 0 is the targeted moment (block 6); everything above it is a free check on the
 # SHAPE of the supplier-count distribution (gate V8).
@@ -599,7 +597,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                                          moment/parameter labels and MOMENT_MASK. This is
                                          everything `extended_parameters`,
                                          `sourcing_geometry` and `simulate_economy` need.
-                              counts     G_K.csv / G_K_var.csv -> Gbar_s(0) and the curve
+                              counts     G_K.csv -> Gbar_s(0) and the curve
                               moments    best_simulated_moments.npy and the block dicts
                               inference  the FAKE-WORLD artefacts: step2/world_residuals.npz,
                                          Omega_world / W_world (block 4), and the
@@ -741,7 +739,6 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     N_supplier_s = np.full(S, np.nan)
     sector_codes = None
     G_curve, G_curve_K, G_pmf = None, None, None
-    G_pmf_se = None
     gk_path = input_folder / "G_K.csv"
     if granular and "counts" in parts:
         # G_K.csv is the data pipeline's `t_G` (Step 6 of the build): `G` is the share
@@ -801,63 +798,6 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                   "read as a share of 0.")
             G_curve[miss] = 0.0
         G_pmf = G_curve
-
-    # ------------------- bootstrap variance of the empirical increments (optional)
-    # `G_K_var.csv` is `A129, K, var` (or `se`) and carries the BOOTSTRAP variance of
-    # p_s(K) = share of cells with EXACTLY K suppliers -- the same object G_pmf holds.
-    # It is optional: absent, the empirical panels are drawn without a band. The Julia
-    # code reads no data covariance, so this file is the only empirical band on the
-    # count curve.
-    gkv_path = input_folder / "G_K_var.csv"
-    if granular and "counts" in parts and gkv_path.exists() and sector_codes is not None:
-        gkv = pd.read_csv(gkv_path)
-        v_sector = _gk_col(gkv, ("a129", "sector"))
-        v_K = _gk_col(gkv, ("k",))
-        # The value column, by name where the name says what it is, and otherwise by
-        # elimination: a file written off G_K.csv's own schema often keeps the column
-        # called `G`, which names the object measured, not the statistic. Whatever is
-        # left once A129 and K are removed is taken as a VARIANCE (the file's stated
-        # content), and the choice is printed rather than assumed silently -- a variance
-        # read as an SE would be off by orders of magnitude.
-        _named = {c: c.strip().lower() for c in gkv.columns}
-        v_col = next((c for c, n in _named.items()
-                      if n in ("var", "variance", "v", "var_g", "g_var")), None)
-        is_var = v_col is not None
-        if v_col is None:
-            v_col = next((c for c, n in _named.items()
-                          if n in ("se", "sd", "std", "stderr", "se_g")), None)
-        if v_col is None:
-            spare = [c for c in gkv.columns if c not in (v_sector, v_K)]
-            if len(spare) != 1:
-                raise KeyError(
-                    f"{gkv_path.name}: cannot tell which column holds the variance. "
-                    f"Columns are {list(gkv.columns)}; expected one named var/variance "
-                    "(or se/sd/std) beside A129 and K, or exactly one other column.")
-            v_col, is_var = spare[0], True
-            print(f"[load] {gkv_path.name}: reading column '{v_col}' as the VARIANCE of "
-                  "the increment p_s(K) (no var/se column name to go on). Rename it to "
-                  "`var` or `se` to be explicit.")
-        # Sectors are matched BY VALUE on the A129 code, so the two files must agree on
-        # its dtype: an int64 A129 here against a string one in G_K.csv (a leading zero,
-        # a quoted field) matches nothing and would hand back an all-NaN band with no
-        # complaint. Compare on the stripped string form, and say which codes missed.
-        gkv_key = gkv[v_sector].astype(str).str.strip()
-        G_pmf_se = np.full((S, len(G_curve_K)), np.nan)
-        unmatched = []
-        for s_i, code in enumerate(sector_codes):
-            sub = gkv[gkv_key == str(code).strip()]
-            if sub.empty:
-                unmatched.append(code)
-                continue
-            for kk, vv in zip(sub[v_K].astype(float).round().astype(int).values,
-                              sub[v_col].astype(float).values):
-                if kk in G_curve_K:
-                    G_pmf_se[s_i, G_curve_K.index(kk)] = (
-                        np.sqrt(max(vv, 0.0)) if is_var else abs(vv))
-        if unmatched:
-            print(f"[load] G_K_var.csv has no row for A129 = {unmatched} (it carries "
-                  f"{sorted(gkv_key.unique())[:6]}...); those sectors get no empirical "
-                  "band. The A129 column must hold the same sector CODES as G_K.csv.")
 
     # sector names, in the model's 1..S order (sorted A129), as in load_parameters.jl
     fdf_path = input_folder / "filter_N_upstream.csv"
@@ -1218,8 +1158,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # the WHOLE empirical count curve, Pr(K_ls <= K) by (sector, K); only the
         # K = 0 column is targeted, the rest is the untargeted fit check
         "G_curve": G_curve, "G_curve_K": G_curve_K,
-        # the INCREMENTS (exactly K) and their bootstrap SE, which is what is plotted
-        "G_pmf": G_pmf, "G_pmf_se": G_pmf_se,
+        # the shares of cells with EXACTLY K suppliers, which is what is plotted
+        "G_pmf": G_pmf,
         "emp_gamma_aa": emp_gamma_aa, "coefs": coefs,
         "d": "C30C" if industry == "aero" else "C29A",
         # moments
