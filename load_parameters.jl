@@ -144,8 +144,43 @@ println(" variety-count bounds N_LO = $N_LO_local, N_HI = $N_HI_local")
 @everywhere const N_LO     = $N_LO_local
 @everywhere const N_HI     = $N_HI_local
 
+# ── The foreign competitor ──────────────────────────────────────────────────────────
+# f̂_s = 1 − domestic_share[s]: the import share of the downstream industry's purchases
+# from sector s (TES of the downstream column). One foreign competitor per sector, with
+# a cost common to every buyer, enters each variety's Ricardian competition with Fréchet
+# scale Φ^F_s (no wage, no trade cost): Φ_rs = Σ_l T_ls (w_l τ_lr)^{−θ} + Φ^F_s. Φ^F_s is
+# a T-column parameter and f̂_s its γ moment (see section 5). A sector with f̂_s = 0 has no
+# foreign competitor and the model reduces to the domestic one.
+foreign_share_local = clamp.(1 .- vec(Float64.(domestic_share_local)), 0.0, 1.0)
+length(foreign_share_local) == S_ || error("domestic_share.npy has $(length(foreign_share_local)) entries, expected S=$S_")
+any(>=(1.0 - 1e-9), foreign_share_local) &&
+    error("a sector has domestic_share = 0: no domestic sourcing share to match")
+foreign_active_local = foreign_share_local .> 1e-12
+@everywhere const FOREIGN_SHARE  = $foreign_share_local
+@everywhere const FOREIGN_ACTIVE = $foreign_active_local
+println(" foreign share f̂_s = 1 − domestic_share: ", round.(foreign_share_local, digits = 4))
+
+# Variety-count bounds with a foreign competitor. N_HI[s] = N^obs_s bounds the varieties
+# won by FRANCE for at least one buyer, i.e. N_s q_s ≤ N^obs_s with q_s that share of the
+# varieties, so the bound on N_s is N^obs_s / q_s (`concentrate_N_s`, q_s from the draws).
+# At the T profile the model's import share is f̂_s and q_s ≥ max_r (1 − f_rs) ≥ 1 − f̂_s,
+# so N^obs_s / (1 − f̂_s) bounds it: N_HI_CAP, which sizes the draws. N_LO is unchanged
+# (still a valid, weaker bound since q_s ≤ 1). The draw count is capped at N_RHO_MAX
+# (ENV, default 2000); a binding cap is reported and N_HI_CAP clamped to it.
+N_HI_CAP_local = [ceil(Int, N_HI_local[s] / (1 - foreign_share_local[s]) - 1e-9) for s in 1:S_]
+N_RHO_MAX_local = parse(Int, get(ENV, "N_RHO_MAX", "2000"))
+N_rho_local = max(100, maximum(N_HI_CAP_local))
+if N_rho_local > N_RHO_MAX_local
+    @warn "N^obs_s/(1 − f̂_s) reaches $N_rho_local draws; capped at N_RHO_MAX = $N_RHO_MAX_local " *
+          "(sectors $(findall(>(N_RHO_MAX_local), N_HI_CAP_local)) have their N_s upper bound clamped)"
+    N_rho_local = N_RHO_MAX_local
+end
+N_HI_CAP_local = min.(N_HI_CAP_local, N_rho_local)
+println(" N_s upper bound with imports, N^obs/(1 − f̂_s): $N_HI_CAP_local")
+@everywhere const N_HI_CAP = $N_HI_CAP_local
+
 # Draws per (sector, cell). Must cover the largest candidate variety count.
-@everywhere const N_rho           = $(max(100, maximum(N_HI_local)))
+@everywhere const N_rho           = $(N_rho_local)
 @everywhere const N_RHO_INFERENCE = $(Int(n_rho_inference))
 println(" N_rho (optimisation) = $N_rho ; N_RHO_INFERENCE = $N_RHO_INFERENCE")
 
@@ -157,6 +192,8 @@ println(" N_rho (optimisation) = $N_rho ; N_RHO_INFERENCE = $N_RHO_INFERENCE")
 #    areas (control cells included: they inherit T_{s,a} > 0). Drives n_good, GOOD_S/R.
 #  • T COLUMNS — attraction areas: the columns of the T parameter matrix AND of the γ
 #    moment block (T[s,a] column ↔ γ[s,a] row, both s-major). T[s,l] = T_par[s, AA_OF_ZE[l]] n_ls^κ.
+#    The LAST column, FOREIGN_COL = n_AA + 1, is the foreign competitor: T_par[s, F] = Φ^F_s
+#    and γ[s, F] = the import share f_s. T_COL_DIM = n_AA + 1; no ZE maps to F.
 # ═══════════════════════════════════════════════════════════════════════════
 
 emp_gamma_ls_local = permutedims(NPZ.npzread(joinpath(input_folder, "emp_gamma_ls.npy")))  # (R, S)
@@ -176,13 +213,20 @@ aa_of_ze_local = vec(getindex.(argmax(AA_link_local, dims=2), 2))
     "attraction_area_linkages.npy disagrees with the closest downstream region for " *
     "$(count(aa_of_ze_local .!= closest_downstream_region_local)) ZE")
 n_AA_local = R_down_
-@everywhere const AA_OF_ZE = $aa_of_ze_local
-@everywhere const n_AA     = $n_AA_local
+n_Tcol_local = n_AA_local + 1                   # + the foreign column
+foreign_col_local = n_Tcol_local
+@everywhere const AA_OF_ZE    = $aa_of_ze_local
+@everywhere const n_AA        = $n_AA_local
+@everywhere const FOREIGN_COL = $foreign_col_local
 
-# 𝒜⁺_s: (sector, area) pairs hosting at least one observed supplier.
-aa_active_local = falses(S_, n_AA_local)
+# 𝒜⁺_s: (sector, area) pairs hosting at least one observed supplier, and the foreign
+# column of every sector that imports.
+aa_active_local = falses(S_, n_Tcol_local)
 for s in 1:S_, l in 1:R_full
     supplier_cells_local[s, l] && (aa_active_local[s, aa_of_ze_local[l]] = true)
+end
+for s in 1:S_
+    aa_active_local[s, foreign_col_local] = foreign_active_local[s] && any(view(aa_active_local, s, 1:n_AA_local))
 end
 
 cell_mask_local = filter_N_upstream_local .== 1
@@ -194,7 +238,7 @@ if _outside > 0
     end
 end
 @everywhere const CELL_MASK = $cell_mask_local
-@everywhere const T_COL_DIM = $n_AA_local
+@everywhere const T_COL_DIM = $n_Tcol_local
 @everywhere const T_ACTIVE  = $aa_active_local
 @everywhere const T_GATHER  = $aa_of_ze_local
 
@@ -221,17 +265,20 @@ end
 @everywhere const SECTOR_GOOD_REGIONS = $SECTOR_GOOD_REGIONS_local
 @everywhere const W_RS_FLAT           = $W_RS_FLAT_local
 @everywhere const CELLS_OF_SECTOR     = $SECTOR_GOOD_INDICES_local
-SECTOR_T_COLS_local = [findall(view(aa_active_local, s, :)) for s in 1:S_]
-@everywhere const SECTOR_T_COLS = $SECTOR_T_COLS_local
+SECTOR_T_COLS_local   = [findall(view(aa_active_local, s, :)) for s in 1:S_]          # foreign included
+SECTOR_DOM_COLS_local = [filter(!=(foreign_col_local), c) for c in SECTOR_T_COLS_local] # areas only
+@everywhere const SECTOR_T_COLS   = $SECTOR_T_COLS_local
+@everywhere const SECTOR_DOM_COLS = $SECTOR_DOM_COLS_local
 
 println("\nEstimated set per sector:")
 @printf("  %-8s %10s %10s %10s %10s\n", "sector", "ZE supply", "ZE control", "ZE total", "AA active")
 for s in 1:S_
     n_sup = count(view(supplier_cells_local, s, :)); n_cell = count(view(cell_mask_local, s, :))
-    @printf("  %-8d %10d %10d %10d %10d\n", s, n_sup, n_cell - n_sup, n_cell, count(view(aa_active_local, s, :)))
+    @printf("  %-8d %10d %10d %10d %10d\n", s, n_sup, n_cell - n_sup, n_cell, length(SECTOR_DOM_COLS_local[s]))
     n_sup <= 1 && @warn "sector $s has $n_sup supplier cell(s): no free γ moment / T column."
 end
-println(" simulated cells: $n_good_local ; T columns: $(count(T_mask_local))")
+println(" simulated cells: $n_good_local ; T columns: $(count(T_mask_local)) " *
+        "(of which $(count(aa_active_local[:, foreign_col_local])) foreign Φ^F_s)")
 
 # γ target at the area level, summed over every cell of the area (control cells
 # contribute 0 in the data and a positive share in the model — the unbiased match).
@@ -239,18 +286,34 @@ for s in 1:S_, l in 1:R_full
     (!cell_mask_local[s, l] && emp_gamma_ls_local[l, s] != 0) &&
         error("emp_gamma_ls[$l, $s] ≠ 0 for a cell outside CELL_MASK")
 end
-emp_gamma_T_local = zeros(Float64, n_AA_local, S_)
+emp_gamma_T_local = zeros(Float64, n_Tcol_local, S_)
 for s in 1:S_, l in 1:R_full
     cell_mask_local[s, l] && (emp_gamma_T_local[aa_of_ze_local[l], s] += emp_gamma_ls_local[l, s])
 end
-# Domestic-share-balanced target (Σ_a = 1): the Sinkhorn-compatible row margin.
-emp_gamma_T_tilde_local = emp_gamma_T_local ./ reshape(max.(domestic_share_local, 1e-12), 1, S_)
+# The data notebook builds γ̂ as shares of TOTAL purchases, imports included, so the
+# domestic entries sum to 1 − f̂_s. A gap means the two files disagree: the domestic
+# entries are rescaled to 1 − f̂_s (their profile is kept) and the gap reported.
+let dom = vec(sum(emp_gamma_T_local[1:n_AA_local, :]; dims = 1))
+    gap = maximum(abs.(dom .- (1 .- foreign_share_local)))
+    gap > 1e-6 && @warn "Σ_a γ̂_{s,a} ≠ domestic_share (max gap $(round(gap, sigdigits = 3))): " *
+                        "domestic γ̂ rescaled to 1 − f̂_s per sector"
+    for s in 1:S_
+        (dom[s] > 0 && abs(dom[s] - (1 - foreign_share_local[s])) > 1e-12) &&
+            (emp_gamma_T_local[1:n_AA_local, s] .*= (1 - foreign_share_local[s]) / dom[s])
+        emp_gamma_T_local[foreign_col_local, s] = aa_active_local[s, foreign_col_local] ? foreign_share_local[s] : 0.0
+    end
+end
+# Area AND foreign shares of total purchases: Σ over the T columns = 1 per sector, the
+# Sinkhorn row margin (the model's γ is computed on the same base). EMP_GAMMA_T_TILDE is
+# the same array, kept under its name for the inversion's default target.
+emp_gamma_T_tilde_local = copy(emp_gamma_T_local)
 @everywhere const EMP_GAMMA_T       = $emp_gamma_T_local
 @everywhere const EMP_GAMMA_T_TILDE = $emp_gamma_T_tilde_local
 
-# Reference area per sector (T = 1, γ moment dropped): the largest empirical share.
+# Reference area per sector (T = 1, γ moment dropped): the largest empirical DOMESTIC
+# share (never the foreign column: Φ^F_s is measured against a domestic area).
 T_REF_REGION_local = [isempty(c) ? 0 : c[argmax(emp_gamma_T_local[c, s])]
-                      for (s, c) in enumerate(SECTOR_T_COLS_local)]
+                      for (s, c) in enumerate(SECTOR_DOM_COLS_local)]
 @everywhere const T_REF_REGION = $T_REF_REGION_local
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -292,7 +355,7 @@ println(" block 4 target: β_d = $(round.(_bd, digits=4)), β_κ = $(round(_bk[1
 # ═══════════════════════════════════════════════════════════════════════════
 
 n_labor, n_industry, n_pi = 1, S_, length(emp_pi_r_local)
-n_gamma = S_ * n_AA_local
+n_gamma = S_ * n_Tcol_local
 n_G0    = S_
 off_gamma = n_labor + n_industry + n_pi + n_reg
 empirical_moments_local = vcat([agg_labor_share], vec(agg_industry_share_local), emp_pi_r_local,
@@ -304,7 +367,7 @@ for idx in 1:n_gamma
     T_mask_local[idx] || (moment_mask_local[off_gamma + idx] = false)
 end
 for s in 1:S_
-    T_REF_REGION_local[s] > 0 && (moment_mask_local[off_gamma + (s - 1) * n_AA_local + T_REF_REGION_local[s]] = false)
+    T_REF_REGION_local[s] > 0 && (moment_mask_local[off_gamma + (s - 1) * n_Tcol_local + T_REF_REGION_local[s]] = false)
 end
 empirical_moments_local = reshape(empirical_moments_local[moment_mask_local], 1, :)
 N_moments = length(empirical_moments_local)
@@ -432,9 +495,9 @@ function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
     nfac     = exp.(kappa0 .* log_n_ls_local)
     tau_negθ = exp.((-theta * alpha0) .* LOG_DIST_DOWNSTREAM_local)
     Ê = emp_pi_r_local ./ sum(emp_pi_r_local)
-    T = zeros(Float64, S_, n_AA_local)
+    T = zeros(Float64, S_, n_Tcol_local)
     for s in 1:S_
-        cells_s = SECTOR_GOOD_REGIONS_local[s]; cols_s = SECTOR_T_COLS_local[s]
+        cells_s = SECTOR_GOOD_REGIONS_local[s]; cols_s = SECTOR_DOM_COLS_local[s]
         (isempty(cells_s) || isempty(cols_s)) && continue
         ref = T_REF_REGION_local[s]
         for c in cols_s
@@ -466,6 +529,16 @@ function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
                 T[s, c] = Tn
             end
             max_rel < tol && break
+        end
+        # Foreign start: with Φ̃_rs common across buyers, f = Φ^F/(Φ̃ + Φ^F), so
+        # Φ^F_s = f̂_s/(1 − f̂_s) · Σ_r Ê_r Φ̃_rs at the converged domestic T.
+        if aa_active_local[s, foreign_col_local]
+            Phi = zeros(Float64, R_down_)
+            for l in cells_s, dr in 1:R_down_
+                Phi[dr] += T[s, aa_of_ze_local[l]] * nfac[s, l] * tau_negθ[l, dr]
+            end
+            f = foreign_share_local[s]
+            T[s, foreign_col_local] = f / (1 - f) * sum(Ê .* Phi)
         end
     end
     return T
@@ -542,14 +615,16 @@ end
 
 _sector_names = _sec_keys
 _ze_names     = _ze_keys
-_tcol_names   = ["AA" * _ze_names[downstream_regions_local[a]] for a in 1:n_AA_local]
+_tcol_names   = vcat(["AA" * _ze_names[downstream_regions_local[a]] for a in 1:n_AA_local], "Foreign")
 
 _moment_labels = String["labor"]
 for s in 2:S_;            push!(_moment_labels, "Omega_s[$(_sector_names[s])]"); end
 for j in 2:n_pi;          push!(_moment_labels, "pi_r[$(_ze_names[downstream_regions_local[j]])]"); end
 for b in 1:n_reg;         push!(_moment_labels, b <= n_coef ? "beta_d[$(REG_COEF_LABELS[b])]" : "beta_kappa"); end
-for s in 1:S_, c in 1:n_AA_local
-    moment_mask_local[off_gamma + (s - 1) * n_AA_local + c] && push!(_moment_labels, "gamma[$(_sector_names[s])-$(_tcol_names[c])]")
+for s in 1:S_, c in 1:n_Tcol_local
+    moment_mask_local[off_gamma + (s - 1) * n_Tcol_local + c] &&
+        push!(_moment_labels, c == foreign_col_local ? "f_foreign[$(_sector_names[s])]" :
+                              "gamma[$(_sector_names[s])-$(_tcol_names[c])]")
 end
 for s in 1:S_;            push!(_moment_labels, "G0[$(_sector_names[s])]"); end
 @assert length(_moment_labels) == N_moments
@@ -561,9 +636,11 @@ for s in 1:S_;            push!(_moment_labels, "G0[$(_sector_names[s])]"); end
 _param_labels = vcat(["Omega_L"], ["Omega_s[$s]" for s in _sector_names],
                      ["A[$(_ze_names[r])]" for r in downstream_regions_local],
                      [n_tau == 1 ? "alpha" : "alpha_$b" for b in 1:n_tau], ["kappa"],
-                     ["T[$(_sector_names[(p - 1) ÷ n_AA_local + 1])-$(_tcol_names[(p - 1) % n_AA_local + 1])]"
+                     [((p - 1) % n_Tcol_local + 1 == foreign_col_local ?
+                       "PhiF[$(_sector_names[(p - 1) ÷ n_Tcol_local + 1])]" :
+                       "T[$(_sector_names[(p - 1) ÷ n_Tcol_local + 1])-$(_tcol_names[(p - 1) % n_Tcol_local + 1])]")
                       for p in findall(T_mask_local)])
-_T_ref_reduced = [count(T_mask_local[1:((s - 1) * n_AA_local + T_REF_REGION_local[s])])
+_T_ref_reduced = [count(T_mask_local[1:((s - 1) * n_Tcol_local + T_REF_REGION_local[s])])
                   for s in 1:S_ if T_REF_REGION_local[s] > 0]
 @everywhere const PARAM_LABELS   = $_param_labels
 @everywhere const T_ID_REDUCED   = $([i for i in 1:count(T_mask_local) if i ∉ _T_ref_reduced])
@@ -577,9 +654,9 @@ let pos_of = Dict{Int,Int}(), k = 0
     end
     for s in 1:S_
         ref = T_REF_REGION_local[s]; ref == 0 && continue
-        pos = [pos_of[(s - 1) * n_AA_local + c] for c in 1:n_AA_local if haskey(pos_of, (s - 1) * n_AA_local + c)]
+        pos = [pos_of[(s - 1) * n_Tcol_local + c] for c in 1:n_Tcol_local if haskey(pos_of, (s - 1) * n_Tcol_local + c)]
         isempty(pos) || push!(_gamma_ref_map, (sector = s, local_positions = pos,
-                              c_s = domestic_share_local[s], emp_ref = emp_gamma_T_local[ref, s]))
+                              c_s = 1.0, emp_ref = emp_gamma_T_local[ref, s]))
     end
 end
 @everywhere const GAMMA_REF_MAP = $_gamma_ref_map

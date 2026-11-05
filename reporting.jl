@@ -113,9 +113,14 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
         for f in (:q1, :median, :q3, :max_val)
             @printf(io, "%-10s Empirical: %8.3f | Simulated: %8.3f\n", f, getfield(qe, f), getfield(qs, f))
         end
-        println(io, "\n>> Sector input shares:")
+        println(io, "\n>> Sector input shares (total purchases, imports included):")
         for s in 1:S
             @printf(io, "%-10s Empirical: %8.3f | Simulated: %8.3f\n", SECTOR_NAMES[s], agg_industry_share[s], sim[2][s])
+        end
+        println(io, "\n>> Import share f_s (foreign row of the γ block; Φ^F_s profiled with T):")
+        for s in 1:S
+            @printf(io, "%-10s Empirical: %8.3f | Simulated: %8.3f | Φ^F_s %10.4g\n", SECTOR_NAMES[s],
+                    FOREIGN_SHARE[s], sim[5][FOREIGN_COL, s], foreign_phi(unpack_T_par(params))[s])
         end
         println(io, "\n>> Block 4 — cell-level cloglog:")
         for (i, lab) in enumerate(REG_COEF_LABELS)
@@ -125,13 +130,15 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
         @printf(io, "%-10s %9s %9s %6s %6s %6s %6s %9s\n", "sector", "G0 data", "G0 model",
                 "N_LO", "N̂_s", "N_HI", "clamp", "N_count")
         for s in 1:S
-            @printf(io, "%-10s %9.4f %9.4f %6d %6s %6d %6s %9s\n", SECTOR_NAMES[s], G_TARGET[s], sim[6][s],
-                    N_LO[s], gr === nothing ? "-" : string(gr.N_hat[s]), N_HI[s],
+            @printf(io, "%-10s %9.4f %9.4f %6d %6s %6s %6s %9s\n", SECTOR_NAMES[s], G_TARGET[s], sim[6][s],
+                    N_LO[s], gr === nothing ? "-" : string(gr.N_hat[s]),
+                    gr === nothing ? string(N_HI[s]) : string(gr.N_hi[s]),
                     gr === nothing ? "-" : string(gr.clamped[s]),
                     gr === nothing ? "-" : @sprintf("%.1f", gr.N_count[s]))
         end
         println(io, "\n  clamp :lo/:hi = the variety count sits on a bound (a rejection signal, not a nuisance).")
         println(io, "  N_count = N_supplier_s / Σ_l q̂_ls is the independent second route to N_s.")
+        println(io, "  N_HI = N^obs_s / q_s, q_s the share of varieties won by France (N^obs_s without imports).")
     end
 end
 
@@ -205,13 +212,15 @@ function report_granular(theta::Vector{Float64}, folder::String; industry::Strin
         mkpath(folder)
         lines = String[]
         push!(lines, "GRANULAR DIAGNOSTICS $(industry) $(label)")
-        push!(lines, @sprintf("  %-8s %6s %6s %6s %6s %9s %9s %9s", "sector", "N_LO", "N̂_s", "N_HI",
-                              "clamp", "G0_fit", "G0_tgt", "N_count"))
+        push!(lines, @sprintf("  %-8s %6s %6s %6s %6s %9s %9s %9s %7s %7s %7s", "sector", "N_LO", "N̂_s", "N_HI",
+                              "clamp", "G0_fit", "G0_tgt", "N_count", "q_FR", "f_fit", "f_tgt"))
         for s in 1:S
-            push!(lines, @sprintf("  %-8s %6d %6d %6d %6s %9.4f %9.4f %9.1f", SECTOR_NAMES[s], N_LO[s],
-                                  info.N_hat[s], N_HI[s], string(info.clamped[s]), info.G0[s],
-                                  G_TARGET[s], info.N_count[s]))
+            push!(lines, @sprintf("  %-8s %6d %6d %6d %6s %9.4f %9.4f %9.1f %7.3f %7.3f %7.3f", SECTOR_NAMES[s], N_LO[s],
+                                  info.N_hat[s], info.N_hi[s], string(info.clamped[s]), info.G0[s],
+                                  G_TARGET[s], info.N_count[s], info.q_french[s], info.foreign_share[s],
+                                  FOREIGN_SHARE[s]))
         end
+        push!(lines, "  N_HI = N^obs_s / q_FR (q_FR: varieties won by France for ≥ 1 buyer); f: import share")
         push!(lines, "  Block 4 (R = $R_CELL_REG networks, $(info.reg_fail) failed fits)")
         push!(lines, @sprintf("  %-10s %10s %12s %10s %12s", "coef", "data", "E[β̂(y)]", "sd_j", "β̂(E[y])"))
         for (i, lab) in enumerate(REG_COEF_LABELS)
@@ -221,7 +230,10 @@ function report_granular(theta::Vector{Float64}, folder::String; industry::Strin
         println("\n", join(lines, "\n"))
         write(joinpath(folder, "granular_diagnostics.txt"), join(lines, "\n") * "\n")
         NPZ.npzwrite(joinpath(folder, "granular_diagnostics.npz"),
-            Dict("N_hat" => Float64.(info.N_hat), "N_LO" => Float64.(N_LO), "N_HI" => Float64.(N_HI),
+            Dict("N_hat" => Float64.(info.N_hat), "N_LO" => Float64.(N_LO), "N_HI" => Float64.(info.N_hi),
+                 "N_obs" => Float64.(N_HI), "q_french" => Float64.(info.q_french),
+                 "foreign_share_fit" => Float64.(info.foreign_share),
+                 "foreign_share_target" => Float64.(collect(FOREIGN_SHARE)),
                  "clamped" => [c == :none ? 0.0 : (c == :lo ? -1.0 : 1.0) for c in info.clamped],
                  "G0_fit" => Float64.(info.G0), "G0_target" => Float64.(collect(G_TARGET)),
                  "N_count" => Float64.(info.N_count), "q_hat" => Float64.(info.q_hat),
@@ -279,8 +291,12 @@ end
 The economy the Python reporting checks against (`check_against_julia`):
   * `suppliers.parquet` — `n_rep` independent realisations (i.i.d. draws) of the
     N̂_s-variety economy (weights 1/N̂_s on rows ρ ≤ N̂_s, 0 beyond), with `replication`
-    and `variety` columns; `post_hoc_u.npy` the draws (N_max × n_good × n_rep),
+    and `variety` columns; `post_hoc_u.npy` the cell draws (N_max × n_good × n_rep),
+    `post_hoc_u_foreign.npy` the foreign competitor's (N_max × S × n_rep),
     `post_hoc_good_sr.npy` the (sector, cell) of each draw column, `post_hoc_N_hat.npy`.
+    The rows are French linkages only: an imported variety creates none, so `share`
+    sums to the DOMESTIC intermediate share of the buyer's cost and the printed D_r is
+    1 + that share.
   * `suppliers_continuum.parquet` — the solve on the estimation draws (N_rho per cell,
     the N_s → ∞ benchmark); `w_srd_r.npy` and `suppliers.npy` from that solve.
 """
@@ -311,7 +327,7 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString;
     Parquet.write_parquet(joinpath(dest, "suppliers_continuum.parquet"), _firm_cols_frame(ref_cols))
 
     k_counts = vec(sum(network.linkages_flat; dims = 1))
-    N_hat, clamped = concentrate_N_s(k_counts, m)
+    N_hat, clamped = concentrate_N_s(k_counts, m; q = french_variety_share(network.linkages_flat))
     N_max = maximum(N_hat)
     npzwrite(joinpath(dest, "post_hoc_N_hat.npy"), N_hat)
     W_gran = zeros(N_max, n_good)
@@ -319,20 +335,21 @@ function write_post_hoc(params::Vector{Float64}, dest::AbstractString;
         W_gran[1:N_hat[GOOD_S[g]], g] .= 1.0 / N_hat[GOOD_S[g]]
     end
     cols = _empty_firm_cols(); siren_map = Dict{NTuple{4,Int},Int}()
-    u_stack = zeros(N_max, n_good, n_rep)
+    u_stack = zeros(N_max, n_good, n_rep); uF_stack = zeros(N_max, S, n_rep)
     for b in 1:n_rep
         u = generate_draws(N_max, n_good, :mc; randomise = true, rng = MersenneTwister(base_seed + b))[1]
         for g in 1:n_good, rho in (N_hat[GOOD_S[g]] + 1):N_max
             u[rho, g] = 0.5                # zero-weight rows: keep every price finite
         end
-        u_stack[:, :, b] .= u
+        u_stack[:, :, b] .= u[:, 1:n_good]; uF_stack[:, :, b] .= u[:, (n_good + 1):(n_good + S)]
         net_b = solve_network(params; u_draws = u, sample_weights = W_gran, return_firm_level = true)
         _firm_level_rows!(cols, net_b, siren_map, b)
     end
     npzwrite(joinpath(dest, "post_hoc_u.npy"), u_stack)
+    npzwrite(joinpath(dest, "post_hoc_u_foreign.npy"), uF_stack)
     npzwrite(joinpath(dest, "post_hoc_good_sr.npy"), hcat(GOOD_S, GOOD_R))
     Parquet.write_parquet(joinpath(dest, "suppliers.parquet"), _firm_cols_frame(cols))
-    @printf("  post-hoc -> %s: N̂_s %s (%d clamped), %d linkages over %d realisations; mean D_r %.4f (granular) vs %.4f (N_s → ∞)\n",
+    @printf("  post-hoc -> %s: N̂_s %s (%d clamped), %d linkages over %d realisations; mean domestic D_r %.4f (granular) vs %.4f (N_s → ∞)\n",
             dest, string(N_hat), count(!=(:none), clamped),
             length(cols.share), n_rep, 1 + sum(cols.share) / (R_downstream * n_rep),
             1 + sum(ref_cols.share) / R_downstream)

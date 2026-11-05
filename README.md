@@ -138,6 +138,17 @@ worker: `WORKER_HEAP_HINT` (default 2G).
 
 ## What it computes
 
+**Imports.** Each upstream sector has one foreign competitor, with a cost common to all
+buyers and Fréchet scale Φ^F_s: `Φ_rs = Σ_l T_ls (w τ)^{−θ} + Φ^F_s`. Φ^F_s is the last
+column of T (`FOREIGN_COL`) and is profiled with it on the import share
+`f̂_s = 1 − domestic_share[s]`, the foreign row of the γ block. γ, the sector shares (block 2)
+and the labour share are all shares of TOTAL purchases, imports included, as in the data.
+Imported varieties enter the price indices but create no French linkage. The upper bound
+of the N_s bisection becomes `N^obs_s / q_s` (q_s = share of varieties France wins for at
+least one buyer), and the draw count is sized by `N^obs_s / (1 − f̂_s)` (capped by
+`N_RHO_MAX`, 2000). A sector with `domestic_share = 1` has no foreign competitor, and then
+the code reproduces the domestic-only model bit for bit.
+
 1. **Step 1** — identity-weighted PSO over `[Ω^L, Ω^s, A, α, κ]`, T = T* by Sinkhorn
    inversion of the observed area-level sourcing shares, N_s by integer bisection on the
    zero-supplier share; a joint fit then block-coordinate loops → θ̂₁ (`step1/`).

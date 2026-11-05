@@ -6,14 +6,20 @@
 # solve. The γ block is therefore juste-identified; [β_d ; β_κ], π_r, the shares and
 # Ḡ_s(0) are fitted by the head. Only the closed-form PRICES are used here — the
 # extensive-margin moments always come from the simulation.
+#
+# The foreign competitor: T's last column (FOREIGN_COL) is Φ^F_s, added to every buyer's
+# Φ_rs, and the γ block's foreign row is the import share. Both γ and its target are
+# shares of TOTAL purchases (Σ over the T columns = 1), so the update below moves the
+# areas' T and Φ^F_s with the same rule: the inversion profiles (T, Φ^F) jointly.
 
 using LinearAlgebra
 using Printf
 
 """
-    compute_Phi(T_mat, tau) -> Φ (S × R_downstream),  Φ_{s,r} = Σ_l T_ls (w_l τ_lr)^{−θ}
+    compute_Phi(T_mat, tau; PhiF = nothing) -> Φ (S × R_downstream),
+    Φ_{s,r} = Σ_l T_ls (w_l τ_lr)^{−θ} + Φ^F_s
 """
-function compute_Phi(T_mat::AbstractMatrix{FT}, tau::AbstractMatrix{FT}) where {FT}
+function compute_Phi(T_mat::AbstractMatrix{FT}, tau::AbstractMatrix{FT}; PhiF = nothing) where {FT}
     Phi = zeros(FT, S, R_downstream)
     for g in 1:n_good
         s = GOOD_S[g]; r_p = GOOD_R[g]
@@ -22,18 +28,26 @@ function compute_Phi(T_mat::AbstractMatrix{FT}, tau::AbstractMatrix{FT}) where {
             Phi[s, dr] += T_val * (w_val * tau[r_p, dr])^(-theta)
         end
     end
+    if PhiF !== nothing
+        for s in 1:S
+            PhiF[s] > 0 || continue
+            for dr in 1:R_downstream
+                Phi[s, dr] += PhiF[s]
+            end
+        end
+    end
     return Phi
 end
 
 """
-    compute_prices_analytical(Ω^L, Ω^s, A, T_mat, tau) -> NamedTuple
+    compute_prices_analytical(Ω^L, Ω^s, A, T_mat, tau; PhiF = nothing) -> NamedTuple
 
-Closed-form EK prices: `P_sr = Γ_s Φ_{s,r}^{−1/θ}`, the CES aggregates `P_r`, `c_r`,
-downstream prices and sales `Y_r`.
+Closed-form EK prices: `P_sr = Γ_s Φ_{s,r}^{−1/θ}` (Φ with the foreign term), the CES
+aggregates `P_r`, `c_r`, downstream prices and sales `Y_r`.
 """
 function compute_prices_analytical(Omega_L::FT, Omega_s_vec, A_r, T_mat::AbstractMatrix,
-                                   tau::AbstractMatrix) where {FT}
-    Phi = compute_Phi(T_mat, tau)
+                                   tau::AbstractMatrix; PhiF = nothing) where {FT}
+    Phi = compute_Phi(T_mat, tau; PhiF = PhiF)
     P_sr = similar(Phi)
     for s in 1:S, dr in 1:R_downstream
         P_sr[s, dr] = GAMMA_FACTOR[s] * Phi[s, dr]^(-1/theta)
@@ -57,37 +71,55 @@ function compute_prices_analytical(Omega_L::FT, Omega_s_vec, A_r, T_mat::Abstrac
 end
 
 """
-    gamma_ls_analytical(Ω^L, Ω^s, A, T_mat, tau) -> γ (R × S) at the ZE level
+    gamma_T_analytical(Ω^L, Ω^s, A, T_par, kappa, tau) -> γ (T_COL_DIM × S)
+
+Closed-form shares of each sector's TOTAL purchases at the area level, the import share
+`Σ_r ω_sr Φ^F_s/Φ_sr / Σ_r ω_sr` on the foreign row (Σ over the columns = 1).
 """
-function gamma_ls_analytical(Omega_L::Real, Omega_s, A, T_mat::AbstractMatrix, tau::AbstractMatrix)
-    (; P_sr, P_r, c_r, Y_r, mu, Phi) = compute_prices_analytical(Omega_L, Omega_s, A, T_mat, tau)
-    FT = eltype(Y_r)
+function gamma_T_analytical(Omega_L::Real, Omega_s, A, T_par::AbstractMatrix, kappa, tau::AbstractMatrix)
+    T_mat = gather_T_to_ze(T_par, kappa)
+    PhiF  = foreign_phi(T_par)
+    (; P_sr, P_r, c_r, Y_r, mu, Phi) = compute_prices_analytical(Omega_L, Omega_s, A, T_mat, tau; PhiF = PhiF)
+    ω = similar(Phi)
+    for s in 1:S, dr in 1:R_downstream
+        ω[s, dr] = Omega_s[s] * (P_sr[s, dr] / P_r[dr])^(1 - nu) *
+                   (P_r[dr] / c_r[dr])^(1 - lambda) * (1 - Omega_L) * mu * Y_r[dr]
+    end
+    return gamma_T_from_weights(T_mat, PhiF, tau, Phi, ω)
+end
+
+"""
+    gamma_T_from_weights(T_ze, PhiF, tau, Phi, ω) -> γ (T_COL_DIM × S)
+
+The flows `X_ls = Σ_r T_ls (w τ)^{−θ}/Φ_sr ω_sr`, `X_F = Σ_r Φ^F_s/Φ_sr ω_sr` with the
+sector expenditure ω (S × R_d) supplied, as shares of total purchases.
+"""
+function gamma_T_from_weights(T_ze::AbstractMatrix, PhiF::AbstractVector, tau::AbstractMatrix,
+                              Phi::AbstractMatrix, ω::AbstractMatrix)
+    FT = promote_type(eltype(T_ze), eltype(ω))
     X_ls = zeros(FT, R, S)
-    for g in 1:n_good
+    @inbounds for g in 1:n_good
         s = GOOD_S[g]; r_p = GOOD_R[g]
-        T_val = T_mat[s, r_p]; w_val = W_RS_FLAT[g]; Os = Omega_s[s]
+        T_val = T_ze[s, r_p]; w_val = W_RS_FLAT[g]
         for dr in 1:R_downstream
-            phi_sdr = Phi[s, dr]
-            phi_sdr < 1e-300 && continue
-            exp_sdr = Os * (P_sr[s, dr] / P_r[dr])^(1 - nu) *
-                      (P_r[dr] / c_r[dr])^(1 - lambda) * (1 - Omega_L) * mu * Y_r[dr]
-            X_ls[r_p, s] += T_val * (w_val * tau[r_p, dr])^(-theta) / phi_sdr * exp_sdr
+            Phi[s, dr] < 1e-300 && continue
+            X_ls[r_p, s] += T_val * (w_val * tau[r_p, dr])^(-theta) / Phi[s, dr] * ω[s, dr]
         end
     end
-    X_s = vec(sum(X_ls, dims=1))
-    gamma_ls = zeros(FT, R, S)
-    for s in 1:S
-        X_s[s] < 1e-300 && continue
-        for r in 1:R
-            gamma_ls[r, s] = X_ls[r, s] / X_s[s] * domestic_share[s]
+    X_F = zeros(FT, S)
+    @inbounds for s in 1:S
+        PhiF[s] > 0 || continue
+        for dr in 1:R_downstream
+            Phi[s, dr] < 1e-300 && continue
+            X_F[s] += PhiF[s] / Phi[s, dr] * ω[s, dr]
         end
     end
-    return gamma_ls
+    return gamma_T_from_flows(X_ls, X_F)
 end
 
 """
     invert_T_ge(alpha, Ω^L, Ω^s, A; kappa, target=EMP_GAMMA_T_TILDE, T_init=copy(T_rs_init),
-                max_iter=600, tol=1e-9, damping=0.3) -> (T, iters, converged, resid)
+                max_iter=2000, tol=1e-9, damping=0.3) -> (T, iters, converged, resid)
 
 Damped multiplicative Sinkhorn update in the area-level T space,
 `T⁺[s,a] = T[s,a] (target[a,s] / γ_model[a,s])^damping`, renormalised to `T[s,ref] = 1`
@@ -99,7 +131,7 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
                      kappa::Real,
                      target::AbstractMatrix = EMP_GAMMA_T_TILDE,
                      T_init::AbstractMatrix = copy(T_rs_init),
-                     max_iter::Int = 600, tol::Float64 = 1e-9, damping::Float64 = 0.3)
+                     max_iter::Int = 2000, tol::Float64 = 1e-9, damping::Float64 = 0.3)
     tau   = build_tau(alpha)
     T_par = Matrix{Float64}(undef, S, T_COL_DIM)
     T_par .= T_init
@@ -112,8 +144,7 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
     T_new = similar(T_par)
     for it in 1:max_iter
         iters = it
-        gamma_model = aggregate_gamma_to_T(
-            gamma_ls_analytical(Omega_L, Omega_s, A, gather_T_to_ze(T_par, kappa), tau))
+        gamma_model = gamma_T_analytical(Omega_L, Omega_s, A, T_par, kappa, tau)
         T_new .= T_par
         for s in 1:S
             cols = SECTOR_T_COLS[s]
@@ -127,9 +158,8 @@ function invert_T_ge(alpha, Omega_L::Real, Omega_s, A;
             rv > 0 && (T_new[s, cols] ./= rv)
             # A ZERO-target column (a fake world in which an area active in the data wins
             # nothing — never on the data) is held fixed relative to the reference: the
-            # ratio-1 update would let the gauge drift it, since the model γ sums to
-            # domestic_share and the target to 1, a common factor the renormalisation
-            # removes from every positive column but not from this one.
+            # ratio-1 update would let the gauge drift it, by whatever common factor the
+            # renormalisation removes from the positive columns.
             for c in cols
                 target[c, s] > 0 || (T_new[s, c] = T_par[s, c])
             end
@@ -207,10 +237,10 @@ end
 # is solved to convergence at every Sinkhorn pass and the T map stays a map of T alone.
 
 """
-    expected_sector_prices(T_ze, tau) -> (P_sr (S × R_d), Φ)
+    expected_sector_prices(T_ze, tau; PhiF = nothing) -> (P_sr (S × R_d), Φ)
 """
-function expected_sector_prices(T_ze::AbstractMatrix, tau::AbstractMatrix)
-    Phi  = compute_Phi(T_ze, tau)
+function expected_sector_prices(T_ze::AbstractMatrix, tau::AbstractMatrix; PhiF = nothing)
+    Phi  = compute_Phi(T_ze, tau; PhiF = PhiF)
     P_sr = similar(Phi)
     @inbounds for s in 1:S, dr in 1:R_downstream
         P_sr[s, dr] = GAMMA_FACTOR[s] * Phi[s, dr]^(-1/theta)
@@ -314,31 +344,10 @@ function profile_A(c_r::AbstractVector, pi::AbstractVector)
     return A ./ A[1]
 end
 
-# ZE-level γ (R × S) with the expenditure weights ω (S × R_d) supplied: the arithmetic
-# of `gamma_ls_analytical`, whose weights come from the full price solve instead.
-function gamma_ze_from_weights(T_ze::AbstractMatrix, tau::AbstractMatrix,
-                               Phi::AbstractMatrix, ω::AbstractMatrix)
-    X_ls = zeros(R, S)
-    @inbounds for g in 1:n_good
-        s = GOOD_S[g]; r_p = GOOD_R[g]
-        T_val = T_ze[s, r_p]; w_val = W_RS_FLAT[g]
-        for dr in 1:R_downstream
-            Phi[s, dr] < 1e-300 && continue
-            X_ls[r_p, s] += T_val * (w_val * tau[r_p, dr])^(-theta) / Phi[s, dr] * ω[s, dr]
-        end
-    end
-    X_s = vec(sum(X_ls; dims = 1))
-    gamma = zeros(R, S)
-    @inbounds for s in 1:S, r in 1:R
-        X_s[s] < 1e-300 && continue
-        gamma[r, s] = X_ls[r, s] / X_s[s] * domestic_share[s]
-    end
-    return gamma
-end
 
 """
     invert_T_head_ge(alpha; kappa, target=EMP_GAMMA_T_TILDE, tg=head_targets(),
-                     T_init=copy(T_rs_init), x_init=nothing, max_iter=600, tol=1e-9,
+                     T_init=copy(T_rs_init), x_init=nothing, max_iter=2000, tol=1e-9,
                      damping=0.3)
         -> (T, Omega_L, Omega_s, A, x, iters, converged, resid, head_resid)
 
@@ -354,7 +363,7 @@ function invert_T_head_ge(alpha; kappa::Real,
                           tg = head_targets(),
                           T_init::AbstractMatrix = copy(T_rs_init),
                           x_init = nothing,
-                          max_iter::Int = 600, tol::Float64 = 1e-9, damping::Float64 = 0.3)
+                          max_iter::Int = 2000, tol::Float64 = 1e-9, damping::Float64 = 0.3)
     tau   = build_tau(alpha)
     T_par = Matrix{Float64}(undef, S, T_COL_DIM)
     T_par .= T_init
@@ -369,13 +378,14 @@ function invert_T_head_ge(alpha; kappa::Real,
     for it in 1:max_iter
         iters = it
         T_ze = gather_T_to_ze(T_par, kappa)
-        P_sr, Phi = expected_sector_prices(T_ze, tau)
+        PhiF = foreign_phi(T_par)
+        P_sr, Phi = expected_sector_prices(T_ze, tau; PhiF = PhiF)
         x = solve_head(P_sr; x0 = x, tg = tg).x
         _, _, ell, s_rs, _, _ = head_shares(x, P_sr)
         @inbounds for dr in 1:R_downstream, s in 1:S
             ω[s, dr] = tg.pi[dr] * (1 - ell[dr]) * s_rs[s, dr]
         end
-        gamma_model = aggregate_gamma_to_T(gamma_ze_from_weights(T_ze, tau, Phi, ω))
+        gamma_model = gamma_T_from_weights(T_ze, PhiF, tau, Phi, ω)
         T_new .= T_par
         for s in 1:S
             cols = SECTOR_T_COLS[s]
@@ -401,7 +411,7 @@ function invert_T_head_ge(alpha; kappa::Real,
         resid = max_step
         resid < tol && break
     end
-    P_sr, _ = expected_sector_prices(gather_T_to_ze(T_par, kappa), tau)
+    P_sr, _ = expected_sector_prices(gather_T_to_ze(T_par, kappa), tau; PhiF = foreign_phi(T_par))
     h = solve_head(P_sr; x0 = x, tg = tg)
     ΩL, Ωs, _, _, _, c_r = head_shares(h.x, P_sr)
     A = profile_A(c_r, tg.pi)
@@ -437,15 +447,15 @@ function with_head(x::AbstractVector, ΩL::Real, Ωs::AbstractVector, A::Abstrac
 end
 
 """
-    head_moment_residuals(Ω^L, Ω^s, A, T_ze, tau; tg) -> (labor, industry, pi_r)
+    head_moment_residuals(Ω^L, Ω^s, A, T_ze, tau; tg, PhiF = nothing) -> (labor, industry, pi_r)
 
 Analytical blocks 1–3 at a θ against their targets (max |model − target| per block),
 from the full closed-form price solve. ≈ 0 at a head profile; the gap to the SIMULATED
 blocks is the Monte-Carlo error of the realised price indices.
 """
 function head_moment_residuals(ΩL, Ωs, A, T_ze::AbstractMatrix, tau::AbstractMatrix;
-                               tg = head_targets())
-    pr   = compute_prices_analytical(ΩL, Ωs, A, T_ze, tau)
+                               tg = head_targets(), PhiF = nothing)
+    pr   = compute_prices_analytical(ΩL, Ωs, A, T_ze, tau; PhiF = PhiF)
     ell  = ΩL .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr.c_r) .^ (1 - lambda)
     pi_m = pr.Y_r ./ sum(pr.Y_r)
     s_rs = Ωs .* (pr.P_sr ./ reshape(pr.P_r, 1, :)) .^ (1 - nu)

@@ -36,6 +36,13 @@
 # sector shares Õ_b and sales shares π_b, so the head's sampling noise enters the
 # parameter draws and Ω^L, Ω^s are reported with them.
 #
+# ── The foreign competitor ───────────────────────────────────────────────────
+# A world's network draws the foreign bids too (`generate_draws`' foreign columns), so
+# its import share f_b is the realised share of its N̂_s varieties won abroad, noisy
+# with N̂_s. It sits on the foreign row of γ_b, and the recalibration re-inverts Φ^F_s on
+# it with the areas' T: the sampling noise of the import share enters the draws of T
+# and Φ^F. The counterfactuals hold Φ^F_s at the world's estimate.
+#
 # ── Areas that come out empty ────────────────────────────────────────────────
 # A world is ONE network, so an area active in the data can win nothing in it (γ_b = 0).
 # On the data such an area would not be active and its T would be zero; the world does
@@ -86,8 +93,9 @@ the statistics computed on it as on the real data:
   * `beta`  — the cell cloglog of `has_sup_ls = 1{cell l wins one of the N̂_s varieties
               for at least one buyer}`: ONE network, ONE fit (`ok = false` if it fails);
   * `G`     — per sector, the share of cells hosting no supplier;
-  * `gamma` — the sourcing shares by area, summing to one per sector (the form
-              `invert_T_ge` takes as `target`; `EMP_GAMMA_T_TILDE` on the data);
+  * `gamma` — the shares of total purchases by area, and the import share on the foreign
+              row, summing to one per sector (the form `invert_T_ge` takes as `target`;
+              `EMP_GAMMA_T_TILDE` on the data);
   * `pi`    — downstream sales shares, `DOWNSTREAM_REGIONS` order;
   * `L`, `Os` — the labour share and the sector shares of intermediate spending
               (blocks 1–2), the head targets under PROFILE_HEAD.
@@ -108,7 +116,7 @@ function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
     end
     beta, ok = cell_cloglog_beta(Float64[has[g] for g in REG_CELL_G])
     G = [isempty(c) ? 0.0 : count(g -> !has[g], c) / length(c) for c in CELLS_OF_SECTOR]
-    X_s = zeros(S)
+    X_s = copy(net.X_F_flat)                         # total purchases: imports + areas
     for g in 1:n_good
         X_s[GOOD_S[g]] += net.X_ls_flat[g]
     end
@@ -116,6 +124,9 @@ function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
     for g in 1:n_good
         s = GOOD_S[g]
         X_s[s] > 0 && (gam[T_GATHER[GOOD_R[g]], s] += net.X_ls_flat[g] / X_s[s])
+    end
+    for s in 1:S
+        (FOREIGN_ACTIVE[s] && X_s[s] > 0) && (gam[FOREIGN_COL, s] = net.X_F_flat[s] / X_s[s])
     end
     Yd = net.Y_r[DOWNSTREAM_REGIONS]
     ref_empty = any(s -> T_REF_REGION[s] > 0 && gam[T_REF_REGION[s], s] <= 0, 1:S)
@@ -133,7 +144,7 @@ analytical c_r and π_r at θ̂.
 function world_reference(theta_hat::AbstractVector)
     ΩL, Ωs, A, α, κ = normalized_head(theta_hat)
     Tp = unpack_T_par(theta_hat)
-    pr = compute_prices_analytical(ΩL, Ωs, A, gather_T_to_ze(Tp, κ), build_tau(α))
+    pr = compute_prices_analytical(ΩL, Ωs, A, gather_T_to_ze(Tp, κ), build_tau(α); PhiF = foreign_phi(Tp))
     return (theta = collect(Float64, theta_hat), ΩL = ΩL, Ωs = collect(Ωs), A = collect(A),
             alpha = collect(α), kappa = Float64(κ), T = Matrix(Tp),
             c = collect(pr.c_r), pi = pr.Y_r ./ sum(pr.Y_r))
@@ -171,7 +182,8 @@ function recalibrate_TA(ref, alpha, kappa, world;
         res = invert_T_ge(alpha, ref.ΩL, ref.Ωs, A; kappa = kappa, target = gamma_b, T_init = T)
         conv &= res.converged
         T = res.T
-        c = compute_prices_analytical(ref.ΩL, ref.Ωs, A, gather_T_to_ze(T, kappa), tau).c_r
+        c = compute_prices_analytical(ref.ΩL, ref.Ωs, A, gather_T_to_ze(T, kappa), tau;
+                                      PhiF = foreign_phi(T)).c_r
         A_new = ref.A .* (c ./ ref.c) .* pfac
         A_new ./= A_new[1]
         step = maximum(abs.(log.(A_new) .- log.(A)))
@@ -217,7 +229,8 @@ function simulate_beta(params::AbstractVector, G_target::AbstractVector, sim)
     net = solve_network(params; u_draws = sim.u, sample_weights = sim.w)
     L = net.linkages_flat
     m = size(L, 1)
-    N_hat, _ = concentrate_N_s(vec(sum(L; dims = 1)), m; target = G_target)
+    N_hat, _ = concentrate_N_s(vec(sum(L; dims = 1)), m; target = G_target,
+                               q = french_variety_share(L))
     beta, n_fail, _ = cell_cloglog_moment(L, N_hat; perms = sim.perms)
     return beta, N_hat, n_fail
 end
@@ -386,16 +399,18 @@ expected network): for every buyer the flows `X[l, r]` to each upstream ZE, then
 purchase-weighted mean sourcing distance (km) and the local shares within each radius,
 aggregated over buyers with their upstream purchases (`mean_*`) and at the median buyer
 (`med_*`). `:equal_T` sets every non-empty cell's T to one (`Equal comparative
-advantage`), `:no_trade_cost` sets τ ≡ 1; prices are re-solved in both.
+advantage`), `:no_trade_cost` sets τ ≡ 1; prices are re-solved in both. The flows are
+DOMESTIC (the shares are of French purchases); the foreign competitor Φ^F_s is a
+primitive held at its estimate in every regime, so the import share responds.
 """
 function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
                          radii = (100.0, 200.0))
     # (not called `theta`: that is the Fréchet shape used below)
-    ΩL, Ωs, A, α, Tvec = unpack_params(params)
+    ΩL, Ωs, A, α, Tvec, PhiF = unpack_params(params)
     T_mat = reshape(collect(Tvec), S, R)
     regime === :equal_T && (T_mat = Float64.(T_mat .> EMPTY_T_CUT))
     tau = regime === :no_trade_cost ? ones(R, R_downstream) : build_tau(α)
-    pr  = compute_prices_analytical(ΩL, Ωs, A, T_mat, tau)
+    pr  = compute_prices_analytical(ΩL, Ωs, A, T_mat, tau; PhiF = PhiF)
     X = zeros(R, R_downstream)
     for g in 1:n_good
         s = GOOD_S[g]; l = GOOD_R[g]
@@ -475,7 +490,8 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     n_ok >= 2 || error("world_inference: only $n_ok of $B worlds usable ($fails)")
 
     # ── parameter draws ──────────────────────────────────────────────────────
-    t_lbl = ["T[$(sector_names[(fp - 1) ÷ T_COL_DIM + 1])-$(tcol_names[(fp - 1) % T_COL_DIM + 1])]"
+    t_lbl = [((fp - 1) % T_COL_DIM + 1 == FOREIGN_COL ? "PhiF[$(sector_names[(fp - 1) ÷ T_COL_DIM + 1])]" :
+              "T[$(sector_names[(fp - 1) ÷ T_COL_DIM + 1])-$(tcol_names[(fp - 1) % T_COL_DIM + 1])]")
              for fp in findall(T_MASK)]
     t_red(T) = (v = vec(permutedims(T))[T_MASK]; v[v .<= EMPTY_T_CUT] .= NaN; v)
     # Ω^L, Ω^s vary across worlds only when they are profiled (PROFILE_HEAD).
@@ -491,7 +507,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
 
     # ── the dispersion of log T ──────────────────────────────────────────────
     lg(x) = x > EMPTY_T_CUT ? log(x) : NaN
-    disp(T) = [(v = filter(isfinite, lg.(T[s, SECTOR_T_COLS[s]])); length(v) > 1 ? std(v) : NaN) for s in 1:S]
+    disp(T) = [(v = filter(isfinite, lg.(T[s, SECTOR_DOM_COLS[s]])); length(v) > 1 ? std(v) : NaN) for s in 1:S]
     Dp = permutedims(reduce(hcat, (disp(r.est.T) for r in good)))
 
     # ── counterfactuals: levels and changes against the estimated regime ─────
