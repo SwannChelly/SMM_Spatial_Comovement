@@ -27,6 +27,8 @@ using Printf
 Particle swarm with a scrambled-Sobol initial swarm, reflecting walls, linearly
 decreasing inertia and periodic restarts of stagnant particles. The warm start is
 always one of the particles, so a stage never ends worse than its incumbent.
+# Swann : Add a description for each parameter.
+
 """
 function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{Float64};
                           n_particles::Int = 70, max_iter::Int = 100,
@@ -44,6 +46,7 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
     else
         net = sobol_scrambled_net(n_random, d, Random.GLOBAL_RNG)
         [lb .+ net[i, :] .* (ub .- lb) for i in 1:n_random]
+        # Swann : Explique ici que l'on prend la même seed pour chaque secteur et que l'hypothèse sous jacente c'est que l'effet d'un secteur sur les autres est limité. 
     end
     warm_start_particle === nothing ||
         push!(particles, clamp.(warm_start_particle, lb, ub))
