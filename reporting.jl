@@ -43,13 +43,14 @@ function plot_T_vs_initial(params, folder)
     try
         T_best = unpack_T_par(params)
         α = round(params[alpha_range()][1], digits = 3)
+        κ = round(unpack_kappa(params), digits = 3)   # T* depends on (α, κ), not on α alone
         idx = [(s, c) for s in 1:S for c in 1:T_COL_DIM if T_rs_init[s, c] > 1e-8 && T_best[s, c] > 1e-8]
         isempty(idx) && return
         xs = [T_rs_init[s, c] for (s, c) in idx]; ys = [T_best[s, c] for (s, c) in idx]
         lo, hi = min(minimum(xs), minimum(ys)), max(maximum(xs), maximum(ys))
         p = scatter(xs, ys; xscale = :log10, yscale = :log10, label = "",
                     xlabel = "initial T / T_ref (α₀ = $(round(P_alpha, digits=3)))",
-                    ylabel = "T / T_ref (α = $α)", title = "T: initial vs current")
+                    ylabel = "T / T_ref (α₁ = $α, κ = $κ)", title = "T: initial vs current")
         plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash, label = "y = x")
         plot!(p, [lo, hi], BOUND_HI .* [lo, hi]; color = :firebrick, ls = :dot, label = "×$BOUND_LO / ×$BOUND_HI")
         plot!(p, [lo, hi], BOUND_LO .* [lo, hi]; color = :firebrick, ls = :dot, label = "")
@@ -101,7 +102,8 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
     open(joinpath(folder, "report.txt"), "w") do io
         println(io, "Date: $(Dates.format(now(), "yyyy-mm-dd HH:MM"))")
         println(io, "Optimisation: $(isempty(variable) ? "All" : variable)   radius: $radius")
-        println(io, "Score: $(loss[1])\n")
+        println(io, "Score: $(loss[1])")
+        println(io, "α = $(round.(params[alpha_range()], digits = 4))   κ = $(round(unpack_kappa(params), digits = 4))\n")
         @printf(io, ">> Labour share   Empirical: %8.4f | Simulated: %8.4f\n", agg_labor_share, sim[1][1])
         qe, qs = _quartiles(emp_g), _quartiles(sim_g)
         println(io, "\n>> γ_{s,a} (quartiles of non-zero entries):")
