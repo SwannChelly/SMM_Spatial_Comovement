@@ -27,7 +27,7 @@ SMM_Spatial_Comovement/
 ├── main.jl              # Steps 1–4 + post-hoc
 ├── load_parameters.jl   # data → constants, moment vector, masks, T starting value
 ├── model_CP.jl          # simulated model, cell-level cloglog (block 4), N_s bisection, moments
-├── profiling.jl         # closed-form prices, GE-Sinkhorn inversion T*(α, κ, Ω, A)
+├── profiling.jl         # closed-form prices, GE-Sinkhorn inversion T*(α, κ, χ, A)
 ├── optimizer.jl         # PSO over (α, κ), in stages of narrowing boxes
 ├── reporting.jl         # stage reports, run summaries, granular diagnostics, post-hoc economy
 ├── inference.jl         # fake worlds: W from Cov(β_world − β_sim), parametric-bootstrap inference
@@ -137,7 +137,7 @@ worker: `WORKER_HEAP_HINT` (default 2G).
 ## What it computes
 
 1. **Step 1** — identity-weighted PSO over `[α ; κ]` on blocks 4–6. At each (α, κ), T and
-   the aggregates (Ω^L, Ω^s, A) are profiled jointly (`profile_ge`): they reproduce the
+   the aggregates (χ^L, χ^s, A) are profiled jointly (`profile_ge`): they reproduce the
    area-level sourcing shares and blocks 1–3 (labour share, sector shares, sales shares)
    exactly. N_s by integer bisection on the zero-supplier share. A first stage on the whole
    box, then stages in narrowing boxes → θ̂₁ (`step1/`).

@@ -332,11 +332,11 @@ MU_DIRS = {1: ("step1", "step2"), 2: ("step3", "step3")}
 
 def reporting_folder(industry, base="..", profile_T=True, ca_level="aa",
                      granular=True, relax_n_lo=False, optimizer="pso",
-                     kappa=True, profile_head=False):
+                     kappa=True):
     """Reproduce main.jl's output_folder naming exactly.
 
     The current Julia code estimates one specification and names its tree
-    `reporting_<ind>_profiled_aa_gran_kappa[_nlo1][_profhead]_pso`. `kappa=False`
+    `reporting_<ind>_profiled_aa_gran_kappa[_nlo1]_pso`. `kappa=False`
     rebuilds the pre-kappa name (`..._gran[_nlo1]_pso`), whose parameter and moment
     layouts this loader no longer reads -- it is kept only so the error is a clear
     layout mismatch rather than a missing folder.
@@ -347,7 +347,6 @@ def reporting_folder(industry, base="..", profile_T=True, ca_level="aa",
     name += "_gran" if granular else ""
     name += "_kappa" if (kappa and granular) else ""
     name += "_nlo1" if (relax_n_lo and granular) else ""
-    name += "_profhead" if profile_head else ""
     name += f"_{optimizer}"
     return Path(base) / name
 
@@ -565,7 +564,7 @@ def resolve_parts(parts):
 
 def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                        granular=True, relax_n_lo=False, optimizer="pso", K=-1,
-                       k_max=None, parts=None, kappa=True, profile_head=False):
+                       k_max=None, parts=None, kappa=True):
     """
     Load everything the granular / attraction-area reporting needs.
 
@@ -633,7 +632,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     input_folder = Path(base) / f"baseline_{industry}"
     folder = reporting_folder(industry, base=base, profile_T=profile_T, ca_level=ca_level,
                               granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer,
-                              kappa=kappa, profile_head=profile_head)
+                              kappa=kappa)
     if not folder.exists():
         raise FileNotFoundError(f"run folder {folder} not found — check profile_T / ca_level / "
                                 "granular / relax_n_lo / optimizer against main.jl's naming")
@@ -1180,7 +1179,6 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "agg_industry_share": agg_industry_share, "emp_pi_r": emp_pi_r,
         "reg_coef": reg_coef, "reg_coef_labels": reg_coef_labels,
         "beta_d": beta_d, "beta_kappa": float(beta_kappa[0]), "log_n_ls": log_n_ls,
-        "profile_head": profile_head,
         "G_target": G_target, "N_supplier_s": N_supplier_s,
         # the WHOLE empirical count curve, Pr(K_ls <= K) by (sector, K); only the
         # K = 0 column is targeted, the rest is the untargeted fit check

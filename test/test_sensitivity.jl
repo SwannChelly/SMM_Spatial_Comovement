@@ -36,10 +36,10 @@ check(name, ok) = (global pass &= ok; @printf("  [%s] %s\n", ok ? "PASS" : "FAIL
 
 x = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), collect(TAU_PRIOR),
          KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK])
-θ = profile_theta(x).theta
+theta_vec = profile_theta(x).theta
 d1, d2 = mktempdir(), mktempdir()
-r1 = sensitivity_jacobian(θ; K = 2, dest = d1)
-r2 = sensitivity_jacobian(θ; K = 2, dest = d2)
+r1 = sensitivity_jacobian(theta_vec; K = 2, dest = d1)
+r2 = sensitivity_jacobian(theta_vec; K = 2, dest = d2)
 
 println("\n(1) Determinism")
 check("estimation-draw Jacobian identical across two runs", isequal(r1.J_est, r2.J_est))
@@ -48,7 +48,7 @@ check("independent-set mean identical across two runs (seeded)", isequal(r1.J, r
 println("\n(2) Structural zeros")
 blk = zeros(Int, sum(MOMENT_MASK))
 for (b, rg) in enumerate(BLOCK_RANGES); blk[rg] .= b; end
-cols = sens_columns(θ)
+cols = sens_columns(theta_vec)
 iN = findall(c -> c.kind === :N, cols)
 iA = findall(c -> c.kind === :aggregate, cols)
 off46 = findall(b -> !(b in (4, 6)), blk)
@@ -60,8 +60,8 @@ check("every column finite on the estimation draws", all(isfinite, r1.J_est))
 
 println("\n(3) Profiles")
 dp = mktempdir()
-sensitivity_profiles(θ; K = 1, G = 5, dest = dp)
-m0, _ = sens_moments(θ, sens_drawset(0))
+sensitivity_profiles(theta_vec; K = 1, G = 5, dest = dp)
+m0, _ = sens_moments(theta_vec, sens_drawset(0))
 for line in readlines(joinpath(dp, "profiles_index.txt"))
     lab, fn = split(line, '\t')
     z = NPZ.npzread(joinpath(dp, fn))
@@ -76,7 +76,7 @@ for line in readlines(joinpath(dp, "profiles_index.txt"))
 end
 
 println("\n", pass ? "ALL SENSITIVITY GATES PASS" : "SOME SENSITIVITY GATES FAILED")
-cols2 = sens_columns(θ)
+cols2 = sens_columns(theta_vec)
 for k in (:aggregate, :alpha, :kappa, :T, :N)
     j = findall(c -> c.kind === k, cols2)
     @printf("  %-9s max |ΔJ| between runs: estimation draws %.3g, mean %.3g\n", k,

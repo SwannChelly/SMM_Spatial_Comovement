@@ -1,7 +1,7 @@
 ##### profiling.jl — T and the aggregates profiled out of the search #####
 #
 # The search runs over (α, κ) only. At each (α, κ), `profile_ge` returns the area-level
-# comparative advantage T and the aggregates (Ω^L, Ω^s, A) that reproduce, exactly and
+# comparative advantage T and the aggregates (χ^L, χ^s, A) that reproduce, exactly and
 # jointly, the sourcing shares γ_{s,a} (block 5) and blocks 1–3 (labour share, sector
 # shares, downstream sales shares), with the expected Eaton–Kortum prices in closed form.
 # These blocks are therefore just-identified; [β_d ; β_κ] and Ḡ_s(0) are left to (α, κ)
@@ -27,25 +27,25 @@ function compute_Phi(T_mat::AbstractMatrix{FT}, tau::AbstractMatrix{FT}) where {
 end
 
 """
-    compute_prices_analytical(Ω^L, Ω^s, A, T_mat, tau) -> NamedTuple
+    compute_prices_analytical(χ^L, χ^s, A, T_mat, tau) -> NamedTuple
 
 Closed-form EK prices: `P_sr = Γ_s Φ_{s,r}^{−1/θ}`, the CES aggregates `P_r`, `c_r`,
 downstream prices and sales `Y_r`.
 """
-function compute_prices_analytical(Omega_L::FT, Omega_s_vec, A_r, T_mat::AbstractMatrix,
+function compute_prices_analytical(chi_L::FT, chi_s_vec, A_r, T_mat::AbstractMatrix,
                                    tau::AbstractMatrix) where {FT}
     Phi = compute_Phi(T_mat, tau)
     P_sr = similar(Phi)
     for s in 1:S, dr in 1:R_downstream
         P_sr[s, dr] = GAMMA_FACTOR[s] * Phi[s, dr]^(-1/theta)
     end
-    Os_col = reshape(collect(Omega_s_vec), S, 1)
+    Os_col = reshape(collect(chi_s_vec), S, 1)
     P_r = vec(sum(Os_col .* P_sr .^ (1 - nu), dims=1)) .^ (1 / (1 - nu))
     c_r = similar(P_r)
     for dr in 1:R_downstream
         r = DOWNSTREAM_REGIONS[dr]
-        c_r[dr] = (Omega_L * regional_wages[r]^(1-lambda) +
-                   (1-Omega_L) * P_r[dr]^(1-lambda))^(1/(1-lambda))
+        c_r[dr] = (chi_L * regional_wages[r]^(1-lambda) +
+                   (1-chi_L) * P_r[dr]^(1-lambda))^(1/(1-lambda))
     end
     c_tilde_r  = c_r ./ A_r
     mu         = FT(epsilon / (epsilon - 1))
@@ -58,20 +58,20 @@ function compute_prices_analytical(Omega_L::FT, Omega_s_vec, A_r, T_mat::Abstrac
 end
 
 """
-    gamma_ls_analytical(Ω^L, Ω^s, A, T_mat, tau) -> γ (R × S) at the ZE level
+    gamma_ls_analytical(χ^L, χ^s, A, T_mat, tau) -> γ (R × S) at the ZE level
 """
-function gamma_ls_analytical(Omega_L::Real, Omega_s, A, T_mat::AbstractMatrix, tau::AbstractMatrix)
-    (; P_sr, P_r, c_r, Y_r, mu, Phi) = compute_prices_analytical(Omega_L, Omega_s, A, T_mat, tau)
+function gamma_ls_analytical(chi_L::Real, chi_s, A, T_mat::AbstractMatrix, tau::AbstractMatrix)
+    (; P_sr, P_r, c_r, Y_r, mu, Phi) = compute_prices_analytical(chi_L, chi_s, A, T_mat, tau)
     FT = eltype(Y_r)
     X_ls = zeros(FT, R, S)
     for g in 1:n_good
         s = GOOD_S[g]; r_p = GOOD_R[g]
-        T_val = T_mat[s, r_p]; w_val = W_RS_FLAT[g]; Os = Omega_s[s]
+        T_val = T_mat[s, r_p]; w_val = W_RS_FLAT[g]; Os = chi_s[s]
         for dr in 1:R_downstream
             phi_sdr = Phi[s, dr]
             phi_sdr < 1e-300 && continue
             exp_sdr = Os * (P_sr[s, dr] / P_r[dr])^(1 - nu) *
-                      (P_r[dr] / c_r[dr])^(1 - lambda) * (1 - Omega_L) * mu * Y_r[dr]
+                      (P_r[dr] / c_r[dr])^(1 - lambda) * (1 - chi_L) * mu * Y_r[dr]
             X_ls[r_p, s] += T_val * (w_val * tau[r_p, dr])^(-theta) / phi_sdr * exp_sdr
         end
     end
@@ -96,17 +96,17 @@ function with_T(x::AbstractVector, T_par::AbstractMatrix)
 end
 
 # ══════════════════════════════════════════════════════════════════════════════
-# THE PROFILE: T and the aggregates (Ω^L, Ω^s, A) at a given (α, κ)
+# THE PROFILE: T and the aggregates (χ^L, χ^s, A) at a given (α, κ)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# Given (α, κ, T) the aggregates are just-identified by blocks 1–3: Ω^L by the aggregate
-# labour share (1 equation), Ω^s by the sector shares of intermediate spending (S − 1
-# free equations, ΣΩ^s = 1), A by the downstream sales shares (R_d − 1, A_1 = 1). All
+# Given (α, κ, T) the aggregates are just-identified by blocks 1–3: χ^L by the aggregate
+# labour share (1 equation), χ^s by the sector shares of intermediate spending (S − 1
+# free equations, Σχ^s = 1), A by the downstream sales shares (R_d − 1, A_1 = 1). All
 # of it runs through the EXPECTED price indices P_sr = Γ_s Φ_sr^{−1/θ}, which do not
 # depend on the aggregates, so the profile is deterministic:
 #
-#   ℓ_r  = Ω^L (w_r/c_r)^{1−λ}                         regional labour share (no A)
-#   s_rs = Ω_s P_sr^{1−ν} / Σ_k Ω_k P_kr^{1−ν}         sector split of intermediates
+#   ℓ_r  = χ^L (w_r/c_r)^{1−λ}                         regional labour share (no A)
+#   s_rs = χ_s P_sr^{1−ν} / Σ_k χ_k P_kr^{1−ν}         sector split of intermediates
 #   L    = Σ_r π_r ℓ_r                                 block 1 (cost ∝ sales ∝ π_r)
 #   Õ_s  = Σ_r π_r (1−ℓ_r) s_rs / Σ_r π_r (1−ℓ_r)      block 2
 #   A_r ∝ c_r (π_r/δ_r)^{−1/ε}                         block 3, closed form, A_1 = 1
@@ -116,8 +116,8 @@ end
 # once, at the end. Pinning sales also removes the ε channel a T map at fixed A would
 # carry (raise T ⇒ cheaper inputs ⇒ with |ε| large sales jump ⇒ demand returns).
 #
-# (Ω^L, Ω^s) are solved JOINTLY by Newton on x = (logit Ω^L, log Ω_s[2:S] − log Ω_s[1]):
-# the weights π_r (1−ℓ_r) move with Ω^s through P_r, so the two blocks are coupled. The
+# (χ^L, χ^s) are solved JOINTLY by Newton on x = (logit χ^L, log χ_s[2:S] − log χ_s[1]):
+# the weights π_r (1−ℓ_r) move with χ^s through P_r, so the two blocks are coupled. The
 # system is S × S and costs O(S R_d) per evaluation, negligible beside one Φ pass, so it
 # is solved to convergence at every Sinkhorn pass and the T map stays a map of T alone.
 
@@ -144,23 +144,23 @@ profile_targets(; L = agg_labor_share, Os = agg_industry_share, pi = emp_pi_r) =
     (L = Float64(L), Os = collect(Float64, vec(Os)) ./ sum(Os), pi = collect(Float64, vec(pi)) ./ sum(pi))
 
 """
-    aggregate_shares(x, P_sr) -> (Ω^L, Ω^s, ℓ, s_rs, P_r, c_r) at x = (logit Ω^L, z_2..z_S)
+    aggregate_shares(x, P_sr) -> (χ^L, χ^s, ℓ, s_rs, P_r, c_r) at x = (logit χ^L, z_2..z_S)
 """
 function aggregate_shares(x::AbstractVector, P_sr::AbstractMatrix)
-    ΩL = 1 / (1 + exp(-x[1]))
+    chi_L = 1 / (1 + exp(-x[1]))
     z  = vcat(0.0, x[2:end])
-    Ωs = exp.(z .- maximum(z)); Ωs ./= sum(Ωs)
-    num  = Ωs .* P_sr .^ (1 - nu)
+    chi_s = exp.(z .- maximum(z)); chi_s ./= sum(chi_s)
+    num  = chi_s .* P_sr .^ (1 - nu)
     den  = vec(sum(num; dims = 1))
     s_rs = num ./ reshape(den, 1, :)
     P_r  = den .^ (1 / (1 - nu))
     c_r  = similar(P_r); ell = similar(P_r)
     @inbounds for dr in eachindex(P_r)
         w = regional_wages[DOWNSTREAM_REGIONS[dr]]
-        c_r[dr] = (ΩL * w^(1 - lambda) + (1 - ΩL) * P_r[dr]^(1 - lambda))^(1 / (1 - lambda))
-        ell[dr] = ΩL * (w / c_r[dr])^(1 - lambda)
+        c_r[dr] = (chi_L * w^(1 - lambda) + (1 - chi_L) * P_r[dr]^(1 - lambda))^(1 / (1 - lambda))
+        ell[dr] = chi_L * (w / c_r[dr])^(1 - lambda)
     end
-    return ΩL, Ωs, ell, s_rs, P_r, c_r
+    return chi_L, chi_s, ell, s_rs, P_r, c_r
 end
 
 # Blocks 1–2 at x: S equations (labour share, then sector shares 2..S).
@@ -172,7 +172,7 @@ function aggregate_residual(x::AbstractVector, P_sr::AbstractMatrix, tg)
 end
 
 # Newton start: the one-region closed form at the π-weighted mean log prices,
-# Ω_s ∝ Õ_s P̄_s^{ν−1}, then logit Ω^L = logit L + (1−λ) log(P̄/w̄).
+# χ_s ∝ Õ_s P̄_s^{ν−1}, then logit χ^L = logit L + (1−λ) log(P̄/w̄).
 function aggregate_init(P_sr::AbstractMatrix, tg)
     lP   = log.(P_sr) * tg.pi
     Os   = max.(tg.Os, 1e-12) .* exp.((nu - 1) .* lP); Os ./= sum(Os)
@@ -232,14 +232,14 @@ end
 # ZE-level γ (R × S) with the expenditure weights ω (S × R_d) supplied: the arithmetic
 # of `gamma_ls_analytical`, whose weights come from the full price solve instead.
 function gamma_ze_from_weights(T_ze::AbstractMatrix, tau::AbstractMatrix,
-                               Phi::AbstractMatrix, ω::AbstractMatrix)
+                               Phi::AbstractMatrix, spend_w::AbstractMatrix)
     X_ls = zeros(R, S)
     @inbounds for g in 1:n_good
         s = GOOD_S[g]; r_p = GOOD_R[g]
         T_val = T_ze[s, r_p]; w_val = W_RS_FLAT[g]
         for dr in 1:R_downstream
             Phi[s, dr] < 1e-300 && continue
-            X_ls[r_p, s] += T_val * (w_val * tau[r_p, dr])^(-theta) / Phi[s, dr] * ω[s, dr]
+            X_ls[r_p, s] += T_val * (w_val * tau[r_p, dr])^(-theta) / Phi[s, dr] * spend_w[s, dr]
         end
     end
     X_s = vec(sum(X_ls; dims = 1))
@@ -257,7 +257,7 @@ end
         -> (T, Omega_L, Omega_s, A, x, iters, converged, resid, agg_resid)
 
 Joint profile of T and the aggregates at (α, κ), by a damped Sinkhorn iteration on T.
-Each pass: P_sr from the current T → (Ω^L, Ω^s) solved at those prices (warm-started from
+Each pass: P_sr from the current T → (χ^L, χ^s) solved at those prices (warm-started from
 the previous pass) → ω_sr = π_r (1−ℓ_r) s_rs → closed-form γ → the multiplicative update
 `T⁺[s,a] = T[s,a] (target[a,s] / γ_model[a,s])^damping`, renormalised to `T[s,ref] = 1`.
 Only the per-sector profile of `target` matters (the reference gauge absorbs the scale).
@@ -282,19 +282,19 @@ function profile_ge(alpha; kappa::Real,
     x = x_init
     resid = Inf; iters = 0
     T_new = similar(T_par)
-    ω = zeros(S, R_downstream)
+    spend_w = zeros(S, R_downstream)
     for it in 1:max_iter
         iters = it
-        # 2) Solve the aggregates (Ω^L, Ω^s) at the prices implied by the current T.
+        # 2) Solve the aggregates (χ^L, χ^s) at the prices implied by the current T.
         T_ze = gather_T_to_ze(T_par, kappa)
         P_sr, Phi = expected_sector_prices(T_ze, tau)
         x = solve_aggregates(P_sr; x0 = x, tg = tg).x
         # 3) Compute the model γ with the expenditure weights pinned at the target sales shares.
         _, _, ell, s_rs, _, _ = aggregate_shares(x, P_sr)
         @inbounds for dr in 1:R_downstream, s in 1:S
-            ω[s, dr] = tg.pi[dr] * (1 - ell[dr]) * s_rs[s, dr]
+            spend_w[s, dr] = tg.pi[dr] * (1 - ell[dr]) * s_rs[s, dr]
         end
-        gamma_model = aggregate_gamma_to_T(gamma_ze_from_weights(T_ze, tau, Phi, ω))
+        gamma_model = aggregate_gamma_to_T(gamma_ze_from_weights(T_ze, tau, Phi, spend_w))
         # 4) Move T towards the target γ, then renormalise each sector to its reference area.
         T_new .= T_par
         for s in 1:S
@@ -325,9 +325,9 @@ function profile_ge(alpha; kappa::Real,
     # 6) Solve the aggregates at the final T, and A in closed form from the sales shares.
     P_sr, _ = expected_sector_prices(gather_T_to_ze(T_par, kappa), tau)
     h = solve_aggregates(P_sr; x0 = x, tg = tg)
-    ΩL, Ωs, _, _, _, c_r = aggregate_shares(h.x, P_sr)
+    chi_L, chi_s, _, _, _, c_r = aggregate_shares(h.x, P_sr)
     A = profile_A(c_r, tg.pi)
-    return (T = T_par, Omega_L = ΩL, Omega_s = Ωs, A = A, x = h.x, iters = iters,
+    return (T = T_par, chi_L = chi_L, chi_s = chi_s, A = A, x = h.x, iters = iters,
             converged = resid < tol && h.converged && all(isfinite, A),
             resid = resid, agg_resid = h.resid)
 end
@@ -349,29 +349,29 @@ function profile_ge_warm(alpha; kwargs...)
 end
 
 """
-    with_aggregates(x, Ω^L, Ω^s, A) -> copy of the level vector `x` with its aggregates set
+    with_aggregates(x, χ^L, χ^s, A) -> copy of the level vector `x` with its aggregates set
 """
-function with_aggregates(x::AbstractVector, ΩL::Real, Ωs::AbstractVector, A::AbstractVector)
+function with_aggregates(x::AbstractVector, chi_L::Real, chi_s::AbstractVector, A::AbstractVector)
     xf = collect(Float64, x)
-    xf[1] = ΩL
-    xf[2:(1 + S)] = Ωs
+    xf[1] = chi_L
+    xf[2:(1 + S)] = chi_s
     xf[(S + 2):(S + R_downstream + 1)] = A
     return xf
 end
 
 """
-    aggregate_moment_residuals(Ω^L, Ω^s, A, T_ze, tau; tg) -> (labor, industry, pi_r)
+    aggregate_moment_residuals(χ^L, χ^s, A, T_ze, tau; tg) -> (labor, industry, pi_r)
 
 Analytical blocks 1–3 at a θ against their targets (max |model − target| per block),
 from the full closed-form price solve. ≈ 0 at the profile; the gap to the SIMULATED
 blocks is the Monte-Carlo error of the realised price indices.
 """
-function aggregate_moment_residuals(ΩL, Ωs, A, T_ze::AbstractMatrix, tau::AbstractMatrix;
+function aggregate_moment_residuals(chi_L, chi_s, A, T_ze::AbstractMatrix, tau::AbstractMatrix;
                                tg = profile_targets())
-    pr   = compute_prices_analytical(ΩL, Ωs, A, T_ze, tau)
-    ell  = ΩL .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr.c_r) .^ (1 - lambda)
+    pr   = compute_prices_analytical(chi_L, chi_s, A, T_ze, tau)
+    ell  = chi_L .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr.c_r) .^ (1 - lambda)
     pi_m = pr.Y_r ./ sum(pr.Y_r)
-    s_rs = Ωs .* (pr.P_sr ./ reshape(pr.P_r, 1, :)) .^ (1 - nu)
+    s_rs = chi_s .* (pr.P_sr ./ reshape(pr.P_r, 1, :)) .^ (1 - nu)
     wI   = pi_m .* (1 .- ell)
     return (labor = abs(sum(pi_m .* ell) - tg.L),
             industry = maximum(abs, (s_rs * wI) ./ sum(wI) .- tg.Os),
@@ -381,15 +381,15 @@ end
 """
     profile_theta(x) -> (theta, converged, resid, iters, alpha)
 
-The full level vector at the (α, κ) read from `x`: (Ω^L, Ω^s, A, T) come from
-`profile_ge` (Ω^s on the simplex, A_1 = 1, as `unpack_params` reads them), and every
+The full level vector at the (α, κ) read from `x`: (χ^L, χ^s, A, T) come from
+`profile_ge` (χ^s on the simplex, A_1 = 1, as `unpack_params` reads them), and every
 other entry of `x` is ignored. On `converged = false` the profiled blocks are the last
 iterate: the caller must reject it, not score it.
 """
 function profile_theta(x::AbstractVector)
-    α = collect(x[alpha_range()])
-    res = profile_ge_warm(α; kappa = unpack_kappa(x))
-    return (theta = with_T(with_aggregates(x, res.Omega_L, res.Omega_s, res.A), res.T),
+    alpha = collect(x[alpha_range()])
+    res = profile_ge_warm(alpha; kappa = unpack_kappa(x))
+    return (theta = with_T(with_aggregates(x, res.chi_L, res.chi_s, res.A), res.T),
             converged = res.converged, resid = max(res.resid, res.agg_resid),
-            iters = res.iters, alpha = α)
+            iters = res.iters, alpha = alpha)
 end

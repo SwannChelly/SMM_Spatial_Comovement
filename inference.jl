@@ -22,10 +22,10 @@
 #   recomputed world by world.
 #
 # ── The profile in a world ───────────────────────────────────────────────────
-# The world is treated as the data are: (T, Ω^L, Ω^s, A) are profiled jointly
+# The world is treated as the data are: (T, χ^L, χ^s, A) are profiled jointly
 # (`profile_ge`) on the world's own γ_b, labour share L_b, sector shares Õ_b and sales
 # shares π_b, so the sampling noise of these moments enters the parameter draws, and
-# Ω^L, Ω^s, A are reported with α, κ, N_s and T.
+# χ^L, χ^s, A are reported with α, κ, N_s and T.
 
 # ── Areas that come out empty ────────────────────────────────────────────────
 # A world is ONE network, so an area active in the data can win nothing in it (γ_b = 0).
@@ -117,22 +117,22 @@ end
 """
     world_reference(theta_hat) -> NamedTuple
 
-What the worlds read off the estimate: the level vector itself, Ω^L, Ω^s, A as
+What the worlds read off the estimate: the level vector itself, χ^L, χ^s, A as
 `unpack_params` normalises them, α̂, κ̂ and T̂ by area.
 """
 function world_reference(theta_hat::AbstractVector)
-    ΩL, Ωs, A, α, _ = unpack_params(theta_hat)
-    return (theta = collect(Float64, theta_hat), ΩL = ΩL, Ωs = collect(Ωs), A = collect(A),
-            alpha = collect(α), kappa = Float64(unpack_kappa(theta_hat)),
+    chi_L, chi_s, A, alpha, _ = unpack_params(theta_hat)
+    return (theta = collect(Float64, theta_hat), chi_L = chi_L, chi_s = collect(chi_s), A = collect(A),
+            alpha = collect(alpha), kappa = Float64(unpack_kappa(theta_hat)),
             T = Matrix(unpack_T_par(theta_hat)))
 end
 
 """
-    profile_world(ref, alpha, kappa, world; T_init, x_init) -> (T, A, ΩL, Ωs, x, converged)
+    profile_world(ref, alpha, kappa, world; T_init, x_init) -> (T, A, χL, χs, x, converged)
 
 Profile T and the aggregates at (α, κ) on a world's own moments: γ (`world.gamma`) and
 blocks 1–3 (`world.L`, `world.Os`, `world.pi`). An area that wins nothing in the world
-starts at `EMPTY_T` and stays there. `x_init` warm-starts the Newton solve of (Ω^L, Ω^s).
+starts at `EMPTY_T` and stays there. `x_init` warm-starts the Newton solve of (χ^L, χ^s).
 """
 function profile_world(ref, alpha, kappa, world;
                        T_init::AbstractMatrix = ref.T, x_init = nothing)
@@ -142,7 +142,7 @@ function profile_world(ref, alpha, kappa, world;
     end
     res = profile_ge(alpha; kappa = kappa, target = world.gamma, T_init = T, x_init = x_init,
                      tg = profile_targets(L = world.L, Os = world.Os, pi = world.pi))
-    return (T = res.T, A = res.A, ΩL = res.Omega_L, Ωs = res.Omega_s, x = res.x,
+    return (T = res.T, A = res.A, chi_L = res.chi_L, chi_s = res.chi_s, x = res.x,
             converged = res.converged)
 end
 
@@ -151,7 +151,7 @@ end
     aggregates and T of `cal` (`profile_world`)
 """
 function world_theta(ref, alpha, kappa, cal)
-    x = with_aggregates(ref.theta, cal.ΩL, cal.Ωs, cal.A)
+    x = with_aggregates(ref.theta, cal.chi_L, cal.chi_s, cal.A)
     x[alpha_range()] = alpha
     x[kappa_index()] = kappa
     return with_T(x, cal.T)
@@ -203,11 +203,11 @@ function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
         world.ref_empty && return (ok = false, reason = :empty_ref)
         cal = profile_world(ref, ref.alpha, ref.kappa, world)
         cal.converged   || return (ok = false, reason = :T_inversion)
-        βs, Nb, nf = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, cal),
+        beta_sim, Nb, nf = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, cal),
                                    world.G, world_simulator(seed_s))
-        all(isfinite, βs) || return (ok = false, reason = :sim_fit)
-        return (ok = true, reason = :none, e = world.beta .- βs, beta_world = world.beta,
-                beta_sim = βs, N = Nb, n_fail = nf, G = world.G)
+        all(isfinite, beta_sim) || return (ok = false, reason = :sim_fit)
+        return (ok = true, reason = :none, e = world.beta .- beta_sim, beta_world = world.beta,
+                beta_sim = beta_sim, N = Nb, n_fail = nf, G = world.G)
     catch err
         return _failure(err)
     end
@@ -302,28 +302,28 @@ The estimator applied to one fake world. For each candidate (α, κ): T re-inver
 world's γ and blocks 1–3 (T and the aggregates profiled), N calibrated on its G, β simulated on the world's
 simulator; criterion `e' W e`, `e = β_world − β_sim`. Nelder–Mead over (α, κ) from the
 estimate, inside the estimation's κ box and every α_k ∈ [1e-4, ALPHA_MAX]; the α block
-is read sorted, as in the estimation (α_1 ≤ … ≤ α_K). T and the Newton start of (Ω^L, Ω^s) are warm-started from the last converged
+is read sorted, as in the estimation (α_1 ≤ … ≤ α_K). T and the Newton start of (χ^L, χ^s) are warm-started from the last converged
 evaluation of the world; the fixed point is unique, so this changes cost, not values.
 """
 function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
-    nα = N_TAU
+    n_alpha = N_TAU
     T_warm = Ref(ref.T); x_warm = Ref{Any}(nothing)
-    unpack_x(x) = (sort(x[1:nα]), x[nα + 1])
-    inbox(α, κ) = KAPPA_LO <= κ <= KAPPA_HI && all(a -> 1e-4 <= a <= ALPHA_MAX, α)
+    unpack_x(x) = (sort(x[1:n_alpha]), x[n_alpha + 1])
+    inbox(alpha, kappa) = KAPPA_LO <= kappa <= KAPPA_HI && all(a -> 1e-4 <= a <= ALPHA_MAX, alpha)
 
     function crit(x)
-        α, κ = unpack_x(x)
-        inbox(α, κ) || return WORLD_PENALTY
+        alpha, kappa = unpack_x(x)
+        inbox(alpha, kappa) || return WORLD_PENALTY
         cal = try
-            profile_world(ref, α, κ, world; T_init = T_warm[], x_init = x_warm[])
+            profile_world(ref, alpha, kappa, world; T_init = T_warm[], x_init = x_warm[])
         catch
             return WORLD_PENALTY
         end
         cal.converged || return WORLD_PENALTY
         T_warm[] = cal.T; x_warm[] = cal.x
-        β, _, _ = simulate_beta(world_theta(ref, α, κ, cal), world.G, sim)
-        all(isfinite, β) || return WORLD_PENALTY
-        e = world.beta .- β
+        beta, _, _ = simulate_beta(world_theta(ref, alpha, kappa, cal), world.G, sim)
+        all(isfinite, beta) || return WORLD_PENALTY
+        e = world.beta .- beta
         return dot(e, W * e)
     end
 
@@ -331,14 +331,14 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
     steps = vcat(0.1 .* max.(abs.(ref.alpha), 0.05), 0.1)
     opt = Optim.optimize(crit, x0, NelderMead(initial_simplex = WorldSimplexer(steps)),
                          Optim.Options(iterations = max_iter))
-    α, κ = unpack_x(Optim.minimizer(opt))
-    f̂ = Optim.minimum(opt)
-    cal = profile_world(ref, α, κ, world; T_init = T_warm[], x_init = x_warm[])
-    θ = world_theta(ref, α, κ, cal)
-    _, N, _ = simulate_beta(θ, world.G, sim)
-    return (ok = cal.converged && f̂ < WORLD_PENALTY, alpha = α, kappa = κ, T = cal.T,
-            A = cal.A, ΩL = cal.ΩL, Ωs = cal.Ωs, N = N, loss = f̂,
-            iters = Optim.iterations(opt), theta = θ)
+    alpha, kappa = unpack_x(Optim.minimizer(opt))
+    f_hat = Optim.minimum(opt)
+    cal = profile_world(ref, alpha, kappa, world; T_init = T_warm[], x_init = x_warm[])
+    theta_vec = world_theta(ref, alpha, kappa, cal)
+    _, N, _ = simulate_beta(theta_vec, world.G, sim)
+    return (ok = cal.converged && f_hat < WORLD_PENALTY, alpha = alpha, kappa = kappa, T = cal.T,
+            A = cal.A, chi_L = cal.chi_L, chi_s = cal.chi_s, N = N, loss = f_hat,
+            iters = Optim.iterations(opt), theta = theta_vec)
 end
 
 """
@@ -354,21 +354,21 @@ advantage`), `:no_trade_cost` sets τ ≡ 1; prices are re-solved in both.
 function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
                          radii = (100.0, 200.0))
     # (not called `theta`: that is the Fréchet shape used below)
-    ΩL, Ωs, A, α, Tvec = unpack_params(params)
+    chi_L, chi_s, A, alpha, Tvec = unpack_params(params)
     T_mat = reshape(collect(Tvec), S, R)
     regime === :equal_T && (T_mat = Float64.(T_mat .> EMPTY_T_CUT))
-    tau = regime === :no_trade_cost ? ones(R, R_downstream) : build_tau(α)
-    pr  = compute_prices_analytical(ΩL, Ωs, A, T_mat, tau)
+    tau = regime === :no_trade_cost ? ones(R, R_downstream) : build_tau(alpha)
+    pr  = compute_prices_analytical(chi_L, chi_s, A, T_mat, tau)
     X = zeros(R, R_downstream)
     for g in 1:n_good
         s = GOOD_S[g]; l = GOOD_R[g]
         T_mat[s, l] > 0 || continue
         for dr in 1:R_downstream
-            Φ = pr.Phi[s, dr]
-            Φ < 1e-300 && continue
-            ex = Ωs[s] * (pr.P_sr[s, dr] / pr.P_r[dr])^(1 - nu) *
-                 (pr.P_r[dr] / pr.c_r[dr])^(1 - lambda) * (1 - ΩL) * pr.mu * pr.Y_r[dr]
-            X[l, dr] += T_mat[s, l] * (W_RS_FLAT[g] * tau[l, dr])^(-theta) / Φ * ex
+            phi_sd = pr.Phi[s, dr]
+            phi_sd < 1e-300 && continue
+            ex = chi_s[s] * (pr.P_sr[s, dr] / pr.P_r[dr])^(1 - nu) *
+                 (pr.P_r[dr] / pr.c_r[dr])^(1 - lambda) * (1 - chi_L) * pr.mu * pr.Y_r[dr]
+            X[l, dr] += T_mat[s, l] * (W_RS_FLAT[g] * tau[l, dr])^(-theta) / phi_sd * ex
         end
     end
     dkm  = exp.(LOG_DIST_DOWNSTREAM)
@@ -444,10 +444,10 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     lbl = vcat(["alpha[$i]" for i in 1:N_TAU], ["kappa"], ["N_s[$s]" for s in sector_names],
                t_lbl, ["A[$i]" for i in 1:R_downstream],
                ["Omega_L"], ["Omega_s[$s]" for s in sector_names])
-    row(α, κ, N, T, A, ΩL, Ωs) = vcat(α, κ, Float64.(N), t_red(T), A, ΩL, Ωs)
+    row(alpha, kappa, N, T, A, chi_L, chi_s) = vcat(alpha, kappa, Float64.(N), t_red(T), A, chi_L, chi_s)
     P   = permutedims(reduce(hcat, (row(r.est.alpha, r.est.kappa, r.est.N, r.est.T, r.est.A,
-                                       r.est.ΩL, r.est.Ωs) for r in good)))
-    est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A, ref.ΩL, ref.Ωs)
+                                       r.est.chi_L, r.est.chi_s) for r in good)))
+    est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A, ref.chi_L, ref.chi_s)
     iT  = findall(l -> startswith(l, "T["), lbl)
 
     # ── the dispersion of log T ──────────────────────────────────────────────
@@ -460,9 +460,9 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     Cp     = permutedims(reduce(hcat, (r.cf for r in good)))
     cf_est = counterfactual_row(theta_hat)
     ns     = length(CF_STATS)
-    Δ(M)   = hcat([M[:, ((k - 1) * ns + 1):(k * ns)] .- M[:, 1:ns] for k in 2:length(CF_REGIMES)]...)
-    Δlbl   = ["Δ " * l for l in cf_lbl[(ns + 1):end]]
-    ΔCp    = Δ(Cp); Δest = vec(Δ(permutedims(cf_est)))
+    change(M)   = hcat([M[:, ((k - 1) * ns + 1):(k * ns)] .- M[:, 1:ns] for k in 2:length(CF_REGIMES)]...)
+    change_lbl   = ["Δ " * l for l in cf_lbl[(ns + 1):end]]
+    change_Cp    = change(Cp); change_est = vec(change(permutedims(cf_est)))
 
     NPZ.npzwrite(joinpath(dest, "world_inference_draws.npz"),
                  Dict("params" => P, "estimate" => est,
@@ -494,7 +494,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
             end
             println(out, "  sd = dispersion across worlds; CI = 2.5/97.5% quantiles; bias = mean − estimate.")
             iP = setdiff(eachindex(lbl), iT)
-            block(out, "α, κ, N_s, A, Ω^L, Ω^s", lbl[iP], P[:, iP], est[iP])
+            block(out, "α, κ, N_s, A, χ^L, χ^s", lbl[iP], P[:, iP], est[iP])
             block(out, "T (levels, per-sector reference = 1)", lbl[iT], P[:, iT], est[iT])
             block(out, "log T", lbl[iT], log.(P[:, iT]), log.(est[iT]))
             emp = vec(mean(isnan.(P[:, iT]); dims = 1))
@@ -506,7 +506,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
             end
             block(out, "within-sector sd of log T", ["sector $s" for s in sector_names], Dp, disp(ref.T))
             block(out, "counterfactuals (closed form, levels)", cf_lbl, Cp, cf_est)
-            block(out, "counterfactuals (change against the estimated regime)", Δlbl, ΔCp, Δest)
+            block(out, "counterfactuals (change against the estimated regime)", change_lbl, change_Cp, change_est)
         end
     end
     return (draws = P, labels = lbl, estimate = est, n_ok = n_ok, fails = fails)

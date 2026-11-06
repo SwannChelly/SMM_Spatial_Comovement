@@ -1,13 +1,13 @@
 # Data loading and constant distribution — main specification only:
 # granular varieties (finite N_s), comparative advantage at the attraction-area level
 # with T_ls = T_{a(l)s} · n_ls^κ, cell-level cloglog extensive margin, T and the
-# aggregates (Ω^L, Ω^s, A) profiled, (α, κ) searched.
+# aggregates (χ^L, χ^s, A) profiled, (α, κ) searched.
 #
 # Expects in the calling scope: input_folder, output_folder, n_coef, n_tau,
 # n_rho_inference, relax_n_lo. Everything is broadcast to the workers with
 # `@everywhere const`.
 #
-# Parameter vector: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK))]
+# Parameter vector: [χ^L(1) | χ^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK))]
 # Moment vector   : [labor | industry(S) | π_r(R_d) | [β_d ; β_κ] | γ_{s,a} | Ḡ_s(0)(S)]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -428,8 +428,8 @@ end
 function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
                              tol::Float64=1e-11, damping::Float64=0.5)
     nfac     = exp.(kappa0 .* log_n_ls_local)
-    tau_negθ = exp.((-theta * alpha0) .* LOG_DIST_DOWNSTREAM_local)
-    Ê = emp_pi_r_local ./ sum(emp_pi_r_local)
+    tau_neg_theta = exp.((-theta * alpha0) .* LOG_DIST_DOWNSTREAM_local)
+    E_hat = emp_pi_r_local ./ sum(emp_pi_r_local)
     T = zeros(Float64, S_, n_AA_local)
     for s in 1:S_
         cells_s = SECTOR_GOOD_REGIONS_local[s]; cols_s = SECTOR_T_COLS_local[s]
@@ -442,13 +442,13 @@ function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
         for _ in 1:max_iter
             Phi = zeros(Float64, R_down_)
             for l in cells_s, dr in 1:R_down_
-                Phi[dr] += T[s, aa_of_ze_local[l]] * nfac[s, l] * tau_negθ[l, dr]
+                Phi[dr] += T[s, aa_of_ze_local[l]] * nfac[s, l] * tau_neg_theta[l, dr]
             end
             M_col = zeros(Float64, n_AA_local)
             for l in cells_s
                 M = 0.0
                 for dr in 1:R_down_
-                    Phi[dr] > 1e-300 && (M += tau_negθ[l, dr] * Ê[dr] / Phi[dr])
+                    Phi[dr] > 1e-300 && (M += tau_neg_theta[l, dr] * E_hat[dr] / Phi[dr])
                 end
                 M_col[aa_of_ze_local[l]] += nfac[s, l] * M
             end

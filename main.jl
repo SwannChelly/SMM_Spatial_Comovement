@@ -1,7 +1,7 @@
 ##### Three-step SMM — main specification #####
 # Granular varieties, comparative advantage T_{a(l)s} n_ls^κ at the attraction-area
 # level, cell-level cloglog extensive margin. The search runs over (α, κ); T and the
-# aggregates (Ω^L, Ω^s, A) are profiled out of it (profiling.jl).
+# aggregates (χ^L, χ^s, A) are profiled out of it (profiling.jl).
 #
 #   Step 1  identity-weighted PSO on [α ; κ], loss on blocks 4–6 → θ̂_1   (step1/)
 #   Step 2  W = Cov(β_world − β_sim)⁻¹ over fake worlds at θ̂_1     (step2/), and

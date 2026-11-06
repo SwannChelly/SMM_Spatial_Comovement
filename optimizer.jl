@@ -1,6 +1,6 @@
 ##### optimizer.jl — PSO over (α, κ), in stages of narrowing boxes #####
 #
-# The search runs over (α, κ) only. T and the aggregates (Ω^L, Ω^s, A) are never
+# The search runs over (α, κ) only. T and the aggregates (χ^L, χ^s, A) are never
 # searched: every objective evaluation profiles them at the particle (profiling.jl). A
 # particle whose profile does not converge is REJECTED (loss Inf), never scored at a T
 # the model does not imply.
@@ -194,7 +194,7 @@ sorted_box(lo, hi) = (sort(lo), sort(hi))
         -> (best_params, best_fitness, history)
 
 Run one PSO stage over (α, κ) and return the full parameter vector at its optimum. T and
-the aggregates (Ω^L, Ω^s, A) are profiled at every particle (`profile_theta`).
+the aggregates (χ^L, χ^s, A) are profiled at every particle (`profile_theta`).
 
 # Arguments
 - `n_particles`: the swarm size, which should be a multiple of `nworkers()`.
@@ -206,7 +206,7 @@ the aggregates (Ω^L, Ω^s, A) are profiled at every particle (`profile_theta`).
 - `moment_blocks`: the moment blocks that enter the loss (`[4, 5, 6]` in Step 1, `[4]` in Step 3).
 
 # Returns
-- `best_params`: the full level vector `[Ω^L | Ω^s | A | α | κ | T]` at the best particle, profiled there.
+- `best_params`: the full level vector `[χ^L | χ^s | A | α | κ | T]` at the best particle, profiled there.
 - `best_fitness`: the loss at that particle.
 - `history`: the PSO history (`parallel_pso_smm`).
 """
@@ -216,25 +216,25 @@ function train_stage(n_particles::Int, max_iter::Int;
                      tightness::Real = 0.9,
                      weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
                      moment_blocks::Union{Nothing, Vector{Int}} = [4, 5, 6])
-    α0, κ0 = start[alpha_range()], unpack_kappa(start)
-    box_lo, box_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : α0)
+    alpha0, kappa0 = start[alpha_range()], unpack_kappa(start)
+    box_lo, box_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : alpha0)
 
     # 1) Build the search box over (α, κ).
     if fresh
         # 1.1) Fresh start: the whole α box around its prior and the whole κ range.
-        α_lo, α_hi = sorted_box(box_lo, box_hi)
-        κ_lo, κ_hi = KAPPA_LO, KAPPA_HI
+        alpha_lo, alpha_hi = sorted_box(box_lo, box_hi)
+        kappa_lo, kappa_hi = KAPPA_LO, KAPPA_HI
     else
         # 1.2) Continue stage: a box around `start`, narrower as the tightness rises, clipped to the whole box.
-        α_lo = max.(α0 .* tightness, box_lo); α_hi = min.(α0 ./ tightness, box_hi)
-        bad = α_lo .>= α_hi                 # incumbent above the cap: reset to the whole box
-        α_lo = ifelse.(bad, box_lo, α_lo); α_hi = ifelse.(bad, box_hi, α_hi)
-        α_lo, α_hi = sorted_box(α_lo, α_hi)
+        alpha_lo = max.(alpha0 .* tightness, box_lo); alpha_hi = min.(alpha0 ./ tightness, box_hi)
+        bad = alpha_lo .>= alpha_hi                 # incumbent above the cap: reset to the whole box
+        alpha_lo = ifelse.(bad, box_lo, alpha_lo); alpha_hi = ifelse.(bad, box_hi, alpha_hi)
+        alpha_lo, alpha_hi = sorted_box(alpha_lo, alpha_hi)
         half = (1 - tightness) * (KAPPA_HI - KAPPA_LO) / 2
-        κ_lo, κ_hi = max(κ0 - half, KAPPA_LO), min(κ0 + half, KAPPA_HI)
-        κ_lo >= κ_hi && ((κ_lo, κ_hi) = (KAPPA_LO, KAPPA_HI))
+        kappa_lo, kappa_hi = max(kappa0 - half, KAPPA_LO), min(kappa0 + half, KAPPA_HI)
+        kappa_lo >= kappa_hi && ((kappa_lo, kappa_hi) = (KAPPA_LO, KAPPA_HI))
     end
-    lb, ub = vcat(α_lo, κ_lo), vcat(α_hi, κ_hi)
+    lb, ub = vcat(alpha_lo, kappa_lo), vcat(alpha_hi, kappa_hi)
 
     # 2) Map a particle (α, κ) to a full level vector, with the α block sorted (see `sorted_box`).
     function to_full(x)
@@ -266,7 +266,7 @@ function train_stage(n_particles::Int, max_iter::Int;
     println("="^60)
     # 5) Run the PSO: each iteration scores every particle in parallel with `objective`.
     best_x, best_fitness, history = parallel_pso_smm(objective, lb, ub;
-        n_particles = n_particles, max_iter = max_iter, warm_start_particle = vcat(α0, κ0),
+        n_particles = n_particles, max_iter = max_iter, warm_start_particle = vcat(alpha0, kappa0),
         t_conv_probe = probe)
 
     # 6) Profile once more at the best particle, because the PSO returns only (α, κ).

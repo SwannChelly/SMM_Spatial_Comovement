@@ -25,8 +25,8 @@
 #                  Holding T fixed would let α move γ, which the inversion pins in
 #                  estimation, and suggest a spurious identification of α by γ.
 #        T[s,a]    partial derivative, T free (every identified, non-reference area).
-#        aggregate partial derivative of Ω^L, Ω^s[2:S], A[2:R_d] (the normalised-out
-#                  Ω^s[1] and A[1] are gauge directions and are skipped).
+#        aggregate partial derivative of χ^L, χ^s[2:S], A[2:R_d] (the normalised-out
+#                  χ^s[1] and A[1] are gauge directions and are skipped).
 #        N_s       unit difference in varieties, (m(N+1) − m(N−1))/2 (forward at N = 1),
 #                  other sectors pinned. Only blocks 4 and 6 move: the value blocks
 #                  are computed on the full draw set and carry no N_s.
@@ -148,8 +148,8 @@ function _sens_column_task(theta, c, k::Int, N_base::Vector{Int}, h::Float64, se
         (tp === nothing || tm === nothing) && return fill(NaN, n_m)
         mp, _ = sens_moments(tp, ds; N_fixed = N_base)
         mm, _ = sens_moments(tm, ds; N_fixed = N_base)
-        dθ = c.kind === :kappa ? 2h : theta[c.index] * (exp(h) - exp(-h))
-        return (mp .- mm) ./ dθ
+        dtheta = c.kind === :kappa ? 2h : theta[c.index] * (exp(h) - exp(-h))
+        return (mp .- mm) ./ dtheta
     catch err
         @warn "sensitivity column $(c.label), draw set $k failed: $(sprint(showerror, err))"
         return fill(NaN, n_m)
@@ -171,15 +171,15 @@ function sensitivity_jacobian(theta::AbstractVector; K::Int = 10, h::Float64 = 0
                               include_T::Bool = true, include_aggregates::Bool = true,
                               seed::Int = SENS_SEED, dest::AbstractString)
     mkpath(dest)
-    θ = collect(Float64, theta)
-    cols = sens_columns(θ; include_T = include_T, include_aggregates = include_aggregates)
+    theta_vec = collect(Float64, theta)
+    cols = sens_columns(theta_vec; include_T = include_T, include_aggregates = include_aggregates)
     n_p, n_m = length(cols), sum(MOMENT_MASK)
     println("Sensitivity Jacobian: $n_p columns × $(K + 1) draw sets (estimation + $K), step $h")
 
-    base = pmap(k -> sens_moments(θ, sens_drawset(k; seed = seed)), 0:K)
+    base = pmap(k -> sens_moments(theta_vec, sens_drawset(k; seed = seed)), 0:K)
     N_base = [b[2] for b in base]
     tasks = [(j, k) for k in 0:K for j in 1:n_p]
-    res = pmap(t -> _sens_column_task(θ, cols[t[1]], t[2], N_base[t[2] + 1], h, seed), tasks)
+    res = pmap(t -> _sens_column_task(theta_vec, cols[t[1]], t[2], N_base[t[2] + 1], h, seed), tasks)
 
     J_all = fill(NaN, K + 1, n_m, n_p)
     for ((j, k), v) in zip(tasks, res)
@@ -193,7 +193,7 @@ function sensitivity_jacobian(theta::AbstractVector; K::Int = 10, h::Float64 = 0
     NPZ.npzwrite(joinpath(dest, "jacobian.npz"),
                  Dict("J" => J, "J_sd" => J_sd, "J_est" => J_est, "J_draws" => J_draws,
                       "m_base" => base[1][1], "m_base_draws" => permutedims(reduce(hcat, (b[1] for b in base[2:end]))),
-                      "theta" => [c.kind === :N ? Float64(N_base[1][c.index]) : θ[c.index] for c in cols],
+                      "theta" => [c.kind === :N ? Float64(N_base[1][c.index]) : theta_vec[c.index] for c in cols],
                       "N_base" => Float64.(N_base[1]), "h" => [h], "K" => [Float64(K)],
                       "kind" => [Float64(findfirst(==(c.kind), (:aggregate, :alpha, :kappa, :T, :N))) for c in cols]))
     write(joinpath(dest, "jacobian_param_labels.txt"), join([c.label for c in cols], "\n") * "\n")
@@ -219,8 +219,8 @@ function profile_grid(theta::AbstractVector, c, N_hat::Vector{Int}; G::Int = 15,
         a = theta[c.index]
         return sort(unique(vcat(a, clamp.(a .* span .^ t, 1e-4, ALPHA_MAX))))
     elseif c.kind === :kappa
-        κ = theta[c.index]
-        return sort(unique(vcat(κ, clamp.(κ .+ kappa_span .* t, KAPPA_LO, KAPPA_HI))))
+        kappa = theta[c.index]
+        return sort(unique(vcat(kappa, clamp.(kappa .+ kappa_span .* t, KAPPA_LO, KAPPA_HI))))
     end
     n = N_hat[c.index]
     return sort(unique(vcat(n, clamp.(round.(Int, n .* span .^ t), 1, N_HI[c.index]))))
@@ -278,14 +278,14 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
                               span::Float64 = 2.0, kappa_span::Float64 = 0.5,
                               seed::Int = SENS_SEED, dest::AbstractString)
     mkpath(dest)
-    θ = collect(Float64, theta)
-    cols = filter(c -> c.kind in (:alpha, :kappa, :N), sens_columns(θ; include_T = false, include_aggregates = false))
-    base = pmap(k -> sens_moments(θ, sens_drawset(k; seed = seed)), 0:K)
+    theta_vec = collect(Float64, theta)
+    cols = filter(c -> c.kind in (:alpha, :kappa, :N), sens_columns(theta_vec; include_T = false, include_aggregates = false))
+    base = pmap(k -> sens_moments(theta_vec, sens_drawset(k; seed = seed)), 0:K)
     N_base = [b[2] for b in base]
-    grids = [profile_grid(θ, c, N_base[1]; G = G, span = span, kappa_span = kappa_span) for c in cols]
+    grids = [profile_grid(theta_vec, c, N_base[1]; G = G, span = span, kappa_span = kappa_span) for c in cols]
     println("Sensitivity profiles: $(length(cols)) parameters × ≤ $(maximum(length.(grids))) points × $(K + 1) draw sets")
     tasks = [(j, k) for j in eachindex(cols) for k in 0:K]
-    res = pmap(t -> _profile_task(θ, cols[t[1]], grids[t[1]], t[2], N_base[t[2] + 1], seed), tasks)
+    res = pmap(t -> _profile_task(theta_vec, cols[t[1]], grids[t[1]], t[2], N_base[t[2] + 1], seed), tasks)
 
     emp = vec(empirical_moments)
     fname(l) = "profile_" * replace(l, r"[^A-Za-z0-9_]+" => "_") * ".npz"
@@ -303,7 +303,7 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
         m_mean = [_nanmean(Md[i, l, :]) for i in axes(Md, 1), l in axes(Md, 2)]
         m_sd   = [_nanstd(Md[i, l, :])  for i in axes(Md, 1), l in axes(Md, 2)]
         tg = profile_targets(c)
-        est = c.kind === :N ? Float64(N_base[1][c.index]) : θ[c.index]
+        est = c.kind === :N ? Float64(N_base[1][c.index]) : theta_vec[c.index]
         NPZ.npzwrite(joinpath(dest, fname(c.label)),
                      Dict("grid" => Float64.(grids[j]), "m_est" => Mest, "m_mean" => m_mean,
                           "m_sd" => m_sd, "N_est" => rs[1].N, "converged" => Float64.(rs[1].conv),

@@ -42,20 +42,20 @@ with the search-window lines ×BOUND_LO / ×BOUND_HI. Never blocks estimation.
 function plot_T_vs_initial(params, folder)
     try
         T_best = unpack_T_par(params)
-        α = round(params[alpha_range()][1], digits = 3)
-        κ = round(unpack_kappa(params), digits = 3)   # T* depends on (α, κ), not on α alone
+        alpha = round(params[alpha_range()][1], digits = 3)
+        kappa = round(unpack_kappa(params), digits = 3)   # T* depends on (α, κ), not on α alone
         idx = [(s, c) for s in 1:S for c in 1:T_COL_DIM if T_rs_init[s, c] > 1e-8 && T_best[s, c] > 1e-8]
         isempty(idx) && return
         xs = [T_rs_init[s, c] for (s, c) in idx]; ys = [T_best[s, c] for (s, c) in idx]
         lo, hi = min(minimum(xs), minimum(ys)), max(maximum(xs), maximum(ys))
         p = scatter(xs, ys; xscale = :log10, yscale = :log10, label = "",
                     xlabel = "initial T / T_ref (α₀ = $(round(P_alpha, digits=3)))",
-                    ylabel = "T / T_ref (α₁ = $α, κ = $κ)", title = "T: initial vs current")
+                    ylabel = "T / T_ref (α₁ = $alpha, κ = $kappa)", title = "T: initial vs current")
         plot!(p, [lo, hi], [lo, hi]; color = :black, ls = :dash, label = "y = x")
         plot!(p, [lo, hi], BOUND_HI .* [lo, hi]; color = :firebrick, ls = :dot, label = "×$BOUND_LO / ×$BOUND_HI")
         plot!(p, [lo, hi], BOUND_LO .* [lo, hi]; color = :firebrick, ls = :dot, label = "")
-        savefig(p, joinpath(folder, "T_best_vs_initial_alpha$(α).png"))
-        NPZ.npzwrite(joinpath(folder, "T_best_vs_initial_alpha$(α).npz"),
+        savefig(p, joinpath(folder, "T_best_vs_initial_alpha$(alpha).png"))
+        NPZ.npzwrite(joinpath(folder, "T_best_vs_initial_alpha$(alpha).npz"),
                      Dict("T_initial" => xs, "T_best" => ys,
                           "sector" => Float64.(first.(idx)), "region" => Float64.(last.(idx))))
     catch e
@@ -79,8 +79,8 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
     loss, sim = full_SMM(params)
     sim_vec = moments_to_vec(sim)
     emp_vec = vec(empirical_moments)
-    rγ = collect(BLOCK_RANGES[5])
-    emp_g, sim_g = emp_vec[rγ], sim_vec[rγ]
+    r_gamma = collect(BLOCK_RANGES[5])
+    emp_g, sim_g = emp_vec[r_gamma], sim_vec[r_gamma]
     x_ref = Float64[]; y_ref = Float64[]
     for e in GAMMA_REF_MAP
         e.emp_ref > 0 || continue

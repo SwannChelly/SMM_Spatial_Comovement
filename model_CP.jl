@@ -1,7 +1,7 @@
 ##### Spatial Comovement — simulated model (main specification) #####
 #
 # Notation (paper, Appendix B): r downstream buyer, l (or r') upstream cell, s sector,
-# ρ variety. ε demand elasticity, Ω^L labour share, Ω^s sector shares, λ labour/inputs
+# ρ variety. ε demand elasticity, χ^L labour share, χ^s sector shares, λ labour/inputs
 # elasticity, ν across sectors, ν_s across varieties, θ Fréchet shape, T_ls Fréchet
 # scale, A_r downstream productivity, τ = d^α (or 1 + α_b by distance bin).
 #
@@ -131,18 +131,18 @@ function gather_T_to_ze(T_par::AbstractMatrix, kappa)
 end
 
 """
-    unpack_params(params) -> (Ω^L, Ω^s, A, α, vec(T))
+    unpack_params(params) -> (χ^L, χ^s, A, α, vec(T))
 
-Ω^s is normalised to sum to one, A to A[1] = 1, and T is gathered to the (S, R) ZE level.
+χ^s is normalised to sum to one, A to A[1] = 1, and T is gathered to the (S, R) ZE level.
 """
 function unpack_params(params)
-    Omega_L = params[1]
-    Omega_s = params[2:(1 + S)] / sum(params[2:(1 + S)])
+    chi_L = params[1]
+    chi_s = params[2:(1 + S)] / sum(params[2:(1 + S)])
     A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
     alpha = params[alpha_range()]
     T_mat = gather_T_to_ze(unpack_T_par(params), unpack_kappa(params))
-    return Omega_L, Omega_s, A, alpha, vec(T_mat)
+    return chi_L, chi_s, A, alpha, vec(T_mat)
 end
 
 """
@@ -313,7 +313,7 @@ function solve_network(params; u_draws::Matrix{Float64},
                        sample_weights::AbstractMatrix{Float64},
                        precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                        return_firm_level::Bool=false)
-    Omega_L, Omega_s_vec, A_r, alpha, T_vec = unpack_params(params)
+    chi_L, chi_s_vec, A_r, alpha, T_vec = unpack_params(params)
     tau = precomputed_tau === nothing ? build_tau(alpha) : precomputed_tau
     T   = reshape(T_vec, S, R)
     nu_s_mat = reshape(nu_s, 1, S)
@@ -377,8 +377,8 @@ function solve_network(params; u_draws::Matrix{Float64},
             end
         end
 
-        # P_sr = [Σ_ρ w_ρ p_ρ^{1−ν_s}]^{1/(1−ν_s)}, P_r = [Σ_s Ω^s P_sr^{1−ν}]^{1/(1−ν)},
-        # c_r = [Ω^L w_r^{1−λ} + (1−Ω^L) P_r^{1−λ}]^{1/(1−λ)}.
+        # P_sr = [Σ_ρ w_ρ p_ρ^{1−ν_s}]^{1/(1−ν_s)}, P_r = [Σ_s χ^s P_sr^{1−ν}]^{1/(1−ν)},
+        # c_r = [χ^L w_r^{1−λ} + (1−χ^L) P_r^{1−λ}]^{1/(1−λ)}.
         for s in 1:S
             nu_s_s = nu_s[s]
             for rho in 1:N_rho_eff
@@ -388,13 +388,13 @@ function solve_network(params; u_draws::Matrix{Float64},
             end
         end
         P_sr = sum(ces_buf, dims=1).^(1 ./ (1 .- nu_s_mat))
-        P_r = sum(P_sr.^(1 - nu) .* reshape(Omega_s_vec, 1, S))^(1 / (1 - nu))
-        c_r = (Omega_L * regional_wages[r]^(1-lambda) +
-               (1-Omega_L) * P_r^(1-lambda))^(1/(1-lambda))
+        P_r = sum(P_sr.^(1 - nu) .* reshape(chi_s_vec, 1, S))^(1 / (1 - nu))
+        c_r = (chi_L * regional_wages[r]^(1-lambda) +
+               (1-chi_L) * P_r^(1-lambda))^(1/(1-lambda))
         c_tilde_r[r_d] = c_r / A_r[r_d]
 
         # Expenditure share of each won variety in the buyer's unit cost.
-        labor_substitution_factor = (1 - Omega_L) * (P_r / c_r)^(1 - lambda)
+        labor_substitution_factor = (1 - chi_L) * (P_r / c_r)^(1 - lambda)
         for s in 1:S
             P_sr_s = P_sr[s]
             nu_s_s = nu_s[s]
@@ -402,7 +402,7 @@ function solve_network(params; u_draws::Matrix{Float64},
                 g_winner = winner_good_idx[rho, s]
                 g_winner == 0 && continue
                 linkages_flat[rho, g_winner] = true
-                exp_val = sample_weights[rho, g_winner] * Omega_s_vec[s] * (1-Omega_L) *
+                exp_val = sample_weights[rho, g_winner] * chi_s_vec[s] * (1-chi_L) *
                     (p_rho_s[rho, s] / P_sr_s)^(1 - nu_s_s) *
                     (P_sr_s / P_r)^(1 - nu) *
                     (P_r / c_r)^(1 - lambda)
@@ -490,22 +490,22 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
     yf = Float64.(y); Xf = Matrix{Float64}(X); wf = Float64.(w)
     grows = build_fe_group_rows(fe_group)
 
-    μ = (yf .+ 0.5) ./ 2
-    η = clamp.(log.(.-log.(1 .- μ)), -eta_clamp, eta_clamp)
+    mu = (yf .+ 0.5) ./ 2
+    eta = clamp.(log.(.-log.(1 .- mu)), -eta_clamp, eta_clamp)
     zwork = Vector{Float64}(undef, n); W = Vector{Float64}(undef, n)
     zt = Vector{Float64}(undef, n);    Xt = Matrix{Float64}(undef, n, k)
-    Xb = Vector{Float64}(undef, n);    η_new = Vector{Float64}(undef, n)
+    Xb = Vector{Float64}(undef, n);    eta_new = Vector{Float64}(undef, n)
     sw_g = Vector{Float64}(undef, length(grows))
 
-    β = zeros(k)
+    beta = zeros(k)
     n_it = 0
     for _ in 1:max_iter
         n_it += 1
         @inbounds for i in 1:n
-            μi       = clamp(1 - exp(-exp(η[i])), 1e-12, 1 - 1e-12)
-            di       = exp(η[i]) * (1 - μi)
-            zwork[i] = η[i] + (yf[i] - μi) / di
-            W[i]     = wf[i] * (di^2) / (μi * (1 - μi))
+            mu_i       = clamp(1 - exp(-exp(eta[i])), 1e-12, 1 - 1e-12)
+            di       = exp(eta[i]) * (1 - mu_i)
+            zwork[i] = eta[i] + (yf[i] - mu_i) / di
+            W[i]     = wf[i] * (di^2) / (mu_i * (1 - mu_i))
             zt[i]    = zwork[i]
         end
         copyto!(Xt, Xf)
@@ -524,29 +524,29 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
             end
         end
         WXt   = W .* Xt
-        β_new = (Xt' * WXt) \ (Xt' * (W .* zt))
-        mul!(Xb, Xf, β_new)
+        beta_new = (Xt' * WXt) \ (Xt' * (W .* zt))
+        mul!(Xb, Xf, beta_new)
         @inbounds for i in 1:n
-            η_new[i] = Xb[i]
+            eta_new[i] = Xb[i]
         end
         @inbounds for (p, r) in enumerate(grows)
             sw = sw_g[p]
             sw < 1e-300 && continue
             cr = sum(i -> W[i] * (zwork[i] - Xb[i]), r) / sw
             for i in r
-                η_new[i] += cr
+                eta_new[i] += cr
             end
         end
         @inbounds for i in 1:n
-            η_new[i] = clamp(η_new[i], -eta_clamp, eta_clamp)
+            eta_new[i] = clamp(eta_new[i], -eta_clamp, eta_clamp)
         end
-        Δ = maximum(abs.(β_new .- β))
-        β = β_new
-        copyto!(η, η_new)
-        Δ < tol && break
+        max_change = maximum(abs.(beta_new .- beta))
+        beta = beta_new
+        copyto!(eta, eta_new)
+        max_change < tol && break
     end
     iters_out === nothing || (iters_out[] = n_it)
-    return β
+    return beta
 end
 
 """
@@ -613,7 +613,7 @@ function cell_cloglog_beta(y::AbstractVector{<:Real}; max_iter::Int = 100)
     k = size(REG_CELL_X, 2)
     length(idx) <= k && return (fill(NaN, k), false)
     it = Ref(0)
-    β = try
+    beta = try
         _cloglog_irls(view(y, idx), REG_CELL_X[idx, :], ones(length(idx)),
                       REG_CELL_FE[idx]; max_iter = max_iter, iters_out = it)
     catch e
@@ -622,7 +622,7 @@ function cell_cloglog_beta(y::AbstractVector{<:Real}; max_iter::Int = 100)
         e isa LinearAlgebra.SingularException || rethrow()
         return (fill(NaN, k), false)
     end
-    return (β, all(isfinite, β) && it[] < max_iter)
+    return (beta, all(isfinite, beta) && it[] < max_iter)
 end
 
 """
@@ -651,9 +651,9 @@ function cell_cloglog_moment(linkages, N_hat::AbstractVector{<:Integer};
             end
             y[i] = hit ? 1.0 : 0.0
         end
-        β, ok = cell_cloglog_beta(y)
+        beta, ok = cell_cloglog_beta(y)
         if ok
-            reps[:, j] .= β; acc .+= β; n_ok += 1
+            reps[:, j] .= beta; acc .+= beta; n_ok += 1
         end
     end
     return (n_ok > 0 ? acc ./ n_ok : fill(NaN, k), R_CELL_REG - n_ok, reps)
@@ -668,7 +668,7 @@ end
 by the fake worlds (inference.jl), which measure their own labour share.
 """
 function labor_share(c_tilde_r::AbstractVector, params::AbstractVector)
-    Omega_L = params[1]
+    chi_L = params[1]
     active = N_downstream_per_region .!= 0
     markup = (epsilon - 1) / epsilon
     price_index = sum((c_tilde_r[active] .* markup).^epsilon .* delta_r[active])^(1/epsilon)
@@ -676,16 +676,16 @@ function labor_share(c_tilde_r::AbstractVector, params::AbstractVector)
     y_r = zeros(R)
     y_r[active] = c_tilde_r[active].^(epsilon - 1) .* delta_r[active] .* B
     # A_r is Hicks-neutral (y = A·F(ℓ, q), eq. B1): labour demand is
-    # ℓ = Ω_L (w/c)^{-λ} y/A with c the A-free unit cost of the CES bundle, so the
-    # cost share w ℓ/(c̃ y) = Ω_L (w/c)^{1-λ} carries no A — the complement of the
-    # intermediate share (1-Ω_L)(P/c)^{1-λ} solve_network uses. Evaluating it at c̃ = c/A
-    # instead gave Ω_L (w A/c)^{1-λ}, so the two shares did not sum to one and the
+    # ℓ = χ_L (w/c)^{-λ} y/A with c the A-free unit cost of the CES bundle, so the
+    # cost share w ℓ/(c̃ y) = χ_L (w/c)^{1-λ} carries no A — the complement of the
+    # intermediate share (1-χ_L)(P/c)^{1-λ} solve_network uses. Evaluating it at c̃ = c/A
+    # instead gave χ_L (w A/c)^{1-λ}, so the two shares did not sum to one and the
     # A[1] = 1 normalisation leaked into the moment.
     A_full = zeros(R)
     A_full[DOWNSTREAM_REGIONS] = params[(S + 2):(S + R_downstream + 1)] ./ params[S + 2]
     c_r = c_tilde_r .* A_full
     labor_r = zeros(R)
-    labor_r[active] = Omega_L .* (y_r[active] ./ A_full[active]) .*
+    labor_r[active] = chi_L .* (y_r[active] ./ A_full[active]) .*
                       (regional_wages[active] ./ c_r[active]).^(-lambda)
     return sum(regional_wages .* labor_r) / sum(c_tilde_r .* y_r)
 end
