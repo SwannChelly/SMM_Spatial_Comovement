@@ -6,7 +6,7 @@
 #
 # Stage variables (a "stage" optimises one block, warm-started at the incumbent):
 #   "productivity"                                  A
-#   "alpha"                                         [α ; κ]
+#   "alpha_kappa"                                   [α ; κ]
 #   "agg_labor_share_tech", "agg_industry_share_tech"  Ω^L, Ω^s
 #
 # Under PROFILE_HEAD the head (Ω^L, Ω^s, A) is profiled jointly with T, so every search
@@ -159,7 +159,7 @@ function param_start(var::Symbol)
     var == :agg_labor_share_tech    && return 1
     var == :agg_industry_share_tech && return 2
     var == :productivity            && return 2 + S
-    var == :alpha                   && return 2 + S + R_downstream
+    var == :alpha_kappa             && return 2 + S + R_downstream
     error("Unknown stage variable :$var")
 end
 
@@ -227,9 +227,9 @@ function train_stage(n_particles::Int, max_iter::Int;
         best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:, 1]
         Ω_L, Ω_s, A_r, α, _ = unpack_params(best_params_prev)
         params_dict = Dict(:agg_labor_share_tech => Ω_L, :agg_industry_share_tech => Ω_s,
-                           :productivity => A_r, :alpha => vcat(α, unpack_kappa(best_params_prev)))
+                           :productivity => A_r, :alpha_kappa => vcat(α, unpack_kappa(best_params_prev)))
         var_list = isa(variable_list, String) ? [variable_list] : collect(variable_list)
-        ("alpha" in var_list) || (cached_tau = build_tau(α))
+        ("alpha_kappa" in var_list) || (cached_tau = build_tau(α))
 
         lb_parts = Vector{Float64}[]; ub_parts = Vector{Float64}[]
         offset = 0
@@ -237,7 +237,7 @@ function train_stage(n_particles::Int, max_iter::Int;
             val = params_dict[Symbol(v)]
             if v == "agg_labor_share_tech"
                 lb_v = max.(val .* (1 - radius), 0.001); ub_v = min.(val .* (1 + radius), 1.0)
-            elseif v == "alpha"
+            elseif v == "alpha_kappa"
                 κv, αv = val[end], val[1:N_TAU]
                 half = (1 - radius) * (KAPPA_HI - KAPPA_LO) / 2
                 κlo, κhi = max(κv - half, KAPPA_LO), min(κv + half, KAPPA_HI)
@@ -297,7 +297,7 @@ function train_stage(n_particles::Int, max_iter::Int;
     end
 
     println("\n" * "="^60)
-    println("PSO stage: ", isempty(var_list) ? (PROFILE_HEAD ? "alpha (head profiled)" : "all head parameters") :
+    println("PSO stage: ", isempty(var_list) ? (PROFILE_HEAD ? "alpha_kappa (head profiled)" : "all head parameters") :
             join(var_list, ", "),
             " | particles $n_particles | iterations $max_iter | dimension $(length(lb))")
     println("="^60)
@@ -352,7 +352,7 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
         seed_folder = joinpath(loop_base, "seed")
         save_stage(seed_folder, warm_start_params)
         best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial;
-            variable_list = ["alpha"], last_stage_folder = seed_folder, radius = 0.5,
+            variable_list = ["alpha_kappa"], last_stage_folder = seed_folder, radius = 0.5,
             weight_matrix = weight_matrix, moment_blocks = moment_blocks)
     else
         best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial;
@@ -364,8 +364,8 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
     save_stage(joinpath(loop_base, "0"), best_params)
     generate_report(joinpath(loop_base, "0"), best_params; variable = "initial fit")
 
-    stage_vars = (gamma_beta_only || PROFILE_HEAD) ? (["alpha"],) :
-        (["productivity"], ["alpha"], ["agg_labor_share_tech", "agg_industry_share_tech"])
+    stage_vars = (gamma_beta_only || PROFILE_HEAD) ? (["alpha_kappa"],) :
+        (["productivity"], ["alpha_kappa"], ["agg_labor_share_tech", "agg_industry_share_tech"])
     radius_start, radius_end = 0.3, 0.9
     for loop in 1:max_loop
         radius = radius_start + (loop - 1) * (radius_end - radius_start) / max(max_loop - 1, 1)
