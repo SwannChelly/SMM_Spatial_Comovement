@@ -205,7 +205,9 @@ function train_stage(n_particles::Int, max_iter::Int;
     T_PLACEHOLDER = vec(permutedims(T_rs_init))[T_MASK]   # overwritten by profiling
     cached_tau = nothing
 
+    # 1) Create the PSO particules within the search box. 
     if last_stage_folder === nothing
+        # 1.1) If we don't give any particle around which to start with, start with the initial values. 
         A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A ./= sum(A)
         a_lo, a_hi = sorted_box(alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)...)
@@ -224,6 +226,7 @@ function train_stage(n_particles::Int, max_iter::Int;
         lb = lb[(n_fixed + 1):end]; ub = ub[(n_fixed + 1):end]
         warm_start === nothing || (warm_start = warm_start[(n_fixed + 1):end])
     else
+        # 1.2) Otherwise, work around the particule of the last stage.
         best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:, 1]
         Ω_L, Ω_s, A_r, α, _ = unpack_params(best_params_prev)
         params_dict = Dict(:agg_labor_share_tech => Ω_L, :agg_industry_share_tech => Ω_s,
@@ -259,7 +262,8 @@ function train_stage(n_particles::Int, max_iter::Int;
         warm_start = vcat([params_dict[Symbol(v)] for v in var_list]...)
         @assert length(warm_start) == length(lb)
     end
-
+    # 2) Only specific parameters are searched. Some are profiled. Build_x_full creates the full vector. 
+    # Swann : Change the name of build_x_full for it to be more explicit + Create a description. 
     # Stage vector → full level vector (T block stale; profiling replaces it), with the
     # α block sorted (see `sorted_box`).
     function build_x_full(x_stage)
@@ -278,7 +282,7 @@ function train_stage(n_particles::Int, max_iter::Int;
         sort!(view(x_full, alpha_range()))
         return x_full
     end
-
+    # Swann : Create a description of this. 
     function objective(x_stage)
         prof = profiled_theta_full(build_x_full(x_stage))
         prof.converged || return Inf
@@ -286,7 +290,7 @@ function train_stage(n_particles::Int, max_iter::Int;
                           W_override=weight_matrix, moment_blocks=moment_blocks)
         return (result === nothing || !isfinite(result[1][1])) ? Inf : result[1][1]
     end
-
+    # Swann : Create a description of this. 
     function probe(x_stage)
         try
             p = profiled_theta_full(build_x_full(x_stage))
@@ -301,6 +305,7 @@ function train_stage(n_particles::Int, max_iter::Int;
             join(var_list, ", "),
             " | particles $n_particles | iterations $max_iter | dimension $(length(lb))")
     println("="^60)
+    # 3) Then compute the score of each particule. 
     best_x, best_fitness, history = parallel_pso_smm(objective, lb, ub;
         n_particles = n_particles, max_iter = max_iter, warm_start_particle = warm_start,
         t_conv_probe = probe)
