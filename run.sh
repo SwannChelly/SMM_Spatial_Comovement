@@ -7,7 +7,7 @@
 #   ./run.sh aero
 #   ./run.sh aero --n_coef=4 --n_tau=1 --n_rho_inf=10000
 #   ./run.sh aero --relax_n_lo=true          # diagnostic: N_LO forced to 1
-#   ./run.sh aero --profile_head=true        # head (Ω^L, Ω^s, A) profiled with T
+#   ./run.sh aero --profile_head=false       # head (Ω^L, Ω^s, A) searched, not profiled
 #   ./run.sh both
 #
 # The previous, multi-specification code is in old_version/.
@@ -28,7 +28,7 @@ if [ -z "$1" ]; then
 fi
 
 INDUSTRY="$1"; shift
-N_COEF="4"; N_TAU="1"; N_RHO_INF="10000"; RELAX_N_LO="false"; PROFILE_HEAD="false"
+N_COEF="4"; N_TAU="1"; N_RHO_INF="10000"; RELAX_N_LO="false"; PROFILE_HEAD="true"
 for arg in "$@"; do
     case "$arg" in
         --n_coef=*)     N_COEF="${arg#--n_coef=}" ;;

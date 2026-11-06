@@ -178,7 +178,7 @@ function alpha_box(anchor)
 end
 
 # Binned α must be increasing (α_1 ≤ … ≤ α_K). The objective evaluates the α block
-# SORTED (`build_x_full`), so it is symmetric in the order of the α coordinates and the
+# SORTED (`stage_to_full_params`), so it is symmetric in the order of the α coordinates and the
 # returned θ is increasing. A sorted point stays in the box when the bounds are sorted
 # too: with lo and hi each increasing, the k-th order statistic of any x ∈ [lo, hi] lies
 # in [lo_k, hi_k]. Sorting the bounds keeps lo ≤ hi entrywise and is a no-op for an
@@ -208,9 +208,9 @@ function train_stage(n_particles::Int, max_iter::Int;
     T_PLACEHOLDER = vec(permutedims(T_rs_init))[T_MASK]   # overwritten by profiling
     cached_tau = nothing
 
-    # 1) Create the PSO particules within the search box. 
+    # 1) Build the search box [lb, ub] and the warm-start particle of the PSO.
     if last_stage_folder === nothing
-        # 1.1) If we don't give any particle around which to start with, start with the initial values. 
+        # 1.1) Fresh start: centre the box on the data-based starting values.
         A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
         A ./= sum(A)
         a_lo, a_hi = sorted_box(alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)...)
@@ -221,15 +221,14 @@ function train_stage(n_particles::Int, max_iter::Int;
         best_params_prev = nothing
         var_list = String[]
         warm_start = warm_start_override === nothing ? nothing : warm_start_override[1:nhead]
-        # PROFILE_HEAD: the head prefix is a placeholder (profiling overwrites it), so
-        # only [α ; κ] are searched.
+        # 1.1.1) Under PROFILE_HEAD, drop the head from the box: profiling overwrites it, so only [α ; κ] is searched.
         n_fixed = PROFILE_HEAD ? first(alpha_range()) - 1 : 0
         head_prefix = PROFILE_HEAD ? (warm_start === nothing ? lb[1:n_fixed] : warm_start[1:n_fixed]) :
                                      Float64[]
         lb = lb[(n_fixed + 1):end]; ub = ub[(n_fixed + 1):end]
         warm_start === nothing || (warm_start = warm_start[(n_fixed + 1):end])
     else
-        # 1.2) Otherwise, work around the particule of the last stage.
+        # 1.2) Continue stage: centre the box on the previous stage's optimum, for the listed blocks only.
         best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:, 1]
         Ω_L, Ω_s, A_r, α, _ = unpack_params(best_params_prev)
         params_dict = Dict(:agg_labor_share_tech => Ω_L, :agg_industry_share_tech => Ω_s,
@@ -265,11 +264,10 @@ function train_stage(n_particles::Int, max_iter::Int;
         warm_start = vcat([params_dict[Symbol(v)] for v in var_list]...)
         @assert length(warm_start) == length(lb)
     end
-    # 2) Only specific parameters are searched. Some are profiled. Build_x_full creates the full vector. 
-    # Swann : Change the name of build_x_full for it to be more explicit + Create a description. 
-    # Stage vector → full level vector (T block stale; profiling replaces it), with the
-    # α block sorted (see `sorted_box`).
-    function build_x_full(x_stage)
+    # 2) Map a particle (searched coordinates only) to the full parameter vector.
+    # The fixed blocks come from the previous stage (or the head placeholder), T is a
+    # placeholder that profiling replaces, and the α block is sorted (see `sorted_box`).
+    function stage_to_full_params(x_stage)
         if best_params_prev === nothing
             x_full = vcat(head_prefix, x_stage, T_PLACEHOLDER)
         else
@@ -285,18 +283,19 @@ function train_stage(n_particles::Int, max_iter::Int;
         sort!(view(x_full, alpha_range()))
         return x_full
     end
-    # Swann : Create a description of this. 
+    # 3) Score a particle: profile T (and the head), then compute the SMM loss on `moment_blocks`.
+    # A particle whose inversion does not converge gets Inf, never a score at an unprofiled T.
     function objective(x_stage)
-        prof = profiled_theta_full(build_x_full(x_stage))
+        prof = profiled_theta_full(stage_to_full_params(x_stage))
         prof.converged || return Inf
         result = safe_SMM(prof.theta; precomputed_tau=cached_tau,
                           W_override=weight_matrix, moment_blocks=moment_blocks)
         return (result === nothing || !isfinite(result[1][1])) ? Inf : result[1][1]
     end
-    # Swann : Create a description of this. 
+    # 4) Diagnostic only: report whether the T inversion converges at a particle, without scoring it.
     function probe(x_stage)
         try
-            p = profiled_theta_full(build_x_full(x_stage))
+            p = profiled_theta_full(stage_to_full_params(x_stage))
             return (converged = p.converged, alpha = p.alpha)
         catch
             return (converged = false, alpha = Float64[])
@@ -308,12 +307,13 @@ function train_stage(n_particles::Int, max_iter::Int;
             join(var_list, ", "),
             " | particles $n_particles | iterations $max_iter | dimension $(length(lb))")
     println("="^60)
-    # 3) Then compute the score of each particule. 
+    # 5) Run the PSO: each iteration scores every particle in parallel with `objective`.
     best_x, best_fitness, history = parallel_pso_smm(objective, lb, ub;
         n_particles = n_particles, max_iter = max_iter, warm_start_particle = warm_start,
         t_conv_probe = probe)
 
-    prof = profiled_theta_full(build_x_full(best_x))
+    # 6) Profile once more at the best particle, because the PSO returns only the searched coordinates.
+    prof = profiled_theta_full(stage_to_full_params(best_x))
     prof.converged || @warn "invert_T_ge did NOT converge at the stage optimum (no particle " *
         "converged): the returned T is the last iterate." resid=prof.resid iters=prof.iters
     return prof.theta, best_fitness, history
