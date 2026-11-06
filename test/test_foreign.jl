@@ -18,7 +18,8 @@
 #       every (sector, buyer) is the closed-form win probability Φ^F_s/Φ_rs.
 #   (5) SIMULATED MOMENTS at the profile on the estimation draws: γ sums to one with the
 #       reference rebuilt, the import share is f̂ up to Monte-Carlo error, and the
-#       French variety share q_s satisfies 1 − f̂ ≲ q_s ≤ 1 with N_HI = N^obs/q_s.
+#       French variety share q_s satisfies 1 − f̂ ≲ q_s ≤ 1 with N_HI = N^obs/q_s and
+#       N_LO = N^obs/(R_d q_s).
 #   (6) FAKE WORLDS: a world equal to the closed-form model returns (T̂, Φ̂^F, Â); worlds
 #       drawn at the profile have γ summing to one and are profiled.
 
@@ -150,6 +151,10 @@ gr = granular_report(theta_vec)
 @printf("  N_hi = %s (N^obs %s, N_HI_CAP %s) ; N̂ = %s, clamps %s\n", string(gr.N_hi), string(N_HI),
         string(N_HI_CAP), string(gr.N_hat), string(gr.clamped))
 check("1 − f̂ − 0.05 ≤ q_s ≤ 1", all(gr.q_french .<= 1) && all(gr.q_french .>= 1 .- FOREIGN_SHARE .- 0.05))
+@printf("  N_lo = %s (no-import bound N_LO %s)\n", string(gr.N_lo), string(N_LO))
+check("N_lo = max(N_LO, ⌈N^obs/(R_d q)⌉), capped by N_hi",
+      all(gr.N_lo[s] == min(max(N_LO[s], ceil(Int, N_HI[s] / (R_downstream * gr.q_french[s]) - 1e-9)), gr.N_hi[s])
+          for s in imp) && all(gr.N_lo .>= N_LO .|| gr.N_lo .== gr.N_hi))
 check("N_hi = min(⌈N^obs/q⌉, N_HI_CAP, m) and ≥ N^obs",
       all(gr.N_hi[s] == max(min(ceil(Int, N_HI[s] / gr.q_french[s] - 1e-9), N_HI_CAP[s], N_rho), N_HI[s])
           for s in imp) && all(gr.N_hi .>= N_HI))

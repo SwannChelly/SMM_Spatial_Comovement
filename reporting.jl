@@ -133,7 +133,7 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
                 "N_LO", "N̂_s", "N_HI", "clamp", "N_count")
         for s in 1:S
             @printf(io, "%-10s %9.4f %9.4f %6d %6s %6s %6s %9s\n", SECTOR_NAMES[s], G_TARGET[s], sim[6][s],
-                    N_LO[s], gr === nothing ? "-" : string(gr.N_hat[s]),
+                    gr === nothing ? N_LO[s] : gr.N_lo[s], gr === nothing ? "-" : string(gr.N_hat[s]),
                     gr === nothing ? string(N_HI[s]) : string(gr.N_hi[s]),
                     gr === nothing ? "-" : string(gr.clamped[s]),
                     gr === nothing ? "-" : @sprintf("%.1f", gr.N_count[s]))
@@ -217,12 +217,12 @@ function report_granular(theta::Vector{Float64}, folder::String; industry::Strin
         push!(lines, @sprintf("  %-8s %6s %6s %6s %6s %9s %9s %9s %7s %7s %7s", "sector", "N_LO", "N̂_s", "N_HI",
                               "clamp", "G0_fit", "G0_tgt", "N_count", "q_FR", "f_fit", "f_tgt"))
         for s in 1:S
-            push!(lines, @sprintf("  %-8s %6d %6d %6d %6s %9.4f %9.4f %9.1f %7.3f %7.3f %7.3f", SECTOR_NAMES[s], N_LO[s],
+            push!(lines, @sprintf("  %-8s %6d %6d %6d %6s %9.4f %9.4f %9.1f %7.3f %7.3f %7.3f", SECTOR_NAMES[s], info.N_lo[s],
                                   info.N_hat[s], info.N_hi[s], string(info.clamped[s]), info.G0[s],
                                   G_TARGET[s], info.N_count[s], info.q_french[s], info.foreign_share[s],
                                   FOREIGN_SHARE[s]))
         end
-        push!(lines, "  N_HI = N^obs_s / q_FR (q_FR: varieties won by France for ≥ 1 buyer); f: import share")
+        push!(lines, "  N_LO = N^obs_s / (R_d q_FR), N_HI = N^obs_s / q_FR (q_FR: varieties won by France for ≥ 1 buyer); f: import share")
         push!(lines, "  Block 4 (R = $R_CELL_REG networks, $(info.reg_fail) failed fits)")
         push!(lines, @sprintf("  %-10s %10s %12s %10s %12s", "coef", "data", "E[β̂(y)]", "sd_j", "β̂(E[y])"))
         for (i, lab) in enumerate(REG_COEF_LABELS)
@@ -232,7 +232,7 @@ function report_granular(theta::Vector{Float64}, folder::String; industry::Strin
         println("\n", join(lines, "\n"))
         write(joinpath(folder, "granular_diagnostics.txt"), join(lines, "\n") * "\n")
         NPZ.npzwrite(joinpath(folder, "granular_diagnostics.npz"),
-            Dict("N_hat" => Float64.(info.N_hat), "N_LO" => Float64.(N_LO), "N_HI" => Float64.(info.N_hi),
+            Dict("N_hat" => Float64.(info.N_hat), "N_LO" => Float64.(info.N_lo), "N_HI" => Float64.(info.N_hi),
                  "N_obs" => Float64.(N_HI), "q_french" => Float64.(info.q_french),
                  "foreign_share_fit" => Float64.(info.foreign_share),
                  "foreign_share_target" => Float64.(collect(FOREIGN_SHARE)),

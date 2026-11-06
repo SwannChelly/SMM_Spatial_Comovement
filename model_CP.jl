@@ -350,13 +350,27 @@ function n_hi_bound(s::Int, m::Integer, q)
 end
 
 """
+    n_lo_bound(s, q) -> the lower bound of the bisection for sector s
+
+Each variety won by France has at most one supplier per buyer region, so the observed
+suppliers satisfy `N^obs_s ≤ R_d · N_s q_s`, i.e. `N_s ≥ N^obs_s / (R_d q_s)`. Without
+imports (q_s = 1) this is `N_LO[s] = ⌈N^obs_s / R_d⌉`; never below `N_LO[s]`, and
+`N_LO[s] = 1` under `RELAX_N_LO`.
+"""
+function n_lo_bound(s::Int, q)
+    (RELAX_N_LO || q === nothing || q[s] >= 1 || q[s] <= 0) && return N_LO[s]
+    return max(N_LO[s], ceil(Int, N_HI[s] / (R_downstream * q[s]) - 1e-9))
+end
+
+"""
     concentrate_N_s(k_counts, m; target = G_TARGET, q = nothing) -> (N_hat, clamped)
 
 `target` is the Ḡ_s(0) matched: the data by default, a fake world's own realised
 empty-cell share in inference.jl. `q` is `french_variety_share` of the same draws: with
-imports the upper bound is `N^obs_s / q_s` (`n_hi_bound`), `N^obs_s` without.
+imports the bounds are `N^obs_s / (R_d q_s)` (`n_lo_bound`) and `N^obs_s / q_s`
+(`n_hi_bound`), `⌈N^obs_s / R_d⌉` and `N^obs_s` without.
 
-Monotone integer bisection on `Ḡ_s(n)` over `[N_LO[s], n_hi_bound]` matching `G_TARGET[s]`.
+Monotone integer bisection on `Ḡ_s(n)` over `[n_lo_bound, n_hi_bound]` matching `G_TARGET[s]`.
 `k_counts[g]` is the number of the `m` draws cell `g` wins somewhere downstream (free of
 `N_s`, Lemma 2). `clamped[s] ∈ (:none, :lo, :hi)` records a binding bound — a rejection
 signal for the mechanism, reported per sector.
@@ -368,7 +382,8 @@ function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer;
     lg      = gbar_logfact_table(m)
     @inbounds for s in 1:S
         cells = CELLS_OF_SECTOR[s]
-        lo0, hi0 = N_LO[s], n_hi_bound(s, m, q)
+        hi0 = n_hi_bound(s, m, q)
+        lo0 = min(n_lo_bound(s, q), hi0)
         if isempty(cells)
             N_hat[s] = lo0
             continue
@@ -963,8 +978,8 @@ end
 """
     granular_report(params; u_draws, sample_weights, N_fixed=nothing) -> NamedTuple
 
-Non-moment diagnostics: N̂_s and clamps, the bisection's upper bound `N_hi` (N^obs_s/q_s
-with imports) and the French variety share `q_french`, the simulated import share,
+Non-moment diagnostics: N̂_s and clamps, the bisection's bounds `N_lo` (N^obs_s/(R_d q_s))
+and `N_hi` (N^obs_s/q_s with imports) and the French variety share `q_french`, the simulated import share,
 q̂ per cell, Ḡ_s(0), the second route to N_s
 `N^count_s = N_supplier_s / Σ_l q̂_ls`, expected supplier counts `N̂_s q̂`, and block 4 as
 model `E[β̂(y)]`, its sd across networks and `β̂(E[y])` (the cloglog on the expected
@@ -985,9 +1000,10 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
     _, _, reps = cell_cloglog_moment(network.linkages_flat, m.N_hat)
     reg_sd = [std(filter(isfinite, reps[i, :])) for i in 1:size(reps, 1)]
     N_hi = [n_hi_bound(s, m.n_draw, m.q_french) for s in 1:S]
+    N_lo = [min(n_lo_bound(s, m.q_french), N_hi[s]) for s in 1:S]
     return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, reg_coef = m.reg_coef,
             reg_fail = m.reg_fail, reg_sd = reg_sd, beta_expected = beta_expected,
             G0 = m.G0, N_count = N_count, EK = EK, G_curve = m.G_curve,
             k_counts = m.k_counts, n_draw = m.n_draw,
-            q_french = m.q_french, N_hi = N_hi, foreign_share = m.foreign_share)
+            q_french = m.q_french, N_lo = N_lo, N_hi = N_hi, foreign_share = m.foreign_share)
 end

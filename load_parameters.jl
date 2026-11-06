@@ -162,8 +162,9 @@ println(" foreign share f̂_s = 1 − domestic_share: ", round.(foreign_share_lo
 # won by FRANCE for at least one buyer, i.e. N_s q_s ≤ N^obs_s with q_s that share of the
 # varieties, so the bound on N_s is N^obs_s / q_s (`concentrate_N_s`, q_s from the draws).
 # At the T profile the model's import share is f̂_s and q_s ≥ max_r (1 − f_rs) ≥ 1 − f̂_s,
-# so N^obs_s / (1 − f̂_s) bounds it: N_HI_CAP, which sizes the draws. N_LO is unchanged
-# (still a valid, weaker bound since q_s ≤ 1). The draw count is capped at N_RHO_MAX
+# so N^obs_s / (1 − f̂_s) bounds it: N_HI_CAP, which sizes the draws. N_LO is the bound
+# without imports; with them the bisection uses N^obs_s / (R_d q_s) ≥ N_LO (`n_lo_bound`).
+# The draw count is capped at N_RHO_MAX
 # (ENV, default 2000); a binding cap is reported and N_HI_CAP clamped to it.
 N_HI_CAP_local = [ceil(Int, N_HI_local[s] / (1 - foreign_share_local[s]) - 1e-9) for s in 1:S_]
 N_RHO_MAX_local = parse(Int, get(ENV, "N_RHO_MAX", "2000"))
