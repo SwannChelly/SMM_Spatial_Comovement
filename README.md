@@ -79,7 +79,7 @@ file and the gates under `test/` import the same code rather than executing the
 notebook's JSON.
 
 **Every economy is simulated in Python** from the extended parameter set
-`theta+ = (Omega_L, Omega_s, A, alpha, T, N)` — the estimated one and both
+`theta+ = (chi_L, chi_s, A, alpha, T, N)` — the estimated one and both
 counterfactuals, by one forward map (`utils.simulate_economy`). `suppliers.parquet` is
 not read by the reporting: it is the input to `utils.check_against_julia`, which compares
 the Python port against `solve_network` to the bit given Julia's own draws. That is the

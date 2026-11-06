@@ -1302,7 +1302,7 @@ def unpack_estimated_T(data):
     `unpack_params` does, plus alpha.
 
     `best_params` is the RAW theta vector, layout
-        [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s,AA), s-major)],
+        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s,AA), s-major)],
     where the T block carries EVERY active (sector, area) including each sector's
     reference — `unpack_params` divides the sector by its reference entry, which is
     what makes T_{ref,s} = 1 the gauge. The length is asserted against the rebuilt
@@ -1493,7 +1493,7 @@ def _buyer_weights(data):
 # parameters of the ECONOMY all the same, and writing them down beside the head is what
 # makes the Julia and the Python route comparable at all:
 #
-#   theta+ = (Omega_L, Omega_s, A, alpha, T, N)   plus the fixed calibration
+#   theta+ = (chi_L, chi_s, A, alpha, T, N)   plus the fixed calibration
 #            (theta, nu_s, nu, lambda, epsilon, delta_r, w_r).
 #
 # Two properties of `theta+` are worth stating because they bound what "the same
@@ -1591,8 +1591,8 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
     if n_hat.size < S:
         raise ValueError(f"N_hat has {n_hat.size} sectors against S = {S}.")
 
-    xp = {"Omega_L": float(bp[0]),
-          "Omega_s": bp[1:1 + S].copy(),
+    xp = {"chi_L": float(bp[0]),
+          "chi_s": bp[1:1 + S].copy(),
           "A": bp[1 + S:1 + S + R_d].copy(),
           "alpha": est["alpha"].copy(),
           "kappa": est["kappa"],
@@ -1605,7 +1605,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
           "epsilon": float(data["epsilon"]),
           "delta": np.ones(R_d), "wage": np.ones(data["R"])}
     if verbose:
-        print(f"  [theta+] Omega_L {xp['Omega_L']:.4f}  alpha {float(xp['alpha'][0]):.4f}  "
+        print(f"  [theta+] chi_L {xp['chi_L']:.4f}  alpha {float(xp['alpha'][0]):.4f}  "
               f"theta {xp['theta']:.4f} ({src})  N_s {xp['N'].min()}-{xp['N'].max()}  "
               f"eps {xp['epsilon']:.3f}  nu {xp['nu']:g}/{NU_S_DEFAULT:g}  lam {xp['lam']:g}")
     return xp
@@ -1662,7 +1662,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
         xp = extended_parameters(data, n_hat=n_hat, verbose=verbose)
     g = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T) if geom is None else geom
     theta, a = xp["theta"], g["alpha"]
-    nu, lam, Om_L, Om_s = xp["nu"], xp["lam"], xp["Omega_L"], xp["Omega_s"]
+    nu, lam, chi_L, chi_s = xp["nu"], xp["lam"], xp["chi_L"], xp["chi_s"]
     S = data["S"]
     down = np.asarray(g["downstream"]).astype(int)          # 1-based ZE of each buyer
     R_d = down.size
@@ -1749,14 +1749,14 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
             acc[s]["W"].append(win_keep[s].astype(float))
             acc[s]["rep"].append(np.full(N, b))
 
-        P_r = (Om_s[:, None] * P_sr ** (1.0 - nu)).sum(axis=0) ** (1.0 / (1.0 - nu))
+        P_r = (chi_s[:, None] * P_sr ** (1.0 - nu)).sum(axis=0) ** (1.0 / (1.0 - nu))
         w_d = wage[down - 1]
-        c_r = (Om_L * w_d ** (1.0 - lam) + (1.0 - Om_L) * P_r ** (1.0 - lam)) ** (1.0 / (1.0 - lam))
+        c_r = (chi_L * w_d ** (1.0 - lam) + (1.0 - chi_L) * P_r ** (1.0 - lam)) ** (1.0 / (1.0 - lam))
         c_tilde = c_r / A
-        lab_sub = (1.0 - Om_L) * (P_r / c_r) ** (1.0 - lam)           # D_r - 1, exactly
+        lab_sub = (1.0 - chi_L) * (P_r / c_r) ** (1.0 - lam)           # D_r - 1, exactly
         for s in range(S):
             nus = float(xp["nu_s"][s])
-            e = ((1.0 / Nv[s]) * Om_s[s] * (1.0 - Om_L)
+            e = ((1.0 / Nv[s]) * chi_s[s] * (1.0 - chi_L)
                  * (p_keep[s] / P_sr[s][None, :]) ** (1.0 - nus)
                  * (P_sr[s][None, :] / P_r[None, :]) ** (1.0 - nu)
                  * (P_r[None, :] / c_r[None, :]) ** (1.0 - lam))
@@ -1765,7 +1765,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
         p_dr = c_tilde / mu_inv
         P_agg = (p_dr ** xp["epsilon"] * xp["delta"]).sum() ** (1.0 / xp["epsilon"])
         Y_r = p_dr ** xp["epsilon"] * P_agg ** (-xp["epsilon"]) * xp["delta"]
-        theta_rs = Om_s[:, None] * (P_sr / P_r[None, :]) ** (1.0 - nu)
+        theta_rs = chi_s[:, None] * (P_sr / P_r[None, :]) ** (1.0 - nu)
         val_rows.append({"replication": b, "P_sr": P_sr.copy(), "P_r": P_r,
                          "c_r": c_r, "c_tilde_r": c_tilde, "D_r": 1.0 + lab_sub,
                          "Y_r": Y_r, "P": float(P_agg), "theta_rs": theta_rs})
@@ -1804,9 +1804,9 @@ def economy_identities(econ, xp, tol=1e-12, verbose=True):
     on the economy: each one fixes a different step, so a mismatch NAMES the step.
 
     (1) `sum_rho (1/N)(p/P_sr)^(1-nu_s) = 1` — the definition of the within-sector index.
-    (2) `sum_s Omega_s (P_sr/P_r)^(1-nu) = 1` — the across-sector index.
+    (2) `sum_s chi_s (P_sr/P_r)^(1-nu) = 1` — the across-sector index.
     (3) `theta_rs` sums to one over sectors, so the input mix comes OUT of the economy.
-    (4) `D_r = 1 + sum_{l,s} exp_val = 1 + (1-Omega_L)(P_r/c_r)^(1-lambda)`, which is the
+    (4) `D_r = 1 + sum_{l,s} exp_val = 1 + (1-chi_L)(P_r/c_r)^(1-lambda)`, which is the
         closed form the section quotes — (1) and (2) are what collapse the two CES
         indices, so this is the one number that fixes the whole expenditure chain.
     """
@@ -1832,7 +1832,7 @@ def economy_identities(econ, xp, tol=1e-12, verbose=True):
             e1 = max(e1, abs(v[r == b].sum(axis=0) - 1.0).max())
     res["ces_within"] = e1
     res["ces_across"] = float(np.abs(
-        (xp["Omega_s"][None, :, None] * (val["P_sr"] / val["P_r"][:, None, :]) ** (1.0 - xp["nu"])
+        (xp["chi_s"][None, :, None] * (val["P_sr"] / val["P_r"][:, None, :]) ** (1.0 - xp["nu"])
          ).sum(axis=1) - 1.0).max())
     res["mix_sums_one"] = float(np.abs(val["theta_rs"].sum(axis=1) - 1.0).max())
     tot = np.zeros_like(val["D_r"])

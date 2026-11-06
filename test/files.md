@@ -263,7 +263,7 @@ merely the absence of cross-sector spillovers.
 
 Gates `extended_parameters` / `simulate_economy` / `economy_identities` /
 `check_against_julia`, i.e. the design in which ONE implementation produces the estimated
-economy and both counterfactuals from `theta+ = (Omega_L, Omega_s, A, alpha, T, N)`.
+economy and both counterfactuals from `theta+ = (chi_L, chi_s, A, alpha, T, N)`.
 
 `theta+` is written down BY HAND in the fixture rather than read from a run tree — that is
 the point of the object — over the planted economy of `test_concentration_identity.py`
@@ -273,7 +273,7 @@ Twelve gates. (1) the draw-matrix column order is region-outer/sector-inner, as 
 column-major `findall` on the `(S, R)` cell mask walks it, with the C-order alternative
 shown to differ so the gate is not vacuous. (2) the four identities to machine precision.
 (3) `P_r`, `c_r`, `c_tilde_r`, `D_r`, `theta_rs`, `P` and `Y_r` against a hand
-recomputation from `theta+` alone — including `D_r = 1 + (1-Omega_L)(P_r/c_r)^(1-lambda)`,
+recomputation from `theta+` alone — including `D_r = 1 + (1-chi_L)(P_r/c_r)^(1-lambda)`,
 which holds only because the two CES indices collapse, so it fixes the whole expenditure
 chain in one number. (4) determinism in `(theta+, draws)`, and the separating check that
 the HEAD moves the value block while leaving the winners untouched (the Ricardian argmin

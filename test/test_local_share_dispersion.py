@@ -95,7 +95,7 @@ CF_COLORS = {"Both forces": toulouse_color, "Equal comparative advantage": sim_c
 # so it had to be written after and the ordering had to be explained.
 def extended_parameters(data, n_hat=None, theta=None, verbose=False):
     nb_ = len(buyers)
-    return {"Omega_L": 0.31, "Omega_s": np.full(S, 1.0 / S),
+    return {"chi_L": 0.31, "chi_s": np.full(S, 1.0 / S),
             "A": np.linspace(0.8, 1.2, nb_), "alpha": np.array([ALPHA]), "T": None,
             "N": np.asarray(N_HAT).astype(int) if n_hat is None
                  else np.asarray(n_hat).astype(int),

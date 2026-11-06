@@ -1,6 +1,6 @@
 """Gate for the extended parameter set and the economy it defines.
 
-`theta+ = (Omega_L, Omega_s, A, alpha, T, N)` plus the fixed calibration, and
+`theta+ = (chi_L, chi_s, A, alpha, T, N)` plus the fixed calibration, and
 `simulate_economy` is the forward map from it to a realised finite-variety economy. Under
 that design the counterfactuals are produced by the SAME code as the estimated economy, so
 what has to be gated is (a) that the map closes -- the two CES identities, the input mix and
@@ -70,7 +70,7 @@ install(globals(), [utils, granular_lib],
                "CF_REGIMES": CF_REGIMES})
 
 # theta+ written down by hand: this IS the object, so nothing is read from a run tree.
-XP = {"Omega_L": 0.31, "Omega_s": np.array([0.2, 0.3, 0.5]),
+XP = {"chi_L": 0.31, "chi_s": np.array([0.2, 0.3, 0.5]),
       "A": np.array([1.0, 1.4, 0.8, 1.1, 0.9]), "alpha": np.array([ALPHA]),
       "T": None, "N": N_HAT.copy(), "theta": THETA, "theta_source": "fixture",
       "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT, "lam": LAMBDA_DEFAULT,
@@ -105,16 +105,16 @@ print("2 ok  the two CES identities, the input mix and D_r all close to machine 
 # P_sr is taken from the economy, everything after it is rebuilt here from theta+ alone.
 V = econ.value
 P_sr, P_r = V["P_sr"], V["P_r"]
-h_P_r = (XP["Omega_s"][None, :, None] * P_sr ** (1 - XP["nu"])).sum(1) ** (1 / (1 - XP["nu"]))
+h_P_r = (XP["chi_s"][None, :, None] * P_sr ** (1 - XP["nu"])).sum(1) ** (1 / (1 - XP["nu"]))
 assert np.allclose(P_r, h_P_r, rtol=0, atol=1e-13)
-h_c = (XP["Omega_L"] * 1.0 + (1 - XP["Omega_L"]) * P_r ** (1 - XP["lam"])) ** (1 / (1 - XP["lam"]))
+h_c = (XP["chi_L"] * 1.0 + (1 - XP["chi_L"]) * P_r ** (1 - XP["lam"])) ** (1 / (1 - XP["lam"]))
 assert np.allclose(V["c_r"], h_c, atol=1e-13)
 assert np.allclose(V["c_tilde_r"], h_c / XP["A"][None, :], atol=1e-13)
 # D_r is the closed form the section quotes; it follows ONLY because the two CES
 # identities collapse, so this single number fixes the whole expenditure chain
-h_D = 1 + (1 - XP["Omega_L"]) * (P_r / V["c_r"]) ** (1 - XP["lam"])
+h_D = 1 + (1 - XP["chi_L"]) * (P_r / V["c_r"]) ** (1 - XP["lam"])
 assert np.allclose(V["D_r"], h_D, atol=1e-13)
-h_mix = XP["Omega_s"][None, :, None] * (P_sr / P_r[:, None, :]) ** (1 - XP["nu"])
+h_mix = XP["chi_s"][None, :, None] * (P_sr / P_r[:, None, :]) ** (1 - XP["nu"])
 assert np.allclose(V["theta_rs"], h_mix, atol=1e-13)
 mu = XP["epsilon"] / (XP["epsilon"] - 1)
 h_p = V["c_tilde_r"] / mu
@@ -124,7 +124,7 @@ assert np.allclose(V["Y_r"], h_p ** XP["epsilon"] * h_Pa[:, None] ** (-XP["epsil
 assert (V["D_r"] > 1).all() and (V["Y_r"] > 0).all()
 print(f"3 ok  P_r, c_r, c_tilde_r, D_r, theta_rs, P and Y_r reproduce a hand "
       f"recomputation from theta+ (D_r median {np.median(V['D_r']):.3f}) -- and D_r IS "
-      "1 + (1-Omega_L)(P_r/c_r)^(1-lambda), the closed form")
+      "1 + (1-chi_L)(P_r/c_r)^(1-lambda), the closed form")
 
 # --- 4. deterministic in (theta+, draws) ----------------------------------------------
 a1 = simulate_economy(data, XP, n_rep=5, seed=7)
@@ -137,7 +137,7 @@ assert np.allclose(a1.value["D_r"], a2.value["D_r"], atol=0)
 assert not np.array_equal(a1[0]["winner"], a3[0]["winner"])
 # and in theta+: a different head moves the value block and NOT the winners, because the
 # head does not enter the Ricardian argmin at all
-XP2 = dict(XP); XP2["Omega_L"] = 0.5
+XP2 = dict(XP); XP2["chi_L"] = 0.5
 b1 = simulate_economy(data, XP2, n_rep=5, seed=7)
 for s in range(S):
     assert np.array_equal(a1[s]["winner"], b1[s]["winner"])

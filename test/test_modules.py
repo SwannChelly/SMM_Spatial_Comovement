@@ -103,7 +103,7 @@ for reg, (econ, dl) in regs.items():
 #   moves a shock in space, not in size. That is a property of the one-tier structure.
 #
 #   `simulate_economy` re-solves the WHOLE forward map, so the price indices move with
-#   the regime and D_r = 1 + (1-Omega_L)(P_r/c_r)^(1-lambda) moves with them. It is not
+#   the regime and D_r = 1 + (1-chi_L)(P_r/c_r)^(1-lambda) moves with them. It is not
 #   an inconsistency: the first holds the cost shares fixed BY CONSTRUCTION, the second
 #   lets them respond. A figure that mixes the two would be reading a size change as a
 #   geographic one.
@@ -137,7 +137,7 @@ print(f"3 ok  every regime is built from theta+ with no parquet in the tree; D_r
 # The question the amplification section asks is how the distribution of comparative
 # advantage governs how much of a euro is bought upstream at all. A counterfactual that
 # holds the upstream spend fixed cannot answer it: T and alpha do not appear in
-# D_r = 1 + (1-Omega_L)(P_r/c_r)^(1-lambda), but they set which cell wins each variety and
+# D_r = 1 + (1-chi_L)(P_r/c_r)^(1-lambda), but they set which cell wins each variety and
 # at what delivered cost, hence P_sr, hence P_r -- and with lambda < 1 labour and
 # intermediates are COMPLEMENTS, so a higher input price index raises the intermediate
 # expenditure share. Equalising comparative advantage therefore changes how much leaves

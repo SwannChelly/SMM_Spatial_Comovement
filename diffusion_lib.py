@@ -187,7 +187,7 @@ def counterfactual_diffusion_frame(data, alpha=None, equalise_T=False,
     what this function holds fixed, NOT a property of the model.
 
     An earlier version of this docstring argued the opposite: that
-    $D_r = 1 + (1-\\Omega_L)(P_r/c_r)^{1-\\lambda}$ carries no comparative-advantage
+    $D_r = 1 + (1-\\chi_L)(P_r/c_r)^{1-\\lambda}$ carries no comparative-advantage
     parameter, so `T` and `alpha` could not move it. They do not appear in that
     expression, but they decide which cell wins each variety and at what delivered cost,
     so they set $P_{sr}$ and hence $P_r$. With `lambda < 1` labour and intermediates are
@@ -347,7 +347,7 @@ def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="shar
 #
 # `counterfactual_diffusion_frame` above holds the upstream spending fixed and reallocates
 # it. Its docstring used to argue that this was not an approximation -- that
-# `D_r = 1 + (1-Omega_L)(P_r/c_r)^{1-lambda}` carries no comparative-advantage parameter,
+# `D_r = 1 + (1-chi_L)(P_r/c_r)^{1-lambda}` carries no comparative-advantage parameter,
 # so `T` and `alpha` cannot move it. That is wrong, and the error matters for the section's
 # own question. `T` and `alpha` do not appear in that expression, but they decide WHICH
 # cell wins each variety and at what delivered cost, so they set `P_sr`, hence `P_r`. With

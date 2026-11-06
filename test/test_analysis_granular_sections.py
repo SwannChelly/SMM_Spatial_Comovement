@@ -501,7 +501,7 @@ def gate_untargeted():
     print("specification ladder: five rows, delta/gamma only, baseline reproduced")
 
     # theta*alpha is read off the RUN's own best_params, not carried in the markdown:
-    # layout [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA))]
+    # layout [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA))]
     S_t, R_t, n_AA_t, alpha_t = 3, 4, 5, 0.37
     aa_active = np.zeros((S_t, n_AA_t), dtype=bool)
     aa_active[:, :2] = True
@@ -652,8 +652,8 @@ def gate_comparative_advantage():
 
     n_T = int(AA_ACTIVE.sum())
     best_params = np.concatenate([
-        [0.4],                                     # Omega_L
-        rng.uniform(0.5, 1.5, S),                  # Omega_s
+        [0.4],                                     # chi_L
+        rng.uniform(0.5, 1.5, S),                  # chi_s
         rng.uniform(0.5, 1.5, n_AA),               # A (R_downstream == n_AA)
         [ALPHA],                                   # alpha
         [0.0],                                     # kappa = 0: T_ls = T_a
