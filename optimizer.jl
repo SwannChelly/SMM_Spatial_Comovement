@@ -24,11 +24,28 @@ using Printf
     parallel_pso_smm(objective, lb, ub; n_particles, max_iter, warm_start_particle,
                      t_conv_probe, verbose) -> (best_x, best_f, history)
 
-Particle swarm with a scrambled-Sobol initial swarm, reflecting walls, linearly
-decreasing inertia and periodic restarts of stagnant particles. The warm start is
-always one of the particles, so a stage never ends worse than its incumbent.
-# Swann : Add a description for each parameter.
+Minimise `objective` over the box `[lb, ub]` by particle swarm optimisation (PSO).
+The initial swarm is a scrambled Sobol net, the walls reflect, the inertia decreases
+linearly and stagnant particles are periodically restarted. The warm start is always
+one of the particles, so a stage never ends worse than its incumbent.
 
+# Arguments
+- `objective`: the loss of one particle; it is evaluated in parallel with `pmap`, and `Inf` marks a rejected particle.
+- `lb`, `ub`: the lower and upper bounds of the search box, one entry per searched coordinate.
+- `n_particles`: the swarm size, which should be a multiple of `nworkers()`.
+- `max_iter`: the number of PSO iterations after the initial swarm.
+- `warm_start_particle`: a point that joins the swarm as one particle (clamped to the box); `nothing` means none.
+- `w_start`, `w_end`: the inertia weight at the first and last iteration (linear in between).
+- `c1`: the pull of each particle towards its own best position (cognitive weight).
+- `c2`: the pull of each particle towards the swarm's best position (social weight).
+- `bounce_damping`: the share of its velocity a particle keeps when it bounces off a wall.
+- `t_conv_probe`: an optional function that reports whether the T inversion converges at a particle; it is printed with the progress.
+- `verbose`: whether to print the progress every 5 iterations.
+
+# Returns
+- `best_x`: the best position found, in the searched coordinates only.
+- `best_f`: the loss at `best_x`.
+- `history`: a `Dict` with the best and the mean finite loss at each iteration (entry 1 is the initial swarm).
 """
 function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{Float64};
                           n_particles::Int = 70, max_iter::Int = 100,
@@ -40,18 +57,20 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
                           verbose::Bool = true)
     d = length(lb)
 
+    # 1) Draw the initial swarm: a scrambled Sobol net over the box, plus the warm start.
     n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
     particles = if n_random == 0
         Vector{Vector{Float64}}()
     else
         net = sobol_scrambled_net(n_random, d, Random.GLOBAL_RNG)
+        # The scramble comes from the global RNG (seeded in main.jl), so the swarm is reproducible.
         [lb .+ net[i, :] .* (ub .- lb) for i in 1:n_random]
-        # Swann : Explique ici que l'on prend la même seed pour chaque secteur et que l'hypothèse sous jacente c'est que l'effet d'un secteur sur les autres est limité. 
     end
     warm_start_particle === nothing ||
         push!(particles, clamp.(warm_start_particle, lb, ub))
     velocities = [0.1 * (ub .- lb) .* randn(d) for _ in 1:length(particles)]
 
+    # 2) Score the initial swarm and set each particle's best and the swarm's best.
     fitness = Vector{Float64}(pmap(objective, particles))
     p_best, p_best_fitness = copy(particles), copy(fitness)
     g_best_idx = argmin(p_best_fitness)
@@ -64,6 +83,7 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
 
     for iter in 1:max_iter
         t_start = time()
+        # 3) Move every particle: inertia plus pulls towards its own best and the swarm's best, with the step capped at 10% of the box and reflection at the walls.
         w = w_start - (w_start - w_end) * (iter / max_iter)
         v_max = 0.1 * (ub .- lb)
         for i in 1:length(particles)
@@ -74,6 +94,7 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
             reflect_bounds!(particles[i], velocities[i], lb, ub, bounce_damping)
         end
 
+        # 4) Score the new positions in parallel and update the personal and global bests.
         fitness = Vector{Float64}(pmap(objective, particles))
         for i in 1:length(particles)
             if fitness[i] < p_best_fitness[i]
@@ -85,7 +106,7 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
             g_best, g_best_fitness = copy(p_best[k]), p_best_fitness[k]
         end
 
-        # Restart particles far from the best.
+        # 5) Every 25 iterations after the 30th, restart the particles whose loss exceeds 1.5 × the best at a random point.
         if iter > 30 && iter % 25 == 0
             for i in 1:length(particles)
                 fitness[i] > g_best_fitness * 1.5 || continue
@@ -95,6 +116,7 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
             end
         end
 
+        # 6) Record the history and print the progress, with the share of particles whose T inversion failed.
         push!(history["best_fitness"], g_best_fitness)
         push!(history["mean_fitness"], mean(filter(isfinite, fitness)))
         if verbose && (iter % 5 == 0 || iter == 1 || iter == max_iter)
@@ -190,11 +212,33 @@ sorted_box(lo, hi) = (sort(lo), sort(hi))
                 radius, weight_matrix, warm_start_override, moment_blocks)
         -> (best_params, best_fitness, history)
 
-Fresh start (`last_stage_folder === nothing`): the whole head, boxed at `HEAD_*_BOX` × the
-data-based starting values (α within `alpha_box` of its prior, κ in [KAPPA_LO, KAPPA_HI]).
-Continue stage: the listed variables only, in a box of relative radius `radius` around
-the incumbent (clamped to the same outer boxes); everything else fixed at the incumbent.
-The returned vector carries T*(·) at the optimum.
+Run one PSO stage and return the full parameter vector at its optimum.
+
+A fresh start (`last_stage_folder === nothing`) searches [α ; κ] under PROFILE_HEAD (the
+whole head otherwise), in a box around the data-based starting values. A continue stage
+searches only the blocks in `variable_list`, in a box around the previous stage's
+optimum, and keeps every other block there. T, and the head under PROFILE_HEAD, are never
+searched: they are profiled at every particle.
+
+# Arguments
+- `n_particles`: the swarm size, which should be a multiple of `nworkers()`.
+- `max_iter`: the number of PSO iterations.
+- `init_alpha`: the α around which the fresh-start box is built when `TAU_PRIOR` is `nothing`; ignored in a continue stage.
+- `variable_list`: the blocks searched in a continue stage (`"alpha_kappa"`, `"productivity"`, `"agg_labor_share_tech"`, `"agg_industry_share_tech"`); ignored in a fresh start.
+- `last_stage_folder`: the folder whose `best_params.npy` is the incumbent; `nothing` means a fresh start.
+- `radius`: the width of the continue-stage box around the incumbent (see the caveat below).
+- `weight_matrix`: the weighting matrix of the loss; `nothing` means `Weight_matrix_custom` (the identity).
+- `warm_start_override`: a full parameter vector whose searched part joins the fresh-start swarm as one particle; ignored in a continue stage.
+- `moment_blocks`: the moment blocks that enter the loss (`[4, 5, 6]` under PROFILE_HEAD in Step 1, `[4]` in Step 3); `nothing` means all six.
+
+Caveat on `radius`: a larger value WIDENS the α and Ω^L boxes (`× (1 ± radius)`) but
+NARROWS the κ box (half-width `(1 − radius) ×` its range) and the A and Ω^s boxes
+(`[× radius, ÷ radius]`).
+
+# Returns
+- `best_params`: the full level vector `[Ω^L | Ω^s | A | α | κ | T]` at the best particle, with T (and the head under PROFILE_HEAD) profiled there.
+- `best_fitness`: the loss at that particle.
+- `history`: the PSO history (`parallel_pso_smm`).
 """
 function train_stage(n_particles::Int, max_iter::Int;
                      init_alpha = nothing,
