@@ -355,6 +355,7 @@ def gate_untargeted():
               "step_dir": "step1", "folder": TMP, "input_folder": inp_l,
               "aa_names": ["a", "b", "c"], "aa_of_ze": aa_of_ze,
               "AA_ACTIVE": np.ones((S_l, 3), dtype=bool), "CELL_MASK": cell_mask,
+              "T_ACTIVE": np.hstack([np.ones((S_l, 3), dtype=bool), np.zeros((S_l, 1), dtype=bool)]),
               "T_REF_AA": np.array([0, 0]), "best_params": bp_l,
               "coefs": pd.DataFrame({"stat": ["theta"], "value": [th_l]}),
               "sector_names": ["s0", "s1"]}
@@ -508,7 +509,8 @@ def gate_untargeted():
     bp = np.concatenate([[0.1], np.full(S_t, 0.2), np.full(R_t, 0.3), [alpha_t], [0.0],
                          np.full(int(aa_active.sum()), 1.0)])
     d_ta = {"best_params": bp, "S": S_t, "n_tau": 1, "aa_names": ["a"] * R_t,
-            "AA_ACTIVE": aa_active, "coefs": None, "folder": ".", "step_dir": "step1"}
+            "AA_ACTIVE": aa_active, "coefs": None, "folder": ".", "step_dir": "step1",
+            "T_ACTIVE": np.hstack([aa_active, np.zeros((S_t, 1), dtype=bool)])}
     assert abs(NS["theta_alpha"](d_ta) - NS["THETA_DEFAULT"] * alpha_t) < 1e-12
     try:                                   # a flag mismatch must be an error, not a number
         NS["theta_alpha"](dict(d_ta, best_params=bp[:-1]))
@@ -674,6 +676,7 @@ def gate_comparative_advantage():
         "france": pd.DataFrame({"ze2010": ze_codes,
                                 "ze2010_name": [f"Zone {c}" for c in ze_codes]}),
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
+        "T_ACTIVE": np.hstack([AA_ACTIVE, np.zeros((S, 1), dtype=bool)]),   # no import here
         "T_REF_AA": T_REF_AA, "N_downstream": N_down,
         "emp_pi_r": rng.dirichlet(np.ones(n_AA)),
         # observed AA-level sourcing shares: what the Sinkhorn inversion targets, and
@@ -1081,6 +1084,7 @@ def gate_amplification():
             "n_AA": n_AA, "n_tau": n_tau, "sector_names": [f"C{s}" for s in range(S)],
             "aa_names": [codes[a] for a in range(n_AA)], "aa_of_ze": aa_of_ze,
             "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK, "T_REF_AA": T_REF_AA,
+            "T_ACTIVE": np.hstack([AA_ACTIVE, np.zeros((S, 1), dtype=bool)]),   # no import here
             "N_downstream": N_down, "best_params": best_params,
             "coefs": pd.DataFrame({"value": [1.0]})}     # no `theta` entry -> the default
 

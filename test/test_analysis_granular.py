@@ -162,6 +162,12 @@ def _build_industry(ROOT, industry, sectors):
         act = np.flatnonzero(AA_ACTIVE[s])
         T_REF[s] = act[np.argmax(emp_gamma_aa[s, act])]
 
+    # the foreign competitor (load_parameters.jl): f_s = 1 - domestic_share, a last T
+    # column Phi^F_s and a foreign row of the gamma block for every importing sector
+    foreign_share = 1.0 - domestic_share
+    FOREIGN_ACTIVE = (foreign_share > 1e-12) & AA_ACTIVE.any(axis=1)
+    T_ACTIVE = np.hstack([AA_ACTIVE, FOREIGN_ACTIVE[:, None]])
+
     # cells_ls.csv: n_ls (establishments) and has_sup on every simulated cell
     N_LS = RNG.integers(1, 40, (S, R))
     pd.DataFrame([{"A129": sectors[s], "ze2010": int(ze[r]), "n_ls": int(N_LS[s, r]),
@@ -173,13 +179,15 @@ def _build_industry(ROOT, industry, sectors):
     emp_pi_r = emp_pi_r / emp_pi_r.sum()
 
     # ---- the SIMULATED moment vector, with a KNOWN answer ---------------------
-    # gamma: per sector, an active-only split of domestic_share[s] -> the
-    # reconstruction  gamma_ref = c_s - sum_{a != ref}  must return sim[s, ref] exactly.
+    # gamma: per sector, a simulated import share f_s near the target and an active-only
+    # split of 1 - f_s over the areas -> the reconstruction on total purchases
+    # gamma_ref = 1 - f_s - sum_{a != ref}  must return sim[s, ref] exactly.
+    sim_foreign = np.where(FOREIGN_ACTIVE, foreign_share * RNG.uniform(0.9, 1.1, S), 0.0)
     sim_gamma_aa = np.zeros((S, R_D))
     for s in range(S):
         act = np.flatnonzero(AA_ACTIVE[s])
         w = RNG.uniform(0.3, 1.0, act.size)
-        sim_gamma_aa[s, act] = w / w.sum() * domestic_share[s]
+        sim_gamma_aa[s, act] = w / w.sum() * (1.0 - sim_foreign[s])
 
     sim_labor = np.array([agg_labor_share * 1.05])
     sim_industry = agg_industry_share * RNG.uniform(0.9, 1.1, S)
@@ -210,11 +218,11 @@ def _build_industry(ROOT, industry, sectors):
                        for s in range(S)])
 
     final = np.concatenate([sim_labor, sim_industry, sim_pi, sim_reg,
-                            sim_gamma_aa.ravel(), sim_G0])
+                            np.hstack([sim_gamma_aa, sim_foreign[:, None]]).ravel(), sim_G0])
     stages = np.column_stack([final * (0.7 + 0.15 * k) for k in range(N_STAGES - 1)] + [final])
     np.save(f"{RUN}/step1/best_simulated_moments.npy", stages * 0.95)
     np.save(f"{RUN}/step3/best_simulated_moments.npy", stages)
-    n_par = 1 + S + R_D + 1 + 1 + int(AA_ACTIVE.sum())      # ... alpha | kappa | T
+    n_par = 1 + S + R_D + 1 + 1 + int(T_ACTIVE.sum())       # ... alpha | kappa | T (+ Phi^F)
     PAR = {st: RNG.random((n_par, N_STAGES)) + 0.1 for st in ("step1", "step3")}
     for st in PAR:
         np.save(f"{RUN}/{st}/best_parameters_list.npy", PAR[st])
@@ -222,7 +230,7 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{RUN}/n_reg_coef.npy", np.array(N_REG))
     np.save(f"{RUN}/n_tau.npy", np.array(1))
 
-    gam_free = AA_ACTIVE.copy()
+    gam_free = T_ACTIVE.copy()                              # areas + foreign, minus references
     for s in range(S):
         gam_free[s, T_REF[s]] = False
     n_gb = N_REG + 1 + int(gam_free.sum()) + S
@@ -254,8 +262,8 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{RUN}/step2/W_world.npy", np.linalg.inv(Omega_w))
 
     # ---- inference from fake worlds: step2 (theta_1, W = I) and step3 (theta_2) ----
-    t_lbl = [f"T[{sectors[s]}-AA{ze[down_idx[a]]}]" for s in range(S) for a in range(R_D)
-             if AA_ACTIVE[s, a]]
+    t_lbl = [(f"PhiF[{sectors[s]}]" if a == R_D else f"T[{sectors[s]}-AA{ze[down_idx[a]]}]")
+             for s in range(S) for a in range(R_D + 1) if T_ACTIVE[s, a]]
     w_lbl = (["alpha[1]", "kappa"] + [f"N_s[{x}]" for x in sectors] + t_lbl
              + [f"A[{i + 1}]" for i in range(R_D)])
     B_I = 200
@@ -328,6 +336,10 @@ def _build_industry(ROOT, industry, sectors):
         "sector_names": sectors,
         "aa_of_ze": aa_of_ze.tolist(),
         "AA_ACTIVE": AA_ACTIVE.tolist(),
+        "T_ACTIVE": T_ACTIVE.tolist(),
+        "foreign_share": foreign_share.tolist(),
+        "sim_foreign": sim_foreign.tolist(),
+        "n_gamma_area_kept": int(gam_free[:, :R_D].sum()),
         "CELL_MASK": CELL_MASK.tolist(),
         "T_REF_AA": T_REF.tolist(),
         "emp_gamma_aa": emp_gamma_aa.tolist(),
@@ -661,13 +673,16 @@ def run_checks(ns, ROOT, exp):
     print("\n=== 3. moment mask (must reproduce load_parameters.jl) ===")
     mask, S, nAA = d2["moment_mask"], d2["S"], d2["n_AA"]
     off_gam = 1 + S + len(exp["emp_pi_r"]) + exp["n_coef"] + 1      # + beta_kappa
-    gam_mask = mask[off_gam:off_gam + S * nAA].reshape(S, nAA)
-    free = np.array(exp["AA_ACTIVE"])
+    gam_mask = mask[off_gam:off_gam + S * (nAA + 1)].reshape(S, nAA + 1)
+    free_T = np.array(exp["T_ACTIVE"])                 # areas + the foreign column
     for s in range(S):
-        free[s, exp["T_REF_AA"][s]] = False
+        free_T[s, exp["T_REF_AA"][s]] = False
+    free = free_T[:, :nAA]
     check("first industry share dropped", not mask[1])
     check("first pi_r dropped", not mask[1 + S])
-    check("gamma mask = active & non-reference", (gam_mask == free).all())
+    check("gamma mask = active & non-reference, foreign row kept for importers", (gam_mask == free_T).all())
+    check("foreign target row = 1 - domestic_share",
+          close(d2["emp_gamma_T"][:, nAA], np.array(exp["foreign_share"])))
     check("kept gamma count", int(gam_mask.sum()) == exp["n_gamma_kept"])
     check("G0 block never masked", mask[-S:].all())
     check("kept total = n_gb + labor + industry + pi_r pieces",
@@ -680,6 +695,7 @@ def run_checks(ns, ROOT, exp):
     check("pi_r", close(sim["emp_pi_r"], exp["sim_final"]["pi"]))
     check("reg_coef", close(sim["reg_coef"], exp["sim_final"]["reg"]))
     check("gamma (S x n_AA, s-major)", close(sim["gamma_aa"], exp["sim_gamma_aa"]))
+    check("import share split off the gamma block", close(sim["foreign_share"], exp["sim_foreign"]))
     check("G0", close(sim["G0"], exp["sim_final"]["G0"]))
 
     d1 = ns["load_granular_data"]("test", mu=1, base=ROOT)
@@ -735,13 +751,13 @@ def run_checks(ns, ROOT, exp):
     print("\n=== 6. gamma scatter: reference reconstruction ===")
     x_free, y_free, x_ref, y_ref = ns["gamma_aa_points"](d2)
     emp_aa, sim_aa = np.array(exp["emp_gamma_aa"]), np.array(exp["sim_gamma_aa"])
-    check("free points = active & non-reference", x_free.size == exp["n_gamma_kept"])
+    check("free points = active & non-reference areas", x_free.size == exp["n_gamma_area_kept"])
     check("free points carry the right values",
           close(sorted(x_free), sorted(emp_aa[free])) and close(sorted(y_free), sorted(sim_aa[free])))
     ref_x_expected = [emp_aa[s, exp["T_REF_AA"][s]] for s in range(S) if free[s].any()]
     ref_y_expected = [sim_aa[s, exp["T_REF_AA"][s]] for s in range(S) if free[s].any()]
     check("reference x = observed reference share", close(sorted(x_ref), sorted(ref_x_expected)))
-    check("reference y = c_s - sum of the free simulated gammas == sim at the reference",
+    check("reference y = 1 - f_s - sum of the free simulated gammas == sim at the reference",
           close(sorted(y_ref), sorted(ref_y_expected), 1e-12))
 
     print("\n=== 7. WLS through the origin matches the Julia dashboard formula ===")
@@ -839,7 +855,7 @@ def run_checks(ns, ROOT, exp):
                  "emp_gamma_aa", "aa_names", "AA_ACTIVE", "G_target"):
         check(f"data['{name}'] present", name in g)
     check("empirical_moments is a column vector",
-          g["empirical_moments"].shape == (len(exp["emp_gamma_aa"]) * exp["n_AA"]
+          g["empirical_moments"].shape == (len(exp["emp_gamma_aa"]) * (exp["n_AA"] + 1)
                                            + 1 + exp["S"] + len(exp["emp_pi_r"])
                                            + exp["n_coef"] + 1 + exp["S"], 1))
     check("best_simulated_moments_dict keeps the stage axis LAST (old [..., K] layout)",
@@ -874,6 +890,15 @@ def run_checks(ns, ROOT, exp):
           [l.replace("gamma[", "") for l in d0["moment_labels"]
            if l.startswith("gamma[")] ==
           [l.replace("T[", "") for l in d0["param_labels"] if l.startswith("T[")])
+    check("import-share moments and Phi^F parameters enumerate the same sectors",
+          [l.replace("f_foreign[", "") for l in d0["moment_labels"] if l.startswith("f_foreign[")] ==
+          [l.replace("PhiF[", "") for l in d0["param_labels"] if l.startswith("PhiF[")]
+          and sum(l.startswith("PhiF[") for l in d0["param_labels"]) == int(np.array(exp["T_ACTIVE"])[:, -1].sum()))
+    T_est = ns["unpack_estimated_T"](d2)
+    check("unpack_estimated_T splits Phi^F off the area T, reference-normalised",
+          T_est["T"].shape == (S, exp["n_AA"]) and T_est["PhiF"].shape == (S,)
+          and all(abs(T_est["T"][s, exp["T_REF_AA"][s]] - 1) < 1e-12 for s in range(S))
+          and ((T_est["PhiF"] > 0) == np.array(exp["T_ACTIVE"])[:, -1]).all())
     ws = ns["world_weight_summary"](d2)
     check("world_weight_summary returns the block-4 table", ws is not None and len(ws) == exp["n_coef"] + 1)
 

@@ -59,20 +59,42 @@ function sobol_scrambled_net(N::Int, d::Int, rng::AbstractRNG)
 end
 
 """
+    sobol_dim_shifted(N, j, rng) -> Vector (N)
+
+Dimension `j` of an `N`-point Sobol net, randomised by its own digital shift from `rng`.
+"""
+function sobol_dim_shifted(N::Int, j::Int, rng::AbstractRNG)
+    pts   = QuasiMonteCarlo.sample(N, zeros(j), ones(j), SobolSample())
+    nbits = 52
+    scale = Float64(2)^nbits
+    mask  = (UInt64(1) << nbits) - UInt64(1)
+    shift = rand(rng, UInt64) & mask
+    return [((floor(UInt64, pts[j, i] * scale) & mask) ⊻ shift) / scale for i in 1:N]
+end
+
+"""
     generate_draws(N_rho, n_good, method; randomise=false, rng=Random.GLOBAL_RNG) -> (U, W)
+
+`U` is `N_rho × (n_good + S)`: columns `1:n_good` are the cells, column `n_good + s` the
+foreign competitor of sector s (one cost per variety, common to every buyer; 0.5 where
+the sector does not import). `W` covers the cells only (`N_rho × n_good`).
 
   * `:sobol` — one scrambled Sobol net per SECTOR (the Ricardian min lives within a
     sector, across its cells). `randomise=false` freezes the scramble (seed 42), so the
-    criterion is a deterministic function of θ. Used for the optimisation draws.
-  * `:mc` — i.i.d. uniforms (`randomise=false` ⇒ `MersenneTwister(0)`). Used for
-    inference and the post-hoc replications, which want independent designs.
+    criterion is a deterministic function of θ. Used for the optimisation draws. The
+    foreign draw is the next Sobol dimension of the sector's net (d + 1 for d cells), so
+    it is stratified jointly with the cells; its shift comes from a stream derived from
+    the master without consuming it, so the cell columns — and whatever the caller draws
+    from `rng` afterwards — are those of the domestic-only design.
+  * `:mc` — i.i.d. uniforms (`randomise=false` ⇒ `MersenneTwister(0)`), the foreign
+    columns drawn after the cells. Used for inference and the post-hoc replications.
 """
 function generate_draws(N_rho::Int, n_good::Int, method::Symbol;
                         randomise::Bool=false, rng::AbstractRNG=Random.GLOBAL_RNG)
     W = FlatWeights(1.0 / N_rho, N_rho, n_good)
+    lo, hi = eps(), 1.0 - eps()
     if method === :sobol
-        U      = Matrix{Float64}(undef, N_rho, n_good)
-        lo, hi = eps(), 1.0 - eps()
+        U      = fill(0.5, N_rho, n_good + S)
         master = randomise ? rng : MersenneTwister(42)
         # One net per sector, because a variety's supplier is the min over the cells of its own
         # sector only: competition never crosses sectors, so the sectors are separate integrals.
@@ -85,9 +107,19 @@ function generate_draws(N_rho::Int, n_good::Int, method::Symbol;
                 U[rho, g] = clamp(net[rho, k], lo, hi)
             end
         end
+        frng = MersenneTwister(hash((:foreign_draws, rand(copy(master), UInt64))))
+        for s in 1:S
+            (FOREIGN_ACTIVE[s] && !isempty(SECTOR_GOOD_INDICES[s])) || continue
+            uF = sobol_dim_shifted(N_rho, length(SECTOR_GOOD_INDICES[s]) + 1, frng)
+            @inbounds for rho in 1:N_rho
+                U[rho, n_good + s] = clamp(uF[rho], lo, hi)
+            end
+        end
         return U, W
     elseif method === :mc
-        return rand(randomise ? rng : MersenneTwister(0), N_rho, n_good), W
+        r = randomise ? rng : MersenneTwister(0)
+        U = rand(r, N_rho, n_good)
+        return hcat(U, clamp.(rand(r, N_rho, S), lo, hi)), W
     end
     error("Unknown draw method :$method (choose :sobol or :mc)")
 end
@@ -131,9 +163,16 @@ function gather_T_to_ze(T_par::AbstractMatrix, kappa)
 end
 
 """
-    unpack_params(params) -> (χ^L, χ^s, A, α, vec(T))
+    foreign_phi(T_par) -> Vector (S):  Φ^F_s = T_par[s, FOREIGN_COL], zero where s does not import
+"""
+foreign_phi(T_par::AbstractMatrix) =
+    [FOREIGN_ACTIVE[s] ? T_par[s, FOREIGN_COL] : zero(eltype(T_par)) for s in 1:S]
 
-χ^s is normalised to sum to one, A to A[1] = 1, and T is gathered to the (S, R) ZE level.
+"""
+    unpack_params(params) -> (χ^L, χ^s, A, α, vec(T), Φ^F)
+
+χ^s is normalised to sum to one, A to A[1] = 1, T is gathered to the (S, R) ZE level and
+Φ^F (S) is the foreign Fréchet scale, in the same reference-normalised units as T.
 """
 function unpack_params(params)
     chi_L = params[1]
@@ -141,21 +180,45 @@ function unpack_params(params)
     A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
     alpha = params[alpha_range()]
-    T_mat = gather_T_to_ze(unpack_T_par(params), unpack_kappa(params))
-    return chi_L, chi_s, A, alpha, vec(T_mat)
+    T_par = unpack_T_par(params)
+    T_mat = gather_T_to_ze(T_par, unpack_kappa(params))
+    return chi_L, chi_s, A, alpha, vec(T_mat), foreign_phi(T_par)
 end
 
 """
-    aggregate_gamma_to_T(gamma_ze) -> Matrix (T_COL_DIM × S)
+    aggregate_gamma_to_T(gamma_ze; foreign = nothing) -> Matrix (T_COL_DIM × S)
 
-Area aggregate `γ_{s,a} = Σ_{l ∈ a} γ_{ls}` over every simulated cell of the area.
+Area aggregate `γ_{s,a} = Σ_{l ∈ a} γ_{ls}` over every simulated cell of the area; the
+foreign row `FOREIGN_COL` is `foreign` (S) when given, zero otherwise.
 """
-function aggregate_gamma_to_T(gamma_ze::AbstractMatrix)
+function aggregate_gamma_to_T(gamma_ze::AbstractMatrix; foreign = nothing)
     out = zeros(eltype(gamma_ze), T_COL_DIM, S)
     @inbounds for g in 1:n_good
         out[T_GATHER[GOOD_R[g]], GOOD_S[g]] += gamma_ze[GOOD_R[g], GOOD_S[g]]
     end
+    foreign === nothing || (out[FOREIGN_COL, :] .= foreign)
     return out
+end
+
+"""
+    gamma_T_from_flows(X_ls, X_F) -> Matrix (T_COL_DIM × S)
+
+Shares of each sector's TOTAL purchases: area aggregates of the domestic flows `X_ls`
+(R × S) and the foreign flow `X_F` (S) on the foreign row, divided by `Σ_l X_ls + X_F`.
+They sum to one per sector, as the data γ̂ with f̂ on the foreign row.
+"""
+function gamma_T_from_flows(X_ls::AbstractMatrix, X_F::AbstractVector)
+    X_tot = vec(sum(X_ls; dims = 1)) .+ X_F
+    g = zeros(promote_type(eltype(X_ls), eltype(X_F)), R, S)
+    f = zeros(eltype(g), S)
+    @inbounds for s in 1:S
+        X_tot[s] > 1e-300 || continue
+        for r in 1:R
+            g[r, s] = X_ls[r, s] / X_tot[s]
+        end
+        f[s] = X_F[s] / X_tot[s]
+    end
+    return aggregate_gamma_to_T(g; foreign = f)
 end
 
 """
@@ -257,24 +320,55 @@ function gbar_sector_K(cells, k_counts::AbstractVector{<:Integer}, m::Integer,
 end
 
 """
-    concentrate_N_s(k_counts, m; target = G_TARGET) -> (N_hat, clamped)
+    french_variety_share(linkages) -> q (S):  share of the draws won by a French cell for
+    at least one buyer (1 in a sector without foreign competitor)
+"""
+function french_variety_share(linkages::AbstractMatrix)
+    m = size(linkages, 1)
+    q = ones(S)
+    for s in 1:S
+        (FOREIGN_ACTIVE[s] && !isempty(CELLS_OF_SECTOR[s])) || continue
+        n = 0
+        @inbounds for rho in 1:m
+            any(g -> linkages[rho, g] != 0, CELLS_OF_SECTOR[s]) && (n += 1)
+        end
+        q[s] = n / m
+    end
+    return q
+end
+
+"""
+    n_hi_bound(s, m, q) -> the upper bound of the bisection for sector s
+
+`N^obs_s / q_s` (the varieties won by France are at most the observed suppliers),
+capped by `N_HI_CAP[s]` and the draw count `m`; `N_HI[s]` when `q === nothing` or q_s = 1.
+"""
+function n_hi_bound(s::Int, m::Integer, q)
+    (q === nothing || q[s] >= 1) && return min(N_HI[s], m)
+    hi = q[s] > 0 ? ceil(Int, N_HI[s] / q[s] - 1e-9) : N_HI_CAP[s]
+    return max(min(hi, N_HI_CAP[s], m), min(N_HI[s], m))
+end
+
+"""
+    concentrate_N_s(k_counts, m; target = G_TARGET, q = nothing) -> (N_hat, clamped)
 
 `target` is the Ḡ_s(0) matched: the data by default, a fake world's own realised
-empty-cell share in inference.jl.
+empty-cell share in inference.jl. `q` is `french_variety_share` of the same draws: with
+imports the upper bound is `N^obs_s / q_s` (`n_hi_bound`), `N^obs_s` without.
 
-Monotone integer bisection on `Ḡ_s(n)` over `[N_LO[s], N_HI[s]]` matching `G_TARGET[s]`.
+Monotone integer bisection on `Ḡ_s(n)` over `[N_LO[s], n_hi_bound]` matching `G_TARGET[s]`.
 `k_counts[g]` is the number of the `m` draws cell `g` wins somewhere downstream (free of
 `N_s`, Lemma 2). `clamped[s] ∈ (:none, :lo, :hi)` records a binding bound — a rejection
 signal for the mechanism, reported per sector.
 """
 function concentrate_N_s(k_counts::AbstractVector{<:Integer}, m::Integer;
-                         target::AbstractVector{<:Real} = G_TARGET)
+                         target::AbstractVector{<:Real} = G_TARGET, q = nothing)
     N_hat   = zeros(Int, S)
     clamped = fill(:none, S)
     lg      = gbar_logfact_table(m)
     @inbounds for s in 1:S
         cells = CELLS_OF_SECTOR[s]
-        lo0, hi0 = N_LO[s], N_HI[s]
+        lo0, hi0 = N_LO[s], n_hi_bound(s, m, q)
         if isempty(cells)
             N_hat[s] = lo0
             continue
@@ -308,17 +402,36 @@ Ricardian selection (lowest-cost cell wins each variety for each buyer), nested 
 price indices, downstream sales and trade flows, on the passed draws (`N_rho_eff` =
 their row count). `return_firm_level` adds the per-(variety, buyer) expenditure shares
 (COO vectors) and the productivity matrix `z_flat`.
+
+The foreign competitor of sector s bids `p^F_ρs = (−log(1 − u^F_ρs)/Φ^F_s)^{1/θ}` for
+variety ρ, the same for every buyer (`u_draws[:, n_good + s]`); it wins where it is
+strictly cheaper than the best domestic cell. Its varieties enter the price indices and
+the spending (`X_F_flat`, `X_F_by_r`) but create no domestic linkage, so the extensive
+margin, the win counts and the firm-level rows are French only.
 """
 function solve_network(params; u_draws::Matrix{Float64},
                        sample_weights::AbstractMatrix{Float64},
                        precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                        return_firm_level::Bool=false)
-    chi_L, chi_s_vec, A_r, alpha, T_vec = unpack_params(params)
+    chi_L, chi_s_vec, A_r, alpha, T_vec, PhiF = unpack_params(params)
     tau = precomputed_tau === nothing ? build_tau(alpha) : precomputed_tau
     T   = reshape(T_vec, S, R)
     nu_s_mat = reshape(nu_s, 1, S)
     N_rho_eff = size(u_draws, 1)
     @assert size(sample_weights, 1) == N_rho_eff "sample_weights rows must match u_draws rows"
+    any(>(0), PhiF) && @assert(size(u_draws, 2) >= n_good + S,
+                               "u_draws needs n_good + S columns (foreign draws); use generate_draws")
+
+    # Foreign bid per (variety, sector); Inf where the sector does not import.
+    p_F = fill(Inf, N_rho_eff, S)
+    for s in 1:S
+        PhiF[s] > 0 || continue
+        sc = PhiF[s]^(-1 / theta)
+        @inbounds for rho in 1:N_rho_eff
+            p_F[rho, s] = sc * (-log(1.0 - u_draws[rho, n_good + s]))^(1 / theta)
+        end
+    end
+    X_F_by_r = zeros(S, R_downstream)
 
     # z = T^{1/θ} (−log(1−u))^{−1/θ}, built one column at a time; only 1/z drives the argmin.
     z_inv_flat = Matrix{Float64}(undef, N_rho_eff, n_good)
@@ -372,8 +485,15 @@ function solve_network(params; u_draws::Matrix{Float64},
                         end
                     end
                 end
-                winner_good_idx[rho, s] = g_indices[bidx]
-                p_rho_s[rho, s] = best
+                # Foreign bid strictly below the best domestic cell (a NaN domestic price
+                # keeps winning, as above): the variety is imported (winner = −1).
+                if p_F[rho, s] < best
+                    winner_good_idx[rho, s] = -1
+                    p_rho_s[rho, s] = p_F[rho, s]
+                else
+                    winner_good_idx[rho, s] = g_indices[bidx]
+                    p_rho_s[rho, s] = best
+                end
             end
         end
 
@@ -383,7 +503,10 @@ function solve_network(params; u_draws::Matrix{Float64},
             nu_s_s = nu_s[s]
             for rho in 1:N_rho_eff
                 g_w = winner_good_idx[rho, s]
-                w_rho_s[rho, s] = g_w == 0 ? 0.0 : sample_weights[rho, g_w]
+                # A variety's weight is the sector's (constant across its cells), so an
+                # imported variety reads it on the sector's first cell.
+                w_rho_s[rho, s] = g_w == 0 ? 0.0 :
+                                  sample_weights[rho, g_w > 0 ? g_w : SECTOR_GOOD_INDICES[s][1]]
                 ces_buf[rho, s] = w_rho_s[rho, s] * p_rho_s[rho, s]^(1 - nu_s_s)
             end
         end
@@ -401,6 +524,13 @@ function solve_network(params; u_draws::Matrix{Float64},
             for rho in 1:N_rho_eff
                 g_winner = winner_good_idx[rho, s]
                 g_winner == 0 && continue
+                if g_winner < 0
+                    X_F_by_r[s, r_d] += w_rho_s[rho, s] * chi_s_vec[s] * (1-chi_L) *
+                        (p_rho_s[rho, s] / P_sr_s)^(1 - nu_s_s) *
+                        (P_sr_s / P_r)^(1 - nu) *
+                        (P_r / c_r)^(1 - lambda)
+                    continue
+                end
                 linkages_flat[rho, g_winner] = true
                 exp_val = sample_weights[rho, g_winner] * chi_s_vec[s] * (1-chi_L) *
                     (p_rho_s[rho, s] / P_sr_s)^(1 - nu_s_s) *
@@ -423,16 +553,23 @@ function solve_network(params; u_draws::Matrix{Float64},
     Y_r = p_r.^epsilon .* P^(-epsilon) .* 1.0 .* delta_r[DOWNSTREAM_REGIONS]
 
     X_ls_flat = zeros(n_good)
+    X_F_flat  = zeros(S)
     for r_d in 1:R_downstream
         total_cost_r = mu * Y_r[r_d]
         for g in 1:n_good
             X_ls_flat[g] += X_shares_by_r[g, r_d] * total_cost_r
         end
+        for s in 1:S
+            X_F_flat[s] += X_F_by_r[s, r_d] * total_cost_r
+        end
     end
     c_tilde_r_full = zeros(R); c_tilde_r_full[DOWNSTREAM_REGIONS] = c_tilde_r
     Y_r_full       = zeros(R); Y_r_full[DOWNSTREAM_REGIONS]       = Y_r
 
-    base = (X_ls_flat = X_ls_flat, c_tilde_r = c_tilde_r_full, Y_r = Y_r_full,
+    # X_F_by_r: foreign spending per unit of the buyer's cost (S × R_downstream), the
+    # imported part of the intermediate share; X_F_flat: in the units of X_ls_flat.
+    base = (X_ls_flat = X_ls_flat, X_F_flat = X_F_flat, X_F_by_r = X_F_by_r,
+            c_tilde_r = c_tilde_r_full, Y_r = Y_r_full,
             linkages_flat = linkages_flat, sample_weights = sample_weights)
     return_firm_level || return base
     return merge(base, (z_flat = z_flat, firm_exp_rho = firm_exp_rho, firm_exp_s = firm_exp_s,
@@ -552,7 +689,7 @@ end
 """
     cell_perms(m) -> Vector{Matrix{Int32}}
 
-Per sector, `(k_max × R_CELL_REG)`: column j is the first `k_max = min(m, max N_HI)`
+Per sector, `(k_max × R_CELL_REG)`: column j is the first `k_max = min(m, max N_HI_CAP)`
 entries of a random permutation of `1:m`. Deterministic in `(m, CELL_PERM_SEED)`,
 cached per worker on `m`.
 """
@@ -573,7 +710,7 @@ The permutation set of `cell_perms` from an explicit `rng`, not cached: each fak
 (inference.jl) draws its own, so its simulated β carries its own simulation noise.
 """
 function draw_cell_perms(m::Int, rng::AbstractRNG)
-    k_max = min(m, maximum(N_HI))
+    k_max = min(m, maximum(N_HI_CAP))
     P = [Matrix{Int32}(undef, k_max, R_CELL_REG) for _ in 1:S]
     for s in 1:S, j in 1:R_CELL_REG
         P[s][:, j] .= Int32.(randperm(rng, m)[1:k_max])
@@ -709,16 +846,17 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     # 1. Labour share
     agg_labor_share = labor_share(c_tilde_r, params)
 
-    # 2. Sector shares X_s / X
+    # 2. Sector shares X_s / X of TOTAL intermediate spending (domestic + imported), the
+    # base of the data's input shares (TES dom + imp).
     X_ls = zeros(R, S)
     for g in 1:n_good
         X_ls[GOOD_R[g], GOOD_S[g]] = X_ls_flat[g]
     end
-    X_s = sum(X_ls, dims=1)
+    X_s = sum(X_ls, dims=1) .+ reshape(network.X_F_flat, 1, S)
     agg_industry_share = X_s ./ sum(X_s)
 
-    # 5. Sourcing shares, aggregated to attraction areas
-    gamma_out = aggregate_gamma_to_T(X_ls ./ X_s .* reshape(domestic_share, 1, S))
+    # 5. Sourcing shares of total purchases: areas, and the import share on the foreign row
+    gamma_out = gamma_T_from_flows(X_ls, network.X_F_flat)
 
     # 4b/6. Win counts → N̂_s (bisection) → Ḡ_s(0), Ḡ_s(K); all closed form in k.
     n_draw = size(linkages_flat, 1)
@@ -731,7 +869,8 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
         k_counts[g] = acc
     end
     q_hat = k_counts ./ n_draw
-    N_hat_free, clamped = concentrate_N_s(k_counts, n_draw)
+    q_french = french_variety_share(linkages_flat)
+    N_hat_free, clamped = concentrate_N_s(k_counts, n_draw; q = q_french)
     N_hat = N_fixed === nothing ? N_hat_free : copy(N_fixed)
 
     reg_coef, reg_fail, _ = cell_cloglog_moment(linkages_flat, N_hat; perms = perms)
@@ -754,6 +893,7 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
     return (agg_labor_share = [agg_labor_share], agg_industry_share = vec(agg_industry_share),
             pi_r = pi_r, reg_coef = reg_coef, gamma_ls = gamma_out, G0 = G0,
             N_hat = N_hat, N_hat_free = N_hat_free, clamped = clamped, q_hat = q_hat,
+            q_french = q_french, foreign_share = gamma_out[FOREIGN_COL, :],
             G_curve = G_curve, k_counts = k_counts, n_draw = n_draw, reg_fail = reg_fail)
 end
 
@@ -823,7 +963,9 @@ end
 """
     granular_report(params; u_draws, sample_weights, N_fixed=nothing) -> NamedTuple
 
-Non-moment diagnostics: N̂_s and clamps, q̂ per cell, Ḡ_s(0), the second route to N_s
+Non-moment diagnostics: N̂_s and clamps, the bisection's upper bound `N_hi` (N^obs_s/q_s
+with imports) and the French variety share `q_french`, the simulated import share,
+q̂ per cell, Ḡ_s(0), the second route to N_s
 `N^count_s = N_supplier_s / Σ_l q̂_ls`, expected supplier counts `N̂_s q̂`, and block 4 as
 model `E[β̂(y)]`, its sd across networks and `β̂(E[y])` (the cloglog on the expected
 network — the gap to `E[β̂(y)]` is what one network's granularity adds).
@@ -842,8 +984,10 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
     beta_expected, _ = cell_cloglog_beta(Ey)
     _, _, reps = cell_cloglog_moment(network.linkages_flat, m.N_hat)
     reg_sd = [std(filter(isfinite, reps[i, :])) for i in 1:size(reps, 1)]
+    N_hi = [n_hi_bound(s, m.n_draw, m.q_french) for s in 1:S]
     return (N_hat = m.N_hat, clamped = m.clamped, q_hat = m.q_hat, reg_coef = m.reg_coef,
             reg_fail = m.reg_fail, reg_sd = reg_sd, beta_expected = beta_expected,
             G0 = m.G0, N_count = N_count, EK = EK, G_curve = m.G_curve,
-            k_counts = m.k_counts, n_draw = m.n_draw)
+            k_counts = m.k_counts, n_draw = m.n_draw,
+            q_french = m.q_french, N_hi = N_hi, foreign_share = m.foreign_share)
 end

@@ -209,7 +209,7 @@ end
     profile_grid(theta, c; G=15, span=2.0, kappa_span=0.5) -> Vector
 
 α_k: `α̂ · span^{range(−1, 1)}`, inside `[1e-4, ALPHA_MAX]`. κ: `κ̂ ± kappa_span`, inside
-the κ box. N_s: the integers `round(N̂ · span^{range(−1, 1)})` in `[1, N_HI[s]]`. The
+the κ box. N_s: the integers `round(N̂ · span^{range(−1, 1)})` in `[1, N_HI_CAP[s]]`. The
 estimate itself is always on the grid.
 """
 function profile_grid(theta::AbstractVector, c, N_hat::Vector{Int}; G::Int = 15,
@@ -223,7 +223,7 @@ function profile_grid(theta::AbstractVector, c, N_hat::Vector{Int}; G::Int = 15,
         return sort(unique(vcat(kappa, clamp.(kappa .+ kappa_span .* t, KAPPA_LO, KAPPA_HI))))
     end
     n = N_hat[c.index]
-    return sort(unique(vcat(n, clamp.(round.(Int, n .* span .^ t), 1, N_HI[c.index]))))
+    return sort(unique(vcat(n, clamp.(round.(Int, n .* span .^ t), 1, N_HI_CAP[c.index]))))
 end
 
 function _profile_task(theta, c, grid, k::Int, N_base::Vector{Int}, seed::Int)

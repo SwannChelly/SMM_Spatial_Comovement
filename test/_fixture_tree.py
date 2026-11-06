@@ -70,9 +70,16 @@ def build(seed=11):
     AA_ACTIVE = np.zeros((S, R_D), dtype=bool)
     for s in range(S):
         AA_ACTIVE[s, aa_of_ze[sup_cells[s]]] = True
+    # T block in Julia's layout: per sector its active areas, then Phi^F_s (every sector
+    # imports here, domestic_share = 0.8), s-major. The area values are drawn exactly as
+    # before the foreign column existed and Phi^F from its own stream, so the Python
+    # economy (which has no foreign competitor) sees the same T.
     n_T = int(AA_ACTIVE.sum())
-    theta_hat = np.concatenate([[0.31], rng.uniform(.2, .5, S), rng.uniform(.8, 1.2, R_D),
-                                [0.4], [KAPPA], rng.lognormal(0, .3, n_T)])
+    head = np.concatenate([[0.31], rng.uniform(.2, .5, S), rng.uniform(.8, 1.2, R_D), [0.4], [KAPPA]])
+    T_area = np.zeros((S, R_D)); T_area[AA_ACTIVE] = rng.lognormal(0, .3, n_T)
+    phi_f = np.random.default_rng(99).lognormal(-1, .3, S)
+    T_blk = [np.append(T_area[s, AA_ACTIVE[s]], phi_f[s]) for s in range(S) if AA_ACTIVE[s].any()]
+    theta_hat = np.concatenate([head] + T_blk)
     np.save(f"{run}/step3/best_parameters_list.npy", theta_hat[:, None])
     np.save(f"{run}/step3/post_hoc_N_hat.npy", np.array([4, 7, 5]))
 

@@ -709,6 +709,21 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         if act.size:
             T_REF_AA[s] = act[np.argmax(emp_gamma_aa[s, act])]
 
+    # ------------------------------------------------- the foreign competitor
+    # One per sector (load_parameters.jl): f_s = 1 - domestic_share[s] is the import share,
+    # the LAST T column (FOREIGN_COL) holds Phi^F_s and the gamma block's foreign row is
+    # f_s. A sector imports when f_s > 0 and it has an active area. The gamma target is a
+    # share of TOTAL purchases: the areas sum to 1 - f_s, rescaled here as Julia does.
+    foreign_share = np.clip(1.0 - domestic_share.astype(float), 0.0, 1.0)
+    FOREIGN_ACTIVE = (foreign_share > 1e-12) & AA_ACTIVE.any(axis=1)
+    for s in range(S):
+        dom = emp_gamma_aa[s].sum()
+        if dom > 0 and abs(dom - (1.0 - foreign_share[s])) > 1e-12:
+            emp_gamma_aa[s] *= (1.0 - foreign_share[s]) / dom
+    n_Tcol = n_AA + 1                                   # areas + the foreign column
+    T_ACTIVE = np.hstack([AA_ACTIVE, FOREIGN_ACTIVE[:, None]])
+    emp_gamma_T = np.hstack([emp_gamma_aa, np.where(FOREIGN_ACTIVE, foreign_share, 0.0)[:, None]])
+
     # ------------------------------------------------------------- count moment
     G_target = np.full(S, np.nan)
     N_supplier_s = np.full(S, np.nan)
@@ -902,7 +917,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                   agg_industry_share.astype(float),
                   emp_pi_r,
                   reg_coef.astype(float),
-                  emp_gamma_aa.ravel()]            # C-order on (S, n_AA) == Julia vec((n_AA, S))
+                  emp_gamma_T.ravel()]             # C-order on (S, n_AA + 1) == Julia vec((T_COL_DIM, S))
     if granular:
         blocks_emp.append(G_target)
     block_sizes = [b.size for b in blocks_emp]
@@ -916,10 +931,10 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     off_gam = off_reg + reg_coef.size
     mask[off_ind] = False                              # first industry share
     mask[off_pi] = False                               # first pi_r
-    mask[off_gam:off_gam + S * n_AA] = AA_ACTIVE.ravel()
+    mask[off_gam:off_gam + S * n_Tcol] = T_ACTIVE.ravel()
     for s in range(S):
         if T_REF_AA[s] >= 0:
-            mask[off_gam + s * n_AA + T_REF_AA[s]] = False
+            mask[off_gam + s * n_Tcol + T_REF_AA[s]] = False
 
     # ------------------------------------------------------- simulated moments
     # Read only when asked for: a notebook that reports no moment fit does not need
@@ -950,14 +965,20 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
       edges = np.cumsum(block_sizes)[:-1]
       emp_blocks = dict(zip(keys, np.split(empirical_moments_full, edges)))
       sim_blocks = dict(zip(keys, np.split(sim_vec, edges)))
-      emp_blocks["gamma_aa"] = emp_blocks["gamma_aa"].reshape(S, n_AA)
-      sim_blocks["gamma_aa"] = sim_blocks["gamma_aa"].reshape(S, n_AA)
+      # The gamma block is (S, n_AA + 1): the areas, then the import share.
+      for blk in (emp_blocks, sim_blocks):
+          g = blk["gamma_aa"].reshape(S, n_Tcol)
+          blk["gamma_aa"], blk["foreign_share"] = g[:, :n_AA], g[:, n_AA]
 
       # All stages, block by block, with the STAGE axis last — the layout
       # analysis.ipynb's `best_simulated_moments_dict[key][..., K]` expects.
       stage_blocks = {}
       for k, b in zip(keys, np.split(best_simulated_moments, edges, axis=0)):
-        stage_blocks[k] = (b.reshape(S, n_AA, b.shape[1]) if k == "gamma_aa" else b)
+        if k == "gamma_aa":
+          g = b.reshape(S, n_Tcol, b.shape[1])
+          stage_blocks["gamma_aa"], stage_blocks["foreign_share"] = g[:, :n_AA], g[:, n_AA]
+        else:
+          stage_blocks[k] = b
 
     # `best_params` is CORE: it carries theta+'s head, so the economy needs it whatever
     # else is being reported.
@@ -980,7 +1001,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     #       re-estimated in each world (step2 at theta_hat_1 with W = I, step3 at
     #       theta_hat_2 with W_world): one row of `params` per usable world, labelled by
     #       world_inference_labels.txt (alpha, kappa, N_s, T, A, chi_L, chi_s).
-    n_gamma_kept = int(mask[off_gam:off_gam + S * n_AA].sum())
+    n_gamma_kept = int(mask[off_gam:off_gam + S * n_Tcol].sum())
     world_residuals = Omega_world = W_world = world_inference = None
     if "inference" in parts:
         p = folder / "step2" / "world_residuals.npz"
@@ -1018,7 +1039,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # Both axes of the Jacobian, rebuilt exactly as load_parameters.jl SECTION 13 does.
     #   rows    : the MASKED moment vector, six blocks;
     #   columns : the IDENTIFIED parameters, layout [chi_L | chi_s(S) | A(R_d) |
-    #             alpha(N_TAU) | kappa | T(active (s,AA), s-major)], minus the S+2 directions
+    #             alpha(N_TAU) | kappa | T(active (s, AA or foreign), s-major)], minus the S+2 directions
     #             the internal normalisations kill (chi_s[1], A[1], each sector's
     #             reference T).
     moment_labels, moment_block_sizes = [], []
@@ -1030,12 +1051,13 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     moment_block_sizes.append(len(aa_names) - 1)
     moment_labels += [f"beta_d[{lab}]" for lab in reg_coef_labels[:-1]] + ["beta_kappa"]
     moment_block_sizes.append(reg_coef.size)
-    gam_free = AA_ACTIVE.copy()
+    gam_free = T_ACTIVE.copy()
     for s in range(S):
         if T_REF_AA[s] >= 0:
             gam_free[s, T_REF_AA[s]] = False
-    moment_labels += [f"gamma[{sector_names[s]}-AA{aa_names[a]}]"
-                      for s in range(S) for a in range(n_AA) if gam_free[s, a]]
+    moment_labels += [(f"f_foreign[{sector_names[s]}]" if a == n_AA else
+                       f"gamma[{sector_names[s]}-AA{aa_names[a]}]")
+                      for s in range(S) for a in range(n_Tcol) if gam_free[s, a]]
     moment_block_sizes.append(int(gam_free.sum()))
     if granular:
         moment_labels += [f"G0[{sector_names[s]}]" for s in range(S)]
@@ -1051,8 +1073,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     param_labels += (["alpha"] if n_tau == 1 else [f"alpha_{b + 1}" for b in range(n_tau)])
     param_labels += ["kappa"]
     param_block_sizes.append(n_tau + 1)
-    param_labels += [f"T[{sector_names[s]}-AA{aa_names[a]}]"
-                     for s in range(S) for a in range(n_AA) if gam_free[s, a]]
+    param_labels += [(f"PhiF[{sector_names[s]}]" if a == n_AA else
+                      f"T[{sector_names[s]}-AA{aa_names[a]}]")
+                     for s in range(S) for a in range(n_Tcol) if gam_free[s, a]]
     param_block_sizes.append(int(gam_free.sum()))
 
     moment_block_names = ["Labor share", "Industry shares", "Downstream sales",
@@ -1172,6 +1195,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # structure
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
         "T_REF_AA": T_REF_AA, "domestic_share": domestic_share,
+        "foreign_share": foreign_share, "FOREIGN_ACTIVE": FOREIGN_ACTIVE,
+        "T_ACTIVE": T_ACTIVE, "emp_gamma_T": emp_gamma_T,
         "filter_N_upstream": filter_N_upstream, "filter_N_upstream_df": filter_N_upstream_df,
         "X_dr": X_dr, "emp_gamma_ls": emp_gamma_ls,
         # scalars / targets
@@ -1302,15 +1327,18 @@ def unpack_estimated_T(data):
     `unpack_params` does, plus alpha.
 
     `best_params` is the RAW theta vector, layout
-        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s,AA), s-major)],
-    where the T block carries EVERY active (sector, area) including each sector's
-    reference — `unpack_params` divides the sector by its reference entry, which is
-    what makes T_{ref,s} = 1 the gauge. The length is asserted against the rebuilt
+        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s, col), s-major)],
+    where the T block carries EVERY active (sector, column) including each sector's
+    reference area and, for an importing sector, the foreign competitor Phi^F_s (the
+    last column) — `unpack_params` divides the sector by its reference entry, which is
+    what makes T_{ref,s} = 1 the gauge, Phi^F_s included. The length is asserted against the rebuilt
     layout, so a flag mismatch is an error rather than a silently shifted vector.
 
-    Returns the AREA-level `T` (S, n_AA) and the CELL-level `T_cell` (S, R) the model
-    actually competes with, `T_ls = T_{a(l)s} * n_ls^kappa` (`gather_T_to_ze`), zero
-    outside CELL_MASK.
+    Returns the AREA-level `T` (S, n_AA), the foreign scale `PhiF` (S, zero where the
+    sector does not import) and the CELL-level `T_cell` (S, R) the model actually
+    competes with, `T_ls = T_{a(l)s} * n_ls^kappa` (`gather_T_to_ze`), zero outside
+    CELL_MASK. The Python economy has no foreign competitor yet: it reads `T` and
+    `T_cell` only.
     """
     bp = data.get("best_params")
     if bp is None:
@@ -1320,9 +1348,9 @@ def unpack_estimated_T(data):
     bp = np.asarray(bp, dtype=float).ravel()
 
     S, n_AA, n_tau = data["S"], data["n_AA"], data["n_tau"]
-    AA_ACTIVE = data["AA_ACTIVE"]
+    T_ACTIVE = data["T_ACTIVE"]                       # (S, n_AA + 1): areas + foreign
     R_d = len(data["aa_names"])                       # one area per downstream region
-    n_T = int(AA_ACTIVE.sum())
+    n_T = int(T_ACTIVE.sum())
     expected = 1 + S + R_d + n_tau + 1 + n_T
     if bp.size != expected:
         raise ValueError(
@@ -1333,12 +1361,13 @@ def unpack_estimated_T(data):
     off = 1 + S + R_d
     alpha = bp[off: off + n_tau]
     kappa = float(bp[off + n_tau])
-    T = np.zeros((S, n_AA))
-    T[AA_ACTIVE] = bp[off + n_tau + 1:]               # C-order on (S, n_AA) == s-major
+    T_full = np.zeros((S, n_AA + 1))
+    T_full[T_ACTIVE] = bp[off + n_tau + 1:]           # C-order on (S, n_AA + 1) == s-major
     for s in range(S):
         ref = data["T_REF_AA"][s]
-        if ref >= 0 and T[s, ref] > 0:
-            T[s] = T[s] / T[s, ref]
+        if ref >= 0 and T_full[s, ref] > 0:
+            T_full[s] = T_full[s] / T_full[s, ref]    # the gauge rescales Phi^F_s too
+    T, PhiF = T_full[:, :n_AA], T_full[:, n_AA]
     log_n = data.get("log_n_ls")
     if log_n is None:
         if kappa != 0.0:
@@ -1346,7 +1375,7 @@ def unpack_estimated_T(data):
                                     f"cannot be formed at kappa = {kappa:.4g}.")
         log_n = np.zeros((S, data["R"]))
     T_cell = T[:, data["aa_of_ze"]] * np.exp(kappa * log_n) * data["CELL_MASK"]
-    return {"T": T, "T_cell": T_cell, "alpha": alpha, "kappa": kappa,
+    return {"T": T, "PhiF": PhiF, "T_cell": T_cell, "alpha": alpha, "kappa": kappa,
             "theta": model_theta(data)}
 
 
@@ -1554,7 +1583,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
     bp = np.asarray(bp, dtype=float).ravel()
     S, n_AA, n_tau = data["S"], data["n_AA"], data["n_tau"]
     R_d = len(data["aa_names"])
-    n_T = int(data["AA_ACTIVE"].sum())
+    n_T = int(data["T_ACTIVE"].sum())               # areas + Phi^F of importing sectors
     expected = 1 + S + R_d + n_tau + 1 + n_T
     if bp.size != expected:
         raise ValueError(

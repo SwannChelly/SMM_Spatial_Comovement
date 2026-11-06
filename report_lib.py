@@ -325,12 +325,16 @@ def gamma_aa_points(data):
       * free      — active, non-reference (sector, AA) pairs, i.e. the moments that
                     actually enter the criterion;
       * reference — each sector's dropped reference area, RECONSTRUCTED from the
-                    within-sector adding-up constraint
-                        gamma_ref,s = domestic_share_s - sum_{a != ref} gamma_{s,a},
-                    applied to the SIMULATED gammas; its x is the observed share.
+                    within-sector adding-up constraint on TOTAL purchases (as Julia's
+                    GAMMA_REF_MAP, c_s = 1)
+                        gamma_ref,s = 1 - f_s - sum_{a != ref} gamma_{s,a},
+                    applied to the SIMULATED gammas and import share f_s; its x is the
+                    observed share.
     """
     emp, sim = data["empirical_moments_dict"]["gamma_aa"], data["simulated_moments_dict"]["gamma_aa"]
-    S, ref, act, c = data["S"], data["T_REF_AA"], data["AA_ACTIVE"], data["domestic_share"]
+    S, ref, act = data["S"], data["T_REF_AA"], data["AA_ACTIVE"]
+    f_sim = data["simulated_moments_dict"].get("foreign_share")
+    c = 1.0 - (np.zeros(S) if f_sim is None else np.asarray(f_sim, float))
 
     free = act.copy()
     for s in range(S):
@@ -1391,7 +1395,8 @@ def _sector_subblocks(data, block_name="Regional sourcing shares"):
     The (start, stop, sector) runs INSIDE one moment block, read off the labels.
 
     The gamma rows are labelled `gamma[<sector>-AA<area>]` and stored s-major, so the
-    sector is the text between "gamma[" and the LAST "-AA" and its rows are contiguous.
+    sector is the text between "gamma[" and the LAST "-AA" and its rows are contiguous;
+    an importing sector's run ends with its import share, `f_foreign[<sector>]`.
     Returns absolute row indices, so the caller can draw on the full matrix without
     knowing where the block starts. An empty list when the block is absent or its labels
     do not carry a sector, which is the right behaviour for every other block.
@@ -1404,6 +1409,8 @@ def _sector_subblocks(data, block_name="Regional sourcing shares"):
     labels = list(data["moment_labels"])[lo:hi]
 
     def _sector(lab):
+        if lab.startswith("f_foreign[") and lab.endswith("]"):   # the import share, last row
+            return lab[len("f_foreign["):-1]
         if not lab.startswith("gamma[") or "-AA" not in lab:
             return None
         return lab[len("gamma["):lab.rfind("-AA")]
@@ -2330,7 +2337,7 @@ def theta_alpha(data):
     bp = np.asarray(bp, dtype=float).ravel()
     S, n_tau = data["S"], data["n_tau"]
     R_d = len(data["aa_names"])
-    expected = 1 + S + R_d + n_tau + 1 + int(data["AA_ACTIVE"].sum())   # + kappa
+    expected = 1 + S + R_d + n_tau + 1 + int(data["T_ACTIVE"].sum())   # + kappa; T incl. Phi^F
     if bp.size != expected:
         raise ValueError(f"best_params has {bp.size} entries, layout rebuilt here is "
                          f"{expected} — the run's flags and the ones passed here disagree.")
