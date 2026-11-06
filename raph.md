@@ -229,7 +229,7 @@ PSO sur (α, χ, A) :
 retourner (α̂, χ̂, Â) et le T̂ associé
 ```
 
-Deux boucles emboîtées : la boucle interne (Sinkhorn) résout $T$ à $w$ fixé, la boucle externe (équilibre général) met à jour $w$ jusqu'au point fixe. Un point important : comme $\gamma$ est **exactement reproduit** par construction (c'est la marge imposée à Sinkhorn), le bloc $\gamma$ sort de la fonction objectif — le PSO n'ajuste plus que $\alpha$ et les paramètres de tête sur les moments restants. On remplace ainsi une recherche en grande dimension (tous les $T_{r's}$) par une résolution exacte, et le PSO ne balaie plus qu'un espace de faible dimension.
+Deux boucles emboîtées : la boucle interne (Sinkhorn) résout $T$ à $w$ fixé, la boucle externe (équilibre général) met à jour $w$ jusqu'au point fixe. Un point important : comme $\gamma$ est **exactement reproduit** par construction (c'est la marge imposée à Sinkhorn), le bloc $\gamma$ sort de la fonction objectif — le PSO n'ajuste plus que $\alpha$ et les agrégats sur les moments restants. On remplace ainsi une recherche en grande dimension (tous les $T_{r's}$) par une résolution exacte, et le PSO ne balaie plus qu'un espace de faible dimension.
 
 L'intervalle de confiance est construit de la même manière que précédemment : on calcule l'estimateur sandwich à partir de la Jacobienne simulée au point optimal et on utilise la matrice identité comme matrice de poids. 
 
