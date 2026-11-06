@@ -13,7 +13,7 @@
 #   Post-hoc: the firm-level economy at θ̂_1 and θ̂_2 (suppliers.parquet, ...)
 #
 # Usage: julia main.jl <industry> <n_coef> <n_tau> <n_rho_inf> <relax_n_lo> <profile_head>
-# profile_head = true: (Ω^L, Ω^s, A) are profiled jointly with T (profiling.jl), every
+# profile_head = true (default): (Ω^L, Ω^s, A) are profiled jointly with T (profiling.jl), every
 # search runs over [α ; κ] only, and blocks 1–3 leave the loss.
 # (run.sh builds the call). No data covariance is used: W and the inference both come
 # from worlds drawn from the model (inference.jl). World counts: ENV WORLD_B_W (1000),
@@ -49,7 +49,7 @@ industry        = length(ARGS) >= 1 ? ARGS[1] : "auto"
 n_coef          = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau           = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 n_rho_inference = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10_000   # unused since the fake-world inference
-relax_n_lo      = length(ARGS) >= 5 ? lowercase(strip(ARGS[5])) in ("true", "1", "yes") : false
+relax_n_lo      = length(ARGS) >= 5 ? lowercase(strip(ARGS[5])) in ("true", "1", "yes") : true
 profile_head    = length(ARGS) >= 6 ? lowercase(strip(ARGS[6])) in ("true", "1", "yes") : false
 n_coef in (1, 4, 5) || error("n_coef must be 1, 4 or 5, got $n_coef")
 n_tau in (1, n_coef) || error("n_tau must be 1 (τ = d^α) or n_coef (one α per distance bin), got $n_tau")
