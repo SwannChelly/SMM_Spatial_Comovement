@@ -203,7 +203,7 @@ On a donc un algorithme qui permet, conditionnellement à $\alpha$ de trouver le
 
 **5) Extension**
 
-On peut alléger le PSO en ne cherchant plus $T$ : à chaque particule, on propose un $\alpha$ (et les paramètres de tête $\Omega, A$), et on **récupère $T$ par Sinkhorn–Knopp** conditionnellement à $\alpha$. La subtilité est que la marge-colonne $w_r$ (dépenses/parts régionales) est un objet d'**équilibre** : quand $T$ bouge, les prix et les revenus bougent, donc $w$ bouge aussi. La cible même de l'algorithme de Sinkhorn se déplace. Il faut donc emboîter Sinkhorn dans une boucle de point fixe sur $w$ :
+On peut alléger le PSO en ne cherchant plus $T$ : à chaque particule, on propose un $\alpha$ (et les agrégats $\chi, A$), et on **récupère $T$ par Sinkhorn–Knopp** conditionnellement à $\alpha$. La subtilité est que la marge-colonne $w_r$ (dépenses/parts régionales) est un objet d'**équilibre** : quand $T$ bouge, les prix et les revenus bougent, donc $w$ bouge aussi. La cible même de l'algorithme de Sinkhorn se déplace. Il faut donc emboîter Sinkhorn dans une boucle de point fixe sur $w$ :
 
 ```
 solve_T_given_alpha(α, γ_data ; réf r0) :
@@ -220,13 +220,13 @@ solve_T_given_alpha(α, γ_data ; réf r0) :
     jusqu'à  δ < ε_GE
     retourner (T, w)
 
-PSO sur (α, Ω, A) :
-    pour chaque particule proposant (α, Ω, A) :
+PSO sur (α, χ, A) :
+    pour chaque particule proposant (α, χ, A) :
         (T, w) ← solve_T_given_alpha(α, γ_data)
-        m ← moments_modèle(α, Ω, A, T, w)
+        m ← moments_modèle(α, χ, A, T, w)
         L ← (m − m_data)' W (m − m_data)   # sur les moments RESTANTS
     mettre à jour les particules
-retourner (α̂, Ω̂, Â) et le T̂ associé
+retourner (α̂, χ̂, Â) et le T̂ associé
 ```
 
 Deux boucles emboîtées : la boucle interne (Sinkhorn) résout $T$ à $w$ fixé, la boucle externe (équilibre général) met à jour $w$ jusqu'au point fixe. Un point important : comme $\gamma$ est **exactement reproduit** par construction (c'est la marge imposée à Sinkhorn), le bloc $\gamma$ sort de la fonction objectif — le PSO n'ajuste plus que $\alpha$ et les paramètres de tête sur les moments restants. On remplace ainsi une recherche en grande dimension (tous les $T_{r's}$) par une résolution exacte, et le PSO ne balaie plus qu'un espace de faible dimension.
