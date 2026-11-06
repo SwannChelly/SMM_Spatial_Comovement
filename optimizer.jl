@@ -209,7 +209,7 @@ sorted_box(lo, hi) = (sort(lo), sort(hi))
 
 """
     train_stage(n_particles, max_iter; init_alpha, variable_list, last_stage_folder,
-                radius, weight_matrix, warm_start_override, moment_blocks)
+                tightness, weight_matrix, warm_start_override, moment_blocks)
         -> (best_params, best_fitness, history)
 
 Run one PSO stage and return the full parameter vector at its optimum.
@@ -226,14 +226,10 @@ searched: they are profiled at every particle.
 - `init_alpha`: the α around which the fresh-start box is built when `TAU_PRIOR` is `nothing`; ignored in a continue stage.
 - `variable_list`: the blocks searched in a continue stage (`"alpha_kappa"`, `"productivity"`, `"agg_labor_share_tech"`, `"agg_industry_share_tech"`); ignored in a fresh start.
 - `last_stage_folder`: the folder whose `best_params.npy` is the incumbent; `nothing` means a fresh start.
-- `radius`: the width of the continue-stage box around the incumbent (see the caveat below).
+- `tightness`: t ∈ (0, 1], how narrow the continue-stage box is around the incumbent: `[x·t, x/t]` for the positive blocks (Ω^L, Ω^s, A, α) and `x ± (1 − t)·range/2` for κ, so a larger t narrows every box.
 - `weight_matrix`: the weighting matrix of the loss; `nothing` means `Weight_matrix_custom` (the identity).
 - `warm_start_override`: a full parameter vector whose searched part joins the fresh-start swarm as one particle; ignored in a continue stage.
 - `moment_blocks`: the moment blocks that enter the loss (`[4, 5, 6]` under PROFILE_HEAD in Step 1, `[4]` in Step 3); `nothing` means all six.
-
-Caveat on `radius`: a larger value WIDENS the α and Ω^L boxes (`× (1 ± radius)`) but
-NARROWS the κ box (half-width `(1 − radius) ×` its range) and the A and Ω^s boxes
-(`[× radius, ÷ radius]`).
 
 # Returns
 - `best_params`: the full level vector `[Ω^L | Ω^s | A | α | κ | T]` at the best particle, with T (and the head under PROFILE_HEAD) profiled there.
@@ -244,7 +240,7 @@ function train_stage(n_particles::Int, max_iter::Int;
                      init_alpha = nothing,
                      variable_list = nothing,
                      last_stage_folder = nothing,
-                     radius = 0.1,
+                     tightness = 0.9,
                      weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
                      warm_start_override::Union{Nothing, Vector{Float64}} = nothing,
                      moment_blocks::Union{Nothing, Vector{Int}} = nothing)
@@ -282,23 +278,25 @@ function train_stage(n_particles::Int, max_iter::Int;
 
         lb_parts = Vector{Float64}[]; ub_parts = Vector{Float64}[]
         offset = 0
+        # One rule for every block: a positive parameter x gets [x·t, x/t] and κ gets x ± (1 − t)·range/2,
+        # so the box narrows as the tightness t rises towards 1 (both widths are ≈ (1 − t) near t = 1).
         for v in var_list
             val = params_dict[Symbol(v)]
             if v == "agg_labor_share_tech"
-                lb_v = max.(val .* (1 - radius), 0.001); ub_v = min.(val .* (1 + radius), 1.0)
+                lb_v = max.(val .* tightness, OMEGA_L_MIN); ub_v = min.(val ./ tightness, OMEGA_L_MAX)
             elseif v == "alpha_kappa"
                 κv, αv = val[end], val[1:N_TAU]
-                half = (1 - radius) * (KAPPA_HI - KAPPA_LO) / 2
+                half = (1 - tightness) * (KAPPA_HI - KAPPA_LO) / 2
                 κlo, κhi = max(κv - half, KAPPA_LO), min(κv + half, KAPPA_HI)
                 κlo >= κhi && ((κlo, κhi) = (KAPPA_LO, KAPPA_HI))
                 box_lo, box_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : αv)
-                lb_v = max.(αv .* (1 - radius), box_lo); ub_v = min.(αv .* (1 + radius), box_hi)
+                lb_v = max.(αv .* tightness, box_lo); ub_v = min.(αv ./ tightness, box_hi)
                 bad = lb_v .>= ub_v           # incumbent above the cap: reset to the full box
                 lb_v = ifelse.(bad, box_lo, lb_v); ub_v = ifelse.(bad, box_hi, ub_v)
                 lb_v, ub_v = sorted_box(lb_v, ub_v)
                 lb_v = vcat(lb_v, κlo); ub_v = vcat(ub_v, κhi)
             else
-                lb_v = val .* radius; ub_v = val ./ radius
+                lb_v = val .* tightness; ub_v = val ./ tightness
             end
             push!(lb_parts, lb_v isa Number ? [lb_v] : lb_v)
             push!(ub_parts, ub_v isa Number ? [ub_v] : ub_v)
@@ -369,8 +367,8 @@ end
                      moments_loss_gamma_beta) -> (best_params, best_fitness)
 
 Step 1 (`gamma_beta_only = false`): a joint fit of the whole head, then `max_loop`
-block-coordinate loops (A, then [α ; κ], then Ω^L/Ω^s), with a radius annealed from
-0.3 to 0.9. Under PROFILE_HEAD the fit and every loop are over [α ; κ] only, and the
+block-coordinate loops (A, then [α ; κ], then Ω^L/Ω^s), with a box tightness raised from
+0.3 to 0.9 (every box narrows over the loops). Under PROFILE_HEAD the fit and every loop are over [α ; κ] only, and the
 loss drops blocks 1–3 (`[4, 5, 6]`): at the profile the SIMULATED blocks 1–3 differ from
 their targets only by the Monte-Carlo error of the realised price indices. Step 3 (`gamma_beta_only = true`): only [α ; κ], the rest fixed at θ̂_1,
 on the inference moments (β → γ → G) with `weight_matrix = W_step3`.
@@ -404,11 +402,11 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
         seed_folder = joinpath(loop_base, "seed")
         save_stage(seed_folder, warm_start_params)
         best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial;
-            variable_list = ["alpha_kappa"], last_stage_folder = seed_folder, radius = 0.5,
+            variable_list = ["alpha_kappa"], last_stage_folder = seed_folder, tightness = 0.5,
             weight_matrix = weight_matrix, moment_blocks = moment_blocks)
     else
         best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial;
-            init_alpha = warm_start_params[alpha_range()], radius = 0.5,
+            init_alpha = warm_start_params[alpha_range()],
             weight_matrix = weight_matrix, warm_start_override = warm_start_params,
             moment_blocks = moment_blocks)
     end
@@ -418,21 +416,21 @@ function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = noth
 
     stage_vars = (gamma_beta_only || PROFILE_HEAD) ? (["alpha_kappa"],) :
         (["productivity"], ["alpha_kappa"], ["agg_labor_share_tech", "agg_industry_share_tech"])
-    radius_start, radius_end = 0.3, 0.9
+    tight_start, tight_end = 0.3, 0.9
     for loop in 1:max_loop
-        radius = radius_start + (loop - 1) * (radius_end - radius_start) / max(max_loop - 1, 1)
+        tightness = tight_start + (loop - 1) * (tight_end - tight_start) / max(max_loop - 1, 1)
         prev_folder = joinpath(loop == 1 ? loop_base : joinpath(loop_base, "epoch_$(loop-1)"), string(stage))
         loop_folder = joinpath(loop_base, "epoch_$loop")
-        println("\n[$output_subfolder] LOOP $loop/$max_loop  radius=$radius")
+        println("\n[$output_subfolder] LOOP $loop/$max_loop  tightness=$tightness")
         for vars in stage_vars
-            r = vars == ["productivity"] ? 0.7 + 0.2 * radius : radius
+            t = vars == ["productivity"] ? 0.7 + 0.2 * tightness : tightness
             best_params, best_fitness, _ = train_stage(n_particles, max_iter_stage;
-                variable_list = vars, last_stage_folder = prev_folder, radius = r,
+                variable_list = vars, last_stage_folder = prev_folder, tightness = t,
                 weight_matrix = weight_matrix, moment_blocks = moment_blocks)
             stage += 1
             prev_folder = joinpath(loop_folder, string(stage))
             save_stage(prev_folder, best_params)
-            generate_report(prev_folder, best_params; variable = join(vars, ", "), radius = r)
+            generate_report(prev_folder, best_params; variable = join(vars, ", "), tightness = t)
         end
         println("  loop $loop done, fitness $(round(best_fitness, digits=6))")
         if loop > 2

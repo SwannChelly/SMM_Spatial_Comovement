@@ -68,13 +68,13 @@ _quartiles(v) = (nz = filter(!=(0), vec(v));
                   q3 = quantile(nz, 0.75), max_val = maximum(nz)))
 
 """
-    generate_report(folder, params; variable="", radius="")
+    generate_report(folder, params; variable="", tightness="")
 
 Writes `dashboard.png` (γ_{s,a} with the reconstructed reference areas, π_r, sector
 shares), the T plot, `pi_r.npy`, `productivity.npy` and `report.txt` (fit of every
 block, the profiled N̂_s with its clamps, block 4 against the data).
 """
-function generate_report(folder::String, params::Vector{Float64}; variable::String = "", radius = "")
+function generate_report(folder::String, params::Vector{Float64}; variable::String = "", tightness = "")
     mkpath(folder)
     loss, sim = full_SMM(params)
     sim_vec = moments_to_vec(sim)
@@ -101,7 +101,7 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
     gr = try granular_report(params) catch e; @warn "granular section skipped: $e"; nothing end
     open(joinpath(folder, "report.txt"), "w") do io
         println(io, "Date: $(Dates.format(now(), "yyyy-mm-dd HH:MM"))")
-        println(io, "Optimisation: $(isempty(variable) ? "All" : variable)   radius: $radius")
+        println(io, "Optimisation: $(isempty(variable) ? "All" : variable)   tightness: $tightness")
         println(io, "Score: $(loss[1])")
         println(io, "α = $(round.(params[alpha_range()], digits = 4))   κ = $(round(unpack_kappa(params), digits = 4))\n")
         @printf(io, ">> Labour share   Empirical: %8.4f | Simulated: %8.4f\n", agg_labor_share, sim[1][1])
