@@ -74,6 +74,10 @@ function generate_draws(N_rho::Int, n_good::Int, method::Symbol;
         U      = Matrix{Float64}(undef, N_rho, n_good)
         lo, hi = eps(), 1.0 - eps()
         master = randomise ? rng : MersenneTwister(42)
+        # One net per sector, because a variety's supplier is the min over the cells of its own
+        # sector only: competition never crosses sectors, so the sectors are separate integrals.
+        # The nets are a numerical integration device, not an assumption about links between
+        # sectors. `master` is drawn from sector after sector, so each sector gets its own shift.
         @inbounds for g_indices in SECTOR_GOOD_INDICES
             isempty(g_indices) && continue
             net = sobol_scrambled_net(N_rho, length(g_indices), master)
