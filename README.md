@@ -28,7 +28,7 @@ SMM_Spatial_Comovement/
 ├── load_parameters.jl   # data → constants, moment vector, masks, T starting value
 ├── model_CP.jl          # simulated model, cell-level cloglog (block 4), N_s bisection, moments
 ├── profiling.jl         # closed-form prices, GE-Sinkhorn inversion T*(α, κ, Ω, A)
-├── optimizer.jl         # PSO and the staged block-coordinate search
+├── optimizer.jl         # PSO over (α, κ), in stages of narrowing boxes
 ├── reporting.jl         # stage reports, run summaries, granular diagnostics, post-hoc economy
 ├── inference.jl         # fake worlds: W from Cov(β_world − β_sim), parametric-bootstrap inference
 │
@@ -119,7 +119,6 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 ./SMM_Spatial_Comovement/run.sh aero                                   # n_coef=4, n_tau=1
 ./SMM_Spatial_Comovement/run.sh aero --n_coef=1 --n_rho_inf=20000
 ./SMM_Spatial_Comovement/run.sh aero --relax_n_lo=true                 # diagnostic
-./SMM_Spatial_Comovement/run.sh aero --profile_head=false              # head searched, not profiled
 ./SMM_Spatial_Comovement/run.sh both
 ```
 
@@ -130,30 +129,32 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 | `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one distance elasticity per segment between bin centres, nesting d^α) |
 | `--n_rho_inf` | integer | `10000` | unused (inference now from fake worlds, at the estimation's `N_rho`); kept so old calls parse |
 | `--relax_n_lo` | `true`, `false` | `false` | DIAGNOSTIC: N_LO forced to 1 (drops the model's bound) |
-| `--profile_head` | `true`, `false` | `true` | (Ω^L, Ω^s, A) profiled jointly with T from blocks 1–3; search over [α ; κ] only, blocks 1–3 out of the loss |
 
-Outputs go to `reporting_<industry>_profiled_aa_gran_kappa[_nlo1][_profhead]_pso/` (log in `logs.log`;
+Outputs go to `reporting_<industry>_profiled_aa_gran_kappa[_nlo1]_pso/` (log in `logs.log`;
 stop with `pkill -f 'julia.*main'`). Worker count: `N_WORKERS` (default 50), heap per
 worker: `WORKER_HEAP_HINT` (default 2G).
 
 ## What it computes
 
-1. **Step 1** — identity-weighted PSO over `[Ω^L, Ω^s, A, α, κ]`, T = T* by Sinkhorn
-   inversion of the observed area-level sourcing shares, N_s by integer bisection on the
-   zero-supplier share; a joint fit then block-coordinate loops → θ̂₁ (`step1/`).
+1. **Step 1** — identity-weighted PSO over `[α ; κ]` on blocks 4–6. At each (α, κ), T and
+   the aggregates (Ω^L, Ω^s, A) are profiled jointly (`profile_ge`): they reproduce the
+   area-level sourcing shares and blocks 1–3 (labour share, sector shares, sales shares)
+   exactly. N_s by integer bisection on the zero-supplier share. A first stage on the whole
+   box, then stages in narrowing boxes → θ̂₁ (`step1/`).
 2. **Step 2** — `WORLD_B_W` (1000) fake worlds at θ̂₁: one network of N̂_s varieties with
-   i.i.d. draws, its own β, γ, G, π; T re-inverted with A updated, N calibrated, β
+   i.i.d. draws, its own β, γ, G, π, labour and sector shares; T and the aggregates
+   re-profiled on them, N calibrated, β
    simulated with the world's seed; `W = Cov(β_world − β_sim)^{-1}` on block 4 (`step2/`).
    Then the Step-4 inference at θ̂₁ with Step 1's weighting W = I (`step2/inference_world/`).
-3. **Step 3** — `[α ; κ]` re-estimated under W on block 4, the rest fixed at θ̂₁ → θ̂₂ (`step3/`).
-4. **Step 4** — `WORLD_B_INF` (500) fake worlds at θ̂₂, the whole chain (T, A, N, local
+3. **Step 3** — `[α ; κ]` re-estimated under W on block 4, starting at θ̂₁ (T and the aggregates re-profiled) → θ̂₂ (`step3/`).
+4. **Step 4** — `WORLD_B_INF` (500) fake worlds at θ̂₂, the whole chain (profile of T and the aggregates, N, local
    search over α, κ) re-run in each (`step3/inference_world/`): sd, 2.5/97.5% quantiles and
    bias for every parameter, the dispersion of log T, and closed-form counterfactuals (mean sourcing distance, local share at 100/200 km
    under the estimate, equal T, no trade cost).
 
 Steps 2 and 4 end with the **moment sensitivity** (`sensitivity.jl`, `<step>/sensitivity/`):
-one-parameter profiles of α, κ and N_s (T re-inverted at each point) and a Jacobian over
-the head, α, κ, T and N_s by central differences with common random numbers, on the
+one-parameter profiles of α, κ and N_s (T and the aggregates re-profiled at each point) and a
+Jacobian over the aggregates, α, κ, T and N_s by central differences with common random numbers, on the
 estimation draws and `SENS_K` (10) independent draw sets. `SENS=0` skips it.
 
 Post-hoc: the firm-level economy at θ̂₁ and θ̂₂ (`suppliers.parquet` etc.), the input of

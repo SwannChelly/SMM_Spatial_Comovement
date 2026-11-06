@@ -95,7 +95,6 @@ end
 ##################### Parameters ###################
 
 t_param_start() = S + R_downstream + 3 + N_TAU          # first T index
-n_head_params() = 2 + S + R_downstream + N_TAU          # [Ω^L | Ω^s | A | α | κ]
 alpha_range()   = (S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)
 kappa_index()   = S + R_downstream + 2 + N_TAU
 unpack_kappa(params) = params[kappa_index()]

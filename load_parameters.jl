@@ -1,9 +1,10 @@
 # Data loading and constant distribution — main specification only:
 # granular varieties (finite N_s), comparative advantage at the attraction-area level
-# with T_ls = T_{a(l)s} · n_ls^κ, cell-level cloglog extensive margin, T profiled.
+# with T_ls = T_{a(l)s} · n_ls^κ, cell-level cloglog extensive margin, T and the
+# aggregates (Ω^L, Ω^s, A) profiled, (α, κ) searched.
 #
 # Expects in the calling scope: input_folder, output_folder, n_coef, n_tau,
-# n_rho_inference, relax_n_lo, profile_head. Everything is broadcast to the workers with
+# n_rho_inference, relax_n_lo. Everything is broadcast to the workers with
 # `@everywhere const`.
 #
 # Parameter vector: [Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK))]
@@ -74,9 +75,6 @@ _gamma_factor_local = [SpecialFunctions.gamma((theta + 1 - nu_s[s]) / theta)^(1 
 # κ: one density elasticity, T_ls = T_{a(l)s} n_ls^κ, searched jointly with α in an
 # absolute box. Block 4 is averaged over R_CELL_REG nested networks.
 @everywhere const RELAX_N_LO     = $(Bool(relax_n_lo))
-# PROFILE_HEAD: (Ω^L, Ω^s, A) profiled out jointly with T (profiling.jl,
-# `invert_T_head_ge`); the search runs over [α ; κ] only and blocks 1–3 leave the loss.
-@everywhere const PROFILE_HEAD   = $(Bool(profile_head))
 @everywhere const R_CELL_REG     = 100
 @everywhere const CELL_PERM_SEED = 4_242_000
 @everywhere const KAPPA_LO = -1.0
@@ -523,18 +521,6 @@ end
 @everywhere const BOUND_LO  = 0.1
 @everywhere const BOUND_HI  = 10
 @everywhere const ALPHA_MAX = 1.5
-
-# Step-1 cold-start box of the head [Ω^L | Ω^s | A], as multipliers of its starting
-# values (observed labour share, observed industry shares, analytical A inversion).
-# Those starts are not the structural values: with w ≡ 1 the labour share is
-# Ω_L/(Ω_L + (1−Ω_L)P_r^{1−λ}) and the sector share ∝ Ω_s (P_sr/P_r)^{1−ν}, so Ω^L, Ω^s
-# absorb the price level set by the T gauge and can sit far from the observed shares;
-# the former ±20% box could bind. Ω^L is also clamped to [OMEGA_L_MIN, OMEGA_L_MAX].
-@everywhere const HEAD_OMEGA_L_BOX = (0.25, 4.0)
-@everywhere const OMEGA_L_MIN      = 0.001
-@everywhere const OMEGA_L_MAX      = 0.95
-@everywhere const HEAD_OMEGA_S_BOX = (0.2, 5.0)
-@everywhere const HEAD_A_BOX       = (0.5, 2.0)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 12 — LABELS AND INFERENCE BOOKKEEPING

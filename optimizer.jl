@@ -1,16 +1,9 @@
-##### optimizer.jl — staged PSO over the head [Ω^L | Ω^s | A | α | κ] #####
+##### optimizer.jl — PSO over (α, κ), in stages of narrowing boxes #####
 #
-# T is never searched: every objective evaluation replaces it by T*(α, κ, Ω, A)
-# (profiling.jl). A particle whose inversion does not converge is REJECTED (loss Inf),
-# never scored at a T the model does not imply.
-#
-# Stage variables (a "stage" optimises one block, warm-started at the incumbent):
-#   "productivity"                                  A
-#   "alpha_kappa"                                   [α ; κ]
-#   "agg_labor_share_tech", "agg_industry_share_tech"  Ω^L, Ω^s
-#
-# Under PROFILE_HEAD the head (Ω^L, Ω^s, A) is profiled jointly with T, so every search
-# — the fresh start included — runs over [α ; κ] only.
+# The search runs over (α, κ) only. T and the aggregates (Ω^L, Ω^s, A) are never
+# searched: every objective evaluation profiles them at the particle (profiling.jl). A
+# particle whose profile does not converge is REJECTED (loss Inf), never scored at a T
+# the model does not imply.
 
 using Distributed
 using Random
@@ -178,17 +171,6 @@ end
 ##################### Stages ###################
 
 """
-    param_start(var) -> first index of a stage variable in the level vector
-"""
-function param_start(var::Symbol)
-    var == :agg_labor_share_tech    && return 1
-    var == :agg_industry_share_tech && return 2
-    var == :productivity            && return 2 + S
-    var == :alpha_kappa             && return 2 + S + R_downstream
-    error("Unknown stage variable :$var")
-end
-
-"""
     alpha_box(anchor) -> (lo, hi)
 
 α box `[BOUND_LO, BOUND_HI] × anchor`, capped at `ALPHA_MAX` in levels; the floor stays
@@ -208,136 +190,70 @@ end
 sorted_box(lo, hi) = (sort(lo), sort(hi))
 
 """
-    train_stage(n_particles, max_iter; init_alpha, variable_list, last_stage_folder,
-                tightness, weight_matrix, warm_start_override, moment_blocks)
+    train_stage(n_particles, max_iter; start, fresh, tightness, weight_matrix, moment_blocks)
         -> (best_params, best_fitness, history)
 
-Run one PSO stage and return the full parameter vector at its optimum.
-
-A fresh start (`last_stage_folder === nothing`) searches [α ; κ] under PROFILE_HEAD (the
-whole head otherwise), in a box around the data-based starting values. A continue stage
-searches only the blocks in `variable_list`, in a box around the previous stage's
-optimum, and keeps every other block there. T, and the head under PROFILE_HEAD, are never
-searched: they are profiled at every particle.
+Run one PSO stage over (α, κ) and return the full parameter vector at its optimum. T and
+the aggregates (Ω^L, Ω^s, A) are profiled at every particle (`profile_theta`).
 
 # Arguments
 - `n_particles`: the swarm size, which should be a multiple of `nworkers()`.
 - `max_iter`: the number of PSO iterations.
-- `init_alpha`: the α around which the fresh-start box is built when `TAU_PRIOR` is `nothing`; ignored in a continue stage.
-- `variable_list`: the blocks searched in a continue stage (`"alpha_kappa"`, `"productivity"`, `"agg_labor_share_tech"`, `"agg_industry_share_tech"`); ignored in a fresh start.
-- `last_stage_folder`: the folder whose `best_params.npy` is the incumbent; `nothing` means a fresh start.
-- `tightness`: t ∈ (0, 1], how narrow the continue-stage box is around the incumbent: `[x·t, x/t]` for the positive blocks (Ω^L, Ω^s, A, α) and `x ± (1 − t)·range/2` for κ, so a larger t narrows every box.
+- `start`: a full level vector whose (α, κ) joins the swarm as one particle and, unless `fresh`, centres the box; its other entries are ignored.
+- `fresh`: `true` searches the whole box (α within `alpha_box` of its prior, κ in `[KAPPA_LO, KAPPA_HI]`); `false` a box around `start` set by `tightness`.
+- `tightness`: t ∈ (0, 1], how narrow the box around `start` is: `[α·t, α/t]` and `κ ± (1 − t)·(KAPPA_HI − KAPPA_LO)/2`, both clipped to the whole box, so a larger t narrows the box; ignored when `fresh`.
 - `weight_matrix`: the weighting matrix of the loss; `nothing` means `Weight_matrix_custom` (the identity).
-- `warm_start_override`: a full parameter vector whose searched part joins the fresh-start swarm as one particle; ignored in a continue stage.
-- `moment_blocks`: the moment blocks that enter the loss (`[4, 5, 6]` under PROFILE_HEAD in Step 1, `[4]` in Step 3); `nothing` means all six.
+- `moment_blocks`: the moment blocks that enter the loss (`[4, 5, 6]` in Step 1, `[4]` in Step 3).
 
 # Returns
-- `best_params`: the full level vector `[Ω^L | Ω^s | A | α | κ | T]` at the best particle, with T (and the head under PROFILE_HEAD) profiled there.
+- `best_params`: the full level vector `[Ω^L | Ω^s | A | α | κ | T]` at the best particle, profiled there.
 - `best_fitness`: the loss at that particle.
 - `history`: the PSO history (`parallel_pso_smm`).
 """
 function train_stage(n_particles::Int, max_iter::Int;
-                     init_alpha = nothing,
-                     variable_list = nothing,
-                     last_stage_folder = nothing,
-                     tightness = 0.9,
+                     start::Vector{Float64},
+                     fresh::Bool = false,
+                     tightness::Real = 0.9,
                      weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
-                     warm_start_override::Union{Nothing, Vector{Float64}} = nothing,
-                     moment_blocks::Union{Nothing, Vector{Int}} = nothing)
-    nhead = n_head_params()
-    T_PLACEHOLDER = vec(permutedims(T_rs_init))[T_MASK]   # overwritten by profiling
-    cached_tau = nothing
+                     moment_blocks::Union{Nothing, Vector{Int}} = [4, 5, 6])
+    α0, κ0 = start[alpha_range()], unpack_kappa(start)
+    box_lo, box_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : α0)
 
-    # 1) Build the search box [lb, ub] and the warm-start particle of the PSO.
-    if last_stage_folder === nothing
-        # 1.1) Fresh start: centre the box on the data-based starting values.
-        A = copy(emp_pi_r_full).^(1/abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
-        A ./= sum(A)
-        a_lo, a_hi = sorted_box(alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : init_alpha)...)
-        lb = vcat(max(HEAD_OMEGA_L_BOX[1] * agg_labor_share, OMEGA_L_MIN),
-                  HEAD_OMEGA_S_BOX[1] .* agg_industry_share, HEAD_A_BOX[1] .* A, a_lo, KAPPA_LO)
-        ub = vcat(min(HEAD_OMEGA_L_BOX[2] * agg_labor_share, OMEGA_L_MAX),
-                  HEAD_OMEGA_S_BOX[2] .* agg_industry_share, HEAD_A_BOX[2] .* A, a_hi, KAPPA_HI)
-        best_params_prev = nothing
-        var_list = String[]
-        warm_start = warm_start_override === nothing ? nothing : warm_start_override[1:nhead]
-        # 1.1.1) Under PROFILE_HEAD, drop the head from the box: profiling overwrites it, so only [α ; κ] is searched.
-        n_fixed = PROFILE_HEAD ? first(alpha_range()) - 1 : 0
-        head_prefix = PROFILE_HEAD ? (warm_start === nothing ? lb[1:n_fixed] : warm_start[1:n_fixed]) :
-                                     Float64[]
-        lb = lb[(n_fixed + 1):end]; ub = ub[(n_fixed + 1):end]
-        warm_start === nothing || (warm_start = warm_start[(n_fixed + 1):end])
+    # 1) Build the search box over (α, κ).
+    if fresh
+        # 1.1) Fresh start: the whole α box around its prior and the whole κ range.
+        α_lo, α_hi = sorted_box(box_lo, box_hi)
+        κ_lo, κ_hi = KAPPA_LO, KAPPA_HI
     else
-        # 1.2) Continue stage: centre the box on the previous stage's optimum, for the listed blocks only.
-        best_params_prev = NPZ.npzread(joinpath(last_stage_folder, "best_params.npy"))[:, 1]
-        Ω_L, Ω_s, A_r, α, _ = unpack_params(best_params_prev)
-        params_dict = Dict(:agg_labor_share_tech => Ω_L, :agg_industry_share_tech => Ω_s,
-                           :productivity => A_r, :alpha_kappa => vcat(α, unpack_kappa(best_params_prev)))
-        var_list = isa(variable_list, String) ? [variable_list] : collect(variable_list)
-        ("alpha_kappa" in var_list) || (cached_tau = build_tau(α))
+        # 1.2) Continue stage: a box around `start`, narrower as the tightness rises, clipped to the whole box.
+        α_lo = max.(α0 .* tightness, box_lo); α_hi = min.(α0 ./ tightness, box_hi)
+        bad = α_lo .>= α_hi                 # incumbent above the cap: reset to the whole box
+        α_lo = ifelse.(bad, box_lo, α_lo); α_hi = ifelse.(bad, box_hi, α_hi)
+        α_lo, α_hi = sorted_box(α_lo, α_hi)
+        half = (1 - tightness) * (KAPPA_HI - KAPPA_LO) / 2
+        κ_lo, κ_hi = max(κ0 - half, KAPPA_LO), min(κ0 + half, KAPPA_HI)
+        κ_lo >= κ_hi && ((κ_lo, κ_hi) = (KAPPA_LO, KAPPA_HI))
+    end
+    lb, ub = vcat(α_lo, κ_lo), vcat(α_hi, κ_hi)
 
-        lb_parts = Vector{Float64}[]; ub_parts = Vector{Float64}[]
-        offset = 0
-        # One rule for every block: a positive parameter x gets [x·t, x/t] and κ gets x ± (1 − t)·range/2,
-        # so the box narrows as the tightness t rises towards 1 (both widths are ≈ (1 − t) near t = 1).
-        for v in var_list
-            val = params_dict[Symbol(v)]
-            if v == "agg_labor_share_tech"
-                lb_v = max.(val .* tightness, OMEGA_L_MIN); ub_v = min.(val ./ tightness, OMEGA_L_MAX)
-            elseif v == "alpha_kappa"
-                κv, αv = val[end], val[1:N_TAU]
-                half = (1 - tightness) * (KAPPA_HI - KAPPA_LO) / 2
-                κlo, κhi = max(κv - half, KAPPA_LO), min(κv + half, KAPPA_HI)
-                κlo >= κhi && ((κlo, κhi) = (KAPPA_LO, KAPPA_HI))
-                box_lo, box_hi = alpha_box(TAU_PRIOR !== nothing ? TAU_PRIOR : αv)
-                lb_v = max.(αv .* tightness, box_lo); ub_v = min.(αv ./ tightness, box_hi)
-                bad = lb_v .>= ub_v           # incumbent above the cap: reset to the full box
-                lb_v = ifelse.(bad, box_lo, lb_v); ub_v = ifelse.(bad, box_hi, ub_v)
-                lb_v, ub_v = sorted_box(lb_v, ub_v)
-                lb_v = vcat(lb_v, κlo); ub_v = vcat(ub_v, κhi)
-            else
-                lb_v = val .* tightness; ub_v = val ./ tightness
-            end
-            push!(lb_parts, lb_v isa Number ? [lb_v] : lb_v)
-            push!(ub_parts, ub_v isa Number ? [ub_v] : ub_v)
-            offset += length(val)
-        end
-        lb = vcat(lb_parts...); ub = vcat(ub_parts...)
-        warm_start = vcat([params_dict[Symbol(v)] for v in var_list]...)
-        @assert length(warm_start) == length(lb)
+    # 2) Map a particle (α, κ) to a full level vector, with the α block sorted (see `sorted_box`).
+    function to_full(x)
+        xf = copy(start)
+        xf[alpha_range()] = sort(x[1:N_TAU])
+        xf[kappa_index()] = x[end]
+        return xf
     end
-    # 2) Map a particle (searched coordinates only) to the full parameter vector.
-    # The fixed blocks come from the previous stage (or the head placeholder), T is a
-    # placeholder that profiling replaces, and the α block is sorted (see `sorted_box`).
-    function stage_to_full_params(x_stage)
-        if best_params_prev === nothing
-            x_full = vcat(head_prefix, x_stage, T_PLACEHOLDER)
-        else
-            x_full = copy(best_params_prev)
-            pos = 1
-            for v in var_list
-                len = length(params_dict[Symbol(v)])
-                st = param_start(Symbol(v))
-                x_full[st:(st + len - 1)] = x_stage[pos:(pos + len - 1)]
-                pos += len
-            end
-        end
-        sort!(view(x_full, alpha_range()))
-        return x_full
-    end
-    # 3) Score a particle: profile T (and the head), then compute the SMM loss on `moment_blocks`.
-    # A particle whose inversion does not converge gets Inf, never a score at an unprofiled T.
-    function objective(x_stage)
-        prof = profiled_theta_full(stage_to_full_params(x_stage))
+    # 3) Score a particle: profile T and the aggregates, then compute the loss on `moment_blocks`; Inf if the profile fails.
+    function objective(x)
+        prof = profile_theta(to_full(x))
         prof.converged || return Inf
-        result = safe_SMM(prof.theta; precomputed_tau=cached_tau,
-                          W_override=weight_matrix, moment_blocks=moment_blocks)
+        result = safe_SMM(prof.theta; W_override = weight_matrix, moment_blocks = moment_blocks)
         return (result === nothing || !isfinite(result[1][1])) ? Inf : result[1][1]
     end
-    # 4) Diagnostic only: report whether the T inversion converges at a particle, without scoring it.
-    function probe(x_stage)
+    # 4) Diagnostic only: report whether the profile converges at a particle, without scoring it.
+    function probe(x)
         try
-            p = profiled_theta_full(stage_to_full_params(x_stage))
+            p = profile_theta(to_full(x))
             return (converged = p.converged, alpha = p.alpha)
         catch
             return (converged = false, alpha = Float64[])
@@ -345,101 +261,81 @@ function train_stage(n_particles::Int, max_iter::Int;
     end
 
     println("\n" * "="^60)
-    println("PSO stage: ", isempty(var_list) ? (PROFILE_HEAD ? "alpha_kappa (head profiled)" : "all head parameters") :
-            join(var_list, ", "),
+    println("PSO stage (α, κ)", fresh ? ", fresh start" : ", tightness $tightness",
             " | particles $n_particles | iterations $max_iter | dimension $(length(lb))")
     println("="^60)
     # 5) Run the PSO: each iteration scores every particle in parallel with `objective`.
     best_x, best_fitness, history = parallel_pso_smm(objective, lb, ub;
-        n_particles = n_particles, max_iter = max_iter, warm_start_particle = warm_start,
+        n_particles = n_particles, max_iter = max_iter, warm_start_particle = vcat(α0, κ0),
         t_conv_probe = probe)
 
-    # 6) Profile once more at the best particle, because the PSO returns only the searched coordinates.
-    prof = profiled_theta_full(stage_to_full_params(best_x))
-    prof.converged || @warn "invert_T_ge did NOT converge at the stage optimum (no particle " *
+    # 6) Profile once more at the best particle, because the PSO returns only (α, κ).
+    prof = profile_theta(to_full(best_x))
+    prof.converged || @warn "the profile did NOT converge at the stage optimum (no particle " *
         "converged): the returned T is the last iterate." resid=prof.resid iters=prof.iters
     return prof.theta, best_fitness, history
 end
 
 """
-    run_optimization(; weight_matrix, warm_start_params, output_subfolder, max_loop,
-                     n_particles, max_iter_initial, max_iter_stage, gamma_beta_only,
-                     moments_loss_gamma_beta) -> (best_params, best_fitness)
+    run_optimization(; start, fresh_start, weight_matrix, loss_blocks, output_subfolder,
+                     max_loop, n_particles, max_iter_initial, max_iter_stage)
+        -> (best_params, best_fitness)
 
-Step 1 (`gamma_beta_only = false`): a joint fit of the whole head, then `max_loop`
-block-coordinate loops (A, then [α ; κ], then Ω^L/Ω^s), with a box tightness raised from
-0.3 to 0.9 (every box narrows over the loops). Under PROFILE_HEAD the fit and every loop are over [α ; κ] only, and the
-loss drops blocks 1–3 (`[4, 5, 6]`): at the profile the SIMULATED blocks 1–3 differ from
-their targets only by the Monte-Carlo error of the realised price indices. Step 3 (`gamma_beta_only = true`): only [α ; κ], the rest fixed at θ̂_1,
-on the inference moments (β → γ → G) with `weight_matrix = W_step3`.
+A first PSO stage (stage 0), then `max_loop` stages, each centred on the previous optimum,
+with a box tightness raised from 0.3 to 0.9 so the box narrows over the loops. Every
+stage writes `<step>/0/` or `<step>/epoch_k/k/` (`best_params.npy` and its report); the
+loops stop when the parameters move by less than 1e-6 between consecutive stages.
 
-Every stage writes `<step>/<stage>/best_params.npy` (stage 0 = the initial fit,
-`epoch_k/<stage>` in the loops) and its report; the loop stops when the parameters
-move by less than 1e-6 between consecutive loops.
+# Arguments
+- `start`: the full level vector the search starts from (its (α, κ) is the warm-start particle).
+- `fresh_start`: `true` (Step 1) searches the whole box at stage 0; `false` (Step 3) a box of tightness 0.5 around `start`.
+- `weight_matrix`: the weighting matrix of the loss; `nothing` means the identity.
+- `loss_blocks`: the moment blocks in the loss. Step 1 uses `[4, 5, 6]`: blocks 1–3 and γ are matched by the profile, and their SIMULATED values differ from the targets only by the Monte-Carlo error of the realised price indices. Step 3 uses `[4]` with the fake-world W.
+- `output_subfolder`: the step folder under `output_folder`.
+- `max_loop`: the maximum number of stages after stage 0.
+- `n_particles`: the swarm size, which should be a multiple of `nworkers()`.
+- `max_iter_initial`, `max_iter_stage`: the PSO iterations of stage 0 and of each later stage.
 
-`n_particles` should be a multiple of `nworkers()` (pmap evaluates one particle per worker).
+# Returns
+- `best_params`: the full level vector at the last stage's optimum.
+- `best_fitness`: its loss.
 """
-function run_optimization(; weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
-                          warm_start_params::Vector{Float64},
+function run_optimization(; start::Vector{Float64},
+                          fresh_start::Bool = true,
+                          weight_matrix::Union{Nothing, AbstractMatrix} = nothing,
+                          loss_blocks::Vector{Int} = [4, 5, 6],
                           output_subfolder::String = "step1",
                           max_loop::Int = 20,
                           n_particles::Int = 98,
                           max_iter_initial::Int = 200,
-                          max_iter_stage::Int = 50,
-                          gamma_beta_only::Bool = false,
-                          moments_loss_gamma_beta::Bool = false,
-                          loss_blocks::Union{Nothing, Vector{Int}} = nothing)
+                          max_iter_stage::Int = 50)
     loop_base = joinpath(output_folder, output_subfolder)
     mkpath(loop_base)
-    # `loss_blocks` overrides: Step 3 uses [4] alone with the fake-world W (inference.jl),
-    # γ and G being reproduced exactly by the T inversion and the N bisection.
-    moment_blocks = loss_blocks !== nothing ? loss_blocks :
-                    (moments_loss_gamma_beta || PROFILE_HEAD) ? [4, 5, 6] : nothing
-    save_stage(folder, params) = (mkpath(folder);
-        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(params, :, 1)))
-
-    if gamma_beta_only
-        seed_folder = joinpath(loop_base, "seed")
-        save_stage(seed_folder, warm_start_params)
-        best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial;
-            variable_list = ["alpha_kappa"], last_stage_folder = seed_folder, tightness = 0.5,
-            weight_matrix = weight_matrix, moment_blocks = moment_blocks)
-    else
-        best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial;
-            init_alpha = warm_start_params[alpha_range()],
-            weight_matrix = weight_matrix, warm_start_override = warm_start_params,
-            moment_blocks = moment_blocks)
+    function save_stage(folder, params, label)
+        mkpath(folder)
+        NPZ.npzwrite(joinpath(folder, "best_params.npy"), reshape(params, :, 1))
+        generate_report(folder, params; variable = label)
     end
-    stage = 0
-    save_stage(joinpath(loop_base, "0"), best_params)
-    generate_report(joinpath(loop_base, "0"), best_params; variable = "initial fit")
 
-    stage_vars = (gamma_beta_only || PROFILE_HEAD) ? (["alpha_kappa"],) :
-        (["productivity"], ["alpha_kappa"], ["agg_labor_share_tech", "agg_industry_share_tech"])
+    # 1) Stage 0: the whole box (Step 1) or a box of tightness 0.5 around `start` (Step 3).
+    best_params, best_fitness, _ = train_stage(n_particles, max_iter_initial; start = start,
+        fresh = fresh_start, tightness = 0.5, weight_matrix = weight_matrix, moment_blocks = loss_blocks)
+    save_stage(joinpath(loop_base, "0"), best_params, "initial fit")
+
+    # 2) Later stages: centred on the previous optimum, the box narrowing as the tightness rises.
     tight_start, tight_end = 0.3, 0.9
     for loop in 1:max_loop
         tightness = tight_start + (loop - 1) * (tight_end - tight_start) / max(max_loop - 1, 1)
-        prev_folder = joinpath(loop == 1 ? loop_base : joinpath(loop_base, "epoch_$(loop-1)"), string(stage))
-        loop_folder = joinpath(loop_base, "epoch_$loop")
         println("\n[$output_subfolder] LOOP $loop/$max_loop  tightness=$tightness")
-        for vars in stage_vars
-            t = vars == ["productivity"] ? 0.7 + 0.2 * tightness : tightness
-            best_params, best_fitness, _ = train_stage(n_particles, max_iter_stage;
-                variable_list = vars, last_stage_folder = prev_folder, tightness = t,
-                weight_matrix = weight_matrix, moment_blocks = moment_blocks)
-            stage += 1
-            prev_folder = joinpath(loop_folder, string(stage))
-            save_stage(prev_folder, best_params)
-            generate_report(prev_folder, best_params; variable = join(vars, ", "), tightness = t)
-        end
+        prev = best_params
+        best_params, best_fitness, _ = train_stage(n_particles, max_iter_stage; start = prev,
+            tightness = tightness, weight_matrix = weight_matrix, moment_blocks = loss_blocks)
+        save_stage(joinpath(loop_base, "epoch_$loop", string(loop)), best_params, "(α, κ), tightness $tightness")
         println("  loop $loop done, fitness $(round(best_fitness, digits=6))")
-        if loop > 2
-            prev = NPZ.npzread(joinpath(loop_base, "epoch_$(loop-1)",
-                                        string(stage - length(stage_vars)), "best_params.npy"))[:, 1]
-            if maximum(abs.(best_params .- prev) ./ (abs.(prev) .+ 1e-10)) < 1e-6
-                println("  converged: Δparams < 1e-6.")
-                break
-            end
+        # 3) Stop when the parameters no longer move.
+        if loop > 2 && maximum(abs.(best_params .- prev) ./ (abs.(prev) .+ 1e-10)) < 1e-6
+            println("  converged: Δparams < 1e-6.")
+            break
         end
     end
     run_reporting(loop_base, max_loop)

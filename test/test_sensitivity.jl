@@ -7,8 +7,8 @@
 #
 #   (1) DETERMINISM: the estimation-draw Jacobian is a function of θ (two runs agree).
 #   (2) STRUCTURAL ZEROS: the N_s columns are exactly zero outside blocks 4 and 6 (the
-#       value blocks use the full draw set), and the head columns exactly zero on
-#       blocks 4 and 6 (with wages ≡ 1 the head does not change who wins).
+#       value blocks use the full draw set), and the aggregate columns exactly zero on
+#       blocks 4 and 6 (with wages ≡ 1 the aggregates do not change who wins).
 #   (3) PROFILES: the point at the estimate reproduces the base moments on the
 #       estimation draws (α, κ: T re-inverted at θ̂ is θ̂'s own T*), and Ḡ_s(0) is
 #       strictly decreasing along the N_s grid.
@@ -27,7 +27,6 @@ n_coef          = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau           = 1
 n_rho_inference = 1000
 relax_n_lo      = false
-profile_head    = get(ENV, "PROFILE_HEAD", "false") == "true"
 input_folder    = get(ENV, "INPUT_FOLDER", "./baseline_$industry")
 output_folder   = mktempdir()
 include(joinpath(REPO, "load_parameters.jl"))
@@ -37,7 +36,7 @@ check(name, ok) = (global pass &= ok; @printf("  [%s] %s\n", ok ? "PASS" : "FAIL
 
 x = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), collect(TAU_PRIOR),
          KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK])
-θ = profiled_theta_full(x).theta
+θ = profile_theta(x).theta
 d1, d2 = mktempdir(), mktempdir()
 r1 = sensitivity_jacobian(θ; K = 2, dest = d1)
 r2 = sensitivity_jacobian(θ; K = 2, dest = d2)
@@ -51,12 +50,12 @@ blk = zeros(Int, sum(MOMENT_MASK))
 for (b, rg) in enumerate(BLOCK_RANGES); blk[rg] .= b; end
 cols = sens_columns(θ)
 iN = findall(c -> c.kind === :N, cols)
-iH = findall(c -> c.kind === :head, cols)
+iA = findall(c -> c.kind === :aggregate, cols)
 off46 = findall(b -> !(b in (4, 6)), blk)
 on46  = findall(b -> b in (4, 6), blk)
 check("N_s columns exactly zero outside blocks 4 and 6", all(r1.J_est[off46, iN] .== 0))
 check("N_s columns move Ḡ_s(0)", all(any(r1.J_est[collect(BLOCK_RANGES[6]), j] .!= 0) for j in iN))
-check("head columns exactly zero on blocks 4 and 6", all(r1.J_est[on46, iH] .== 0))
+check("aggregate columns exactly zero on blocks 4 and 6", all(r1.J_est[on46, iA] .== 0))
 check("every column finite on the estimation draws", all(isfinite, r1.J_est))
 
 println("\n(3) Profiles")
@@ -78,9 +77,9 @@ end
 
 println("\n", pass ? "ALL SENSITIVITY GATES PASS" : "SOME SENSITIVITY GATES FAILED")
 cols2 = sens_columns(θ)
-for k in (:head, :alpha, :kappa, :T, :N)
+for k in (:aggregate, :alpha, :kappa, :T, :N)
     j = findall(c -> c.kind === k, cols2)
-    @printf("  %-6s max |ΔJ| between runs: estimation draws %.3g, mean %.3g\n", k,
+    @printf("  %-9s max |ΔJ| between runs: estimation draws %.3g, mean %.3g\n", k,
             maximum(abs.(r1.J_est[:, j] .- r2.J_est[:, j])), maximum(abs.(r1.J[:, j] .- r2.J[:, j])))
 end
 pass || exit(1)

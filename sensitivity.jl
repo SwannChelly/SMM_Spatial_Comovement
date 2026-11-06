@@ -20,12 +20,12 @@
 #      noise-to-signal reading (`J_sd/√K` against `|J|`) before an entry is interpreted.
 #
 #      Columns and the derivative each one carries:
-#        α_k, κ    TOTAL derivative along the estimator's manifold: T (and the head
-#                  under PROFILE_HEAD) re-profiled at θ ± h (`profiled_theta_full`).
+#        α_k, κ    TOTAL derivative along the estimator's manifold: T and the
+#                  aggregates re-profiled at θ ± h (`profile_theta`).
 #                  Holding T fixed would let α move γ, which the inversion pins in
 #                  estimation, and suggest a spurious identification of α by γ.
 #        T[s,a]    partial derivative, T free (every identified, non-reference area).
-#        head      partial derivative of Ω^L, Ω^s[2:S], A[2:R_d] (the normalised-out
+#        aggregate partial derivative of Ω^L, Ω^s[2:S], A[2:R_d] (the normalised-out
 #                  Ω^s[1] and A[1] are gauge directions and are skipped).
 #        N_s       unit difference in varieties, (m(N+1) − m(N−1))/2 (forward at N = 1),
 #                  other sectors pinned. Only blocks 4 and 6 move: the value blocks
@@ -36,7 +36,7 @@
 #   2. PROFILES `sensitivity_profiles` — Catherine et al.'s Figure D.1. One parameter at
 #      a time is swept over a grid around the estimate, everything else held at θ̂, and
 #      the whole moment vector is recorded at each point, evaluated as the estimator
-#      evaluates it: for α_k and κ, T re-inverted and N̂_s re-calibrated by the bisection
+#      evaluates it: for α_k and κ, T and the aggregates re-profiled and N̂_s re-calibrated by the bisection
 #      (so its integer jumps are part of the curve); for N_s, the other sectors' counts
 #      pinned. Each point is computed on the estimation draws (the curve the optimiser
 #      saw) and on the same K independent draw sets (the band). The global sweep shows
@@ -71,20 +71,20 @@ function sens_moments(theta::AbstractVector, ds; N_fixed::Union{Nothing, Vector{
 end
 
 """
-    sens_columns(theta; include_T=true, include_head=true) -> Vector of NamedTuples
+    sens_columns(theta; include_T=true, include_aggregates=true) -> Vector of NamedTuples
 
-The Jacobian's parameter axis: (label, kind, index) with `kind ∈ (:head, :alpha,
+The Jacobian's parameter axis: (label, kind, index) with `kind ∈ (:aggregate, :alpha,
 :kappa, :T, :N)`; `index` is the position in θ, or the sector for `:N`.
 """
-function sens_columns(theta::AbstractVector; include_T::Bool = true, include_head::Bool = true)
+function sens_columns(theta::AbstractVector; include_T::Bool = true, include_aggregates::Bool = true)
     cols = NamedTuple{(:label, :kind, :index), Tuple{String, Symbol, Int}}[]
-    if include_head
-        push!(cols, (label = PARAM_LABELS[1], kind = :head, index = 1))
+    if include_aggregates
+        push!(cols, (label = PARAM_LABELS[1], kind = :aggregate, index = 1))
         for i in 3:(S + 1)
-            push!(cols, (label = PARAM_LABELS[i], kind = :head, index = i))
+            push!(cols, (label = PARAM_LABELS[i], kind = :aggregate, index = i))
         end
         for i in (S + 3):(S + R_downstream + 1)
-            push!(cols, (label = PARAM_LABELS[i], kind = :head, index = i))
+            push!(cols, (label = PARAM_LABELS[i], kind = :aggregate, index = i))
         end
     end
     for i in alpha_range()
@@ -104,16 +104,15 @@ function sens_columns(theta::AbstractVector; include_T::Bool = true, include_hea
 end
 
 """
-    sens_profile(x) -> `profiled_theta_full(x)` from a COLD start
+    sens_profile(x) -> `profile_theta(x)` from a COLD start
 
-The warm caches of the T (and head) inversion make the converged T* depend, at the
+The warm cache of the profile makes the converged T* depend, at the
 inversion tolerance, on whatever the worker solved last; a finite difference divides
 that by the step. Clearing them makes every sensitivity output a function of θ alone.
 """
 function sens_profile(x::AbstractVector)
-    T_WARM_CACHE[] = nothing
-    HEAD_WARM_CACHE[] = nothing
-    return profiled_theta_full(x)
+    PROFILE_WARM_CACHE[] = nothing
+    return profile_theta(x)
 end
 
 # θ at a continuous perturbation of column `c`; `nothing` when the profile fails.
@@ -161,7 +160,7 @@ _nanmean(x) = (f = filter(isfinite, x); isempty(f) ? NaN : mean(f))
 _nanstd(x)  = (f = filter(isfinite, x); length(f) < 2 ? NaN : std(f))
 
 """
-    sensitivity_jacobian(theta; K=10, h=0.02, include_T=true, include_head=true,
+    sensitivity_jacobian(theta; K=10, h=0.02, include_T=true, include_aggregates=true,
                          seed=SENS_SEED, dest) -> NamedTuple
 
 See the header. Writes `jacobian.npz` (`J`, `J_sd`, `J_est`, `J_draws` (K × moments ×
@@ -169,11 +168,11 @@ parameters), `m_base`, `m_base_draws`, `theta`, `N_base`, `kind`, `h`, `K`) and
 `jacobian_param_labels.txt` / `jacobian_moment_labels.txt` under `dest`.
 """
 function sensitivity_jacobian(theta::AbstractVector; K::Int = 10, h::Float64 = 0.02,
-                              include_T::Bool = true, include_head::Bool = true,
+                              include_T::Bool = true, include_aggregates::Bool = true,
                               seed::Int = SENS_SEED, dest::AbstractString)
     mkpath(dest)
     θ = collect(Float64, theta)
-    cols = sens_columns(θ; include_T = include_T, include_head = include_head)
+    cols = sens_columns(θ; include_T = include_T, include_aggregates = include_aggregates)
     n_p, n_m = length(cols), sum(MOMENT_MASK)
     println("Sensitivity Jacobian: $n_p columns × $(K + 1) draw sets (estimation + $K), step $h")
 
@@ -196,7 +195,7 @@ function sensitivity_jacobian(theta::AbstractVector; K::Int = 10, h::Float64 = 0
                       "m_base" => base[1][1], "m_base_draws" => permutedims(reduce(hcat, (b[1] for b in base[2:end]))),
                       "theta" => [c.kind === :N ? Float64(N_base[1][c.index]) : θ[c.index] for c in cols],
                       "N_base" => Float64.(N_base[1]), "h" => [h], "K" => [Float64(K)],
-                      "kind" => [Float64(findfirst(==(c.kind), (:head, :alpha, :kappa, :T, :N))) for c in cols]))
+                      "kind" => [Float64(findfirst(==(c.kind), (:aggregate, :alpha, :kappa, :T, :N))) for c in cols]))
     write(joinpath(dest, "jacobian_param_labels.txt"), join([c.label for c in cols], "\n") * "\n")
     write(joinpath(dest, "jacobian_moment_labels.txt"), join(MOMENT_LABELS, "\n") * "\n")
     n_nan = count(!isfinite, J)
@@ -280,7 +279,7 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
                               seed::Int = SENS_SEED, dest::AbstractString)
     mkpath(dest)
     θ = collect(Float64, theta)
-    cols = filter(c -> c.kind in (:alpha, :kappa, :N), sens_columns(θ; include_T = false, include_head = false))
+    cols = filter(c -> c.kind in (:alpha, :kappa, :N), sens_columns(θ; include_T = false, include_aggregates = false))
     base = pmap(k -> sens_moments(θ, sens_drawset(k; seed = seed)), 0:K)
     N_base = [b[2] for b in base]
     grids = [profile_grid(θ, c, N_base[1]; G = G, span = span, kappa_span = kappa_span) for c in cols]
@@ -309,7 +308,7 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
                      Dict("grid" => Float64.(grids[j]), "m_est" => Mest, "m_mean" => m_mean,
                           "m_sd" => m_sd, "N_est" => rs[1].N, "converged" => Float64.(rs[1].conv),
                           "estimate" => [est], "targets" => Float64.(tg), "data" => emp,
-                          "kind" => [Float64(findfirst(==(c.kind), (:head, :alpha, :kappa, :T, :N)))]))
+                          "kind" => [Float64(findfirst(==(c.kind), (:aggregate, :alpha, :kappa, :T, :N)))]))
         g = Float64.(grids[j]); i0 = findfirst(==(est), g)
         for t in tg
             y = Mest[:, t]

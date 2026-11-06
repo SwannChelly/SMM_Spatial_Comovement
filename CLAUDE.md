@@ -2,8 +2,10 @@
 
 The Julia code estimates ONE specification: granular varieties (finite `N_s`),
 comparative advantage at the attraction-area level with `T_ls = T_{a(l)s} · n_ls^κ`,
-the cell-level cloglog extensive margin (block 4 = `[β_d ; β_κ]`), and T profiled out of
-the search by a GE-Sinkhorn inversion. The previous multi-specification code (GMM,
+the cell-level cloglog extensive margin (block 4 = `[β_d ; β_κ]`), and ONE estimation
+mode: the PSO searches (α, κ) only, and T with the aggregates (Ω^L, Ω^s, A) is profiled
+out of the search by a joint GE-Sinkhorn inversion (`profile_ge`). The word "head" is
+retired: use "aggregates" for (Ω^L, Ω^s, A). The previous multi-specification code (GMM,
 continuum, ZE-level CA, LPM, firm-level regression, CMA-ES/TikTak, joint T search) is
 frozen in `old_version/`, with its own `CLAUDE.md` and full changelog. Do not add
 backward compatibility to the root code; restore from `old_version/` if needed.
@@ -18,6 +20,7 @@ names/locations below must not move.
 
 | Date | Files | Summary |
 |------|-------|---------|
+| 2026-11-06 | `profiling.jl`, `optimizer.jl`, `inference.jl`, `sensitivity.jl`, `load_parameters.jl`, `model_CP.jl`, `main.jl`, `run.sh`, `README.md`, `test/test_profiling.jl` (renamed from `test_head_profiling.jl`), `test/test_sensitivity.jl`, `test/files.md`, `CLAUDE.md` | **One estimation mode: (α, κ) searched, T and the aggregates (Ω^L, Ω^s, A) profiled jointly; the word "head" is retired.** The former `PROFILE_HEAD = true` path becomes the only one. **Removed**: `--profile_head` / `PROFILE_HEAD`; the fixed-aggregates T inversion (`invert_T_ge`, `invert_T_ge_warm`, `T_WARM_CACHE`, `normalized_head`); the searched-aggregates PSO (stages `productivity`, `agg_labor_share_tech`, `agg_industry_share_tech`, `param_start`, the fresh-start aggregate box, `HEAD_OMEGA_L_BOX`, `OMEGA_L_MIN/MAX`, `HEAD_OMEGA_S_BOX`, `HEAD_A_BOX`, `n_head_params`); the A update relative to the estimate in the fake worlds; the `seed/` folder of Step 3. **Renamed**: `invert_T_head_ge` → `profile_ge`, `HEAD_WARM_CACHE` → `PROFILE_WARM_CACHE`, `head_targets` → `profile_targets`, `solve_head`/`head_shares`/`head_residual`/`head_init` → `solve_aggregates`/`aggregate_shares`/`aggregate_residual`/`aggregate_init`, `with_head` → `with_aggregates`, `head_moment_residuals` → `aggregate_moment_residuals`, `profiled_theta_full` → `profile_theta`, `recalibrate_TA` → `profile_world`; sensitivity columns `:head` → `:aggregate` (`include_aggregates`; numeric code 1 unchanged, so the Python reader is unaffected). **New API**: `train_stage(n, iters; start, fresh, tightness, weight_matrix, moment_blocks)` searches (α, κ) only; `run_optimization(; start, fresh_start, weight_matrix, loss_blocks = [4, 5, 6], …)` (Step 3: `fresh_start = false`, `loss_blocks = [4]`). Stage folders keep their layout (`0/`, `epoch_k/k/`). **Output folder**: `_profhead` is dropped, so it is `reporting_<ind>_profiled_aa_gran_kappa[_nlo1]_pso/`, which is what the Python loader builds with its default `profile_head=False` (its keyword is now vestigial; Python untouched). `main.jl` takes 5 arguments again. **Verified (Julia 1.10.5, synthetic 3 × 60 × 6 tree, `-p 2`)**: against the previous code run with `PROFILE_HEAD = true`, 40/40 arrays BIT-IDENTICAL — profiled θ, moment vector and loss on a 3 × 3 (α, κ) grid; a small-budget Step 1 (stage 0 + 3 stages) and Step 3 (stage 0 + 2 stages); Ω̃ from 12 fake worlds; the draws of a 3-world inference. `test/test_profiling.jl` passes at n_tau = 1 and 4, `test/test_sensitivity.jl` passes. **Not run**: the real data. |
 | 2026-11-06 | `optimizer.jl`, `reporting.jl`, `CLAUDE.md` | **One box rule for every continue stage; `radius` renamed `tightness`.** Before, a larger `radius` widened the α and Ω^L boxes (`× (1 ± r)`) but narrowed the κ (`± (1 − r)·range/2`), A and Ω^s (`[×r, ÷r]`) boxes, so the 0.3 → 0.9 schedule of the loops widened α while it narrowed κ in the same stage. Now `t` ∈ (0, 1] narrows every box: `[x·t, x/t]` for Ω^L, Ω^s, A, α (Ω^L clamped to `[OMEGA_L_MIN, OMEGA_L_MAX]` instead of `[0.001, 1]`), κ unchanged; the two widths are ≈ (1 − t) near t = 1. **Behaviour change**: the α box is log-symmetric (Step 3 at t = 0.5: `[α/2, 2α]` instead of `[α/2, 3α/2]`, still capped by `alpha_box`), and in Step-1 loops the α and Ω^L boxes now shrink over the loops. The fresh-start call loses its unused `radius = 0.5`. `report.txt` prints `tightness`. **Untested here** (no Julia). |
 | 2026-11-06 | `optimizer.jl`, `CLAUDE.md` | **Documentation of `train_stage` and `parallel_pso_smm`**: every argument and output is described in the docstrings, and `parallel_pso_smm` gets numbered block comments `# 1)`–`# 6)`. The docstring of `train_stage` states that `radius` widens the α and Ω^L boxes but narrows the κ, A and Ω^s boxes (existing behaviour, not changed). A note claiming the initial swarm uses one seed per sector is replaced: the swarm has no sector dimension; its scramble comes from the global RNG seeded in `main.jl`. No code change. |
 | 2026-11-06 | `main.jl`, `run.sh`, `README.md`, `optimizer.jl`, `CLAUDE.md` | **`--profile_head` now defaults to `true`** (`run.sh`, and `main.jl`'s 6th argument when omitted), so the default output tree is `..._profhead_pso`. The Python loader's `profile_head=False` default is NOT changed (Python is out of scope): pass `profile_head=True` to read a default run. **`train_stage`**: the numbered block comments are rewritten as one sentence per block, `build_x_full` is renamed `stage_to_full_params`, and `objective`/`probe` are described. No behaviour change in the search. **Untested here** (no Julia). |
@@ -41,18 +44,20 @@ names/locations below must not move.
 | `main.jl` | Steps 1–4 + post-hoc; flags `run_step1..4`, `K_loops`, `K_sim`, `K_jac` at the top |
 | `load_parameters.jl` | data → `@everywhere const` globals, moment vector, masks, T init |
 | `model_CP.jl` | draws, `unpack_params`, `solve_network`, cell cloglog (block 4), N̂_s bisection, `compute_moments`, `full_SMM` |
-| `profiling.jl` | closed-form EK prices, `invert_T_ge` (Sinkhorn), `invert_T_head_ge` (T + head, `PROFILE_HEAD`), `profiled_theta_full` |
-| `optimizer.jl` | PSO, `train_stage`, `run_optimization` (stage 0 + block-coordinate loops) |
+| `profiling.jl` | closed-form EK prices, `profile_ge` (T + aggregates, Sinkhorn + Newton), `profile_theta` |
+| `optimizer.jl` | PSO over (α, κ), `train_stage`, `run_optimization` (stage 0 + stages in narrowing boxes) |
 | `reporting.jl` | stage dashboard/report, `run_reporting`, `report_granular`, `write_post_hoc` |
-| `inference.jl` | fake worlds: `world_weight_matrix` (Step 2), `world_inference` (Step 4) |
+| `inference.jl` | fake worlds: `profile_world`, `world_weight_matrix` (Step 2), `world_inference` (Step 4) |
 | `sensitivity.jl` | moment sensitivity: `sensitivity_profiles` (Fig. D.1) and the CRN `sensitivity_jacobian` |
 
 ## Model objects
 
 Parameter vector (levels): `[Ω^L(1) | Ω^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK))]`.
 Ω^s is normalised to sum to 1, A to A[1] = 1, T per sector to `T[s, ref] = 1`.
-T is never searched: the stage objective replaces the T block with `T*(α, κ, Ω, A)`; a
-particle whose inversion does not converge gets `Inf` (never scored at a fabricated T).
+Only (α, κ) are searched. The objective replaces the aggregates (Ω^L, Ω^s, A) and the T
+block with their profile at (α, κ) (`profile_theta`), which matches γ and blocks 1–3
+exactly; a particle whose profile does not converge gets `Inf` (never scored at a
+fabricated T). The loss is blocks 4–6 in Step 1 and block 4 in Step 3.
 
 Moment vector (masked): `[labor | industry (S−1) | π_r (R_d−1) | β_d (N_REG) ; β_κ | γ_{s,a} (active, non-ref) | Ḡ_s(0) (S)]`,
 `BLOCK_RANGES` a 6-tuple. Assemble with `moments_to_vec`, never by hand.
@@ -68,12 +73,13 @@ order — all areas of sector 1, then sector 2 — so the T[s,a] parameter ↔ �
 `T_ID_REDUCED` drops each sector's reference area and aligns with the γ moments.
 
 ### Weighting and inference: fake worlds
-W lives on block 4 (`[β_d ; β_κ]`, `BLOCK_RANGES[4]` order) only; γ and G are reproduced
-exactly by the T inversion and the N bisection. No data covariance is read.
+W lives on block 4 (`[β_d ; β_κ]`, `BLOCK_RANGES[4]` order) only; γ, blocks 1–3 and G are
+reproduced exactly by the profile and the N bisection. No data covariance is read. In
+every world, T and the aggregates are re-profiled on the world's own moments (`profile_world`).
 
-## Steps and artefacts (`reporting_<ind>_profiled_aa_gran_kappa[_nlo1][_profhead]_pso/`)
+## Steps and artefacts (`reporting_<ind>_profiled_aa_gran_kappa[_nlo1]_pso/`)
 
-- `step1/`: stages `0/`, `epoch_k/<stage>/` (best_params, dashboard, report.txt),
+- `step1/`: stages `0/`, `epoch_k/k/` (best_params, dashboard, report.txt),
   `theta_hat_1.npy`, `best_simulated_moments.npy`, `granular_diagnostics.npz`, post-hoc files.
 - `step2/`: `Omega_world.npy`, `W_world.npy`, `world_residuals.npz`, `world_weight_report.txt`,
   `inference_world/` (the Step-4 inference at θ̂_1 with W = I), `granular_diagnostics.npz`.

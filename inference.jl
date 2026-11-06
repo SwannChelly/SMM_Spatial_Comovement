@@ -5,8 +5,9 @@
 #
 #   Step 2 (`world_weight_matrix`). At θ̂₁ (W = I), draw B worlds: one network of N̂_s
 #   varieties per sector with i.i.d. uniform draws (NOT the estimation's Sobol design).
-#   Each world yields its own "data" (β_b, γ_b, G_b, π_b), computed as on the real data.
-#   T is re-inverted on γ_b with A updated on π_b, N is calibrated on G_b, β is simulated
+#   Each world yields its own "data" (β_b, γ_b, G_b, π_b, L_b, Õ_b), computed as on the
+#   real data. T and the aggregates are re-profiled on them (`profile_world`), N is
+#   calibrated on G_b, β is simulated
 #   at μ̂₁ with a seed proper to the world and at the estimation's m, and
 #   e_b = β_b − β_sim is kept. Ω̃ = Cov(e) and W = Ω̃⁻¹, on block 4 only: γ and G are
 #   reproduced exactly by the T inversion and the N bisection, so their weight does not
@@ -14,32 +15,22 @@
 #   system is exactly identified and W does not move the point estimate.
 #
 #   Step 4 (`world_inference`). At θ̂₂, draw B worlds and re-run the WHOLE chain in each,
-#   W fixed: T inversion + A update, N calibration, and a local search over (α, κ)
+#   W fixed: the profile of T and the aggregates, N calibration, and a local search over (α, κ)
 #   started at the estimate. The B parameter sets give, for every parameter, sd = their
 #   dispersion, a 95% interval = their 2.5/97.5% quantiles, and bias = mean − estimate;
 #   plus the within-sector dispersion of log T and closed-form counterfactuals
 #   recomputed world by world.
 #
-# ── The A update ─────────────────────────────────────────────────────────────
-# Downstream sales are Y_r ∝ (c_r/A_r)^ε δ_r and c_r depends on (α, κ, T) only (upstream
-# wages ≡ 1), so π_r is matched by A in closed form. The update is written RELATIVE to
-# the estimate,
-#
-#     A_b = Â · (c_r(α, κ, T_b)/c_r(α̂, κ̂, T̂)) · (π_b/π̂)^(−1/ε),      A_b ./= A_b[1],
-#
-# with c_r and π̂ from the analytical price solve, so a world identical to the model
-# returns Â exactly. γ depends on A through Y_r, so the T inversion and the A update
-# alternate until A stops moving. Ω^L and Ω^s stay at the estimate.
-#
-# Under PROFILE_HEAD the world is treated as the data are: (T, Ω^L, Ω^s, A) are
-# profiled jointly (`invert_T_head_ge`) on the world's own γ_b, labour share L_b,
-# sector shares Õ_b and sales shares π_b, so the head's sampling noise enters the
-# parameter draws and Ω^L, Ω^s are reported with them.
-#
+# ── The profile in a world ───────────────────────────────────────────────────
+# The world is treated as the data are: (T, Ω^L, Ω^s, A) are profiled jointly
+# (`profile_ge`) on the world's own γ_b, labour share L_b, sector shares Õ_b and sales
+# shares π_b, so the sampling noise of these moments enters the parameter draws, and
+# Ω^L, Ω^s, A are reported with α, κ, N_s and T.
+
 # ── Areas that come out empty ────────────────────────────────────────────────
 # A world is ONE network, so an area active in the data can win nothing in it (γ_b = 0).
 # On the data such an area would not be active and its T would be zero; the world does
-# the same: its T is set to `EMPTY_T` and held there by `invert_T_ge`. Such draws are
+# the same: its T is set to `EMPTY_T` and held there by `profile_ge`. Such draws are
 # reported as EMPTY rather than as a log T of −69. A world whose REFERENCE area is empty
 # cannot be normalised and is excluded (`:empty_ref`).
 #
@@ -87,10 +78,10 @@ the statistics computed on it as on the real data:
               for at least one buyer}`: ONE network, ONE fit (`ok = false` if it fails);
   * `G`     — per sector, the share of cells hosting no supplier;
   * `gamma` — the sourcing shares by area, summing to one per sector (the form
-              `invert_T_ge` takes as `target`; `EMP_GAMMA_T_TILDE` on the data);
+              `profile_ge` takes as `target`; `EMP_GAMMA_T_TILDE` on the data);
   * `pi`    — downstream sales shares, `DOWNSTREAM_REGIONS` order;
   * `L`, `Os` — the labour share and the sector shares of intermediate spending
-              (blocks 1–2), the head targets under PROFILE_HEAD.
+              (blocks 1–2), targets of the profile with `pi`.
 """
 function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
     N_max = maximum(N_hat)
@@ -126,69 +117,41 @@ end
 """
     world_reference(theta_hat) -> NamedTuple
 
-What the A update and the world parameter vectors read off the estimate: the level
-vector itself (its Ω^L, Ω^s are kept), Â normalised, α̂, κ̂, T̂ by area, and the
-analytical c_r and π_r at θ̂.
+What the worlds read off the estimate: the level vector itself, Ω^L, Ω^s, A as
+`unpack_params` normalises them, α̂, κ̂ and T̂ by area.
 """
 function world_reference(theta_hat::AbstractVector)
-    ΩL, Ωs, A, α, κ = normalized_head(theta_hat)
-    Tp = unpack_T_par(theta_hat)
-    pr = compute_prices_analytical(ΩL, Ωs, A, gather_T_to_ze(Tp, κ), build_tau(α))
+    ΩL, Ωs, A, α, _ = unpack_params(theta_hat)
     return (theta = collect(Float64, theta_hat), ΩL = ΩL, Ωs = collect(Ωs), A = collect(A),
-            alpha = collect(α), kappa = Float64(κ), T = Matrix(Tp),
-            c = collect(pr.c_r), pi = pr.Y_r ./ sum(pr.Y_r))
+            alpha = collect(α), kappa = Float64(unpack_kappa(theta_hat)),
+            T = Matrix(unpack_T_par(theta_hat)))
 end
 
 """
-    recalibrate_TA(ref, alpha, kappa, world; T_init, A_init, x_init)
-        -> (T, A, ΩL, Ωs, x, converged)
+    profile_world(ref, alpha, kappa, world; T_init, x_init) -> (T, A, ΩL, Ωs, x, converged)
 
-Re-invert T on a world's sourcing shares `world.gamma` and update A on its sales shares
-`world.pi` (see the header), alternating until `max |Δ log A| < tol`; Ω^L, Ω^s are the
-estimate's. Under PROFILE_HEAD, one joint profile on the world's blocks 1–3 and γ
-instead (`x_init`: the head's Newton warm start). `converged` requires every inversion
-to converge and the alternation to settle.
+Profile T and the aggregates at (α, κ) on a world's own moments: γ (`world.gamma`) and
+blocks 1–3 (`world.L`, `world.Os`, `world.pi`). An area that wins nothing in the world
+starts at `EMPTY_T` and stays there. `x_init` warm-starts the Newton solve of (Ω^L, Ω^s).
 """
-function recalibrate_TA(ref, alpha, kappa, world;
-                        T_init::AbstractMatrix = ref.T, A_init::AbstractVector = ref.A,
-                        x_init = nothing, max_outer::Int = 20, tol::Float64 = 1e-8)
-    gamma_b, pi_b = world.gamma, world.pi
+function profile_world(ref, alpha, kappa, world;
+                       T_init::AbstractMatrix = ref.T, x_init = nothing)
     T = Matrix{Float64}(T_init)
-    A = Vector{Float64}(A_init)
     for s in 1:S, c in SECTOR_T_COLS[s]
-        (gamma_b[c, s] <= 0 && c != T_REF_REGION[s]) && (T[s, c] = EMPTY_T)
+        (world.gamma[c, s] <= 0 && c != T_REF_REGION[s]) && (T[s, c] = EMPTY_T)
     end
-    if PROFILE_HEAD
-        res = invert_T_head_ge(alpha; kappa = kappa, target = gamma_b, T_init = T, x_init = x_init,
-                               tg = head_targets(L = world.L, Os = world.Os, pi = pi_b))
-        return (T = res.T, A = res.A, ΩL = res.Omega_L, Ωs = res.Omega_s, x = res.x,
-                converged = res.converged)
-    end
-    tau  = build_tau(alpha)
-    pfac = (pi_b ./ ref.pi) .^ (-1 / epsilon)
-    conv = true
-    for _ in 1:max_outer
-        res = invert_T_ge(alpha, ref.ΩL, ref.Ωs, A; kappa = kappa, target = gamma_b, T_init = T)
-        conv &= res.converged
-        T = res.T
-        c = compute_prices_analytical(ref.ΩL, ref.Ωs, A, gather_T_to_ze(T, kappa), tau).c_r
-        A_new = ref.A .* (c ./ ref.c) .* pfac
-        A_new ./= A_new[1]
-        step = maximum(abs.(log.(A_new) .- log.(A)))
-        A = A_new
-        step < tol && return (T = T, A = A, ΩL = ref.ΩL, Ωs = ref.Ωs, x = nothing, converged = conv)
-    end
-    return (T = T, A = A, ΩL = ref.ΩL, Ωs = ref.Ωs, x = nothing, converged = false)
+    res = profile_ge(alpha; kappa = kappa, target = world.gamma, T_init = T, x_init = x_init,
+                     tg = profile_targets(L = world.L, Os = world.Os, pi = world.pi))
+    return (T = res.T, A = res.A, ΩL = res.Omega_L, Ωs = res.Omega_s, x = res.x,
+            converged = res.converged)
 end
 
 """
-    world_theta(ref, alpha, kappa, cal) -> level vector: Ω, A, T from the recalibration
-    `cal` (Ω = the estimate's unless PROFILE_HEAD), new α, κ
+    world_theta(ref, alpha, kappa, cal) -> the level vector at (α, κ) with the profiled
+    aggregates and T of `cal` (`profile_world`)
 """
 function world_theta(ref, alpha, kappa, cal)
-    x = copy(ref.theta)
-    x[(S + 2):(S + R_downstream + 1)] = cal.A
-    PROFILE_HEAD && (x = with_head(x, cal.ΩL, cal.Ωs, cal.A))
+    x = with_aggregates(ref.theta, cal.ΩL, cal.Ωs, cal.A)
     x[alpha_range()] = alpha
     x[kappa_index()] = kappa
     return with_T(x, cal.T)
@@ -238,7 +201,7 @@ function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
         world = draw_world(theta_hat, N_hat, seed_w)
         world.ok        || return (ok = false, reason = :world_fit)
         world.ref_empty && return (ok = false, reason = :empty_ref)
-        cal = recalibrate_TA(ref, ref.alpha, ref.kappa, world)
+        cal = profile_world(ref, ref.alpha, ref.kappa, world)
         cal.converged   || return (ok = false, reason = :T_inversion)
         βs, Nb, nf = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, cal),
                                    world.G, world_simulator(seed_s))
@@ -336,15 +299,15 @@ end
     estimate_world(world, ref, W, sim; max_iter) -> NamedTuple
 
 The estimator applied to one fake world. For each candidate (α, κ): T re-inverted on the
-world's γ with A updated on its π, N calibrated on its G, β simulated on the world's
+world's γ and blocks 1–3 (T and the aggregates profiled), N calibrated on its G, β simulated on the world's
 simulator; criterion `e' W e`, `e = β_world − β_sim`. Nelder–Mead over (α, κ) from the
 estimate, inside the estimation's κ box and every α_k ∈ [1e-4, ALPHA_MAX]; the α block
-is read sorted, as in the estimation (α_1 ≤ … ≤ α_K). T and A are warm-started from the last converged evaluation of the
-world; the fixed point is unique, so this changes cost, not values.
+is read sorted, as in the estimation (α_1 ≤ … ≤ α_K). T and the Newton start of (Ω^L, Ω^s) are warm-started from the last converged
+evaluation of the world; the fixed point is unique, so this changes cost, not values.
 """
 function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
     nα = N_TAU
-    T_warm = Ref(ref.T); A_warm = Ref(ref.A); x_warm = Ref{Any}(nothing)
+    T_warm = Ref(ref.T); x_warm = Ref{Any}(nothing)
     unpack_x(x) = (sort(x[1:nα]), x[nα + 1])
     inbox(α, κ) = KAPPA_LO <= κ <= KAPPA_HI && all(a -> 1e-4 <= a <= ALPHA_MAX, α)
 
@@ -352,12 +315,12 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
         α, κ = unpack_x(x)
         inbox(α, κ) || return WORLD_PENALTY
         cal = try
-            recalibrate_TA(ref, α, κ, world; T_init = T_warm[], A_init = A_warm[], x_init = x_warm[])
+            profile_world(ref, α, κ, world; T_init = T_warm[], x_init = x_warm[])
         catch
             return WORLD_PENALTY
         end
         cal.converged || return WORLD_PENALTY
-        T_warm[] = cal.T; A_warm[] = cal.A; x_warm[] = cal.x
+        T_warm[] = cal.T; x_warm[] = cal.x
         β, _, _ = simulate_beta(world_theta(ref, α, κ, cal), world.G, sim)
         all(isfinite, β) || return WORLD_PENALTY
         e = world.beta .- β
@@ -370,7 +333,7 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
                          Optim.Options(iterations = max_iter))
     α, κ = unpack_x(Optim.minimizer(opt))
     f̂ = Optim.minimum(opt)
-    cal = recalibrate_TA(ref, α, κ, world; T_init = T_warm[], A_init = A_warm[], x_init = x_warm[])
+    cal = profile_world(ref, α, κ, world; T_init = T_warm[], x_init = x_warm[])
     θ = world_theta(ref, α, κ, cal)
     _, N, _ = simulate_beta(θ, world.G, sim)
     return (ok = cal.converged && f̂ < WORLD_PENALTY, alpha = α, kappa = κ, T = cal.T,
@@ -478,12 +441,10 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     t_lbl = ["T[$(sector_names[(fp - 1) ÷ T_COL_DIM + 1])-$(tcol_names[(fp - 1) % T_COL_DIM + 1])]"
              for fp in findall(T_MASK)]
     t_red(T) = (v = vec(permutedims(T))[T_MASK]; v[v .<= EMPTY_T_CUT] .= NaN; v)
-    # Ω^L, Ω^s vary across worlds only when they are profiled (PROFILE_HEAD).
-    Ω_lbl = PROFILE_HEAD ? vcat(["Omega_L"], ["Omega_s[$s]" for s in sector_names]) : String[]
-    Ω_row(ΩL, Ωs) = PROFILE_HEAD ? vcat(ΩL, Ωs) : Float64[]
     lbl = vcat(["alpha[$i]" for i in 1:N_TAU], ["kappa"], ["N_s[$s]" for s in sector_names],
-               t_lbl, ["A[$i]" for i in 1:R_downstream], Ω_lbl)
-    row(α, κ, N, T, A, ΩL, Ωs) = vcat(α, κ, Float64.(N), t_red(T), A, Ω_row(ΩL, Ωs))
+               t_lbl, ["A[$i]" for i in 1:R_downstream],
+               ["Omega_L"], ["Omega_s[$s]" for s in sector_names])
+    row(α, κ, N, T, A, ΩL, Ωs) = vcat(α, κ, Float64.(N), t_red(T), A, ΩL, Ωs)
     P   = permutedims(reduce(hcat, (row(r.est.alpha, r.est.kappa, r.est.N, r.est.T, r.est.A,
                                        r.est.ΩL, r.est.Ωs) for r in good)))
     est = row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A, ref.ΩL, ref.Ωs)
@@ -532,8 +493,8 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
                 @printf(out, "    excluded (%s): %d\n", string(r), v)
             end
             println(out, "  sd = dispersion across worlds; CI = 2.5/97.5% quantiles; bias = mean − estimate.")
-            head = setdiff(eachindex(lbl), iT)
-            block(out, PROFILE_HEAD ? "α, κ, N_s, A, Ω^L, Ω^s" : "α, κ, N_s, A", lbl[head], P[:, head], est[head])
+            iP = setdiff(eachindex(lbl), iT)
+            block(out, "α, κ, N_s, A, Ω^L, Ω^s", lbl[iP], P[:, iP], est[iP])
             block(out, "T (levels, per-sector reference = 1)", lbl[iT], P[:, iT], est[iT])
             block(out, "log T", lbl[iT], log.(P[:, iT]), log.(est[iT]))
             emp = vec(mean(isnan.(P[:, iT]); dims = 1))

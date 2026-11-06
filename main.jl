@@ -1,8 +1,9 @@
 ##### Three-step SMM — main specification #####
 # Granular varieties, comparative advantage T_{a(l)s} n_ls^κ at the attraction-area
-# level, cell-level cloglog extensive margin, T profiled out of the search.
+# level, cell-level cloglog extensive margin. The search runs over (α, κ); T and the
+# aggregates (Ω^L, Ω^s, A) are profiled out of it (profiling.jl).
 #
-#   Step 1  identity-weighted PSO                          → θ̂_1   (step1/)
+#   Step 1  identity-weighted PSO on [α ; κ], loss on blocks 4–6 → θ̂_1   (step1/)
 #   Step 2  W = Cov(β_world − β_sim)⁻¹ over fake worlds at θ̂_1     (step2/), and
 #           inference at θ̂_1 from fake worlds, W = I as in Step 1  (step2/inference_world/)
 #   Step 3  W-weighted PSO on [α ; κ], loss on block 4      → θ̂_2   (step3/)
@@ -12,9 +13,7 @@
 #           one-parameter profiles and a common-random-numbers Jacobian (<step>/sensitivity/)
 #   Post-hoc: the firm-level economy at θ̂_1 and θ̂_2 (suppliers.parquet, ...)
 #
-# Usage: julia main.jl <industry> <n_coef> <n_tau> <n_rho_inf> <relax_n_lo> <profile_head>
-# profile_head = true (default): (Ω^L, Ω^s, A) are profiled jointly with T (profiling.jl), every
-# search runs over [α ; κ] only, and blocks 1–3 leave the loss.
+# Usage: julia main.jl <industry> <n_coef> <n_tau> <n_rho_inf> <relax_n_lo>
 # (run.sh builds the call). No data covariance is used: W and the inference both come
 # from worlds drawn from the model (inference.jl). World counts: ENV WORLD_B_W (1000),
 # WORLD_B_INF (500).
@@ -50,17 +49,16 @@ n_coef          = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau           = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 n_rho_inference = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10_000   # unused since the fake-world inference
 relax_n_lo      = length(ARGS) >= 5 ? lowercase(strip(ARGS[5])) in ("true", "1", "yes") : true
-profile_head    = length(ARGS) >= 6 ? lowercase(strip(ARGS[6])) in ("true", "1", "yes") : false
 n_coef in (1, 4, 5) || error("n_coef must be 1, 4 or 5, got $n_coef")
 n_tau in (1, n_coef) || error("n_tau must be 1 (τ = d^α) or n_coef (one α per distance bin), got $n_tau")
 n_rho_inference >= 1 || error("n_rho_inf must be ≥ 1")
-println("Industry: $industry | n_coef: $n_coef | n_tau: $n_tau | n_rho_inf: $n_rho_inference | relax_n_lo: $relax_n_lo | profile_head: $profile_head")
+println("Industry: $industry | n_coef: $n_coef | n_tau: $n_tau | n_rho_inf: $n_rho_inference | relax_n_lo: $relax_n_lo")
 
 run_step1 = true
 run_step2 = true
 run_step3 = true
 run_step4 = true
-K_loops = 20         # block-coordinate loops per optimisation step
+K_loops = 20         # PSO stages after stage 0, per optimisation step
 B_w     = parse(Int, get(ENV, "WORLD_B_W", "1000"))    # fake worlds for W (Step 2)
 B_inf   = parse(Int, get(ENV, "WORLD_B_INF", "500"))   # fake worlds for inference (Step 4)
 # Moment sensitivity (sensitivity.jl): one-parameter profiles + CRN Jacobian at θ̂_1
@@ -70,8 +68,7 @@ sens_K   = parse(Int, get(ENV, "SENS_K", "10"))     # independent draw sets
 sens_G   = parse(Int, get(ENV, "SENS_G", "15"))     # profile grid points
 
 input_folder  = "./baseline_$industry"
-output_folder = "./reporting_$(industry)_profiled_aa_gran_kappa" * (relax_n_lo ? "_nlo1" : "") *
-                (profile_head ? "_profhead" : "") * "_pso"
+output_folder = "./reporting_$(industry)_profiled_aa_gran_kappa" * (relax_n_lo ? "_nlo1" : "") * "_pso"
 mkpath(output_folder)
 
 include("load_parameters.jl")
@@ -86,14 +83,13 @@ read_params(path) = (p = NPZ.npzread(path); ndims(p) > 1 ? p[:, 1] : p)
 
 if run_step1
     println("\n" * "="^70 * "\nSTEP 1: identity-weighted optimisation\n" * "="^70)
-    A_init = emp_pi_r_full .^ (1 / abs(epsilon)) .* regional_wages[N_downstream_per_region .!= 0]
-    A_init ./= sum(A_init)
     # α₀ from the data prior; with distance bins, the per-segment elasticities computed from
-    # the bin coefficients in load_parameters.jl (ALPHA_BIN_INIT).
+    # the bin coefficients in load_parameters.jl (ALPHA_BIN_INIT). The aggregates and T
+    # are placeholders: the profile overwrites them.
     alpha_init = N_TAU == 1 ? [P_alpha] : copy(ALPHA_BIN_INIT)
-    warm_start = vcat(agg_labor_share, agg_industry_share, A_init, alpha_init,
+    warm_start = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), alpha_init,
                       KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK])
-    theta_hat_1, _ = run_optimization(; warm_start_params = warm_start, output_subfolder = "step1",
+    theta_hat_1, _ = run_optimization(; start = warm_start, output_subfolder = "step1",
                                       max_loop = K_loops)
     NPZ.npzwrite(joinpath(step1_dir, "theta_hat_1.npy"), theta_hat_1)
     report_granular(theta_hat_1, step1_dir; industry = industry, label = "theta_1")
@@ -106,9 +102,8 @@ if run_step2
     println("\n" * "="^70 * "\nSTEP 2: weight matrix from $B_w fake worlds at θ̂_1\n" * "="^70)
     world_weight_matrix(theta_hat_1; B = B_w, dest = joinpath(output_folder, "step2"))
     # Inference on the Step-1 estimator: the same whole-chain re-estimation as Step 4, at
-    # θ̂_1 and with Step 1's weighting (identity on block 4; γ and G are matched exactly,
-    # A is recalibrated, Ω^L and Ω^s held at θ̂_1 as in Step 4 — re-profiled with A under
-    # PROFILE_HEAD). Seeds disjoint from Step 4.
+    # θ̂_1 and with Step 1's weighting (identity on block 4; γ, blocks 1–3 and G are matched
+    # exactly in each world by the profile and the N bisection). Seeds disjoint from Step 4.
     println("\n" * "="^70 * "\nSTEP 2b: inference from $B_inf fake worlds at θ̂_1 (W = I)\n" * "="^70)
     world_inference(Vector{Float64}(theta_hat_1), Matrix(1.0I, length(BLOCK_RANGES[4]), length(BLOCK_RANGES[4]));
                     B = B_inf, dest = joinpath(output_folder, "step2", "inference_world"),
@@ -125,9 +120,9 @@ W_world = NPZ.npzread(joinpath(output_folder, "step2", "W_world.npy"))
 
 if run_step3
     println("\n" * "="^70 * "\nSTEP 3: W-weighted optimisation of [α ; κ] (block 4)\n" * "="^70)
-    theta_hat_2, _ = run_optimization(; weight_matrix = W_world, warm_start_params = theta_hat_1,
-                                      output_subfolder = "step3", max_loop = K_loops,
-                                      gamma_beta_only = true, loss_blocks = [4])
+    theta_hat_2, _ = run_optimization(; start = theta_hat_1, fresh_start = false,
+                                      weight_matrix = W_world, loss_blocks = [4],
+                                      output_subfolder = "step3", max_loop = K_loops)
     NPZ.npzwrite(joinpath(step3_dir, "theta_hat_2.npy"), theta_hat_2)
 end
 
