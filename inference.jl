@@ -443,7 +443,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     t_red(T) = (v = vec(permutedims(T))[T_MASK]; v[v .<= EMPTY_T_CUT] .= NaN; v)
     lbl = vcat(["alpha[$i]" for i in 1:N_TAU], ["kappa"], ["N_s[$s]" for s in sector_names],
                t_lbl, ["A[$i]" for i in 1:R_downstream],
-               ["Omega_L"], ["Omega_s[$s]" for s in sector_names])
+               ["chi_L"], ["chi_s[$s]" for s in sector_names])
     row(alpha, kappa, N, T, A, chi_L, chi_s) = vcat(alpha, kappa, Float64.(N), t_red(T), A, chi_L, chi_s)
     P   = permutedims(reduce(hcat, (row(r.est.alpha, r.est.kappa, r.est.N, r.est.T, r.est.A,
                                        r.est.chi_L, r.est.chi_s) for r in good)))

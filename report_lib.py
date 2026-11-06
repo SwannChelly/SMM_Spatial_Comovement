@@ -2318,7 +2318,7 @@ def theta_alpha(data):
     dimensionless number, so |eta_int| <= theta*alpha and |eta_ext| = theta*alpha E(Lambda)).
 
     `best_params` is the raw theta vector, layout
-        [Omega_L(1) | Omega_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA), s-major)],
+        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA), s-major)],
     so alpha is the N_TAU-long slice after the A block; the length is asserted against the
     rebuilt layout, exactly as `unpack_estimated_T` does in the comparative-advantage
     section. theta follows the same rule as `model_theta` there: stats.csv when it carries

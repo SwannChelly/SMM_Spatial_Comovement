@@ -119,7 +119,7 @@ def gate_identification():
         "moment_block_names": ["Labor share", "Industry shares", "Downstream sales",
                                "Extensive margin", "Regional sourcing shares",
                                "Zero-supplier share"],
-        "param_block_names": ["Omega_L", "Industry shares", "Productivity",
+        "param_block_names": ["chi_L", "Industry shares", "Productivity",
                               "Trade cost", "Comparative advantage", "Variety count"],
         "moment_labels": [f"m{i}" for i in range(n_rows)],
         "param_labels": [f"p{i}" for i in range(n_par - S)]
@@ -138,8 +138,8 @@ def gate_identification():
     df = NS["identification_summary"](data)
     assert df["share_exact_zero"].loc["Extensive margin", "Variety count"] == 1.0
     assert df["share_above"].loc["Zero-supplier share", "Variety count"] > 0
-    assert df["share_readable"].loc["Labor share", "Omega_L"] < 1.0
-    assert df["share_live"].loc["Labor share", "Omega_L"] == 0.0   # large but unmeasured
+    assert df["share_readable"].loc["Labor share", "chi_L"] < 1.0
+    assert df["share_live"].loc["Labor share", "chi_L"] == 0.0   # large but unmeasured
     print("identification summary: structural zeros, weak channels and noise separated")
 
     # the channel figure must not let an unmeasurable entry produce a bar

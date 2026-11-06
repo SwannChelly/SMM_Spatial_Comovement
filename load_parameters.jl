@@ -531,7 +531,7 @@ _ze_names     = _ze_keys
 _tcol_names   = ["AA" * _ze_names[downstream_regions_local[a]] for a in 1:n_AA_local]
 
 _moment_labels = String["labor"]
-for s in 2:S_;            push!(_moment_labels, "Omega_s[$(_sector_names[s])]"); end
+for s in 2:S_;            push!(_moment_labels, "chi_s[$(_sector_names[s])]"); end
 for j in 2:n_pi;          push!(_moment_labels, "pi_r[$(_ze_names[downstream_regions_local[j]])]"); end
 for b in 1:n_reg;         push!(_moment_labels, b <= n_coef ? "beta_d[$(REG_COEF_LABELS[b])]" : "beta_kappa"); end
 for s in 1:S_, c in 1:n_AA_local
@@ -544,7 +544,7 @@ for s in 1:S_;            push!(_moment_labels, "G0[$(_sector_names[s])]"); end
 
 # Parameter labels over the FULL layout, and the identified T columns (reference
 # areas dropped) — the T block the inference reports.
-_param_labels = vcat(["Omega_L"], ["Omega_s[$s]" for s in _sector_names],
+_param_labels = vcat(["chi_L"], ["chi_s[$s]" for s in _sector_names],
                      ["A[$(_ze_names[r])]" for r in downstream_regions_local],
                      [n_tau == 1 ? "alpha" : "alpha_$b" for b in 1:n_tau], ["kappa"],
                      ["T[$(_sector_names[(p - 1) ÷ n_AA_local + 1])-$(_tcol_names[(p - 1) % n_AA_local + 1])]"

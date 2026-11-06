@@ -254,7 +254,7 @@ end
 """
     profile_ge(alpha; kappa, target=EMP_GAMMA_T_TILDE, tg=profile_targets(),
                T_init=copy(T_rs_init), x_init=nothing, max_iter=600, tol=1e-9, damping=0.3)
-        -> (T, Omega_L, Omega_s, A, x, iters, converged, resid, agg_resid)
+        -> (T, chi_L, chi_s, A, x, iters, converged, resid, agg_resid)
 
 Joint profile of T and the aggregates at (α, κ), by a damped Sinkhorn iteration on T.
 Each pass: P_sr from the current T → (χ^L, χ^s) solved at those prices (warm-started from

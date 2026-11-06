@@ -374,14 +374,14 @@ def _ze_key(x):
         return t
 
 
-SENS_KINDS = {1: "head", 2: "alpha", 3: "kappa", 4: "T", 5: "N"}
+SENS_KINDS = {1: "aggregate", 2: "alpha", 3: "kappa", 4: "T", 5: "N"}
 SENS_BLOCK_NAMES = {1: None, 2: "Trade cost", 3: "Density", 4: "Comparative advantage",
                     5: "Variety count"}
 
 
-def _sens_head_block(label):
-    return ("Omega_L" if label == "Omega_L" else
-            "Industry shares" if label.startswith("Omega_s") else "Productivity")
+def _sens_aggregate_block(label):
+    return ("chi_L" if label == "chi_L" else
+            "Industry shares" if label.startswith("chi_s") else "Productivity")
 
 
 def load_sensitivity(sens_dir, n_moments=None):
@@ -416,7 +416,7 @@ def load_sensitivity(sens_dir, n_moments=None):
         with np.errstate(divide="ignore", invalid="ignore"):
             f = scale[None, :] / np.where(np.abs(m) > 1e-12, m, np.nan)[:, None]
         js["J_elast"], js["J_elast_se"] = J * f, js["J_se"] * np.abs(f)
-        names = [SENS_BLOCK_NAMES[k] or _sens_head_block(l)
+        names = [SENS_BLOCK_NAMES[k] or _sens_aggregate_block(l)
                  for k, l in zip(js["kind"], js["labels"])]
         bn, bs = [], []
         for nm in names:
@@ -979,7 +979,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     #   <inf_step>/inference_world/world_inference_draws.npz  the WHOLE chain
     #       re-estimated in each world (step2 at theta_hat_1 with W = I, step3 at
     #       theta_hat_2 with W_world): one row of `params` per usable world, labelled by
-    #       world_inference_labels.txt (alpha, kappa, N_s, T, A [, Omega_L, Omega_s]).
+    #       world_inference_labels.txt (alpha, kappa, N_s, T, A, chi_L, chi_s).
     n_gamma_kept = int(mask[off_gam:off_gam + S * n_AA].sum())
     world_residuals = Omega_world = W_world = world_inference = None
     if "inference" in parts:
@@ -1017,14 +1017,14 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # ----------------------------------------- moment and parameter labels ----
     # Both axes of the Jacobian, rebuilt exactly as load_parameters.jl SECTION 13 does.
     #   rows    : the MASKED moment vector, six blocks;
-    #   columns : the IDENTIFIED parameters, layout [Omega_L | Omega_s(S) | A(R_d) |
+    #   columns : the IDENTIFIED parameters, layout [chi_L | chi_s(S) | A(R_d) |
     #             alpha(N_TAU) | kappa | T(active (s,AA), s-major)], minus the S+2 directions
-    #             the internal normalisations kill (Omega_s[1], A[1], each sector's
+    #             the internal normalisations kill (chi_s[1], A[1], each sector's
     #             reference T).
     moment_labels, moment_block_sizes = [], []
     moment_labels.append("labor")
     moment_block_sizes.append(1)
-    moment_labels += [f"Omega_s[{sector_names[s]}]" for s in range(1, S)]
+    moment_labels += [f"chi_s[{sector_names[s]}]" for s in range(1, S)]
     moment_block_sizes.append(S - 1)
     moment_labels += [f"pi_r[{a}]" for a in aa_names[1:]]
     moment_block_sizes.append(len(aa_names) - 1)
@@ -1042,9 +1042,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         moment_block_sizes.append(S)
 
     param_labels, param_block_sizes = [], []
-    param_labels.append("Omega_L")
+    param_labels.append("chi_L")
     param_block_sizes.append(1)
-    param_labels += [f"Omega_s[{sector_names[s]}]" for s in range(1, S)]   # Omega_s[1] normalised out
+    param_labels += [f"chi_s[{sector_names[s]}]" for s in range(1, S)]   # chi_s[1] normalised out
     param_block_sizes.append(S - 1)
     param_labels += [f"A[{a}]" for a in aa_names[1:]]                      # A[1] normalised out
     param_block_sizes.append(len(aa_names) - 1)
@@ -1058,7 +1058,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     moment_block_names = ["Labor share", "Industry shares", "Downstream sales",
                           "Extensive margin", "Regional sourcing shares"] \
         + (["Zero-supplier share"] if granular else [])
-    param_block_names = ["Omega_L", "Industry shares", "Productivity",
+    param_block_names = ["chi_L", "Industry shares", "Productivity",
                          "Trade cost", "Comparative advantage"]
 
     # ------------------------------------------------------------- Jacobian ---

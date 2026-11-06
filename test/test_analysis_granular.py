@@ -280,7 +280,7 @@ def _build_industry(ROOT, industry, sectors):
     # ---- sensitivity.jl: the CRN Jacobian and two profiles, at theta_hat_2 ------
     SD = f"{RUN}/step3/sensitivity"
     os.makedirs(SD, exist_ok=True)
-    s_lbl = (["Omega_L"] + [f"Omega_s[{x}]" for x in sectors[1:]]
+    s_lbl = (["chi_L"] + [f"chi_s[{x}]" for x in sectors[1:]]
              + [f"A[{ze[down_idx[a]]}]" for a in range(1, R_D)] + ["alpha", "kappa"]
              + [f"T[{x}]" for x in range(int(gam_free.sum()))] + [f"N_s[{x}]" for x in sectors])
     s_kind = ([1.0] * (1 + (S - 1) + (R_D - 1)) + [2.0, 3.0] + [4.0] * int(gam_free.sum())
@@ -866,7 +866,7 @@ def run_checks(ns, ROOT, exp):
           ["beta_d[]50,100]]", "beta_d[]100,150]]", "beta_d[]150,200]]", "beta_d[>200]",
            "beta_kappa"])
     d0 = ns["load_granular_data"]("test", mu=2, base=ROOT, parts=("core", "moments"))
-    check("parameter blocks: Omega_L, Omega_s-1, A-1, [alpha ; kappa], T free",
+    check("parameter blocks: chi_L, chi_s-1, A-1, [alpha ; kappa], T free",
           list(d0["param_block_sizes"]) ==
           [1, S - 1, exp["n_AA"] - 1, 2, exp["n_gamma_kept"]]
           and "kappa" in d0["param_labels"])
@@ -883,7 +883,7 @@ def run_checks(ns, ROOT, exp):
           d2["J"].shape == (exp["n_mom_kept"], len(exp["sens_labels"]))
           and d2["param_labels"] == exp["sens_labels"])
     check("parameter blocks in column order, kappa its own block",
-          d2["param_block_names"] == ["Omega_L", "Industry shares", "Productivity",
+          d2["param_block_names"] == ["chi_L", "Industry shares", "Productivity",
                                       "Trade cost", "Density", "Comparative advantage",
                                       "Variety count"]
           and list(d2["param_block_sizes"]) == [1, S - 1, exp["n_AA"] - 1, 1, 1,
