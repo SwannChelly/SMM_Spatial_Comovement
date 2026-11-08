@@ -257,10 +257,27 @@ for s, blk in econ6.items():
     sd = np.sqrt(f * (1 - f) / imp.shape[0])
     worst = max(worst, float(np.max(np.abs(freq - f) / sd)))
 assert worst < 5.0, worst
+# the counterfactuals hold every buyer's import share at its estimate (closed form and
+# simulated), so they move the domestic network only
+for kw in ({"equalise_T": True}, {"alpha": 0.0}):
+    gcf = utils.sourcing_geometry(data6, **kw)
+    for s, blk in gcf["by_sector"].items():
+        b = geom["by_sector"][s]
+        assert np.array_equal(blk["f"], b["f"])
+        assert np.allclose(blk["PhiF_r"] / (blk["phi_dom"] + blk["PhiF_r"]), b["f"], rtol=1e-12)
+    ecf = utils.simulate_economy(data6, xp6, n_rep=n6, seed=12, verbose=False, **kw)
+    utils.economy_identities(ecf, xp6, verbose=False)
+    for s, blk in ecf.items():
+        imp = (blk["winner"] == 0).astype(float)
+        f = geom["by_sector"][s]["f"]
+        z = np.abs(imp.mean(axis=0) - f) / np.sqrt(f * (1 - f) / imp.shape[0])
+        worst = max(worst, float(z.max()))
+assert worst < 5.0, worst
 leak = 1.0 - (econ6.value["D_r"] - 1.0) / (econ6.value["D_total_r"] - 1.0)
 assert (leak > 0).all() and (econ6.value["D_r"] < econ6.value["D_total_r"]).all()
 print(f"6 ok  the foreign competitor: the simulated import frequency matches the closed "
-      f"form Phi^F/Phi_rs within {worst:.2f} binomial sd ({n6} economies), and the domestic "
+      f"form Phi^F/Phi_rs within {worst:.2f} binomial sd ({n6} economies) at the estimate AND "
+      f"in both counterfactuals, which hold it at the estimate; the domestic "
       f"amplification sits below the total one by the leakage (mean {leak.mean():.3f})")
 
 print("\nall gates pass")

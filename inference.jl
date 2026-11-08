@@ -362,16 +362,33 @@ purchase-weighted mean sourcing distance (km) and the local shares within each r
 aggregated over buyers with their upstream purchases (`mean_*`) and at the median buyer
 (`med_*`). `:equal_T` sets every non-empty cell's T to one (`Equal comparative
 advantage`), `:no_trade_cost` sets τ ≡ 1; prices are re-solved in both. The flows are
-DOMESTIC (the shares are of French purchases); the foreign competitor Φ^F_s is a
-primitive held at its estimate in every regime, so the import share responds.
+DOMESTIC (the shares are of French purchases).
+
+The counterfactuals are about the reorganisation of the DOMESTIC network, so the foreign
+margin is neutralised: each buyer's import share f_rs = Φ^F_s/Φ_rs is held at its
+estimate. The regime's foreign scale is buyer-specific,
+`Φ^F_rs = Φ^F_s · Φ^dom_rs(regime) / Φ^dom_rs(estimate)`, with Φ^dom the French part of
+Φ, so f_rs, the leakage abroad and the sector mix of the domestic bill do not move for
+foreign reasons; the within-sector geography never depends on Φ^F. This also makes
+`:equal_T` independent of the reference area that fixes the units of T and Φ^F.
 """
 function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
                          radii = (100.0, 200.0))
     # (not called `theta`: that is the Fréchet shape used below)
     chi_L, chi_s, A, alpha, Tvec, PhiF = unpack_params(params)
     T_mat = reshape(collect(Tvec), S, R)
+    tau_est = build_tau(alpha)
+    if regime !== :estimate && any(>(0), PhiF)
+        # hold f_rs at the estimate: scale Φ^F with the French term of each buyer
+        dom_est = compute_Phi(T_mat, tau_est)
+    end
     regime === :equal_T && (T_mat = Float64.(T_mat .> EMPTY_T_CUT))
-    tau = regime === :no_trade_cost ? ones(R, R_downstream) : build_tau(alpha)
+    tau = regime === :no_trade_cost ? ones(R, R_downstream) : tau_est
+    if regime !== :estimate && any(>(0), PhiF)
+        dom = compute_Phi(T_mat, tau)
+        PhiF = [PhiF[s] > 0 && dom_est[s, dr] > 0 ? PhiF[s] * dom[s, dr] / dom_est[s, dr] : 0.0
+                for s in 1:S, dr in 1:R_downstream]
+    end
     pr  = compute_prices_analytical(chi_L, chi_s, A, T_mat, tau; PhiF = PhiF)
     X = zeros(R, R_downstream)
     for g in 1:n_good
@@ -390,8 +407,10 @@ function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
     dbar = [sum(X[:, dr] .* dkm[:, dr]) / tot[dr] for dr in 1:R_downstream]
     loc  = [[sum(X[dkm[:, dr] .<= d, dr]) / tot[dr] for dr in 1:R_downstream] for d in radii]
     w = tot ./ sum(tot)
+    fF = PhiF isa AbstractMatrix ? PhiF : [PhiF[s] for s in 1:S, dr in 1:R_downstream]
     return (mean_dist = dot(w, dbar), med_dist = median(dbar),
-            mean_local = [dot(w, L) for L in loc], med_local = [median(L) for L in loc])
+            mean_local = [dot(w, L) for L in loc], med_local = [median(L) for L in loc],
+            import_share = fF ./ pr.Phi)
 end
 
 const CF_REGIMES = (:estimate, :equal_T, :no_trade_cost)

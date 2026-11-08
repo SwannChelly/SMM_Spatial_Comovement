@@ -185,4 +185,17 @@ for b in 1:3
     check("world $b: γ sums to one", maximum(abs.(vec(sum(wd.gamma; dims = 1)) .- 1)) < 1e-12)
 end
 
+# ── (7) Counterfactuals hold the import shares ─────────────────────────────
+println("\n(7) Counterfactuals: every buyer's import share held at its estimate")
+cf_est = incidence_stats(theta_vec; regime = :estimate)
+for rg in (:equal_T, :no_trade_cost)
+    cf = incidence_stats(theta_vec; regime = rg)
+    dev = maximum(abs.(cf.import_share[imp, :] .- cf_est.import_share[imp, :]))
+    @printf("  %-14s max |f_rs − f̂_rs| = %.1e ; mean dist %.1f km (estimate %.1f)\n", rg, dev,
+            cf.mean_dist, cf_est.mean_dist)
+    check("$rg holds f_rs at the estimate (1e-12)", dev < 1e-12)
+end
+check("the estimate's import share is Φ^F/Φ_rs",
+      maximum(abs.(cf_est.import_share[imp, :] .- f_cf[imp, :])) < 1e-12)
+
 println("\n", pass ? "GATE: PASS" : "GATE: FAIL")

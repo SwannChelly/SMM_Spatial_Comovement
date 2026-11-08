@@ -1409,8 +1409,12 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
     a sector without foreign competitor.
 
     `alpha=0` switches the distance force off, `equalise_T=True` switches comparative
-    advantage off — the two counterfactuals, both closed form. Phi^F_s is held at its
-    estimate in both, as Julia's counterfactuals hold it.
+    advantage off — the two counterfactuals, both closed form. They are about the
+    reorganisation of the DOMESTIC network, so the foreign margin is neutralised: each
+    buyer's import share is held at its estimate, `f[s][r] = f_hat_rs`, by a buyer-specific
+    foreign scale `PhiF_r[s][r] = Phi^F_s * Phi^dom_rs(regime) / Phi^dom_rs(estimate)`
+    (`Phi^dom` = `phi_dom`, the French part of Phi_rs), as Julia's `incidence_stats` does.
+    At the estimate `PhiF_r` is `Phi^F_s` for every buyer.
     """
     est = unpack_estimated_T(data)
     if est["alpha"].size != 1:
@@ -1420,6 +1424,8 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
             "reporting on an n_tau = 1 fit for this section.")
     a = float(est["alpha"][0]) if alpha is None else float(alpha)
     theta = est["theta"]
+    regime = bool(equalise_T) or a != float(est["alpha"][0])
+    base = sourcing_geometry(data) if regime and (est["PhiF"] > 0).any() else None
 
     D = np.load(data["input_folder"] / "distances.npy")[:data["R"], :data["R"]]
     down = _downstream_ze_index(data)
@@ -1437,10 +1443,17 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
         psi = T_cell[:, None] * d ** (-theta * a)
         tot = psi.sum(axis=0, keepdims=True)
         phi_f = float(est["PhiF"][s])
+        if base is not None and phi_f > 0:
+            b = base["by_sector"][s]                     # hold f_rs at the estimate
+            phi_r = phi_f * tot[0] / b["phi_dom"]
+            f = b["f"]
+        else:
+            phi_r = np.full(tot.shape[1], phi_f)
+            f = phi_f / (tot[0] + phi_f)
         out[s] = {"cells": cells, "areas": aa_of_ze[cells], "T_cell": T_cell,
                   "distance": d, "log_psi": np.log(np.maximum(psi, 1e-300)),
                   "rho": np.divide(psi, tot, out=np.zeros_like(psi), where=tot > 0),
-                  "PhiF": phi_f, "f": phi_f / (tot[0] + phi_f)}
+                  "phi_dom": tot[0], "PhiF": phi_f, "PhiF_r": phi_r, "f": f}
     return {"by_sector": out, "alpha": a, "theta": theta, "T": est["T"],
             "PhiF": est["PhiF"], "alpha_hat": float(est["alpha"][0]), "downstream": down}
 
@@ -1712,6 +1725,11 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     omitted, the foreign bids come from their OWN stream, so the domestic draws (and a
     sector without imports) are exactly what they were without the foreign competitor.
 
+    In a counterfactual (`alpha`, `equalise_T`) the foreign scale is buyer-specific,
+    `Phi^F_s * Phi^dom_rs(regime)/Phi^dom_rs(estimate)` from `sourcing_geometry`, so every
+    buyer's import share stays at its estimate: the regimes move the DOMESTIC network
+    only. The foreign draw `u^F` of a variety is still one per sector, shared by buyers.
+
     The value block is DOMESTIC where the distinction matters, since the reporting reads
     the economy's French flows:
       `D_r`        = 1 + the domestic intermediate share of the buyer's cost, i.e. the
@@ -1756,6 +1774,10 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     # setup sits after them.
     phi_f = np.asarray(xp.get("PhiF", np.zeros(S)), dtype=float)
     imports = phi_f > 0
+    # the foreign scale per (sector, buyer): Phi^F_s at the estimate, rescaled in a
+    # counterfactual so every buyer's import share stays at its estimate (`sourcing_geometry`)
+    phi_fr = {s: np.asarray(blocks[s].get("PhiF_r", np.full(R_d, phi_f[s])), dtype=float)
+              for s in range(S) if imports[s] and s in blocks}
     if u is None:
         if n_rep is None:
             n_rep = globals().get("ECONOMY_REPLICATIONS") or 1000
@@ -1829,9 +1851,10 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
             if imports[s]:
                 # the foreign bid, common to every buyer, wins where strictly cheaper
                 uf = (rng_f.random(N) if u_list is None else uf_list[b][:N, s])
-                pF = np.exp((np.log(-np.log1p(-uf)) - np.log(phi_f[s])) / theta)   # (var,)
-                imp = pF[:, None] < p                                 # (var, buyer)
-                p = np.where(imp, pF[:, None], p)
+                pF = np.exp((np.log(-np.log1p(-uf))[:, None]
+                             - np.log(phi_fr[s])[None, :]) / theta)   # (var, buyer)
+                imp = pF < p                                          # (var, buyer)
+                p = np.where(imp, pF, p)
                 win = np.where(imp, 0, win)
                 zw = np.where(imp, np.nan, zw)
             else:

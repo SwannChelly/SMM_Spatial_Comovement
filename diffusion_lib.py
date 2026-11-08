@@ -530,8 +530,9 @@ def decomposition_report(detail, radii=None, baseline="Both forces"):
             print(f"    {str(lab):<28s} {t:8.4f}  x  (1 - {1.0 - d / t:.4f})  =  {d:8.4f}")
     print("\n    D_r moves through the LEVEL channel alone -- the labour-against-"
           "intermediates\n    margin, which responds because equalising T raises P_r and "
-          "lambda < 1 makes\n    the two complements, and the import leakage, which "
-          "responds through the\n    French Phi_rs the foreign competitor is measured against.\n    The local share is a ratio in which "
+          "lambda < 1 makes\n    the two complements. The counterfactuals hold every "
+          "buyer's import share at\n    its estimate, so the leakage moves only with the "
+          "sector mix of the bill.\n    The local share is a ratio in which "
           "(D_r - 1) cancels\n    exactly, so it moves through the sector MIX and the "
           "within-sector GEOGRAPHY only.")
 

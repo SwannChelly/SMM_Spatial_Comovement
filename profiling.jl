@@ -19,6 +19,10 @@ using Printf
 """
     compute_Phi(T_mat, tau; PhiF = nothing) -> Φ (S × R_downstream),
     Φ_{s,r} = Σ_l T_ls (w_l τ_lr)^{−θ} + Φ^F_s
+
+`PhiF` is a vector (S), the estimated foreign competitor common to every buyer, or a
+matrix (S × R_downstream), a buyer-specific foreign scale (the counterfactuals of
+`incidence_stats`, which hold each buyer's import share at its estimate).
 """
 function compute_Phi(T_mat::AbstractMatrix{FT}, tau::AbstractMatrix{FT}; PhiF = nothing) where {FT}
     Phi = zeros(FT, S, R_downstream)
@@ -29,7 +33,11 @@ function compute_Phi(T_mat::AbstractMatrix{FT}, tau::AbstractMatrix{FT}; PhiF = 
             Phi[s, dr] += T_val * (w_val * tau[r_p, dr])^(-theta)
         end
     end
-    if PhiF !== nothing
+    if PhiF isa AbstractMatrix
+        for s in 1:S, dr in 1:R_downstream
+            PhiF[s, dr] > 0 && (Phi[s, dr] += PhiF[s, dr])
+        end
+    elseif PhiF !== nothing
         for s in 1:S
             PhiF[s] > 0 || continue
             for dr in 1:R_downstream
