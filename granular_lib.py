@@ -1411,7 +1411,7 @@ def _conc_identity(W, pi):
     return float(pi @ h_r), float((bar ** 2).sum()), float(pi @ m_r), h_r, m_r, bar
 
 
-def structural_networks(data, alpha=None, equalise_T=False, buyers=None):
+def structural_networks(data, alpha=None, equalise_T=False, buyers=None, kappa=None):
     """
     The expected incidence `omega^E_{lrs}` of every modelled sector under one regime,
     as a dict `sector -> {"W": (buyer x cell), "cells": ..., "buyers": ...}`.
@@ -1421,7 +1421,10 @@ def structural_networks(data, alpha=None, equalise_T=False, buyers=None):
     with no renormalisation. `buyers` restricts and orders the columns; it defaults to
     the downstream regions the geometry carries.
     """
-    geom = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T)
+    # `kappa` is passed only when set, so a caller's own `sourcing_geometry` without it
+    # still serves the two original regimes
+    geom = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T,
+                             **({} if kappa is None else {"kappa": kappa}))
     down = np.asarray(geom["downstream"]).astype(int)
     if buyers is None:
         buyers = down
@@ -1797,7 +1800,7 @@ def variety_concentration(data, value_col="share", panel=None, spend=None,
     return out
 
 
-def simulate_granular_regime(data, alpha=None, equalise_T=False, n_rep=None,
+def simulate_granular_regime(data, alpha=None, equalise_T=False, kappa=None, n_rep=None,
                              seed=20260912, value_col="share", spend=None, n_hat=None,
                              xp=None, u=None):
     """
@@ -1826,7 +1829,8 @@ def simulate_granular_regime(data, alpha=None, equalise_T=False, n_rep=None,
     realisation, and any number pinned to that realisation moves.
     """
     sp = _sector_spend(data, value_col) if spend is None else spend
-    return simulate_economy(data, xp, alpha=alpha, equalise_T=equalise_T, n_rep=n_rep,
+    return simulate_economy(data, xp, alpha=alpha, equalise_T=equalise_T, kappa=kappa,
+                            n_rep=n_rep,
                             seed=seed, u=u, n_hat=n_hat,
                             buyers=np.asarray(sp.index).astype(int), verbose=False)
 
@@ -4030,17 +4034,31 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
     replications share one `theta+`, so the band is granularity and carries no estimation
     uncertainty. The `"overlay"` layout is one exhibit and keeps its label.
 
-    `save_to` is a file under `"overlay"` and a STEM under `"panels"`: the regime is
+    `"pair"` is the two-exhibit form, and the one for a reader comparing forces: (1) the
+    estimated economy alone, in black, point and band; (2) every counterfactual on ONE
+    figure, each in its own sub-row of the buyer's row with its band, and the baseline
+    repeated in each sub-row as an open black ring WITHOUT a bar. The ring sits on the
+    same line as the counterfactual it is read against, so each displacement is a
+    horizontal distance and needs no cross-row saccade; its band is in figure (1) and
+    drawing it again would double the ink on the reference. Buyer rows are separated by
+    alternate shading so the sub-rows read as one buyer. Both figures share the buyer
+    order (baseline local share) and the x window.
+
+    `save_to` is a file under `"overlay"` and a STEM under `"panels"` and `"pair"`
+    (`_baseline` / `_counterfactuals` appended under `"pair"`): under `"panels"` the regime is
     appended before the extension, so `.../local_share_dispersion_auto.pdf` writes
     `..._both_forces.pdf`, `..._equal_comparative_advantage.pdf`, ... One call still
     produces the whole set and nothing overwrites anything.
 
-    Returns the `Axes` under `"overlay"` and `{regime: Axes}` under `"panels"`.
+    Returns the `Axes` under `"overlay"`, `{regime: Axes}` under `"panels"` and
+    `{"baseline": Axes, "counterfactuals": Axes}` under `"pair"`.
     """
     if orientation not in ("h", "v"):
         raise ValueError(f"orientation must be 'h' or 'v', got {orientation!r}.")
-    if layout not in ("panels", "overlay"):
-        raise ValueError(f"layout must be 'panels' or 'overlay', got {layout!r}.")
+    if layout not in ("panels", "overlay", "pair"):
+        raise ValueError(f"layout must be 'panels', 'overlay' or 'pair', got {layout!r}.")
+    if layout == "pair" and orientation != "h":
+        raise ValueError("layout='pair' is drawn with buyers on the y axis (orientation='h').")
     base = table.attrs.get("baseline", "Both forces") if baseline is None else baseline
 
     keep = _regime_order(table, base)
@@ -4133,6 +4151,55 @@ def plot_local_share_dispersion(table, baseline=None, regimes=None, order=None,
         if save_to:
             fig.savefig(save_to, bbox_inches="tight")
         return ax
+
+    if layout == "pair":
+        stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
+        ext = ext or ".pdf"
+        cfs = [l for l in labels if l != base]
+        k = len(cfs)
+        h1 = max(3.5, 0.22 * n)
+        w = 5.6 if figsize is None else figsize[0]
+        out = {}
+
+        def _save(fig, tag):
+            if stem:
+                path = f"{stem}_{tag}{ext}"
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                fig.savefig(path, bbox_inches="tight")
+
+        # (1) the estimated economy alone
+        fig, ax = plt.subplots(figsize=(w, h1))
+        _draw(ax, base, None)
+        _dress(ax, True)
+        fig.tight_layout()
+        _save(fig, "baseline")
+        out["baseline"] = ax
+
+        # (2) the counterfactuals, one sub-row each, the baseline ring on every sub-row.
+        # The first regime is drawn at the TOP of the row, as in the legend.
+        step = 0.78 / max(k, 1)
+        offs = {lab: ((k - 1) / 2 - j) * step for j, lab in enumerate(cfs)}
+        fig, ax = plt.subplots(figsize=(w, max(4.0, 0.12 * n * (k + 1))))
+        for i in range(0, n, 2):
+            ax.axhspan(i - 0.5, i + 0.5, color="0.94", lw=0, zorder=0)
+        g = pt[base].to_numpy(dtype=float)
+        for j, lab in enumerate(cfs):
+            y = pos + offs[lab]
+            ax.plot(g, y, "o", mfc="none", mec="black", mew=0.8, ms=3.6, lw=0, zorder=4,
+                    label=f"{base} (estimate)" if j == 0 else None)
+            c = CF_COLORS.get(lab, toulouse_color)
+            v, e = _arms(lab)
+            ax.errorbar(v, y, xerr=e, fmt="o", markersize=3.4, color=c, ecolor=c,
+                        elinewidth=1.0, capsize=0.0, linestyle="none", zorder=3, label=lab)
+        _dress(ax, True)
+        ax.set_ylim(-0.5, n - 0.5)
+        ax.grid(False, axis="y")
+        ax.legend(frameon=False, fontsize=fs(8), loc="lower center",
+                  bbox_to_anchor=(0.5, 1.0), ncol=2, handletextpad=0.3, columnspacing=1.2)
+        fig.tight_layout()
+        _save(fig, "counterfactuals")
+        out["counterfactuals"] = ax
+        return out
 
     # One INDEPENDENT figure per regime. `figsize` is now the size of ONE of them, and
     # the window `lim` is shared by construction rather than by `sharex`, which is what

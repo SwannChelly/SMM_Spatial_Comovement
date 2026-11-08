@@ -280,4 +280,27 @@ print(f"6 ok  the foreign competitor: the simulated import frequency matches the
       f"in both counterfactuals, which hold it at the estimate; the domestic "
       f"amplification sits below the total one by the leakage (mean {leak.mean():.3f})")
 
+# --- 7. the two layers of comparative advantage, removed one at a time ---------------
+#   T_ls = T_a n_ls^kappa. kappa = kappa_hat is the estimate exactly; "area" at kappa = 0
+#   is the full equalisation; each regime holds f_rs at the estimate and moves rho.
+est6 = utils.unpack_estimated_T(data6)
+g_k = utils.sourcing_geometry(data6, kappa=est6["kappa"])
+g_a = utils.sourcing_geometry(data6, equalise_T="area")
+g_0 = utils.sourcing_geometry(data6, kappa=0.0)
+g_T = utils.sourcing_geometry(data6, equalise_T=True)
+g_a0 = utils.sourcing_geometry(data6, equalise_T="area", kappa=0.0)
+moved = []
+for s, b in geom["by_sector"].items():
+    assert np.array_equal(b["T_cell"], est6["T_cell"][s, b["cells"]])
+    assert np.array_equal(g_k["by_sector"][s]["rho"], b["rho"])
+    assert np.allclose(g_a0["by_sector"][s]["rho"], g_T["by_sector"][s]["rho"], rtol=0, atol=1e-15)
+    for g in (g_a, g_0):
+        assert np.allclose(g["by_sector"][s]["f"], b["f"], rtol=0, atol=1e-14)
+        moved.append(float(np.abs(g["by_sector"][s]["rho"] - b["rho"]).max()))
+assert est6["kappa"] != 0 and min(moved) > 1e-3, moved
+assert set(utils.CF_REGIMES_KAPPA) <= set(utils.CF_COLORS)
+print(f"7 ok  comparative advantage split in two: kappa = kappa_hat is the estimate, "
+      f"'area' at kappa = 0 is the full equalisation, both regimes hold f_rs and move rho "
+      f"(min max|drho| {min(moved):.3f})")
+
 print("\nall gates pass")

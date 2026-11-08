@@ -306,6 +306,18 @@ CF_COLORS = {"Both forces": (0.0, 0.0, 0.0),
              "No trade cost": sim_color,
              "Neither": (0.72, 0.72, 0.72)}    # kept for a caller that asks for it
 
+# The three forces of the estimated geography, each removed alone: the attraction-area
+# layer of comparative advantage (T_a equalised, density n_ls^kappa kept), the
+# within-area density gradient (kappa = 0, T_a kept), and distance (alpha = 0). Unlike
+# "Equal comparative advantage", which removes BOTH layers of T at once, the first two
+# split comparative advantage into its two sources.
+CF_REGIMES_KAPPA = {"Both forces": dict(),
+                    "Equal area advantage": dict(equalise_T="area"),
+                    "No density gradient": dict(kappa=0.0),
+                    "No trade cost": dict(alpha=0.0)}
+CF_COLORS["Equal area advantage"] = toulouse_color
+CF_COLORS["No density gradient"] = (0.80, 0.55, 0.10)
+
 # The geometry-free benchmark: nothing selects among the cells of a sector, so the
 # incidence carries only the sector mix and the modelled cell support. It is NOT a
 # counterfactual economy and is never reported as one -- it exists to divide out.
@@ -1381,7 +1393,7 @@ def unpack_estimated_T(data):
         log_n = np.zeros((S, data["R"]))
     T_cell = T[:, data["aa_of_ze"]] * np.exp(kappa * log_n) * data["CELL_MASK"]
     return {"T": T, "PhiF": PhiF, "T_cell": T_cell, "alpha": alpha, "kappa": kappa,
-            "theta": model_theta(data)}
+            "log_n": log_n, "theta": model_theta(data)}
 
 
 def _downstream_ze_index(data):
@@ -1394,7 +1406,7 @@ def _downstream_ze_index(data):
     return idx
 
 
-def sourcing_geometry(data, alpha=None, equalise_T=False):
+def sourcing_geometry(data, alpha=None, equalise_T=False, kappa=None):
     """
     The exact Ricardian win probabilities `rho[s][l, r]` and the pieces they are built
     from, per sector, over CELLS l = regions.
@@ -1415,7 +1427,19 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
     foreign scale `PhiF_r[s][r] = Phi^F_s * Phi^dom_rs(regime) / Phi^dom_rs(estimate)`
     (`Phi^dom` = `phi_dom`, the French part of Phi_rs), as Julia's `incidence_stats` does.
     At the estimate `PhiF_r` is `Phi^F_s` for every buyer.
+
+    Comparative advantage has two layers, `T_ls = T_{a(l)s} n_ls^kappa`, and each can be
+    switched off on its own:
+      `equalise_T=True`    every cell's T to one (both layers; Julia's `:equal_T`);
+      `equalise_T="area"`  the AREA layer only, `T_ls = n_ls^kappa`: attraction areas are
+                           made equally productive, local density still selects cells;
+      `kappa=k`            the density elasticity set to k (`kappa=0` keeps the area
+                           layer, `T_ls = T_a`, and removes the within-area gradient).
+    Since `f_rs` is held at its estimate, none of these depends on the reference area
+    that fixes the units of T.
     """
+    if equalise_T not in (False, True, "area"):
+        raise ValueError(f"equalise_T must be False, True or 'area', got {equalise_T!r}.")
     est = unpack_estimated_T(data)
     if est["alpha"].size != 1:
         raise ValueError(
@@ -1424,7 +1448,10 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
             "reporting on an n_tau = 1 fit for this section.")
     a = float(est["alpha"][0]) if alpha is None else float(alpha)
     theta = est["theta"]
-    regime = bool(equalise_T) or a != float(est["alpha"][0])
+    k = est["kappa"] if kappa is None else float(kappa)
+    if equalise_T is True and kappa is not None:
+        raise ValueError("equalise_T=True already sets every T_ls to one; kappa is moot.")
+    regime = bool(equalise_T) or a != float(est["alpha"][0]) or k != est["kappa"]
     base = sourcing_geometry(data) if regime and (est["PhiF"] > 0).any() else None
 
     D = np.load(data["input_folder"] / "distances.npy")[:data["R"], :data["R"]]
@@ -1438,7 +1465,12 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
             continue
         # cell-level comparative advantage T_ls = T_{a(l)s} n_ls^kappa; `equalise_T`
         # sets every cell to one, as Julia's `:equal_T` regime does
-        T_cell = np.ones(cells.size) if equalise_T else est["T_cell"][s, cells]
+        # sets every cell to one, as Julia's `:equal_T` regime does; "area" keeps n_ls^kappa
+        if equalise_T is True:
+            T_cell = np.ones(cells.size)
+        else:
+            dens = np.exp(k * est["log_n"][s, cells])
+            T_cell = dens if equalise_T == "area" else est["T"][s, aa_of_ze[cells]] * dens
         d = np.maximum(D[np.ix_(cells, down - 1)], 1.0)            # (n_cell, R_d)
         psi = T_cell[:, None] * d ** (-theta * a)
         tot = psi.sum(axis=0, keepdims=True)
@@ -1685,7 +1717,7 @@ def _good_order(data):
     return s_idx, r_idx                                    # 0-based
 
 
-def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
+def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, kappa=None, n_rep=None,
                      u=None, u_foreign=None, seed=20260912, geom=None, n_hat=None,
                      buyers=None, verbose=False):
     """
@@ -1747,7 +1779,9 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     """
     if xp is None:
         xp = extended_parameters(data, n_hat=n_hat, verbose=verbose)
-    g = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T) if geom is None else geom
+    g = (sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T,
+                           **({} if kappa is None else {"kappa": kappa}))
+         if geom is None else geom)
     theta, a = xp["theta"], g["alpha"]
     nu, lam, chi_L, chi_s = xp["nu"], xp["lam"], xp["chi_L"], xp["chi_s"]
     S = data["S"]
@@ -1933,7 +1967,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     out.value = val
     out.meta = {"buyers": kept, "value_buyers": all_buyers, "n_rep": n_rep,
                 "N": Nv, "alpha": a, "PhiF": phi_f,
-                "equalise_T": bool(equalise_T), "theta": theta,
+                "equalise_T": equalise_T, "kappa": kappa, "theta": theta,
                 "draws": "julia" if u_list is not None else f"rng({seed})"}
     return out
 
