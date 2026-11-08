@@ -236,4 +236,31 @@ print(f"5 ok  the local-share figure accepts any radii (the default sort key der
       f"replication count explicitly hits the same solve ({n_entries} cache entry)")
 
 shutil.rmtree(TMP, ignore_errors=True)
+# --- 6. the foreign competitor ------------------------------------------------------
+#   Every sector of this fixture imports (domestic_share = 0.8), so the economy carries a
+#   foreign bid per variety. By the Frechet property the share of buyer r's varieties of
+#   sector s won abroad has expectation f_rs = Phi^F_s / (sum_l psi_lrs + Phi^F_s), the
+#   closed form `sourcing_geometry` carries; and the domestic amplification is the total
+#   one net of the leakage, D_r - 1 = (D_total_r - 1) - M_r, closed by the identities.
+TMP6, KW6 = build_tree()
+data6 = utils.load_granular_data("test", mu=2, parts=("core", "geography"), **KW6)
+xp6 = utils.extended_parameters(data6, verbose=False)
+geom = utils.sourcing_geometry(data6)
+assert (xp6["PhiF"] > 0).all()
+n6 = 4000
+econ6 = utils.simulate_economy(data6, xp6, n_rep=n6, seed=11, verbose=False)
+utils.economy_identities(econ6, xp6, verbose=False)
+worst = 0.0
+for s, blk in econ6.items():
+    imp = (blk["winner"] == 0).astype(float)          # (rep * N, buyer)
+    freq, f = imp.mean(axis=0), geom["by_sector"][s]["f"]
+    sd = np.sqrt(f * (1 - f) / imp.shape[0])
+    worst = max(worst, float(np.max(np.abs(freq - f) / sd)))
+assert worst < 5.0, worst
+leak = 1.0 - (econ6.value["D_r"] - 1.0) / (econ6.value["D_total_r"] - 1.0)
+assert (leak > 0).all() and (econ6.value["D_r"] < econ6.value["D_total_r"]).all()
+print(f"6 ok  the foreign competitor: the simulated import frequency matches the closed "
+      f"form Phi^F/Phi_rs within {worst:.2f} binomial sd ({n6} economies), and the domestic "
+      f"amplification sits below the total one by the leakage (mean {leak.mean():.3f})")
+
 print("\nall gates pass")

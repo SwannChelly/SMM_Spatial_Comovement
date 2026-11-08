@@ -1155,6 +1155,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     post_hoc_N_hat = _opt(np.load, n_hat_path) if n_hat_path.exists() else None
 
     suppliers = suppliers_continuum = post_hoc_u = post_hoc_good_sr = w_srd_r = None
+    post_hoc_u_foreign = None
     suppliers_path = folder / step_dir / "suppliers.parquet"
     if "firm" in parts:
       suppliers = _opt(pd.read_parquet, suppliers_path) if suppliers_path.exists() else None
@@ -1176,6 +1177,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # into a test. Absent from a tree written before they were added.
       u_path = folder / step_dir / "post_hoc_u.npy"
       post_hoc_u = _opt(np.load, u_path) if u_path.exists() else None
+      # the foreign competitor's draws, (N_max, S, n_rep): one bid per (variety, sector)
+      uf_path = folder / step_dir / "post_hoc_u_foreign.npy"
+      post_hoc_u_foreign = _opt(np.load, uf_path) if uf_path.exists() else None
       gsr_path = folder / step_dir / "post_hoc_good_sr.npy"
       post_hoc_good_sr = _opt(np.load, gsr_path) if gsr_path.exists() else None
       w_srd_r_path = folder / step_dir / "w_srd_r.npy"
@@ -1189,6 +1193,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "step_dir": step_dir, "inference_step": inf_step,
         "granular": granular, "ca_level": ca_level,
         "post_hoc_u": post_hoc_u, "post_hoc_good_sr": post_hoc_good_sr,
+        "post_hoc_u_foreign": post_hoc_u_foreign,
         # dimensions
         "S": S, "R": R, "n_AA": n_AA, "n_coef": n_coef, "n_tau": n_tau,
         "sector_names": sector_names, "sector_codes": sector_codes, "aa_names": aa_names,
@@ -1394,8 +1399,18 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
     The exact Ricardian win probabilities `rho[s][l, r]` and the pieces they are built
     from, per sector, over CELLS l = regions.
 
+    `rho[s][:, r]` is the DOMESTIC geography: the probability that cell l wins a variety
+    for buyer r GIVEN that a French cell wins it, `psi_lr / sum_l psi_lr`, so every column
+    sums to one. The foreign competitor (Julia's Phi^F_s, a cost common to every buyer)
+    does not change it: it competes with all cells alike, so it scales every cell's
+    unconditional probability by the same `1 - f_rs`. That probability is carried beside
+    it, `f[s][r] = Phi^F_s / (sum_l psi_lr + Phi^F_s)`, the share of buyer r's varieties
+    (and, by the Frechet property, of its spending on s) that is imported; it is zero for
+    a sector without foreign competitor.
+
     `alpha=0` switches the distance force off, `equalise_T=True` switches comparative
-    advantage off — the two counterfactuals, both closed form.
+    advantage off — the two counterfactuals, both closed form. Phi^F_s is held at its
+    estimate in both, as Julia's counterfactuals hold it.
     """
     est = unpack_estimated_T(data)
     if est["alpha"].size != 1:
@@ -1421,11 +1436,13 @@ def sourcing_geometry(data, alpha=None, equalise_T=False):
         d = np.maximum(D[np.ix_(cells, down - 1)], 1.0)            # (n_cell, R_d)
         psi = T_cell[:, None] * d ** (-theta * a)
         tot = psi.sum(axis=0, keepdims=True)
+        phi_f = float(est["PhiF"][s])
         out[s] = {"cells": cells, "areas": aa_of_ze[cells], "T_cell": T_cell,
                   "distance": d, "log_psi": np.log(np.maximum(psi, 1e-300)),
-                  "rho": np.divide(psi, tot, out=np.zeros_like(psi), where=tot > 0)}
+                  "rho": np.divide(psi, tot, out=np.zeros_like(psi), where=tot > 0),
+                  "PhiF": phi_f, "f": phi_f / (tot[0] + phi_f)}
     return {"by_sector": out, "alpha": a, "theta": theta, "T": est["T"],
-            "alpha_hat": float(est["alpha"][0]), "downstream": down}
+            "PhiF": est["PhiF"], "alpha_hat": float(est["alpha"][0]), "downstream": down}
 
 
 # ============================================================================
@@ -1522,7 +1539,7 @@ def _buyer_weights(data):
 # parameters of the ECONOMY all the same, and writing them down beside the head is what
 # makes the Julia and the Python route comparable at all:
 #
-#   theta+ = (chi_L, chi_s, A, alpha, T, N)   plus the fixed calibration
+#   theta+ = (chi_L, chi_s, A, alpha, T, Phi^F, N)   plus the fixed calibration
 #            (theta, nu_s, nu, lambda, epsilon, delta_r, w_r).
 #
 # Two properties of `theta+` are worth stating because they bound what "the same
@@ -1627,6 +1644,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
           "kappa": est["kappa"],
           "T": est["T"],                            # (S, n_AA), T[s, ref] = 1
           "T_cell": est["T_cell"],                  # (S, R), T_a n_ls^kappa
+          "PhiF": est["PhiF"],                      # (S,), the foreign competitor, same gauge as T
           "N": n_hat[:S].copy(),
           "theta": float(theta), "theta_source": src,
           "nu_s": np.full(S, float(NU_S_DEFAULT)),
@@ -1655,8 +1673,8 @@ def _good_order(data):
 
 
 def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
-                     u=None, seed=20260912, geom=None, n_hat=None, buyers=None,
-                     verbose=False):
+                     u=None, u_foreign=None, seed=20260912, geom=None, n_hat=None,
+                     buyers=None, verbose=False):
     """
     The realised finite-variety economy at `theta+`, by the forward map `solve_network`
     runs — the Ricardian block AND the value block, so `D_r`, `theta_rs`, `c_tilde_r` and
@@ -1683,6 +1701,28 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
     than an agreement. Omitted, draws come from `default_rng(seed)` — independent across
     replications, and SHARED ACROSS BUYERS within one, because a variety is one physical
     good and that shared draw is the whole source of common granularity.
+
+    THE FOREIGN COMPETITOR. A sector with `Phi^F_s > 0` has one foreign bid per variety,
+    `p^F = Phi^F_s^(-1/theta) (-log(1 - u^F))^(1/theta)`, common to every buyer (no trade
+    cost, no wage), as Julia's `solve_network` draws it. Where it is strictly below the
+    best French cell the variety is IMPORTED for that buyer: it enters the price index
+    `P_sr` and the buyer's spending, but it is not a French linkage, so its `winner` is 0,
+    its `exp_val` and `v` are 0 and it has no row in `economy_frame` (as in the parquet).
+    `u_foreign` is Julia's `(N_max, S)` matrix per replication (`post_hoc_u_foreign.npy`);
+    omitted, the foreign bids come from their OWN stream, so the domestic draws (and a
+    sector without imports) are exactly what they were without the foreign competitor.
+
+    The value block is DOMESTIC where the distinction matters, since the reporting reads
+    the economy's French flows:
+      `D_r`        = 1 + the domestic intermediate share of the buyer's cost, i.e. the
+                     DOMESTIC amplification: one euro of final demand for r's output sends
+                     `D_r - 1` euros to French upstream cells (the rest of the intermediate
+                     bill, `M_r`, leaks to the foreign competitors);
+      `theta_rs`   = sector s's share of the DOMESTIC intermediate bill (sums to one);
+      `D_total_r`  = 1 + (1-chi_L)(P_r/c_r)^(1-lambda), the TOTAL intermediate share;
+      `M_rs`       = imports from sector s per unit of cost, `M_r = sum_s M_rs`;
+      `theta_total_rs` = chi_s (P_sr/P_r)^(1-nu), the sector mix of the TOTAL bill.
+    Without imports `D_r = D_total_r` and `theta_rs = theta_total_rs` exactly.
 
     Returns `variety_panel`'s structure per sector (so every existing consumer reads it
     unchanged) plus the value block per (replication, buyer) and the cost shares.
@@ -1714,10 +1754,14 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
 
     # `Nv` and the geometry are needed to validate a supplied draw matrix, so the draw
     # setup sits after them.
+    phi_f = np.asarray(xp.get("PhiF", np.zeros(S)), dtype=float)
+    imports = phi_f > 0
     if u is None:
         if n_rep is None:
             n_rep = globals().get("ECONOMY_REPLICATIONS") or 1000
         rng, u_list = np.random.default_rng(seed), None
+        # the foreign bids from their own stream: the domestic draws are untouched
+        rng_f = np.random.default_rng([seed, 1]) if imports.any() else None
     else:
         u_list = [np.asarray(x, dtype=float) for x in (u if isinstance(u, (list, tuple)) else [u])]
         if n_rep is None:
@@ -1735,7 +1779,18 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
                 raise ValueError(
                     f"draw matrix {k} has shape {M.shape}; Julia writes "
                     f"(N_max, n_good) = (>={N_max}, {n_good}) for this theta+.")
-        rng = None
+        rng, rng_f = None, None
+        if imports.any():
+            if u_foreign is None:
+                raise ValueError("this theta+ has a foreign competitor (Phi^F > 0) but no "
+                                 "foreign draws were passed: pass `u_foreign` "
+                                 "(post_hoc_u_foreign.npy), or Julia's economy cannot be rebuilt.")
+            uf_list = [np.asarray(x, dtype=float) for x in
+                       (u_foreign if isinstance(u_foreign, (list, tuple)) else [u_foreign])]
+            if len(uf_list) < n_rep or any(M.ndim != 2 or M.shape[1] != S or M.shape[0] < N_max
+                                           for M in uf_list[:n_rep]):
+                raise ValueError(f"foreign draws must be {n_rep} matrices of shape "
+                                 f"(>={N_max}, {S}), as post_hoc_u_foreign.npy stacks them.")
 
     mu_inv = xp["epsilon"] / (xp["epsilon"] - 1.0)           # mu = eps/(eps-1)
     out, val_rows = Economy(), []
@@ -1743,7 +1798,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
 
     for b in range(n_rep):
         P_sr = np.empty((S, R_d))
-        p_keep, win_keep = {}, {}
+        p_keep, win_keep, imp_keep = {}, {}, {}
         for s in range(S):
             blk = blocks[s]
             cells, N, nus = blk["cells"], Nv[s], float(xp["nu_s"][s])
@@ -1770,11 +1825,26 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
             # the winner's own productivity, which is the parquet's `productivity` column
             zw = np.exp(np.take_along_axis(logz[:, None, :].repeat(j.shape[1], 1),
                                            j[:, :, None], axis=2)[:, :, 0])
+            win = cells[j] + 1                                        # 1-based zone
+            if imports[s]:
+                # the foreign bid, common to every buyer, wins where strictly cheaper
+                uf = (rng_f.random(N) if u_list is None else uf_list[b][:N, s])
+                pF = np.exp((np.log(-np.log1p(-uf)) - np.log(phi_f[s])) / theta)   # (var,)
+                imp = pF[:, None] < p                                 # (var, buyer)
+                p = np.where(imp, pF[:, None], p)
+                win = np.where(imp, 0, win)
+                zw = np.where(imp, np.nan, zw)
+            else:
+                imp = np.zeros(p.shape, dtype=bool)
             acc[s]["z"].append(zw)
             y = p ** (1.0 - nus)
             P_sr[s] = (y.mean(axis=0)) ** (1.0 / (1.0 - nus))         # weights are 1/N
-            p_keep[s], win_keep[s] = p, cells[j] + 1                  # 1-based zone
-            acc[s]["v"].append(y / y.sum(axis=0, keepdims=True))
+            p_keep[s], win_keep[s], imp_keep[s] = p, win, imp
+            # v: the variety's share of the buyer's DOMESTIC spending on s (zero if imported)
+            y_dom = np.where(imp, 0.0, y)
+            tot_dom = y_dom.sum(axis=0, keepdims=True)
+            acc[s]["v"].append(np.divide(y_dom, tot_dom, out=np.zeros_like(y_dom),
+                                         where=tot_dom > 0))
             acc[s]["W"].append(win_keep[s].astype(float))
             acc[s]["rep"].append(np.full(N, b))
 
@@ -1782,22 +1852,39 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
         w_d = wage[down - 1]
         c_r = (chi_L * w_d ** (1.0 - lam) + (1.0 - chi_L) * P_r ** (1.0 - lam)) ** (1.0 / (1.0 - lam))
         c_tilde = c_r / A
-        lab_sub = (1.0 - chi_L) * (P_r / c_r) ** (1.0 - lam)           # D_r - 1, exactly
+        lab_sub = (1.0 - chi_L) * (P_r / c_r) ** (1.0 - lam)           # TOTAL intermediate share
+        M_rs = np.zeros((S, R_d))                                        # imports per unit of cost
         for s in range(S):
             nus = float(xp["nu_s"][s])
             e = ((1.0 / Nv[s]) * chi_s[s] * (1.0 - chi_L)
                  * (p_keep[s] / P_sr[s][None, :]) ** (1.0 - nus)
                  * (P_sr[s][None, :] / P_r[None, :]) ** (1.0 - nu)
                  * (P_r[None, :] / c_r[None, :]) ** (1.0 - lam))
+            if imports[s]:
+                M_rs[s] = np.where(imp_keep[s], e, 0.0).sum(axis=0)
+                e = np.where(imp_keep[s], 0.0, e)                     # no French linkage
             acc[s]["exp"].append(e)
         # the downstream demand system: p_r = c_tilde/mu, P = (sum p^eps delta)^(1/eps)
         p_dr = c_tilde / mu_inv
         P_agg = (p_dr ** xp["epsilon"] * xp["delta"]).sum() ** (1.0 / xp["epsilon"])
         Y_r = p_dr ** xp["epsilon"] * P_agg ** (-xp["epsilon"]) * xp["delta"]
-        theta_rs = chi_s[:, None] * (P_sr / P_r[None, :]) ** (1.0 - nu)
+        theta_tot = chi_s[:, None] * (P_sr / P_r[None, :]) ** (1.0 - nu)
+        if imports.any():
+            # domestic purchases from s per unit of cost, and their mix
+            dom = theta_tot * lab_sub[None, :] - M_rs
+            # a buyer that imports EVERY variety of every sector in this replication has no
+            # domestic bill: its mix is set to zero (and its D_r is exactly 1)
+            dsum = dom.sum(axis=0, keepdims=True)
+            theta_rs = np.divide(dom, dsum, out=np.zeros_like(dom),
+                                 where=dsum > 1e-10 * lab_sub[None, :])
+            D_r = 1.0 + lab_sub - M_rs.sum(axis=0)
+        else:
+            theta_rs, D_r = theta_tot, 1.0 + lab_sub
         val_rows.append({"replication": b, "P_sr": P_sr.copy(), "P_r": P_r,
-                         "c_r": c_r, "c_tilde_r": c_tilde, "D_r": 1.0 + lab_sub,
-                         "Y_r": Y_r, "P": float(P_agg), "theta_rs": theta_rs})
+                         "c_r": c_r, "c_tilde_r": c_tilde, "D_r": D_r,
+                         "D_total_r": 1.0 + lab_sub, "M_rs": M_rs,
+                         "Y_r": Y_r, "P": float(P_agg), "theta_rs": theta_rs,
+                         "theta_total_rs": theta_tot})
 
     all_buyers = down.astype(int)
     if buyers is None:
@@ -1817,11 +1904,12 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, n_rep=None,
                        "buyers": kept,
                        "replication": np.concatenate(acc[s]["rep"])}
     val = {k: np.stack([r[k] for r in val_rows]) for k in
-           ("P_sr", "P_r", "c_r", "c_tilde_r", "D_r", "Y_r", "theta_rs")}
+           ("P_sr", "P_r", "c_r", "c_tilde_r", "D_r", "D_total_r", "M_rs", "Y_r",
+            "theta_rs", "theta_total_rs")}
     val["P"] = np.array([r["P"] for r in val_rows])
     out.value = val
     out.meta = {"buyers": kept, "value_buyers": all_buyers, "n_rep": n_rep,
-                "N": Nv, "alpha": a,
+                "N": Nv, "alpha": a, "PhiF": phi_f,
                 "equalise_T": bool(equalise_T), "theta": theta,
                 "draws": "julia" if u_list is not None else f"rng({seed})"}
     return out
@@ -1832,12 +1920,18 @@ def economy_identities(econ, xp, tol=1e-12, verbose=True):
     The identities the forward map satisfies exactly, as a check on the port rather than
     on the economy: each one fixes a different step, so a mismatch NAMES the step.
 
-    (1) `sum_rho (1/N)(p/P_sr)^(1-nu_s) = 1` — the definition of the within-sector index.
+    (1) `sum_rho exp_val + M_rs = theta_total_rs (D_total_r - 1)` — the definition of the
+        within-sector index `P_sr` (the French and the imported varieties together
+        exhaust the buyer's spending on s), and `v` sums to one over the DOMESTIC
+        varieties of every (replication, buyer) that buys one.
     (2) `sum_s chi_s (P_sr/P_r)^(1-nu) = 1` — the across-sector index.
-    (3) `theta_rs` sums to one over sectors, so the input mix comes OUT of the economy.
-    (4) `D_r = 1 + sum_{l,s} exp_val = 1 + (1-chi_L)(P_r/c_r)^(1-lambda)`, which is the
-        closed form the section quotes — (1) and (2) are what collapse the two CES
-        indices, so this is the one number that fixes the whole expenditure chain.
+    (3) `theta_rs` and `theta_total_rs` sum to one over sectors, so the input mix comes OUT
+        of the economy.
+    (4) `D_r = 1 + sum_{l,s} exp_val` (the DOMESTIC amplification) and
+        `D_total_r = D_r + M_r = 1 + (1-chi_L)(P_r/c_r)^(1-lambda)`, the closed form the
+        section quotes — (1) and (2) are what collapse the two CES indices, so this is the
+        one number that fixes the whole expenditure chain.
+    Without imports `M = 0` and these are the identities of the domestic economy.
     """
     # The panel can be a buyer SUBSET while the value block is not (P and Y_r are sums
     # over every downstream region), so the value columns are cut to the panel's buyers
@@ -1850,26 +1944,29 @@ def economy_identities(econ, xp, tol=1e-12, verbose=True):
     sec = sorted(econ)
     rep = econ.meta["n_rep"]
     res = {}
-    e1 = 0.0
+    e1, ev, tot = 0.0, 0.0, np.zeros_like(val["D_r"])
+    lab = val["D_total_r"] - 1.0                                   # (rep, buyer)
     for s in sec:
-        nus = float(xp["nu_s"][s])
-        v = econ[s]["v"]
-        # v IS (1/N)(p/P_sr)^(1-nu_s) up to the normalisation, so within a replication
-        # it must sum to one over varieties
-        r = econ[s]["replication"]
+        v, e, r = econ[s]["v"], econ[s]["exp_val"], econ[s]["replication"]
         for b in range(rep):
-            e1 = max(e1, abs(v[r == b].sum(axis=0) - 1.0).max())
+            es = e[r == b].sum(axis=0)
+            tot[b] += es
+            e1 = max(e1, float(np.abs(es + val["M_rs"][b, s] - val["theta_total_rs"][b, s] * lab[b]).max()))
+            vs = v[r == b].sum(axis=0)
+            has = (econ[s]["winner"][r == b] > 0).any(axis=0)
+            if has.any():
+                ev = max(ev, float(np.abs(vs[has] - 1.0).max()))
     res["ces_within"] = e1
+    res["v_sums_one"] = ev
     res["ces_across"] = float(np.abs(
         (xp["chi_s"][None, :, None] * (val["P_sr"] / val["P_r"][:, None, :]) ** (1.0 - xp["nu"])
          ).sum(axis=1) - 1.0).max())
-    res["mix_sums_one"] = float(np.abs(val["theta_rs"].sum(axis=1) - 1.0).max())
-    tot = np.zeros_like(val["D_r"])
-    for s in sec:
-        e, r = econ[s]["exp_val"], econ[s]["replication"]
-        for b in range(rep):
-            tot[b] += e[r == b].sum(axis=0)
+    # a domestic bill to split (not one lost to rounding when every variety is imported)
+    has_dom = (val["D_r"] - 1.0) > 1e-10 * (val["D_total_r"] - 1.0)
+    res["mix_sums_one"] = float(max(np.abs(val["theta_rs"].sum(axis=1) - 1.0)[has_dom].max(initial=0.0),
+                                    np.abs(val["theta_total_rs"].sum(axis=1) - 1.0).max()))
     res["D_r_from_shares"] = float(np.abs(val["D_r"] - (1.0 + tot)).max())
+    res["D_total_split"] = float(np.abs(val["D_total_r"] - val["D_r"] - val["M_rs"].sum(axis=1)).max())
     ok = all(v <= tol for v in res.values())
     if verbose:
         print("  [identities] " + "  ".join(f"{k} {v:.2e}" for k, v in res.items())
@@ -1891,6 +1988,10 @@ def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
     within-sector normalisation of the expenditure share. Handed the same `theta+` and
     the same `u`, the forward map is deterministic, so the two must agree to the last
     few bits and anything larger is a defect with an address.
+
+    With a foreign competitor the economy is rebuilt with Julia's foreign draws too
+    (`post_hoc_u_foreign.npy`), and the number of French linkages per sector is compared
+    as well (`missing_rows`): an imported (variety, buyer) is a row in neither.
 
     Three things are checked, in the order a failure should be read. The draw COLUMN map
     first (`post_hoc_good_sr.npy` against `_good_order`): wrong there, every number below
@@ -1930,8 +2031,10 @@ def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
         xp = extended_parameters(data, verbose=verbose)
     n_rep = u.shape[2]
     if econ is None:
+        uf = data.get("post_hoc_u_foreign")
+        uf = None if uf is None else [np.asarray(uf, dtype=float)[:, :, b] for b in range(n_rep)]
         econ = simulate_economy(data, xp, u=[u[:, :, b] for b in range(n_rep)],
-                                n_rep=n_rep, verbose=verbose)
+                                u_foreign=uf, n_rep=n_rep, verbose=verbose)
 
     sec = _parquet_sector_index(data, sup)
     rep = sup["replication"].to_numpy().astype(int)
@@ -1947,7 +2050,7 @@ def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
         N = int(econ.meta["N"][s])
         m = (sec == s) & (rep0 < n_rep) & (var < N)
         if not m.any():
-            rows.append({"sector": s, "rows": 0, "winner_mismatch": np.nan,
+            rows.append({"sector": s, "rows": 0, "missing_rows": np.nan, "winner_mismatch": np.nan,
                          "max_abs_exp": np.nan, "max_rel_exp": np.nan})
             continue
         j = np.array([bpos[b] for b in buy[m]])
@@ -1955,12 +2058,16 @@ def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
         W = econ[s]["winner"].astype(int)[r, j]
         E = econ[s]["exp_val"][r, j]
         d = np.abs(E - val[m])
+        # the linkages Python finds and the parquet lacks: an imported (variety, buyer)
+        # has no row in either, so the two counts must agree
+        Wall = econ[s]["winner"][:n_rep * N]
         rows.append({"sector": s, "rows": int(m.sum()),
+                     "missing_rows": int((Wall > 0).sum()) - int(m.sum()),
                      "winner_mismatch": int((W != win[m]).sum()),
                      "max_abs_exp": float(d.max()),
                      "max_rel_exp": float((d / np.maximum(np.abs(val[m]), 1e-300)).max())})
     out = pd.DataFrame(rows).set_index("sector")
-    worst_w = int(np.nansum(out["winner_mismatch"]))
+    worst_w = int(np.nansum(out["winner_mismatch"])) + int(np.nansum(np.abs(out["missing_rows"])))
     worst_e = float(np.nanmax(out["max_rel_exp"]))
     out.attrs["agrees"] = bool(worst_w == 0 and worst_e <= tol)
     if verbose:
@@ -1986,7 +2093,8 @@ def economy_frame(econ, xp, drop_zero=False):
     replications are two economies and not the same firms observed twice — anything that
     groups by firm must treat them as distinct.
 
-    Julia drops rows whose `share` is exactly zero (a variety past `N_hat` carries weight
+    An IMPORTED (variety, buyer) has no French supplier and therefore no row, as in the
+    parquet. Julia drops rows whose `share` is exactly zero (a variety past `N_hat` carries weight
     zero there and would otherwise read as a supplier that supplies nothing). Here every
     row carries a positive share by construction, since the economy is drawn at `N_hat`
     exactly, so `drop_zero` is off by default and is a convenience for comparing against
@@ -1998,7 +2106,9 @@ def economy_frame(econ, xp, drop_zero=False):
     kept = np.asarray(econ.meta["buyers"]).astype(int)
     col = np.array([int(np.flatnonzero(allb == b)[0]) for b in kept])
     Y = econ.value["Y_r"][:, col]                 # (n_rep, n_buyer)
-    Dm1 = econ.value["D_r"][:, col] - 1.0         # the labour-substitution factor
+    # Julia's `intermediate_derivative` divides by the TOTAL intermediate share (the
+    # labour-substitution factor), imports included
+    Dm1 = econ.value.get("D_total_r", econ.value["D_r"])[:, col] - 1.0
     for s in sorted(econ):
         blk = econ[s]
         N = int(econ.meta["N"][s])
@@ -2020,6 +2130,7 @@ def economy_frame(econ, xp, drop_zero=False):
             "variety": np.repeat(var + 1, nb_),
             "replication": np.repeat(rep + 1, nb_)}))
     out = pd.concat(rows, ignore_index=True)
+    out = out[out["ze2010"] > 0].reset_index(drop=True)     # imported: no French linkage, no row
     if drop_zero:
         out = out[out["share"] != 0.0].reset_index(drop=True)
     key = out[["replication", "ze2010", "A129", "variety"]].astype(int)

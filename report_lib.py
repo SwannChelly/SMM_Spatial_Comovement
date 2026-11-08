@@ -44,6 +44,11 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     Panel C: the extensive margin, block 4 = [beta_d ; beta_kappa] -- the cell cloglog
     of has_sup on the distance regressor(s) and on ln n_ls. Under each simulated
     coefficient, its 95% fake-world band (`reg_coef_world_table`) when Step 2 has run.
+    Panel D: the import share of each upstream sector, f_s = 1 - domestic_share, the
+    foreign row of the sourcing-share block. It is a PROFILED moment: Phi^F_s is set so
+    the closed-form share equals the target exactly, so the simulated share differs from
+    it only by the Monte-Carlo error of the realised prices. Sectors that do not import
+    are omitted; the panel is dropped when no industry imports.
 
     industries_config : [{'industry': 'aero', 'display_name': 'Aerospace'}, ...]
     mu                : 1 (step1 best parameters) or 2 (step3 best parameters)
@@ -80,6 +85,28 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
             "Empirical": d["empirical_moments_dict"]["agg_industry_share"],
             "Simulated": d["simulated_moments_dict"]["agg_industry_share"],
         })
+
+    def _label(code):
+        if name_A129 is not None and "A129" in name_A129.columns:
+            hit = name_A129.loc[name_A129["A129"].astype(str) == str(code), "name"].values
+            if len(hit):
+                return hit[0]
+        return code
+
+    # --- Panel D: import shares (the foreign row of the gamma block) ----------
+    imports = {}
+    for c in industries_config:
+        d = all_data[c["industry"]]
+        act = np.asarray(d.get("FOREIGN_ACTIVE", np.zeros(len(d["sector_names"]), bool)))
+        sim_f = d["simulated_moments_dict"].get("foreign_share")
+        imports[c["industry"]] = {
+            str(code): (float(d["foreign_share"][s]),
+                        np.nan if sim_f is None else float(sim_f[s]))
+            for s, code in enumerate(d["sector_names"]) if act[s]}
+    import_codes = sorted({code for v in imports.values() for code in v})
+    panel_D_rows = [[_label(code)] + [x for c in industries_config
+                                      for x in imports[c["industry"]].get(code, ("---", "---"))]
+                    for code in import_codes]
 
     panel_B_rows = []
     for code in all_codes:
@@ -159,6 +186,14 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
         if any(x not in ("", "{}") for x in band):
             tex += " & ".join(band) + " \\\\\n"
 
+    if panel_D_rows:
+        tex += "\\midrule\n"
+        tex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel D: Import Shares "
+                f"(profiled)}}}} \\\\\n")
+        tex += "\\midrule\n"
+        for row in panel_D_rows:
+            tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
+
     tex += "\\bottomrule\n" + r"\end{tabular}" + "\n\n"
     tex += (r"\vspace{0.3cm}" "\n"
             r"\caption*{\footnotesize \emph{Notes}: Empirical moments against moments simulated "
@@ -172,6 +207,11 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
             + (r" In brackets: the 2.5--97.5\% quantiles of the coefficient in a single "
                r"finite economy drawn from the model (simulated value plus the fake-world "
                r"residual $\beta_{world}-\beta_{sim}$ of Step~2)." if any_band else "")
+            + (r" Panel~D reports each upstream sector's import share $f_s = 1 - $ domestic "
+               r"share (Emp.) against the simulated share of the buyers' spending on that "
+               r"sector won by its foreign competitor (Sim.). It is matched exactly by the "
+               r"foreign Fr\'echet scale $\Phi^F_s$ in closed form, so the gap is simulation "
+               r"error only." if panel_D_rows else "")
             + r" The zero-supplier shares $\bar{G}_s(0)$ are reported in a separate figure.}"
             "\n" r"\end{table}" "\n")
 

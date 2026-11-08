@@ -813,10 +813,24 @@ def run_checks(ns, ROOT, exp):
     check("second industry's simulated values present",
           all(f"{v:.4f}" in tex for v in exp["second"]["sim_final"]["industry"]))
     check("disjoint sector sets produce `---` cells", "{---}" in tex)
+    panel_B = tex.split("Panel B:")[1].split("Panel C:")[0]
     check("row count = union of both sector sets",
-          sum(1 for line in tex.splitlines() if line.strip().endswith(r"\\")
+          sum(1 for line in panel_B.splitlines() if line.strip().endswith(r"\\")
               and line.split("&")[0].strip() in
               set(exp["sector_names"]) | set(exp["second"]["sector_names"])) == 2 * S)
+    panel_D = tex.split("Panel D:")[1].split("bottomrule")[0] if "Panel D:" in tex else ""
+    imp_codes = ({c for c, a in zip(exp["sector_names"], np.array(exp["T_ACTIVE"])[:, -1]) if a}
+                 | {c for c, a in zip(exp["second"]["sector_names"],
+                                      np.array(exp["second"]["T_ACTIVE"])[:, -1]) if a})
+    check("Panel D: one row per importing sector, target f = 1 - domestic_share beside the "
+          "simulated import share",
+          sum(1 for line in panel_D.splitlines() if line.strip().endswith(r"\\")
+              and line.split("&")[0].strip() in imp_codes) == len(imp_codes)
+          and all(f"{v:.4f}" in panel_D for v, a in zip(exp["foreign_share"],
+                                                       np.array(exp["T_ACTIVE"])[:, -1]) if a)
+          and all(f"{v:.4f}" in panel_D for v, a in zip(exp["sim_foreign"],
+                                                       np.array(exp["T_ACTIVE"])[:, -1]) if a)
+          and "profiled" in panel_D and r"\Phi^F_s" in tex)
     check("Panel A present", "Panel A: Aggregate Labor Share" in tex)
     check("Panel B present", "Panel B: Aggregate Industry Shares" in tex)
     check("Panel C: the extensive margin, beta_d bins and beta_kappa",

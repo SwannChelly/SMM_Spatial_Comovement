@@ -42,6 +42,23 @@ from utils import (
 # read off the simulated firm-level economy, so `mu` selects them. The conventions
 # that set the LEVEL of D_r are in the markdown above; the radius is a free
 # parameter throughout.
+#
+# D_r IS THE DOMESTIC AMPLIFICATION. One extra euro of final demand for region r's output
+# raises r's cost bill by one euro (constant returns, markup aside), of which
+#
+#     (1 - chi_L) (P_r / c_r)^(1 - lambda)                 goes to intermediates, and
+#     (1 - chi_L) (P_r / c_r)^(1 - lambda) * (1 - m_r)     to FRENCH upstream cells,
+#
+# with m_r = sum_s theta_rs f_rs the import share of r's intermediate bill (theta_rs the
+# sector mix of that bill, f_rs = Phi^F_s / Phi_rs sector s's import share for buyer r):
+# the rest leaks to the foreign competitors and creates no French sales. Upstream cells
+# use labour only (no upstream price index), so there is no further round, and
+#
+#     D_r = 1 + (1 - chi_L) (P_r / c_r)^(1 - lambda) (1 - m_r).
+#
+# The parquet carries French linkages only, so `1 + sum of its shares` IS this domestic
+# D_r; the simulated economy's value block reports it as `D_r`, with the total
+# (`D_total_r`) and the imports (`M_rs`) beside it.
 
 AMPLIFICATION_RADIUS_KM = 100      # the paper's Figure 6; 200 etc. are just as valid
 # The radii every function below defaults to. It is a PRIVATE copy of the Constants
@@ -123,7 +140,7 @@ def amplification_summary(data, radii=(AMPLIFICATION_RADIUS_KM,), value_col="sha
     out = pd.DataFrame({
         "region": df.groupby("ze2010_downstream")["shocked_name"].first(),
         "upstream_sales": tot,
-        "amplification": 1.0 + tot,
+        "amplification": 1.0 + tot,          # DOMESTIC: the parquet has French rows only
         "supplier_cells": df.assign(hit=df["upstream_sales"] > 0)
                             .groupby("ze2010_downstream")["hit"].sum(),
         "mean_upstream_distance": df.eval("upstream_sales * distance")
@@ -187,7 +204,7 @@ def counterfactual_diffusion_frame(data, alpha=None, equalise_T=False,
     what this function holds fixed, NOT a property of the model.
 
     An earlier version of this docstring argued the opposite: that
-    $D_r = 1 + (1-\\chi_L)(P_r/c_r)^{1-\\lambda}$ carries no comparative-advantage
+    $D_r = 1 + (1-\\chi_L)(P_r/c_r)^{1-\\lambda}(1 - m_r)$ carries no comparative-advantage
     parameter, so `T` and `alpha` could not move it. They do not appear in that
     expression, but they decide which cell wins each variety and at what delivered cost,
     so they set $P_{sr}$ and hence $P_r$. With `lambda < 1` labour and intermediates are
@@ -349,7 +366,9 @@ def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="shar
 # it. Its docstring used to argue that this was not an approximation -- that
 # `D_r = 1 + (1-chi_L)(P_r/c_r)^{1-lambda}` carries no comparative-advantage parameter,
 # so `T` and `alpha` cannot move it. That is wrong, and the error matters for the section's
-# own question. `T` and `alpha` do not appear in that expression, but they decide WHICH
+# own question. (With imports the domestic coefficient is
+# `1 + (1-chi_L)(P_r/c_r)^{1-lambda} (1 - m_r)`, see the top of this module.)
+# `T` and `alpha` do not appear in that expression, but they decide WHICH
 # cell wins each variety and at what delivered cost, so they set `P_sr`, hence `P_r`. With
 # `lambda < 1` labour and intermediates are COMPLEMENTS, so a higher input price index
 # RAISES the intermediate expenditure share: equalising comparative advantage makes
@@ -364,10 +383,14 @@ def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="shar
 #
 #     X_{lr} = (D_r - 1) * sum_s theta_{rs} * rho_{lrs}
 #
-# with `theta_rs` the sector's share of the intermediate bill (it sums to one over
-# sectors -- gated by `economy_identities`) and `rho` the within-sector geography. Hence
+# with `theta_rs` the sector's share of the DOMESTIC intermediate bill (it sums to one
+# over sectors -- gated by `economy_identities`) and `rho` the within-sector geography
+# of French sourcing, which the common foreign competitor does not distort. Hence
 #
-#   (a) LEVEL       D_r - 1        how much of the euro leaves for upstream at all;
+#   (a) LEVEL       D_r - 1        how much of the euro reaches French upstream cells at
+#                                  all = (total intermediate share) x (1 - m_r): the
+#                                  labour-against-intermediates margin AND the import
+#                                  leakage, reported separately;
 #   (b) MIX         theta_rs       which upstream SECTORS it goes to;
 #   (c) GEOGRAPHY   rho_lrs        where inside a sector it lands.
 #
@@ -413,7 +436,10 @@ def amplification_decomposition(economies, regimes=None, radii=None,
 
     Returns one row per (regime, shocked region) with
 
-        amplification        D_r, from the regime's own value block  -- channel (a) alone
+        amplification        D_r (DOMESTIC), from the regime's own value block -- channel (a)
+        amplification_total  1 + the total intermediate share, imports included
+        import_share         m_r, the import share of the intermediate bill, so that
+                             D_r - 1 = (amplification_total - 1)(1 - import_share)
         mean_upstream_distance, share_within_*km
                              the TOTAL effect, mix and geography both at the regime
         *_geography          the same statistics with the sector MIX held at the baseline,
@@ -459,6 +485,10 @@ def amplification_decomposition(economies, regimes=None, radii=None,
             blk[f"{c}_geography"] = gch[c]
             blk[f"{c}_mix"] = mch[c]
         blk["amplification"] = econ.value["D_r"].mean(axis=0)
+        D_tot = econ.value.get("D_total_r", econ.value["D_r"])
+        M_r = econ.value["M_rs"].sum(axis=1) if "M_rs" in econ.value else np.zeros_like(D_tot)
+        blk["amplification_total"] = D_tot.mean(axis=0)
+        blk["import_share"] = (M_r / np.where(D_tot > 1.0, D_tot - 1.0, np.nan)).mean(axis=0)
         blk["region"] = _region_labels(dl).set_index("index")["ze2010_name"].reindex(buyers).to_numpy()
         blk["regime"] = lab
         rows.append(blk.reset_index())
@@ -492,9 +522,16 @@ def decomposition_report(detail, radii=None, baseline="Both forces"):
         print(f"    {str(lab):<28s} {amp[lab].mean():8.4f} "
               f"{float((amp[lab] - base_amp).mean()):+8.4f} | "
               f"{d_tot:+8.4f} {d_geo:+8.4f} {d_mix:+8.4f} {d_tot - d_geo - d_mix:+8.4f}")
+    if "amplification_total" in detail.columns:
+        tot = detail["amplification_total"].unstack("regime")
+        print("\n    domestic D_r - 1 = (total intermediate share) x (1 - leakage to imports):")
+        for lab in amp.columns:
+            t, d = tot[lab].mean() - 1.0, amp[lab].mean() - 1.0
+            print(f"    {str(lab):<28s} {t:8.4f}  x  (1 - {1.0 - d / t:.4f})  =  {d:8.4f}")
     print("\n    D_r moves through the LEVEL channel alone -- the labour-against-"
           "intermediates\n    margin, which responds because equalising T raises P_r and "
-          "lambda < 1 makes\n    the two complements. The local share is a ratio in which "
+          "lambda < 1 makes\n    the two complements, and the import leakage, which "
+          "responds through the\n    French Phi_rs the foreign competitor is measured against.\n    The local share is a ratio in which "
           "(D_r - 1) cancels\n    exactly, so it moves through the sector MIX and the "
           "within-sector GEOGRAPHY only.")
 
