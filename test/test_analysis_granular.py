@@ -21,6 +21,8 @@ import matplotlib
 matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
+import pyfixest as pf
 
 RNG = np.random.default_rng(20260805)
 
@@ -114,6 +116,18 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/domestic_share.npy", domestic_share)
     np.save(f"{BASE}/N_downstream_per_region.npy", N_downstream)
     np.save(f"{BASE}/attraction_area_linkages.npy", AA_link)
+    # distances: the nearest downstream region of every ZE is its attraction area (as
+    # load_parameters.jl asserts), at distances spread over the five bins; a downstream
+    # ZE is at 0 from itself and leaves the regression set (d > 0). Own stream, so RNG
+    # is not consumed.
+    _near = np.array([0, 12, 60, 110, 160, 0, 30, 260, 75, 0, 40, 180], float)
+    _D = 400.0 + np.random.default_rng(5).uniform(0, 100, (R, R))
+    _D = (_D + _D.T) / 2
+    np.fill_diagonal(_D, 0.0)
+    for _l in range(R):
+        _j = down_idx[aa_of_ze[_l]]
+        _D[_l, _j] = _D[_j, _l] = _near[_l]
+    np.save(f"{BASE}/distances.npy", _D)
     # block 4 = [beta_d (N_REG) ; beta_kappa (1)], two files as the data notebook writes
     reg_coef_emp = np.array([-0.35, -0.62, -0.81, -1.05, 0.48])
     np.save(f"{BASE}/beta_d_{N_REG}.npy", reg_coef_emp[:N_REG])
@@ -799,6 +813,58 @@ def run_checks(ns, ROOT, exp):
     check("plot_reg_coef: distance panel + density panel, the band drawn on beta_kappa",
           len(axs4) == 2 and yerr is not None
           and close(sorted([yerr[0][1], yerr[1][1]]), [wt["band_lo"].iloc[-1], wt["band_hi"].iloc[-1]], 1e-9))
+
+    # block 4 as average marginal effects in pp (Fig. 4, Panel A's reading)
+    smp = ns["reg_cell_sample"](d2)
+    nd = exp["n_coef"]
+    xb = ns["_index_no_fe"](smp, d2["empirical_moments_dict"]["reg_coef"], nd)
+    a_g = ns["calibrate_cloglog_fe"](smp, xb)
+    gsum = np.bincount(smp["group"], smp["y"])
+    check("AME: the calibrated fixed effects close every group's supplier count",
+          close(np.bincount(smp["group"], ns["_cloglog_F"](a_g[smp["group"]] + xb)), gsum, 1e-9))
+    check("AME: every group of the regression set has variation in y",
+          bool(((gsum > 0) & (gsum < np.bincount(smp["group"]))).all()))
+    at = ns["extensive_ame_table"](d2, sample=smp)
+    check("AME table: reference bin first and zero, distance bins, then ln n",
+          len(at) == nd + (nd > 1) + 1 and (nd == 1 or (at["data"].iloc[0] == 0
+                                                        and at["simulated"].iloc[0] == 0))
+          and at.index[-1] == r"$\ln n_{ls}$")
+    dr = np.array([100 * np.append(*ns["extensive_ame"](smp, sim4 + e, nd)) for e in E])
+    check("AME band = quantiles of the AME of each world's beta_sim + e_b (not of the "
+          "transformed band end points)",
+          close(at["band_lo"].values, np.quantile(dr, 0.025, axis=0))
+          and close(at["band_hi"].values, np.quantile(dr, 0.975, axis=0)))
+    z0, _ = ns["extensive_ame"](smp, np.r_[np.zeros(nd), 0.4], nd)
+    check("AME: zero distance coefficients give zero distance effects", np.abs(z0).max() == 0)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ns["plot_extensive_ame"](d2, table=at, save_to=os.path.join(outdir, "plot_extensive_ame.pdf"))
+        check("plot_extensive_ame -> pdf", os.path.getsize(os.path.join(outdir, "plot_extensive_ame.pdf")) > 0)
+    except Exception as e:
+        check("plot_extensive_ame -> pdf", False, f"{type(e).__name__}: {e}")
+    # on a planted cloglog with fixed effects, the AME at the cloglog MLE reproduces the
+    # within-group LPM coefficient (the reduced-form object) to a fraction of a point
+    rg = np.random.default_rng(7)
+    gg = np.repeat(np.arange(120), 60); bb = rg.integers(0, 5, gg.size); ln_ = rg.normal(1, .8, gg.size)
+    bt = np.array([-0.3, -0.5, -0.6, -1.0, 0.45])
+    yy = (rg.uniform(size=gg.size) < ns["_cloglog_F"](rg.normal(-3, .7, 120)[gg]
+          + np.r_[0, bt[:4]][bb] + bt[4] * ln_)).astype(float)
+    sp = pd.DataFrame({"group": gg, "y": yy, "bin": bb, "log_n": ln_, "log_d": 0.0})
+    gmean = sp.groupby("group")["y"].transform("mean")
+    sp = sp[(gmean > 0) & (gmean < 1)].reset_index(drop=True)
+    sp["group"] = pd.factorize(sp["group"])[0]
+    Xd = pd.get_dummies(sp["bin"], prefix="b", drop_first=True).astype(float)
+    Xd["log_n"] = sp["log_n"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mle = sm.GLM(sp["y"], pd.concat([Xd, pd.get_dummies(sp["group"]).astype(float)], axis=1),
+                     family=sm.families.Binomial(link=sm.families.links.CLogLog())).fit()
+        lpm = pf.feols("y ~ C(bin) + log_n | group", data=sp).coef().iloc[:4].to_numpy()
+    ame_mle, _ = ns["extensive_ame"](sp, mle.params[list(Xd.columns)].to_numpy(), 4)
+    check("AME at the cloglog MLE = within-group LPM coefficients within 0.3 pp",
+          np.abs(100 * ame_mle[1:] - 100 * lpm).max() < 0.3,
+          f"{np.round(100 * ame_mle[1:], 3)} vs {np.round(100 * lpm, 3)}")
 
     print("\n=== 9. LaTeX table: JOINT (two industries), labor + industry only ===")
     tex = ns["generate_combined_table"](

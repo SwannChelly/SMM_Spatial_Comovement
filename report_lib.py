@@ -21,9 +21,9 @@ import pyfixest as pf          # PPML with absorbed fixed effects (ppmlhdfe)
 
 from utils import (
     EMPIRICAL_MEAN_LOG_D, NU_S_DEFAULT, THETA_DEFAULT,
-    _despine, _read_named_value, fs, get_figsize, load_granular_data, pct,
-    reference_color, set_name_axis_fontsize, sim_color, toulouse_color,
-    unpack_estimated_T,
+    _despine, _downstream_ze_index, _read_named_value, _ze_key, fs, get_figsize,
+    load_granular_data, pct, reference_color, set_name_axis_fontsize, sim_color,
+    toulouse_color, unpack_estimated_T,
 )
 
 
@@ -669,6 +669,238 @@ def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
         out = list(tab.index[~tab["inside_band"]])
         print(f"[plot_reg_coef] {data['industry']}: data outside the 95% fake-world band "
               f"for {out}.")
+    if save_to:
+        os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
+        fig.savefig(save_to, format="pdf", bbox_inches="tight")
+    return axs
+
+
+# ---------------------------------------------------------------------------
+# Block 4 in probability points: average marginal effects of the cell cloglog
+# ---------------------------------------------------------------------------
+#
+# The cloglog coefficients are index effects, P(y=1) = F(a_g + x'beta) with
+# F(eta) = 1 - exp(-e^eta), so they are not comparable with the LPM coefficients of the
+# reduced-form figure (Fig. 4, Panel A). The AME relative to the reference bin is:
+#
+#   eta0_i  = a_g(i) + beta_kappa ln n_i            (every distance dummy at zero)
+#   AME_b   = mean_i [F(eta0_i + beta_b) - F(eta0_i)],     AME_0 = 0,
+#   AME_kap = mean_i f(eta_i) beta_kappa,   f(eta) = e^eta exp(-e^eta),
+#
+# over the regression set A (groups with variation in the data y). The fixed effects are
+# not returned by the cloglog, and beta is either the data's or the model's, so a_g is
+# set by ONE rule for both: sum_{i in g} F(a_g + x_i'beta) = sum_{i in g} y_i (data),
+# i.e. the LPM-with-FE property that fitted group means equal observed ones. Empirical
+# and simulated AMEs are then evaluated on the same cells and group levels, and differ
+# only through beta. With n_coef = 1 the regressor is ln d and AME_d = mean f(eta) beta_d.
+
+
+def _cloglog_F(eta):
+    return -np.expm1(-np.exp(np.minimum(eta, 30.0)))
+
+
+def _cloglog_f(eta):
+    e = np.exp(np.minimum(eta, 30.0))
+    return e * np.exp(-e)
+
+
+def reg_cell_sample(data):
+    """
+    The regression set A of block 4, rebuilt as `load_parameters.jl` SECTION 10 builds
+    `REG_CELL_*`: simulated cells (CELL_MASK) with a has_sup entry in cells_ls.csv and
+    d > 0, d the distance to the nearest downstream region, the distance bin of that
+    distance (edges 50/100/150/200 km, or 20/50/... with five bins; 0 = reference) or
+    ln d when n_coef = 1, ln n_ls, and the sector x attraction-area group.
+
+    Groups without variation in the data y are dropped (`cell_cloglog_beta` drops them;
+    their fixed effect would be infinite). Returns a DataFrame, one row per cell.
+    """
+    inp = data["input_folder"]
+    S, R, n_coef = data["S"], data["R"], int(data["n_coef"])
+    CELL_MASK = np.asarray(data["CELL_MASK"], bool)
+    cdf = pd.read_csv(inp / "cells_ls.csv")
+    fdf = pd.read_csv(inp / "filter_N_upstream.csv")
+    sec_keys = sorted(fdf["A129"].astype(str).unique())
+    ze_keys = sorted(fdf["ze2010"].map(_ze_key).unique())
+    if len(sec_keys) != S or len(ze_keys) != R:
+        raise ValueError("filter_N_upstream.csv does not match the run's S x R.")
+    s_of = {k: i for i, k in enumerate(sec_keys)}
+    l_of = {k: i for i, k in enumerate(ze_keys)}
+    y = np.full((S, R), np.nan)
+    logn = np.zeros((S, R))
+    si = cdf["A129"].astype(str).map(s_of)
+    li = cdf["ze2010"].map(_ze_key).map(l_of)
+    ok = si.notna() & li.notna()
+    si, li = si[ok].astype(int).to_numpy(), li[ok].astype(int).to_numpy()
+    keep = CELL_MASK[si, li]
+    si, li = si[keep], li[keep]
+    y[si, li] = cdf.loc[ok, "has_sup"].to_numpy(float)[keep]
+    logn[si, li] = np.log(cdf.loc[ok, "n_ls"].to_numpy(float)[keep])
+
+    D = np.load(inp / "distances.npy")[:R, :R]
+    Dd = D[:, _downstream_ze_index(data) - 1]                  # (R, R_d)
+    d = Dd.min(axis=1)
+    edges = {5: (20, 50, 100, 150, 200), 4: (50, 100, 150, 200)}.get(n_coef, ())
+    b = np.zeros(R, int)
+    for e in edges:
+        b += d > e
+    aa = np.asarray(data["aa_of_ze"]).astype(int)
+    if not np.array_equal(Dd.argmin(axis=1), aa):
+        # load_parameters.jl asserts it: the group is (sector, nearest downstream region)
+        raise ValueError(f"{int((Dd.argmin(axis=1) != aa).sum())} ZE whose nearest downstream "
+                         "region is not their attraction area.")
+    ss, ll = np.nonzero(CELL_MASK)          # order does not matter: groups are labels
+    take = (d[ll] > 0) & np.isfinite(y[ss, ll])
+    ss, ll = ss[take], ll[take]
+    out = pd.DataFrame({"s": ss, "ze": ll, "group": ss * (aa.max() + 1) + aa[ll],
+                        "y": y[ss, ll], "dist": d[ll], "bin": b[ll],
+                        "log_d": np.log(d[ll]), "log_n": logn[ss, ll]})
+    gm = out.groupby("group")["y"].transform("mean")
+    out = out[(gm > 0) & (gm < 1)].reset_index(drop=True)
+    out["group"] = pd.factorize(out["group"])[0]
+    return out
+
+
+def _index_no_fe(sample, beta, n_coef, drop_distance=False):
+    """x_i' beta without the fixed effect; `drop_distance` sets every distance term to 0."""
+    beta = np.asarray(beta, float)
+    xb = beta[-1] * sample["log_n"].to_numpy()
+    if drop_distance:
+        return xb
+    if n_coef == 1:
+        return xb + beta[0] * sample["log_d"].to_numpy()
+    bd = np.concatenate([[0.0], beta[:n_coef]])
+    return xb + bd[sample["bin"].to_numpy()]
+
+
+def calibrate_cloglog_fe(sample, xb, n_iter=100):
+    """
+    a_g with sum_{i in g} F(a_g + xb_i) = sum_{i in g} y_i, for every group at once.
+    The left side is increasing in a_g, so the root is unique; bisection on a bracket
+    that puts every eta in [-40, 40] (F saturates well inside it).
+    """
+    g = sample["group"].to_numpy()
+    G = int(g.max()) + 1
+    target = np.bincount(g, weights=sample["y"].to_numpy(), minlength=G)
+    xmin = np.full(G, np.inf); np.minimum.at(xmin, g, xb)
+    xmax = np.full(G, -np.inf); np.maximum.at(xmax, g, xb)
+    lo, hi = -40.0 - xmax, 40.0 - xmin
+    for _ in range(n_iter):
+        mid = 0.5 * (lo + hi)
+        up = np.bincount(g, weights=_cloglog_F(mid[g] + xb), minlength=G) < target
+        lo, hi = np.where(up, mid, lo), np.where(up, hi, mid)
+    return 0.5 * (lo + hi)
+
+
+def extensive_ame(sample, beta, n_coef):
+    """
+    AMEs (probability, not pp) of block 4 at `beta` = [beta_d (n_coef) ; beta_kappa]:
+    `(ame_d, ame_kappa)`, `ame_d` of length n_coef + 1 with the reference bin first (0)
+    when n_coef > 1, of length 1 (per unit of ln d) when n_coef = 1.
+    """
+    beta = np.asarray(beta, float)
+    xb = _index_no_fe(sample, beta, n_coef)
+    a = calibrate_cloglog_fe(sample, xb)[sample["group"].to_numpy()]
+    eta = a + xb
+    ame_k = float(np.mean(_cloglog_f(eta)) * beta[-1])
+    if n_coef == 1:
+        return np.array([np.mean(_cloglog_f(eta)) * beta[0]]), ame_k
+    eta0 = a + _index_no_fe(sample, beta, n_coef, drop_distance=True)
+    F0 = _cloglog_F(eta0)
+    ame = np.array([0.0] + [np.mean(_cloglog_F(eta0 + bk) - F0) for bk in beta[:n_coef]])
+    return ame, ame_k
+
+
+def extensive_ame_table(data, q=WORLD_Q, sample=None):
+    """
+    Block 4 as average marginal effects in PERCENTAGE POINTS, data against simulated,
+    with the fake-world band: the AME of each world's `beta_sim + e_b` (a_g re-solved
+    world by world), then its quantiles -- the band of `reg_coef_world_table` pushed
+    through the non-linear map draw by draw, not its end points.
+
+    Rows: the reference bin (0 by construction) and the distance bins, then ln n_ls.
+    `.attrs`: the data's supply rate in the reference bin, the sample size, the number
+    of groups and worlds.
+    """
+    smp = reg_cell_sample(data) if sample is None else sample
+    nd = int(data["n_coef"])
+    emp_b = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    sim_b = _sim_block4(data)
+    e_d, e_k = extensive_ame(smp, emp_b, nd)
+    s_d, s_k = extensive_ame(smp, sim_b, nd)
+    emp = 100 * np.append(e_d, e_k)
+    sim = 100 * np.append(s_d, s_k)
+    labels = _ame_labels(nd)
+    df = pd.DataFrame({"data": emp, "simulated": sim},
+                      index=pd.Index(labels, name="AME (pp)"))
+    wr = data.get("world_residuals")
+    n_w = 0
+    if wr is not None:
+        e = np.asarray(wr["e"], float)
+        e = e[np.isfinite(e).all(axis=1)]
+        n_w = e.shape[0]
+        draws = np.array([100 * np.append(*extensive_ame(smp, sim_b + eb, nd)) for eb in e])
+        df["band_lo"] = np.quantile(draws, q[0], axis=0)
+        df["band_hi"] = np.quantile(draws, q[1], axis=0)
+        df["inside_band"] = (df["data"] >= df["band_lo"]) & (df["data"] <= df["band_hi"])
+        if nd > 1:
+            df.iloc[0, df.columns.get_loc("inside_band")] = True
+    ref = (smp.loc[smp["bin"] == 0, "y"].mean() if nd > 1 else np.nan)
+    df.attrs.update(ref_rate=float(ref), n_cells=len(smp),
+                    n_groups=int(smp["group"].nunique()), n_worlds=n_w, q=q)
+    return df
+
+
+def _ame_labels(n_coef):
+    dist = reg_bin_labels(n_coef)
+    ref = {4: [r"$]0,50]$"], 5: [r"$]0,20]$"]}.get(n_coef, [r"ref."])
+    return (dist if n_coef == 1 else ref + dist) + [r"$\ln n_{ls}$"]
+
+
+def plot_extensive_ame(data, table=None, density=True, save_to=None, q=WORLD_Q):
+    """
+    Block 4 as Fig. 4, Panel A reads it: the effect of each distance bin on the
+    probability that a cell hosts a supplier, in percentage points RELATIVE TO the
+    reference bin, which stays on the axis at zero (dashed line). Empirical (red) against
+    simulated (blue) with the 95% fake-world band. `density=True` adds a narrow panel
+    with the AME of ln n_ls (pp per unit of ln n). The reference-bin supply rate of the
+    data is in `table.attrs["ref_rate"]` and belongs in the caption.
+    """
+    tab = extensive_ame_table(data, q=q) if table is None else table
+    nd = int(data["n_coef"])
+    labels = list(tab.index)
+    has_band = "band_lo" in tab
+    band = (tab["band_lo"].to_numpy(), tab["band_hi"].to_numpy()) if has_band else None
+    sim_label = "Simulated" + ("" if not has_band
+                               else rf" (95\% fake-world band)" if mpl.rcParams.get("text.usetex")
+                               else " (95% fake-world band)")
+    nds = nd + (1 if nd > 1 else 0)
+    if density:
+        fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.62),
+                                gridspec_kw={"width_ratios": [nds + 0.6, 1.6]})
+    else:
+        fig, ax0 = plt.subplots(figsize=get_figsize(hf=0.62))
+        axs = [ax0]
+    sl = [slice(0, nds), slice(nds, nds + 1)]
+    for k, a in enumerate(axs):
+        s_ = sl[k]
+        _paired_errorbar(a, labels[s_], tab["data"].to_numpy()[s_],
+                         tab["simulated"].to_numpy()[s_],
+                         band_sim=None if band is None else (band[0][s_], band[1][s_]),
+                         ylabel=("Supply probability\ndifference (in pp)" if k == 0
+                                 else "pp per unit of ln n"),
+                         xlabel=("Distance" if nd > 1 else "") if k == 0 else "Density",
+                         sim_label=sim_label, legend=(k == 0))
+        a.axhline(0, color="black", ls="dashed", lw=0.8, zorder=0)
+        if k == 0 and nds >= 5:
+            # five bin labels plus the reference do not fit at the default size
+            a.tick_params(axis="x", labelsize=0.75 * mpl.rcParams["xtick.labelsize"]
+                          if isinstance(mpl.rcParams["xtick.labelsize"], (int, float))
+                          else "small")
+    fig.tight_layout()
+    if has_band and not tab["inside_band"].all():
+        print(f"[plot_extensive_ame] {data['industry']}: data outside the 95% fake-world "
+              f"band for {list(tab.index[~tab['inside_band']])}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, format="pdf", bbox_inches="tight")
