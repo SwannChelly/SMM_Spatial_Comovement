@@ -857,13 +857,14 @@ def _ame_labels(n_coef):
     return (dist if n_coef == 1 else ref + dist) + [r"$\ln n_{ls}$"]
 
 
-def plot_extensive_ame(data, table=None, density=True, save_to=None, q=WORLD_Q):
+def plot_extensive_ame(data, table=None, density=False, save_to=None, q=WORLD_Q):
     """
     Block 4 as Fig. 4, Panel A reads it: the effect of each distance bin on the
     probability that a cell hosts a supplier, in percentage points RELATIVE TO the
     reference bin, which stays on the axis at zero (dashed line). Empirical (red) against
-    simulated (blue) with the 95% fake-world band. `density=True` adds a narrow panel
-    with the AME of ln n_ls (pp per unit of ln n). The reference-bin supply rate of the
+    simulated (blue) with the 95% fake-world band. The default is the distance panel
+    alone, as in the paper's Fig. 5; `density=True` adds a narrow panel with the AME of
+    ln n_ls (pp per unit of ln n). The reference-bin supply rate of the
     data is in `table.attrs["ref_rate"]` and belongs in the caption.
     """
     tab = extensive_ame_table(data, q=q) if table is None else table
