@@ -14,19 +14,23 @@
 # 1 — RAW DATA
 # ═══════════════════════════════════════════════════════════════════════════
 
-coefs = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
+stats_df = CSV.read(joinpath(input_folder, "stats.csv"), DataFrame)
 
-# stats.csv is read BY NAME: a column `name`, else a row whose label column is `name`
-# with the number in `value`.
+"""
+    _require_stat(df, name) -> Float64
+
+stats.csv is read BY NAME: a column `name`, else a row whose label column is `name`
+with the number in `value`. Errors when the entry is missing.
+"""
 function _require_stat(df, name::AbstractString)
     if name in names(df)
-        v = collect(skipmissing(df[!, name]))
-        isempty(v) || return Float64(v[1])
+        values = collect(skipmissing(df[!, name]))
+        isempty(values) || return Float64(values[1])
     end
     if "value" in names(df)
-        for c in names(df)
-            i = findfirst(x -> x isa AbstractString && lowercase(strip(x)) == name, df[!, c])
-            i === nothing || return Float64(df[i, "value"])
+        for column in names(df)
+            row = findfirst(x -> x isa AbstractString && lowercase(strip(x)) == name, df[!, column])
+            row === nothing || return Float64(df[row, "value"])
         end
     end
     error("stats.csv has no `$name` entry")
@@ -53,12 +57,12 @@ R_down_    = count(!=(0), N_downstream_per_region_local)
 @everywhere const R = $(R_full)
 @everywhere const R_downstream        = $(R_down_)
 @everywhere const agg_industry_share  = $(agg_industry_share_local)
-@everywhere const agg_labor_share     = $(_require_stat(coefs, "labor_share"))
+@everywhere const agg_labor_share     = $(_require_stat(stats_df, "labor_share"))
 @everywhere const domestic_share      = $(domestic_share_local)
 @everywhere regional_wages            = $(regional_wages_local)
 @everywhere const distances           = $(distances_local)
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
-@everywhere const epsilon             = $(_require_stat(coefs, "epsilon"))
+@everywhere const epsilon             = $(_require_stat(stats_df, "epsilon"))
 @everywhere const lambda              = $(0.5)
 @everywhere const nu                  = $(0.2)
 @everywhere const nu_s                = $(ones(S_) .* 1.5)
@@ -95,15 +99,20 @@ distances_downstream_local      = distances_local[:, downstream_regions_local]
 closest_plant_dist_local        = vec(minimum(distances_downstream_local, dims=2))
 closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_local, dims=2), 2))
 
-# Distance bins of the extensive-margin regression (base category: d ≤ 50 km, or
-# d ≤ 20 km with five bins). With one coefficient the regressor is ln d.
+"""
+    distance_bin(d, n_bins) -> bin index (0 = the base category)
+
+Distance bins of the extensive-margin regression (base category: d ≤ 50 km, or
+d ≤ 20 km with five bins). With one coefficient the regressor is ln d and every
+distance falls in bin 0.
+"""
 function distance_bin(d, n_bins)
     edges = n_bins == 5 ? (20, 50, 100, 150, 200) : n_bins == 4 ? (50, 100, 150, 200) : ()
-    b = 0
-    for e in edges
-        d > e && (b += 1)
+    bin = 0
+    for edge in edges
+        d > edge && (bin += 1)
     end
-    return b
+    return bin
 end
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -111,27 +120,27 @@ end
 # N_supplier_s / R_downstream ≤ N_s ≤ N_supplier_s (finite_sample2.tex §3.3).
 # ═══════════════════════════════════════════════════════════════════════════
 
-gk_df = CSV.read(joinpath(input_folder, "G_K.csv"), DataFrame)
-_gk_col(cands) = (nm = names(gk_df); i = findfirst(c -> lowercase(c) in cands, nm);
+count_curve_df = CSV.read(joinpath(input_folder, "G_K.csv"), DataFrame)
+_count_curve_column(cands) = (nm = names(count_curve_df); i = findfirst(c -> lowercase(c) in cands, nm);
                   i === nothing && error("G_K.csv is missing a column among $cands; has $nm"); nm[i])
-c_sector = _gk_col(["a129", "sector"])
-c_K      = _gk_col(["k"])
-c_G      = _gk_col(["g(k)", "g_k", "gk", "g"])
-c_N      = _gk_col(["n_supplier_s", "n_supplier", "n_suppliers"])
-gk_sectors = sort(unique(gk_df[!, c_sector]))
-@assert length(gk_sectors) == S_ "G_K.csv covers $(length(gk_sectors)) sectors, expected S=$S_"
+col_sector = _count_curve_column(["a129", "sector"])
+col_K      = _count_curve_column(["k"])
+col_G      = _count_curve_column(["g(k)", "g_k", "gk", "g"])
+col_N_supplier      = _count_curve_column(["n_supplier_s", "n_supplier", "n_suppliers"])
+count_curve_sectors = sort(unique(count_curve_df[!, col_sector]))
+@assert length(count_curve_sectors) == S_ "G_K.csv covers $(length(count_curve_sectors)) sectors, expected S=$S_"
 G_target_local = fill(NaN, S_)
 N_LO_local     = zeros(Int, S_)
 N_HI_local     = zeros(Int, S_)
-for (s, a129) in enumerate(gk_sectors)
-    rows = findall(==(a129), gk_df[!, c_sector])
-    nsup = unique(gk_df[rows, c_N])
-    @assert length(nsup) == 1 "G_K.csv: N_supplier_s is not constant within A129=$a129"
-    n_obs = Int(round(Float64(nsup[1])))
+for (s, a129) in enumerate(count_curve_sectors)
+    rows = findall(==(a129), count_curve_df[!, col_sector])
+    n_supplier_values = unique(count_curve_df[rows, col_N_supplier])
+    @assert length(n_supplier_values) == 1 "G_K.csv: N_supplier_s is not constant within A129=$a129"
+    n_obs = Int(round(Float64(n_supplier_values[1])))
     @assert n_obs >= 1 "G_K.csv: N_supplier_s = $n_obs for A129=$a129"
-    k0 = findfirst(i -> Int(round(Float64(gk_df[i, c_K]))) == 0, rows)
-    k0 === nothing && error("G_K.csv has no K=0 row for A129=$a129")
-    G_target_local[s] = Float64(gk_df[rows[k0], c_G])
+    row_K0 = findfirst(i -> Int(round(Float64(count_curve_df[i, col_K]))) == 0, rows)
+    row_K0 === nothing && error("G_K.csv has no K=0 row for A129=$a129")
+    G_target_local[s] = Float64(count_curve_df[rows[row_K0], col_G])
     N_HI_local[s]     = n_obs
     N_LO_local[s]     = RELAX_N_LO ? 1 : max(1, cld(n_obs, R_down_))
 end
@@ -229,9 +238,9 @@ for s in 1:S_
 end
 
 cell_mask_local = filter_N_upstream_local .== 1
-_outside = count(cell_mask_local[s, l] && !aa_active_local[s, aa_of_ze_local[l]] for s in 1:S_, l in 1:R_full)
-if _outside > 0
-    @warn "filter_N_upstream keeps $_outside cells whose area hosts no supplier in that sector; dropped."
+_n_cells_outside = count(cell_mask_local[s, l] && !aa_active_local[s, aa_of_ze_local[l]] for s in 1:S_, l in 1:R_full)
+if _n_cells_outside > 0
+    @warn "filter_N_upstream keeps $_n_cells_outside cells whose area hosts no supplier in that sector; dropped."
     for s in 1:S_, l in 1:R_full
         aa_active_local[s, aa_of_ze_local[l]] || (cell_mask_local[s, l] = false)
     end
@@ -254,8 +263,9 @@ SECTOR_GOOD_REGIONS_local = [GOOD_R_local[idx] for idx in SECTOR_GOOD_INDICES_lo
 W_RS_FLAT_local = [w_rs_local[GOOD_R_local[g]] for g in 1:n_good_local]
 # A zero wage would make a cell win every variety: control ZE without a wage
 # observation get the normalised wage 1.
-let bad = findall(<=(0), W_RS_FLAT_local)
-    isempty(bad) || (@warn "$(length(bad)) simulated cells have no wage; set to 1."; W_RS_FLAT_local[bad] .= 1.0)
+let cells_without_wage = findall(<=(0), W_RS_FLAT_local)
+    isempty(cells_without_wage) || (@warn "$(length(cells_without_wage)) simulated cells have no wage; set to 1.";
+                                    W_RS_FLAT_local[cells_without_wage] .= 1.0)
 end
 @everywhere const n_good              = $n_good_local
 @everywhere const GOOD_S              = $GOOD_S_local
@@ -292,13 +302,13 @@ end
 # The data notebook builds γ̂ as shares of TOTAL purchases, imports included, so the
 # domestic entries sum to 1 − f̂_s. A gap means the two files disagree: the domestic
 # entries are rescaled to 1 − f̂_s (their profile is kept) and the gap reported.
-let dom = vec(sum(emp_gamma_T_local[1:n_AA_local, :]; dims = 1))
-    gap = maximum(abs.(dom .- (1 .- foreign_share_local)))
+let domestic_total = vec(sum(emp_gamma_T_local[1:n_AA_local, :]; dims = 1))
+    gap = maximum(abs.(domestic_total .- (1 .- foreign_share_local)))
     gap > 1e-6 && @warn "Σ_a γ̂_{s,a} ≠ domestic_share (max gap $(round(gap, sigdigits = 3))): " *
                         "domestic γ̂ rescaled to 1 − f̂_s per sector"
     for s in 1:S_
-        (dom[s] > 0 && abs(dom[s] - (1 - foreign_share_local[s])) > 1e-12) &&
-            (emp_gamma_T_local[1:n_AA_local, s] .*= (1 - foreign_share_local[s]) / dom[s])
+        (domestic_total[s] > 0 && abs(domestic_total[s] - (1 - foreign_share_local[s])) > 1e-12) &&
+            (emp_gamma_T_local[1:n_AA_local, s] .*= (1 - foreign_share_local[s]) / domestic_total[s])
         emp_gamma_T_local[foreign_col_local, s] = aa_active_local[s, foreign_col_local] ? foreign_share_local[s] : 0.0
     end
 end
@@ -327,14 +337,14 @@ emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r      = $(emp_pi_r_local)
 
-_bd = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_d_$(n_coef).npy"))))
-_bk = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_kappa_$(n_coef).npy"))))
-length(_bd) == n_coef || error("beta_d_$(n_coef).npy has $(length(_bd)) entries, expected $n_coef")
-length(_bk) == 1      || error("beta_kappa_$(n_coef).npy has $(length(_bk)) entries, expected 1")
-reg_coef_local = vcat(_bd, _bk)
+_beta_d_target = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_d_$(n_coef).npy"))))
+_beta_kappa_target = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_kappa_$(n_coef).npy"))))
+length(_beta_d_target) == n_coef || error("beta_d_$(n_coef).npy has $(length(_beta_d_target)) entries, expected $n_coef")
+length(_beta_kappa_target) == 1      || error("beta_kappa_$(n_coef).npy has $(length(_beta_kappa_target)) entries, expected 1")
+reg_coef_local = vcat(_beta_d_target, _beta_kappa_target)
 # κ prior: the ln n coefficient of the continuous-distance specification.
-_bk1_path = joinpath(input_folder, "beta_kappa_1.npy")
-kappa_prior_local = clamp(Float64(vec(NPZ.npzread(isfile(_bk1_path) ? _bk1_path :
+_beta_kappa_1_path = joinpath(input_folder, "beta_kappa_1.npy")
+kappa_prior_local = clamp(Float64(vec(NPZ.npzread(isfile(_beta_kappa_1_path) ? _beta_kappa_1_path :
                           joinpath(input_folder, "beta_kappa_$(n_coef).npy")))[1]), -0.9, 2.9)
 n_reg = length(reg_coef_local)                # N_REG + 1
 @everywhere const reg_coef    = $reg_coef_local
@@ -344,7 +354,7 @@ n_reg = length(reg_coef_local)                # N_REG + 1
 _dist_labels = n_coef == 5 ? ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"] :
                n_coef == 4 ? ["]50,100]", "]100,150]", "]150,200]", ">200"] : ["ln d"]
 @everywhere const REG_COEF_LABELS = $(vcat(_dist_labels, "ln n"))
-println(" block 4 target: β_d = $(round.(_bd, digits=4)), β_κ = $(round(_bk[1], digits=4)) ; " *
+println(" block 4 target: β_d = $(round.(_beta_d_target, digits=4)), β_κ = $(round(_beta_kappa_target[1], digits=4)) ; " *
         "priors α₀ = $(round(P_alpha, digits=4)), κ₀ = $(round(kappa_prior_local, digits=4))")
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -372,10 +382,10 @@ empirical_moments_local = reshape(empirical_moments_local[moment_mask_local], 1,
 N_moments = length(empirical_moments_local)
 
 _block_sizes = [n_labor, n_industry, n_pi, n_reg, n_gamma, n_G0]
-_cuts = cumsum(vcat(0, _block_sizes))
+_block_cuts = cumsum(vcat(0, _block_sizes))
 BLOCK_RANGES_local = ntuple(6) do k
-    base = count(moment_mask_local[1:_cuts[k]])
-    (base + 1):(base + count(moment_mask_local[(_cuts[k] + 1):_cuts[k + 1]]))
+    n_before = count(moment_mask_local[1:_block_cuts[k]])
+    (n_before + 1):(n_before + count(moment_mask_local[(_block_cuts[k] + 1):_block_cuts[k + 1]]))
 end
 @everywhere const MOMENT_MASK          = $moment_mask_local
 @everywhere const empirical_moments    = $(empirical_moments_local)
@@ -396,7 +406,7 @@ u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, :sobol
 # 9 — GEOGRAPHY BROADCASTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-DistBin_local = [distance_bin(distances_downstream_local[i, j], n_coef) for i in 1:R_full, j in 1:R_down_]
+distance_bin_local = [distance_bin(distances_downstream_local[i, j], n_coef) for i in 1:R_full, j in 1:R_down_]
 LOG_DIST_DOWNSTREAM_local = log.(max.(distances_downstream_local, 1.0))
 @everywhere const DOWNSTREAM_REGIONS        = $(downstream_regions_local)
 @everywhere const CLOSEST_PLANT_DIST        = $(closest_plant_dist_local)
@@ -414,72 +424,74 @@ println(" N_moments = $N_moments, n_good = $n_good_local")
 
 _ze_key(x) = (t = strip(string(x)); v = tryparse(Int, t); v === nothing ? t : lpad(string(v), 4, '0'))
 
-_cdf = CSV.read(joinpath(input_folder, "cells_ls.csv"), DataFrame)
+_cells_df = CSV.read(joinpath(input_folder, "cells_ls.csv"), DataFrame)
 for c in ("A129", "ze2010", "n_ls", "has_sup")
-    c in names(_cdf) || error("cells_ls.csv has no `$c` column")
+    c in names(_cells_df) || error("cells_ls.csv has no `$c` column")
 end
 filter_N_upstream_df = CSV.read(joinpath(input_folder, "filter_N_upstream.csv"), DataFrame)
 _sec_keys = sort(unique(string.(filter_N_upstream_df.A129)))
 _ze_keys  = sort(unique(_ze_key.(filter_N_upstream_df.ze2010)))
 (length(_sec_keys) == S_ && length(_ze_keys) == R_full) ||
     error("filter_N_upstream.csv does not match filter_N_upstream.npy ($S_ × $R_full)")
-_s_of = Dict(k => i for (i, k) in enumerate(_sec_keys))
-_l_of = Dict(k => i for (i, k) in enumerate(_ze_keys))
+_sector_index_of = Dict(k => i for (i, k) in enumerate(_sec_keys))
+_ze_index_of = Dict(k => i for (i, k) in enumerate(_ze_keys))
 
 log_n_ls_local = zeros(Float64, S_, R_full)
-_has_n  = falses(S_, R_full)
-_y_cell = fill(NaN, S_, R_full)
-for row in eachrow(_cdf)
-    sk = string(row.A129); lk = _ze_key(row.ze2010)
-    (haskey(_s_of, sk) && haskey(_l_of, lk)) || continue
-    si = _s_of[sk]; li = _l_of[lk]
-    cell_mask_local[si, li] || continue
-    n = Float64(row.n_ls)
-    n >= 1 || error("cells_ls.csv: n_ls = $n < 1 for cell ($sk, $lk)")
-    log_n_ls_local[si, li] = log(n)
-    _has_n[si, li] = true
-    _y_cell[si, li] = Float64(row.has_sup)
+_has_n_ls  = falses(S_, R_full)
+_has_supplier_data = fill(NaN, S_, R_full)
+for row in eachrow(_cells_df)
+    sector_key = string(row.A129); ze_key = _ze_key(row.ze2010)
+    (haskey(_sector_index_of, sector_key) && haskey(_ze_index_of, ze_key)) || continue
+    s = _sector_index_of[sector_key]; l = _ze_index_of[ze_key]
+    cell_mask_local[s, l] || continue
+    n_firms = Float64(row.n_ls)
+    n_firms >= 1 || error("cells_ls.csv: n_ls = $n_firms < 1 for cell ($sector_key, $ze_key)")
+    log_n_ls_local[s, l] = log(n_firms)
+    _has_n_ls[s, l] = true
+    _has_supplier_data[s, l] = Float64(row.has_sup)
 end
-_missing_n = count(cell_mask_local .& .!_has_n)
-_missing_n == 0 || error("$_missing_n simulated cells have no n_ls in cells_ls.csv (T_ls = T_a n_ls^κ needs it).")
+_n_missing_n_ls = count(cell_mask_local .& .!_has_n_ls)
+_n_missing_n_ls == 0 || error("$_n_missing_n_ls simulated cells have no n_ls in cells_ls.csv (T_ls = T_a n_ls^κ needs it).")
 
 reg_cell_g_local  = Int[]
 reg_cell_fe_local = Int[]
 reg_cell_y_local  = Float64[]
-_rows_x = Vector{Vector{Float64}}()
-_fe_id  = Dict{Tuple{Int,Int},Int}()
+_regressor_rows = Vector{Vector{Float64}}()
+_fe_group_id  = Dict{Tuple{Int,Int},Int}()
+# Each cell's regressors: the distance to its nearest downstream plant (ln d, or the bin
+# dummies with the base bin left out) and ln n_ls, which identifies κ.
 for g in 1:n_good_local
-    si = GOOD_S_local[g]; li = GOOD_R_local[g]
-    d = closest_plant_dist_local[li]
-    (d > 0 && isfinite(_y_cell[si, li])) || continue
-    x = zeros(Float64, n_reg)
+    s = GOOD_S_local[g]; l = GOOD_R_local[g]
+    distance = closest_plant_dist_local[l]
+    (distance > 0 && isfinite(_has_supplier_data[s, l])) || continue
+    regressors = zeros(Float64, n_reg)
     if n_coef == 1
-        x[1] = log(d)
+        regressors[1] = log(distance)
     else
-        b = DistBin_local[li, closest_downstream_region_local[li]]
-        (b > 0 && b <= n_coef) && (x[b] = 1.0)
+        bin = distance_bin_local[l, closest_downstream_region_local[l]]
+        (bin > 0 && bin <= n_coef) && (regressors[bin] = 1.0)
     end
-    x[end] = log_n_ls_local[si, li]
-    push!(reg_cell_g_local, g); push!(_rows_x, x); push!(reg_cell_y_local, _y_cell[si, li])
-    push!(reg_cell_fe_local, get!(_fe_id, (si, aa_of_ze_local[li]), length(_fe_id) + 1))
+    regressors[end] = log_n_ls_local[s, l]
+    push!(reg_cell_g_local, g); push!(_regressor_rows, regressors); push!(reg_cell_y_local, _has_supplier_data[s, l])
+    push!(reg_cell_fe_local, get!(_fe_group_id, (s, aa_of_ze_local[l]), length(_fe_group_id) + 1))
 end
 @everywhere const LOG_N_LS        = $log_n_ls_local
 @everywhere const REG_CELL_G      = $reg_cell_g_local
 @everywhere const REG_CELL_FE     = $reg_cell_fe_local
-@everywhere const REG_CELL_X      = $(permutedims(reduce(hcat, _rows_x)))
+@everywhere const REG_CELL_X      = $(permutedims(reduce(hcat, _regressor_rows)))
 @everywhere const REG_CELL_N_FE   = $(maximum(reg_cell_fe_local))
 @everywhere const REG_CELL_Y_DATA = $reg_cell_y_local
 println(" regression set 𝒜: $(length(reg_cell_g_local)) cells ($(Int(sum(reg_cell_y_local))) with a supplier), " *
-        "$(length(_fe_id)) sector × AA groups")
+        "$(length(_fe_group_id)) sector × AA groups")
 
 # The Julia kernel on the DATA outcome must reproduce the data targets: same cells,
 # regressors, fixed effect and group-drop rule on both sides.
-let (b, ok) = cell_cloglog_beta(reg_cell_y_local)
+let (beta_data, ok) = cell_cloglog_beta(reg_cell_y_local)
     println(" cell cloglog on the data outcome (Julia) vs targets:")
     for i in 1:n_reg
-        @printf("   %-10s  Julia %9.4f   target %9.4f\n", REG_COEF_LABELS[i], b[i], reg_coef_local[i])
+        @printf("   %-10s  Julia %9.4f   target %9.4f\n", REG_COEF_LABELS[i], beta_data[i], reg_coef_local[i])
     end
-    gap = maximum(abs.(b .- reg_coef_local))
+    gap = maximum(abs.(beta_data .- reg_coef_local))
     (ok && gap < 1e-3) || @warn "the Julia cell cloglog does not reproduce beta_d/beta_kappa " *
         "(max gap $(round(gap, sigdigits=3)), converged = $ok): check the regression set."
 end
@@ -489,55 +501,68 @@ end
 # wages ≡ 1 and destination expenditure proxied by π̂_r. T is ref-normalised per sector.
 # ═══════════════════════════════════════════════════════════════════════════
 
+"""
+    invert_T_from_gamma(alpha0, kappa0; max_iter=1000, tol=1e-11, damping=0.5) -> T (S × T_COL_DIM)
+
+The starting value of T: for each sector, the area-level scales that make the
+closed-form domestic sourcing shares match γ̂ at the priors (α₀, κ₀), with wages ≡ 1
+and each buyer's spending proxied by its sales share π̂_r. It is a damped Sinkhorn
+iteration on `T_a ∝ γ̂_a / Σ_{l∈a} n_ls^κ Σ_r τ_lr^{−θ} π̂_r / Φ_r`, normalised to the
+reference area (T[s, ref] = 1). The foreign scale Φ^F_s then follows in closed form
+from the import share.
+"""
 function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
                              tol::Float64=1e-11, damping::Float64=0.5)
-    nfac     = exp.(kappa0 .* log_n_ls_local)
-    tau_neg_theta = exp.((-theta * alpha0) .* LOG_DIST_DOWNSTREAM_local)
-    E_hat = emp_pi_r_local ./ sum(emp_pi_r_local)
+    n_ls_power    = exp.(kappa0 .* log_n_ls_local)                       # n_ls^κ (S × R)
+    tau_neg_theta = exp.((-theta * alpha0) .* LOG_DIST_DOWNSTREAM_local)  # τ^{−θ} (R × R_d)
+    spending_hat  = emp_pi_r_local ./ sum(emp_pi_r_local)
     T = zeros(Float64, S_, n_Tcol_local)
     for s in 1:S_
-        cells_s = SECTOR_GOOD_REGIONS_local[s]; cols_s = SECTOR_DOM_COLS_local[s]
-        (isempty(cells_s) || isempty(cols_s)) && continue
-        ref = T_REF_REGION_local[s]
-        for c in cols_s
-            T[s, c] = max(emp_gamma_T_tilde_local[c, s], 1e-12)
+        sector_zones = SECTOR_GOOD_REGIONS_local[s]; sector_areas = SECTOR_DOM_COLS_local[s]
+        (isempty(sector_zones) || isempty(sector_areas)) && continue
+        reference_area = T_REF_REGION_local[s]
+        for a in sector_areas
+            T[s, a] = max(emp_gamma_T_tilde_local[a, s], 1e-12)
         end
-        T[s, cols_s] ./= T[s, ref]
+        T[s, sector_areas] ./= T[s, reference_area]
         for _ in 1:max_iter
+            # Each buyer's price index Φ_r at the current T.
             Phi = zeros(Float64, R_down_)
-            for l in cells_s, dr in 1:R_down_
-                Phi[dr] += T[s, aa_of_ze_local[l]] * nfac[s, l] * tau_neg_theta[l, dr]
+            for l in sector_zones, dr in 1:R_down_
+                Phi[dr] += T[s, aa_of_ze_local[l]] * n_ls_power[s, l] * tau_neg_theta[l, dr]
             end
-            M_col = zeros(Float64, n_AA_local)
-            for l in cells_s
-                M = 0.0
+            # The demand an area would receive per unit of T: its market access.
+            market_access_area = zeros(Float64, n_AA_local)
+            for l in sector_zones
+                market_access = 0.0
                 for dr in 1:R_down_
-                    Phi[dr] > 1e-300 && (M += tau_neg_theta[l, dr] * E_hat[dr] / Phi[dr])
+                    Phi[dr] > 1e-300 && (market_access += tau_neg_theta[l, dr] * spending_hat[dr] / Phi[dr])
                 end
-                M_col[aa_of_ze_local[l]] += nfac[s, l] * M
+                market_access_area[aa_of_ze_local[l]] += n_ls_power[s, l] * market_access
             end
+            # The T that would deliver γ̂ at this market access, reached with damping.
             T_new = Dict{Int,Float64}()
-            for c in cols_s
-                Tc = M_col[c] > 1e-300 ? max(emp_gamma_T_tilde_local[c, s], 1e-12) / M_col[c] : T[s, c]
-                T_new[c] = exp((1 - damping) * log(T[s, c]) + damping * log(Tc))
+            for a in sector_areas
+                T_target = market_access_area[a] > 1e-300 ? max(emp_gamma_T_tilde_local[a, s], 1e-12) / market_access_area[a] : T[s, a]
+                T_new[a] = exp((1 - damping) * log(T[s, a]) + damping * log(T_target))
             end
-            max_rel = 0.0
-            for c in cols_s
-                Tn = T_new[c] / T_new[ref]
-                max_rel = max(max_rel, abs(log(Tn) - log(T[s, c])))
-                T[s, c] = Tn
+            max_log_change = 0.0
+            for a in sector_areas
+                T_normalised = T_new[a] / T_new[reference_area]
+                max_log_change = max(max_log_change, abs(log(T_normalised) - log(T[s, a])))
+                T[s, a] = T_normalised
             end
-            max_rel < tol && break
+            max_log_change < tol && break
         end
         # Foreign start: with Φ̃_rs common across buyers, f = Φ^F/(Φ̃ + Φ^F), so
         # Φ^F_s = f̂_s/(1 − f̂_s) · Σ_r Ê_r Φ̃_rs at the converged domestic T.
         if aa_active_local[s, foreign_col_local]
             Phi = zeros(Float64, R_down_)
-            for l in cells_s, dr in 1:R_down_
-                Phi[dr] += T[s, aa_of_ze_local[l]] * nfac[s, l] * tau_neg_theta[l, dr]
+            for l in sector_zones, dr in 1:R_down_
+                Phi[dr] += T[s, aa_of_ze_local[l]] * n_ls_power[s, l] * tau_neg_theta[l, dr]
             end
-            f = foreign_share_local[s]
-            T[s, foreign_col_local] = f / (1 - f) * sum(E_hat .* Phi)
+            import_share = foreign_share_local[s]
+            T[s, foreign_col_local] = import_share / (1 - import_share) * sum(spending_hat .* Phi)
         end
     end
     return T
@@ -554,27 +579,27 @@ _alpha_bin_init = Float64[]
 if n_tau > 1
     n_tau == n_coef || error("n_tau must be 1 or n_coef ($n_coef), got $n_tau")
     _edges = n_coef == 5 ? [0.0, 20, 50, 100, 150, 200] : [0.0, 50, 100, 150, 200]
-    _dmax  = maximum(closest_plant_dist_local)
-    _dmax > _edges[end] || error("no cell lies beyond $(_edges[end]) km (max distance to the " *
-                                 "nearest downstream region $_dmax): the last bin is empty.")
-    _all_edges = vcat(_edges, _dmax)
-    _dbar  = 0.5 .* (_all_edges[1:end-1] .+ _all_edges[2:end])
-    _tau_log_knots = log.(_dbar)
-    _ln_tau = vcat(0.0, -_bd ./ theta)
-    _slope  = diff(_ln_tau) ./ diff(_tau_log_knots)
+    _max_distance  = maximum(closest_plant_dist_local)
+    _max_distance > _edges[end] || error("no cell lies beyond $(_edges[end]) km (max distance to the " *
+                                 "nearest downstream region $_max_distance): the last bin is empty.")
+    _all_edges = vcat(_edges, _max_distance)
+    _bin_centres  = 0.5 .* (_all_edges[1:end-1] .+ _all_edges[2:end])
+    _tau_log_knots = log.(_bin_centres)
+    _log_tau_at_centres = vcat(0.0, -_beta_d_target ./ theta)
+    _segment_slope  = diff(_log_tau_at_centres) ./ diff(_tau_log_knots)
     # α_k must be increasing (ln τ convex in ln d): a slope below the previous segment's
     # takes the previous value, so the starting values are a running maximum.
     let prev = P_alpha
-        for (k, s_k) in enumerate(_slope)
+        for (k, s_k) in enumerate(_segment_slope)
             prev = k == 1 ? (s_k > 0 ? s_k : prev) : max(s_k, prev)
             push!(_alpha_bin_init, prev)
         end
     end
-    println(" binned τ: knots d̄ = $(round.(_dbar, digits=1)) km (d_max = $(round(_dmax, digits=1)))")
+    println(" binned τ: knots d̄ = $(round.(_bin_centres, digits=1)) km (d_max = $(round(_max_distance, digits=1)))")
     for k in 1:n_tau
         @printf("   segment %3.0f → %5.0f km: Δln τ = %7.4f  slope %7.4f  α_k init %6.4f%s\n",
-                _dbar[k], _dbar[k + 1], _ln_tau[k + 1] - _ln_tau[k], _slope[k], _alpha_bin_init[k],
-                _alpha_bin_init[k] == _slope[k] ? "" : "  (floor)")
+                _bin_centres[k], _bin_centres[k + 1], _log_tau_at_centres[k + 1] - _log_tau_at_centres[k], _segment_slope[k], _alpha_bin_init[k],
+                _alpha_bin_init[k] == _segment_slope[k] ? "" : "  (floor)")
     end
     any(_alpha_bin_init .> 1.5) && @warn "an α_k starting value exceeds ALPHA_MAX = 1.5; the search box caps it"
 end
@@ -582,9 +607,9 @@ end
 @everywhere const ALPHA_BIN_INIT = $_alpha_bin_init
 
 T_init_local = invert_T_from_gamma(P_alpha, kappa_prior_local)
-let v = T_init_local[T_init_local .> 0]
-    (isempty(v) || !all(isfinite, v)) && error("γ-inversion produced a non-finite T starting value")
-    @printf(" T init (γ-inversion at α₀): range [%.3g, %.3g]\n", minimum(v), maximum(v))
+let positive_T = T_init_local[T_init_local .> 0]
+    (isempty(positive_T) || !all(isfinite, positive_T)) && error("γ-inversion produced a non-finite T starting value")
+    @printf(" T init (γ-inversion at α₀): range [%.3g, %.3g]\n", minimum(positive_T), maximum(positive_T))
 end
 @everywhere const T_rs_init = $(T_init_local)
 
@@ -635,15 +660,16 @@ _T_ref_reduced = [count(T_mask_local[1:((s - 1) * n_Tcol_local + T_REF_REGION_lo
 # Per sector: positions of its retained γ moments inside the γ block, the sector total
 # c_s and the empirical reference share — to rebuild the dropped reference γ.
 _gamma_ref_map = NamedTuple{(:sector, :local_positions, :c_s, :emp_ref), Tuple{Int, Vector{Int}, Float64, Float64}}[]
-let pos_of = Dict{Int,Int}(), k = 0
+let position_in_block = Dict{Int,Int}(), n_kept = 0
     for slot in 1:n_gamma
-        moment_mask_local[off_gamma + slot] && (k += 1; pos_of[slot] = k)
+        moment_mask_local[off_gamma + slot] && (n_kept += 1; position_in_block[slot] = n_kept)
     end
     for s in 1:S_
-        ref = T_REF_REGION_local[s]; ref == 0 && continue
-        pos = [pos_of[(s - 1) * n_Tcol_local + c] for c in 1:n_Tcol_local if haskey(pos_of, (s - 1) * n_Tcol_local + c)]
-        isempty(pos) || push!(_gamma_ref_map, (sector = s, local_positions = pos,
-                              c_s = 1.0, emp_ref = emp_gamma_T_local[ref, s]))
+        reference_area = T_REF_REGION_local[s]; reference_area == 0 && continue
+        positions = [position_in_block[(s - 1) * n_Tcol_local + c] for c in 1:n_Tcol_local
+                     if haskey(position_in_block, (s - 1) * n_Tcol_local + c)]
+        isempty(positions) || push!(_gamma_ref_map, (sector = s, local_positions = positions,
+                                    c_s = 1.0, emp_ref = emp_gamma_T_local[reference_area, s]))
     end
 end
 @everywhere const GAMMA_REF_MAP = $_gamma_ref_map

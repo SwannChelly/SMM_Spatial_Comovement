@@ -64,10 +64,10 @@ sens_drawset(k::Int; seed::Int = SENS_SEED) =
 
 The masked moment vector at `theta` on draw set `ds`; N̂_s re-calibrated unless pinned.
 """
-function sens_moments(theta::AbstractVector, ds; N_fixed::Union{Nothing, Vector{Int}} = nothing)
-    net = solve_network(theta; u_draws = ds.u, sample_weights = ds.w)
-    m = compute_moments(net, theta; N_fixed = N_fixed, perms = ds.perms)
-    return moments_to_vec(m), m.N_hat
+function sens_moments(theta::AbstractVector, draw_set; N_fixed::Union{Nothing, Vector{Int}} = nothing)
+    network = solve_network(theta; u_draws = draw_set.u, sample_weights = draw_set.w)
+    moments = compute_moments(network, theta; N_fixed = N_fixed, perms = draw_set.perms)
+    return moments_to_vec(moments), moments.N_hat
 end
 
 """
@@ -77,30 +77,30 @@ The Jacobian's parameter axis: (label, kind, index) with `kind ∈ (:aggregate, 
 :kappa, :T, :N)`; `index` is the position in θ, or the sector for `:N`.
 """
 function sens_columns(theta::AbstractVector; include_T::Bool = true, include_aggregates::Bool = true)
-    cols = NamedTuple{(:label, :kind, :index), Tuple{String, Symbol, Int}}[]
+    columns = NamedTuple{(:label, :kind, :index), Tuple{String, Symbol, Int}}[]
     if include_aggregates
-        push!(cols, (label = PARAM_LABELS[1], kind = :aggregate, index = 1))
+        push!(columns, (label = PARAM_LABELS[1], kind = :aggregate, index = 1))
         for i in 3:(S + 1)
-            push!(cols, (label = PARAM_LABELS[i], kind = :aggregate, index = i))
+            push!(columns, (label = PARAM_LABELS[i], kind = :aggregate, index = i))
         end
         for i in (S + 3):(S + R_downstream + 1)
-            push!(cols, (label = PARAM_LABELS[i], kind = :aggregate, index = i))
+            push!(columns, (label = PARAM_LABELS[i], kind = :aggregate, index = i))
         end
     end
     for i in alpha_range()
-        push!(cols, (label = PARAM_LABELS[i], kind = :alpha, index = i))
+        push!(columns, (label = PARAM_LABELS[i], kind = :alpha, index = i))
     end
-    push!(cols, (label = "kappa", kind = :kappa, index = kappa_index()))
+    push!(columns, (label = "kappa", kind = :kappa, index = kappa_index()))
     if include_T
-        for r in T_ID_REDUCED
-            i = t_param_start() - 1 + r
-            push!(cols, (label = PARAM_LABELS[i], kind = :T, index = i))
+        for reduced_position in T_ID_REDUCED
+            i = t_param_start() - 1 + reduced_position
+            push!(columns, (label = PARAM_LABELS[i], kind = :T, index = i))
         end
     end
     for s in 1:S
-        push!(cols, (label = "N_s[$(SECTOR_NAMES[s])]", kind = :N, index = s))
+        push!(columns, (label = "N_s[$(SECTOR_NAMES[s])]", kind = :N, index = s))
     end
-    return cols
+    return columns
 end
 
 """
@@ -110,54 +110,54 @@ The warm cache of the profile makes the converged T* depend, at the
 inversion tolerance, on whatever the worker solved last; a finite difference divides
 that by the step. Clearing them makes every sensitivity output a function of θ alone.
 """
-function sens_profile(x::AbstractVector)
+function sens_profile(theta_vec::AbstractVector)
     PROFILE_WARM_CACHE[] = nothing
-    return profile_theta(x)
+    return profile_theta(theta_vec)
 end
 
 # θ at a continuous perturbation of column `c`; `nothing` when the profile fails.
-function _sens_theta(theta::AbstractVector, c, sign::Int, h::Float64)
-    x = collect(Float64, theta)
-    if c.kind === :kappa
-        x[c.index] += sign * h
+function _sens_theta(theta::AbstractVector, column, sign::Int, h::Float64)
+    theta_shifted = collect(Float64, theta)
+    if column.kind === :kappa
+        theta_shifted[column.index] += sign * h
     else
-        x[c.index] *= exp(sign * h)
+        theta_shifted[column.index] *= exp(sign * h)
     end
-    if c.kind in (:alpha, :kappa)
-        r = sens_profile(x)
-        r.converged || return nothing
-        return r.theta_vec
+    if column.kind in (:alpha, :kappa)
+        profile = sens_profile(theta_shifted)
+        profile.converged || return nothing
+        return profile.theta_vec
     end
-    return x
+    return theta_shifted
 end
 
-function _sens_column_task(theta, c, k::Int, N_base::Vector{Int}, h::Float64, seed::Int)
-    ds = sens_drawset(k; seed = seed)
-    n_m = sum(MOMENT_MASK)
+function _sens_column_task(theta, column, k::Int, N_base::Vector{Int}, h::Float64, seed::Int)
+    draw_set = sens_drawset(k; seed = seed)
+    n_moments = sum(MOMENT_MASK)
     try
-        if c.kind === :N
-            s = c.index
-            Nu = copy(N_base); Nu[s] += 1
-            Nd = copy(N_base); Nd[s] = max(N_base[s] - 1, 1)
-            mu, _ = sens_moments(theta, ds; N_fixed = Nu)
-            md, _ = sens_moments(theta, ds; N_fixed = Nd)
-            return (mu .- md) ./ (Nu[s] - Nd[s])
+        if column.kind === :N
+            s = column.index
+            N_up = copy(N_base); N_up[s] += 1
+            N_down = copy(N_base); N_down[s] = max(N_base[s] - 1, 1)
+            m_up, _ = sens_moments(theta, draw_set; N_fixed = N_up)
+            m_down, _ = sens_moments(theta, draw_set; N_fixed = N_down)
+            return (m_up .- m_down) ./ (N_up[s] - N_down[s])
         end
-        tp = _sens_theta(theta, c, +1, h)
-        tm = _sens_theta(theta, c, -1, h)
-        (tp === nothing || tm === nothing) && return fill(NaN, n_m)
-        mp, _ = sens_moments(tp, ds; N_fixed = N_base)
-        mm, _ = sens_moments(tm, ds; N_fixed = N_base)
-        dtheta = c.kind === :kappa ? 2h : theta[c.index] * (exp(h) - exp(-h))
-        return (mp .- mm) ./ dtheta
+        theta_plus = _sens_theta(theta, column, +1, h)
+        theta_minus = _sens_theta(theta, column, -1, h)
+        (theta_plus === nothing || theta_minus === nothing) && return fill(NaN, n_moments)
+        m_plus, _ = sens_moments(theta_plus, draw_set; N_fixed = N_base)
+        m_minus, _ = sens_moments(theta_minus, draw_set; N_fixed = N_base)
+        dtheta = column.kind === :kappa ? 2h : theta[column.index] * (exp(h) - exp(-h))
+        return (m_plus .- m_minus) ./ dtheta
     catch err
-        @warn "sensitivity column $(c.label), draw set $k failed: $(sprint(showerror, err))"
-        return fill(NaN, n_m)
+        @warn "sensitivity column $(column.label), draw set $k failed: $(sprint(showerror, err))"
+        return fill(NaN, n_moments)
     end
 end
 
-_nanmean(x) = (f = filter(isfinite, x); isempty(f) ? NaN : mean(f))
-_nanstd(x)  = (f = filter(isfinite, x); length(f) < 2 ? NaN : std(f))
+_nanmean(x) = (finite = filter(isfinite, x); isempty(finite) ? NaN : mean(finite))
+_nanstd(x)  = (finite = filter(isfinite, x); length(finite) < 2 ? NaN : std(finite))
 
 """
     sensitivity_jacobian(theta; K=10, h=0.02, include_T=true, include_aggregates=true,
@@ -172,35 +172,35 @@ function sensitivity_jacobian(theta::AbstractVector; K::Int = 10, h::Float64 = 0
                               seed::Int = SENS_SEED, dest::AbstractString)
     mkpath(dest)
     theta_vec = collect(Float64, theta)
-    cols = sens_columns(theta_vec; include_T = include_T, include_aggregates = include_aggregates)
-    n_p, n_m = length(cols), sum(MOMENT_MASK)
-    println("Sensitivity Jacobian: $n_p columns × $(K + 1) draw sets (estimation + $K), step $h")
+    columns = sens_columns(theta_vec; include_T = include_T, include_aggregates = include_aggregates)
+    n_params, n_moments = length(columns), sum(MOMENT_MASK)
+    println("Sensitivity Jacobian: $n_params columns × $(K + 1) draw sets (estimation + $K), step $h")
 
-    base = pmap(k -> sens_moments(theta_vec, sens_drawset(k; seed = seed)), 0:K)
-    N_base = [b[2] for b in base]
-    tasks = [(j, k) for k in 0:K for j in 1:n_p]
-    res = pmap(t -> _sens_column_task(theta_vec, cols[t[1]], t[2], N_base[t[2] + 1], h, seed), tasks)
+    base_moments = pmap(k -> sens_moments(theta_vec, sens_drawset(k; seed = seed)), 0:K)
+    N_base = [draw_result[2] for draw_result in base_moments]
+    tasks = [(j, k) for k in 0:K for j in 1:n_params]
+    column_derivatives = pmap(t -> _sens_column_task(theta_vec, columns[t[1]], t[2], N_base[t[2] + 1], h, seed), tasks)
 
-    J_all = fill(NaN, K + 1, n_m, n_p)
-    for ((j, k), v) in zip(tasks, res)
-        J_all[k + 1, :, j] .= v
+    J_all = fill(NaN, K + 1, n_moments, n_params)
+    for ((j, k), derivative) in zip(tasks, column_derivatives)
+        J_all[k + 1, :, j] .= derivative
     end
     J_est   = J_all[1, :, :]
     J_draws = J_all[2:end, :, :]
-    J    = [_nanmean(J_draws[:, i, j]) for i in 1:n_m, j in 1:n_p]
-    J_sd = [_nanstd(J_draws[:, i, j])  for i in 1:n_m, j in 1:n_p]
+    J    = [_nanmean(J_draws[:, i, j]) for i in 1:n_moments, j in 1:n_params]
+    J_sd = [_nanstd(J_draws[:, i, j])  for i in 1:n_moments, j in 1:n_params]
 
     NPZ.npzwrite(joinpath(dest, "jacobian.npz"),
                  Dict("J" => J, "J_sd" => J_sd, "J_est" => J_est, "J_draws" => J_draws,
-                      "m_base" => base[1][1], "m_base_draws" => permutedims(reduce(hcat, (b[1] for b in base[2:end]))),
-                      "theta" => [c.kind === :N ? Float64(N_base[1][c.index]) : theta_vec[c.index] for c in cols],
+                      "m_base" => base_moments[1][1], "m_base_draws" => permutedims(reduce(hcat, (draw_result[1] for draw_result in base_moments[2:end]))),
+                      "theta" => [column.kind === :N ? Float64(N_base[1][column.index]) : theta_vec[column.index] for column in columns],
                       "N_base" => Float64.(N_base[1]), "h" => [h], "K" => [Float64(K)],
-                      "kind" => [Float64(findfirst(==(c.kind), (:aggregate, :alpha, :kappa, :T, :N))) for c in cols]))
-    write(joinpath(dest, "jacobian_param_labels.txt"), join([c.label for c in cols], "\n") * "\n")
+                      "kind" => [Float64(findfirst(==(column.kind), (:aggregate, :alpha, :kappa, :T, :N))) for column in columns]))
+    write(joinpath(dest, "jacobian_param_labels.txt"), join([column.label for column in columns], "\n") * "\n")
     write(joinpath(dest, "jacobian_moment_labels.txt"), join(MOMENT_LABELS, "\n") * "\n")
     n_nan = count(!isfinite, J)
     println("  written to $dest ($(n_nan) non-finite entries of $(length(J)))")
-    return (J = J, J_sd = J_sd, J_est = J_est, labels = [c.label for c in cols])
+    return (J = J, J_sd = J_sd, J_est = J_est, labels = [column.label for column in columns])
 end
 
 # ── profiles ────────────────────────────────────────────────────────────────
@@ -212,57 +212,57 @@ end
 the κ box. N_s: the integers `round(N̂ · span^{range(−1, 1)})` in `[1, N_HI_CAP[s]]`. The
 estimate itself is always on the grid.
 """
-function profile_grid(theta::AbstractVector, c, N_hat::Vector{Int}; G::Int = 15,
+function profile_grid(theta::AbstractVector, column, N_hat::Vector{Int}; G::Int = 15,
                       span::Float64 = 2.0, kappa_span::Float64 = 0.5)
-    t = range(-1, 1; length = G)
-    if c.kind === :alpha
-        a = theta[c.index]
-        return sort(unique(vcat(a, clamp.(a .* span .^ t, 1e-4, ALPHA_MAX))))
-    elseif c.kind === :kappa
-        kappa = theta[c.index]
-        return sort(unique(vcat(kappa, clamp.(kappa .+ kappa_span .* t, KAPPA_LO, KAPPA_HI))))
+    grid_steps = range(-1, 1; length = G)
+    if column.kind === :alpha
+        alpha_hat = theta[column.index]
+        return sort(unique(vcat(alpha_hat, clamp.(alpha_hat .* span .^ grid_steps, 1e-4, ALPHA_MAX))))
+    elseif column.kind === :kappa
+        kappa = theta[column.index]
+        return sort(unique(vcat(kappa, clamp.(kappa .+ kappa_span .* grid_steps, KAPPA_LO, KAPPA_HI))))
     end
-    n = N_hat[c.index]
-    return sort(unique(vcat(n, clamp.(round.(Int, n .* span .^ t), 1, N_HI_CAP[c.index]))))
+    N_hat_s = N_hat[column.index]
+    return sort(unique(vcat(N_hat_s, clamp.(round.(Int, N_hat_s .* span .^ grid_steps), 1, N_HI_CAP[column.index]))))
 end
 
-function _profile_task(theta, c, grid, k::Int, N_base::Vector{Int}, seed::Int)
-    ds = sens_drawset(k; seed = seed)
-    n_m = sum(MOMENT_MASK)
-    M = fill(NaN, length(grid), n_m)
-    Nh = fill(NaN, length(grid), S)
-    conv = falses(length(grid))
-    if c.kind === :N
+function _profile_task(theta, column, grid, k::Int, N_base::Vector{Int}, seed::Int)
+    draw_set = sens_drawset(k; seed = seed)
+    n_moments = sum(MOMENT_MASK)
+    moments_on_grid = fill(NaN, length(grid), n_moments)
+    N_on_grid = fill(NaN, length(grid), S)
+    converged = falses(length(grid))
+    if column.kind === :N
         # one Ricardian solve per draw set: the network does not depend on N_s
-        net = solve_network(theta; u_draws = ds.u, sample_weights = ds.w)
-        for (i, n) in enumerate(grid)
-            Nf = copy(N_base); Nf[c.index] = Int(n)
-            m = compute_moments(net, theta; N_fixed = Nf, perms = ds.perms)
-            M[i, :] .= moments_to_vec(m); Nh[i, :] .= Nf; conv[i] = true
+        network = solve_network(theta; u_draws = draw_set.u, sample_weights = draw_set.w)
+        for (i, N_value) in enumerate(grid)
+            N_pinned = copy(N_base); N_pinned[column.index] = Int(N_value)
+            moments = compute_moments(network, theta; N_fixed = N_pinned, perms = draw_set.perms)
+            moments_on_grid[i, :] .= moments_to_vec(moments); N_on_grid[i, :] .= N_pinned; converged[i] = true
         end
-        return (M = M, N = Nh, conv = conv)
+        return (moments_on_grid = moments_on_grid, N = N_on_grid, converged = converged)
     end
-    for (i, v) in enumerate(grid)
-        x = collect(Float64, theta); x[c.index] = v
+    for (i, value) in enumerate(grid)
+        theta_point = collect(Float64, theta); theta_point[column.index] = value
         try
-            r = sens_profile(x)
-            r.converged || continue
-            m, N = sens_moments(r.theta_vec, ds)       # N̂_s re-calibrated, as in estimation
-            M[i, :] .= m; Nh[i, :] .= N; conv[i] = true
+            profile = sens_profile(theta_point)
+            profile.converged || continue
+            moments, N = sens_moments(profile.theta_vec, draw_set)       # N̂_s re-calibrated, as in estimation
+            moments_on_grid[i, :] .= moments; N_on_grid[i, :] .= N; converged[i] = true
         catch err
-            @warn "profile $(c.label) = $v, draw set $k failed: $(sprint(showerror, err))"
+            @warn "profile $(column.label) = $value, draw set $k failed: $(sprint(showerror, err))"
         end
     end
-    return (M = M, N = Nh, conv = conv)
+    return (moments_on_grid = moments_on_grid, N = N_on_grid, converged = converged)
 end
 
 # The moments a parameter is meant to move (Figure D.1 pairs one moment with one
 # parameter): α → the distance coefficients, κ → β_κ, N_s → Ḡ_s(0).
-function profile_targets(c)
-    b4 = collect(BLOCK_RANGES[4])
-    c.kind === :alpha && return b4[1:(end - 1)]
-    c.kind === :kappa && return [b4[end]]
-    return [collect(BLOCK_RANGES[6])[c.index]]
+function profile_targets(column)
+    block4 = collect(BLOCK_RANGES[4])
+    column.kind === :alpha && return block4[1:(end - 1)]
+    column.kind === :kappa && return [block4[end]]
+    return [collect(BLOCK_RANGES[6])[column.index]]
 end
 
 """
@@ -279,16 +279,16 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
                               seed::Int = SENS_SEED, dest::AbstractString)
     mkpath(dest)
     theta_vec = collect(Float64, theta)
-    cols = filter(c -> c.kind in (:alpha, :kappa, :N), sens_columns(theta_vec; include_T = false, include_aggregates = false))
-    base = pmap(k -> sens_moments(theta_vec, sens_drawset(k; seed = seed)), 0:K)
-    N_base = [b[2] for b in base]
-    grids = [profile_grid(theta_vec, c, N_base[1]; G = G, span = span, kappa_span = kappa_span) for c in cols]
-    println("Sensitivity profiles: $(length(cols)) parameters × ≤ $(maximum(length.(grids))) points × $(K + 1) draw sets")
-    tasks = [(j, k) for j in eachindex(cols) for k in 0:K]
-    res = pmap(t -> _profile_task(theta_vec, cols[t[1]], grids[t[1]], t[2], N_base[t[2] + 1], seed), tasks)
+    columns = filter(column -> column.kind in (:alpha, :kappa, :N), sens_columns(theta_vec; include_T = false, include_aggregates = false))
+    base_moments = pmap(k -> sens_moments(theta_vec, sens_drawset(k; seed = seed)), 0:K)
+    N_base = [draw_result[2] for draw_result in base_moments]
+    grids = [profile_grid(theta_vec, column, N_base[1]; G = G, span = span, kappa_span = kappa_span) for column in columns]
+    println("Sensitivity profiles: $(length(columns)) parameters × ≤ $(maximum(length.(grids))) points × $(K + 1) draw sets")
+    tasks = [(j, k) for j in eachindex(columns) for k in 0:K]
+    profile_results = pmap(t -> _profile_task(theta_vec, columns[t[1]], grids[t[1]], t[2], N_base[t[2] + 1], seed), tasks)
 
-    emp = vec(empirical_moments)
-    fname(l) = "profile_" * replace(l, r"[^A-Za-z0-9_]+" => "_") * ".npz"
+    data_moments = vec(empirical_moments)
+    profile_file(l) = "profile_" * replace(l, r"[^A-Za-z0-9_]+" => "_") * ".npz"
     lines = String["MOMENT SENSITIVITY PROFILES  $(now())",
                    "  one parameter swept, the rest at the estimate; α, κ: T re-inverted and N̂ re-calibrated",
                    "  slope = central difference at the estimate (estimation draws); crosses = the model",
@@ -296,35 +296,35 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
                    "  the slope's sign.", ""]
     push!(lines, @sprintf("  %-22s %-22s %11s %11s %11s %8s %8s", "parameter", "moment", "estimate",
                           "model", "data", "monot.", "crosses"))
-    for (j, c) in enumerate(cols)
-        rs = [res[i] for (i, t) in enumerate(tasks) if t[1] == j]       # k = 0..K in order
-        Mest = rs[1].M
-        Md = cat((r.M for r in rs[2:end])...; dims = 3)                 # grid × m × K
-        m_mean = [_nanmean(Md[i, l, :]) for i in axes(Md, 1), l in axes(Md, 2)]
-        m_sd   = [_nanstd(Md[i, l, :])  for i in axes(Md, 1), l in axes(Md, 2)]
-        tg = profile_targets(c)
-        est = c.kind === :N ? Float64(N_base[1][c.index]) : theta_vec[c.index]
-        NPZ.npzwrite(joinpath(dest, fname(c.label)),
-                     Dict("grid" => Float64.(grids[j]), "m_est" => Mest, "m_mean" => m_mean,
-                          "m_sd" => m_sd, "N_est" => rs[1].N, "converged" => Float64.(rs[1].conv),
-                          "estimate" => [est], "targets" => Float64.(tg), "data" => emp,
-                          "kind" => [Float64(findfirst(==(c.kind), (:aggregate, :alpha, :kappa, :T, :N)))]))
-        g = Float64.(grids[j]); i0 = findfirst(==(est), g)
-        for t in tg
-            y = Mest[:, t]
-            ok = isfinite.(y)
-            d = diff(y[ok])
-            slope = (i0 === nothing || i0 == 1 || i0 == length(g)) ? NaN :
-                    (y[i0 + 1] - y[i0 - 1]) / (g[i0 + 1] - g[i0 - 1])
-            mono = isempty(d) || !isfinite(slope) ? NaN : count(x -> sign(x) == sign(slope), d) / length(d)
-            r = y[ok] .- emp[t]
-            crosses = length(r) > 1 && any(r[1:(end - 1)] .* r[2:end] .<= 0)
-            push!(lines, @sprintf("  %-22s %-22s %11.4g %11.4g %11.4g %8.2f %8s", c.label,
-                                  first(MOMENT_LABELS[t], 22), est,
-                                  i0 === nothing ? NaN : y[i0], emp[t], mono, string(crosses)))
+    for (j, column) in enumerate(columns)
+        set_results = [profile_results[i] for (i, t) in enumerate(tasks) if t[1] == j]       # k = 0..K in order
+        m_est = set_results[1].moments_on_grid
+        m_draws = cat((r.moments_on_grid for r in set_results[2:end])...; dims = 3)                 # grid × m × K
+        m_mean = [_nanmean(m_draws[i, l, :]) for i in axes(m_draws, 1), l in axes(m_draws, 2)]
+        m_sd   = [_nanstd(m_draws[i, l, :])  for i in axes(m_draws, 1), l in axes(m_draws, 2)]
+        target_moments = profile_targets(column)
+        estimate = column.kind === :N ? Float64(N_base[1][column.index]) : theta_vec[column.index]
+        NPZ.npzwrite(joinpath(dest, profile_file(column.label)),
+                     Dict("grid" => Float64.(grids[j]), "m_est" => m_est, "m_mean" => m_mean,
+                          "m_sd" => m_sd, "N_est" => set_results[1].N, "converged" => Float64.(set_results[1].converged),
+                          "estimate" => [estimate], "targets" => Float64.(target_moments), "data" => data_moments,
+                          "kind" => [Float64(findfirst(==(column.kind), (:aggregate, :alpha, :kappa, :T, :N)))]))
+        grid = Float64.(grids[j]); estimate_position = findfirst(==(estimate), grid)
+        for target in target_moments
+            model_curve = m_est[:, target]
+            finite = isfinite.(model_curve)
+            steps = diff(model_curve[finite])
+            slope = (estimate_position === nothing || estimate_position == 1 || estimate_position == length(grid)) ? NaN :
+                    (model_curve[estimate_position + 1] - model_curve[estimate_position - 1]) / (grid[estimate_position + 1] - grid[estimate_position - 1])
+            monotone_share = isempty(steps) || !isfinite(slope) ? NaN : count(x -> sign(x) == sign(slope), steps) / length(steps)
+            gap_to_data = model_curve[finite] .- data_moments[target]
+            crosses = length(gap_to_data) > 1 && any(gap_to_data[1:(end - 1)] .* gap_to_data[2:end] .<= 0)
+            push!(lines, @sprintf("  %-22s %-22s %11.4g %11.4g %11.4g %8.2f %8s", column.label,
+                                  first(MOMENT_LABELS[target], 22), estimate,
+                                  estimate_position === nothing ? NaN : model_curve[estimate_position], data_moments[target], monotone_share, string(crosses)))
         end
     end
-    write(joinpath(dest, "profiles_index.txt"), join([c.label * "\t" * fname(c.label) for c in cols], "\n") * "\n")
+    write(joinpath(dest, "profiles_index.txt"), join([column.label * "\t" * profile_file(column.label) for column in columns], "\n") * "\n")
     write(joinpath(dest, "profiles_report.txt"), join(lines, "\n") * "\n")
     println(join(lines, "\n"))
     return nothing
@@ -337,13 +337,13 @@ function run_sensitivity(theta::AbstractVector, dest::AbstractString; K::Int = 1
                          h::Float64 = 0.02, include_T::Bool = true)
     try
         sensitivity_profiles(theta; K = K, G = G, dest = dest)
-    catch e
-        @warn "sensitivity profiles failed: $(sprint(showerror, e))"
+    catch err
+        @warn "sensitivity profiles failed: $(sprint(showerror, err))"
     end
     try
         sensitivity_jacobian(theta; K = K, h = h, include_T = include_T, dest = dest)
-    catch e
-        @warn "sensitivity Jacobian failed: $(sprint(showerror, e))"
+    catch err
+        @warn "sensitivity Jacobian failed: $(sprint(showerror, err))"
     end
     return nothing
 end

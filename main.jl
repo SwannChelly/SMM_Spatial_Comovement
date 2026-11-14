@@ -77,7 +77,7 @@ NPZ.npzwrite(joinpath(output_folder, "n_tau.npy"), n_tau)
 
 step1_dir = joinpath(output_folder, "step1")
 step3_dir = joinpath(output_folder, "step3")
-read_params(path) = (p = NPZ.npzread(path); ndims(p) > 1 ? p[:, 1] : p)
+read_params(path) = (stored = NPZ.npzread(path); ndims(stored) > 1 ? stored[:, 1] : stored)   # a vector, or the first column of a stored matrix
 
 ############## Step 1 — identity-weighted optimisation ##############
 

@@ -48,20 +48,20 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
                           bounce_damping::Float64 = 0.5,
                           t_conv_probe::Union{Function, Nothing} = nothing,
                           verbose::Bool = true)
-    d = length(lb)
+    n_dims = length(lb)
 
     # 1) Draw the initial swarm: a scrambled Sobol net over the box, plus the warm start.
     n_random = warm_start_particle === nothing ? n_particles : n_particles - 1
     particles = if n_random == 0
         Vector{Vector{Float64}}()
     else
-        net = sobol_scrambled_net(n_random, d, Random.GLOBAL_RNG)
+        net = sobol_scrambled_net(n_random, n_dims, Random.GLOBAL_RNG)
         # The scramble comes from the global RNG (seeded in main.jl), so the swarm is reproducible.
         [lb .+ net[i, :] .* (ub .- lb) for i in 1:n_random]
     end
     warm_start_particle === nothing ||
         push!(particles, clamp.(warm_start_particle, lb, ub))
-    velocities = [0.1 * (ub .- lb) .* randn(d) for _ in 1:length(particles)]
+    velocities = [0.1 * (ub .- lb) .* randn(n_dims) for _ in 1:length(particles)]
 
     # 2) Score the initial swarm and set each particle's best and the swarm's best.
     fitness = Vector{Float64}(pmap(objective, particles))
@@ -70,18 +70,18 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
     g_best, g_best_fitness = copy(p_best[g_best_idx]), p_best_fitness[g_best_idx]
     history = Dict("best_fitness" => Float64[g_best_fitness],
                    "mean_fitness" => Float64[mean(filter(isfinite, fitness))])
-    verbose && println("[PSO] $(length(particles)) particles, dimension $d, " *
+    verbose && println("[PSO] $(length(particles)) particles, dimension $n_dims, " *
                        "initial best $(round(g_best_fitness, digits=6))")
     last_printed = g_best_fitness
 
     for iter in 1:max_iter
         t_start = time()
         # 3) Move every particle: inertia plus pulls towards its own best and the swarm's best, with the step capped at 10% of the box and reflection at the walls.
-        w = w_start - (w_start - w_end) * (iter / max_iter)
+        inertia = w_start - (w_start - w_end) * (iter / max_iter)
         v_max = 0.1 * (ub .- lb)
         for i in 1:length(particles)
-            r1, r2 = rand(d), rand(d)
-            velocities[i] = clamp.(w * velocities[i] .+ c1 * r1 .* (p_best[i] .- particles[i]) .+
+            r1, r2 = rand(n_dims), rand(n_dims)
+            velocities[i] = clamp.(inertia * velocities[i] .+ c1 * r1 .* (p_best[i] .- particles[i]) .+
                                    c2 * r2 .* (g_best .- particles[i]), -v_max, v_max)
             particles[i] = particles[i] .+ velocities[i]
             reflect_bounds!(particles[i], velocities[i], lb, ub, bounce_damping)
@@ -94,17 +94,17 @@ function parallel_pso_smm(objective::Function, lb::Vector{Float64}, ub::Vector{F
                 p_best[i] = copy(particles[i]); p_best_fitness[i] = fitness[i]
             end
         end
-        k = argmin(p_best_fitness)
-        if p_best_fitness[k] < g_best_fitness
-            g_best, g_best_fitness = copy(p_best[k]), p_best_fitness[k]
+        best_particle = argmin(p_best_fitness)
+        if p_best_fitness[best_particle] < g_best_fitness
+            g_best, g_best_fitness = copy(p_best[best_particle]), p_best_fitness[best_particle]
         end
 
         # 5) Every 25 iterations after the 30th, restart the particles whose loss exceeds 1.5 × the best at a random point.
         if iter > 30 && iter % 25 == 0
             for i in 1:length(particles)
                 fitness[i] > g_best_fitness * 1.5 || continue
-                particles[i] = lb .+ rand(d) .* (ub .- lb)
-                velocities[i] = 0.1 * (ub .- lb) .* randn(d)
+                particles[i] = lb .+ rand(n_dims) .* (ub .- lb)
+                velocities[i] = 0.1 * (ub .- lb) .* randn(n_dims)
                 p_best[i] = copy(particles[i]); p_best_fitness[i] = Inf
             end
         end
@@ -150,21 +150,21 @@ Share of the swarm whose T inversion did not converge, overall and by α bin (a 
 rising in α says the α box reaches past the solver's stability ceiling).
 """
 function report_t_convergence(probes; n_bins::Int = 5)
-    n_tot = length(probes)
-    bad   = [!p.converged for p in probes]
-    n_bad = count(bad)
-    @printf("  T non-converged: %d/%d particles (%.1f%%)\n", n_bad, n_tot, 100 * n_bad / max(n_tot, 1))
-    n_bad == 0 && return
-    alphas = [isempty(p.alpha) ? NaN : maximum(p.alpha) for p in probes]
-    ok = findall(isfinite, alphas)
-    length(ok) < 2 && return
-    lo, hi = extrema(alphas[ok])
-    hi > lo || return
-    w = (hi - lo) / n_bins
-    for b in 1:n_bins
-        blo = lo + (b - 1) * w; bhi = b == n_bins ? hi : lo + b * w
-        idx = [i for i in ok if alphas[i] >= blo && (alphas[i] < bhi || b == n_bins)]
-        isempty(idx) || @printf("    α ∈ [%.4g, %.4g)  %3d/%3d\n", blo, bhi, count(i -> bad[i], idx), length(idx))
+    n_particles = length(probes)
+    failed   = [!p.converged for p in probes]
+    n_failed = count(failed)
+    @printf("  T non-converged: %d/%d particles (%.1f%%)\n", n_failed, n_particles, 100 * n_failed / max(n_particles, 1))
+    n_failed == 0 && return
+    max_alpha = [isempty(p.alpha) ? NaN : maximum(p.alpha) for p in probes]
+    with_alpha = findall(isfinite, max_alpha)
+    length(with_alpha) < 2 && return
+    alpha_min, alpha_max = extrema(max_alpha[with_alpha])
+    alpha_max > alpha_min || return
+    bin_width = (alpha_max - alpha_min) / n_bins
+    for bin in 1:n_bins
+        bin_lo = alpha_min + (bin - 1) * bin_width; bin_hi = bin == n_bins ? alpha_max : alpha_min + bin * bin_width
+        in_bin = [i for i in with_alpha if max_alpha[i] >= bin_lo && (max_alpha[i] < bin_hi || bin == n_bins)]
+        isempty(in_bin) || @printf("    α ∈ [%.4g, %.4g)  %3d/%3d\n", bin_lo, bin_hi, count(i -> failed[i], in_bin), length(in_bin))
     end
 end
 
@@ -177,8 +177,8 @@ end
 below half the ceiling so the box never collapses.
 """
 function alpha_box(anchor)
-    hi = min.(anchor .* BOUND_HI, ALPHA_MAX)
-    return (min.(anchor .* BOUND_LO, 0.5 .* hi), hi)
+    upper = min.(anchor .* BOUND_HI, ALPHA_MAX)
+    return (min.(anchor .* BOUND_LO, 0.5 .* upper), upper)
 end
 
 # Binned α must be increasing (α_1 ≤ … ≤ α_K). The objective evaluates the α block
@@ -227,34 +227,34 @@ function train_stage(n_particles::Int, max_iter::Int;
     else
         # 1.2) Continue stage: a box around `start`, narrower as the tightness rises, clipped to the whole box.
         alpha_lo = max.(alpha0 .* tightness, box_lo); alpha_hi = min.(alpha0 ./ tightness, box_hi)
-        bad = alpha_lo .>= alpha_hi                 # incumbent above the cap: reset to the whole box
-        alpha_lo = ifelse.(bad, box_lo, alpha_lo); alpha_hi = ifelse.(bad, box_hi, alpha_hi)
+        above_cap = alpha_lo .>= alpha_hi                 # incumbent above the cap: reset to the whole box
+        alpha_lo = ifelse.(above_cap, box_lo, alpha_lo); alpha_hi = ifelse.(above_cap, box_hi, alpha_hi)
         alpha_lo, alpha_hi = sorted_box(alpha_lo, alpha_hi)
-        half = (1 - tightness) * (KAPPA_HI - KAPPA_LO) / 2
-        kappa_lo, kappa_hi = max(kappa0 - half, KAPPA_LO), min(kappa0 + half, KAPPA_HI)
+        kappa_half_width = (1 - tightness) * (KAPPA_HI - KAPPA_LO) / 2
+        kappa_lo, kappa_hi = max(kappa0 - kappa_half_width, KAPPA_LO), min(kappa0 + kappa_half_width, KAPPA_HI)
         kappa_lo >= kappa_hi && ((kappa_lo, kappa_hi) = (KAPPA_LO, KAPPA_HI))
     end
     lb, ub = vcat(alpha_lo, kappa_lo), vcat(alpha_hi, kappa_hi)
 
     # 2) Map a particle (α, κ) to a full level vector, with the α block sorted (see `sorted_box`).
     function to_full(x)
-        xf = copy(start)
-        xf[alpha_range()] = sort(x[1:N_TAU])
-        xf[kappa_index()] = x[end]
-        return xf
+        theta_vec = copy(start)
+        theta_vec[alpha_range()] = sort(x[1:N_TAU])
+        theta_vec[kappa_index()] = x[end]
+        return theta_vec
     end
     # 3) Score a particle: profile T and the aggregates, then compute the loss on `moment_blocks`; Inf if the profile fails.
     function objective(x)
-        prof = profile_theta(to_full(x))
-        prof.converged || return Inf
-        result = safe_SMM(prof.theta_vec; W_override = weight_matrix, moment_blocks = moment_blocks)
+        profile = profile_theta(to_full(x))
+        profile.converged || return Inf
+        result = safe_SMM(profile.theta_vec; W_override = weight_matrix, moment_blocks = moment_blocks)
         return (result === nothing || !isfinite(result[1][1])) ? Inf : result[1][1]
     end
     # 4) Diagnostic only: report whether the profile converges at a particle, without scoring it.
     function probe(x)
         try
-            p = profile_theta(to_full(x))
-            return (converged = p.converged, alpha = p.alpha)
+            probe_profile = profile_theta(to_full(x))
+            return (converged = probe_profile.converged, alpha = probe_profile.alpha)
         catch
             return (converged = false, alpha = Float64[])
         end
@@ -270,10 +270,10 @@ function train_stage(n_particles::Int, max_iter::Int;
         t_conv_probe = probe)
 
     # 6) Profile once more at the best particle, because the PSO returns only (α, κ).
-    prof = profile_theta(to_full(best_x))
-    prof.converged || @warn "the profile did NOT converge at the stage optimum (no particle " *
-        "converged): the returned T is the last iterate." max_residual=prof.max_residual iterations=prof.iterations
-    return prof.theta_vec, best_fitness, history
+    profile = profile_theta(to_full(best_x))
+    profile.converged || @warn "the profile did NOT converge at the stage optimum (no particle " *
+        "converged): the returned T is the last iterate." max_residual=profile.max_residual iterations=profile.iterations
+    return profile.theta_vec, best_fitness, history
 end
 
 """
@@ -327,13 +327,13 @@ function run_optimization(; start::Vector{Float64},
     for loop in 1:max_loop
         tightness = tight_start + (loop - 1) * (tight_end - tight_start) / max(max_loop - 1, 1)
         println("\n[$output_subfolder] LOOP $loop/$max_loop  tightness=$tightness")
-        prev = best_params
-        best_params, best_fitness, _ = train_stage(n_particles, max_iter_stage; start = prev,
+        previous_params = best_params
+        best_params, best_fitness, _ = train_stage(n_particles, max_iter_stage; start = previous_params,
             tightness = tightness, weight_matrix = weight_matrix, moment_blocks = loss_blocks)
         save_stage(joinpath(loop_base, "epoch_$loop", string(loop)), best_params, "(α, κ), tightness $tightness")
         println("  loop $loop done, fitness $(round(best_fitness, digits=6))")
         # 3) Stop when the parameters no longer move.
-        if loop > 2 && maximum(abs.(best_params .- prev) ./ (abs.(prev) .+ 1e-10)) < 1e-6
+        if loop > 2 && maximum(abs.(best_params .- previous_params) ./ (abs.(previous_params) .+ 1e-10)) < 1e-6
             println("  converged: Δparams < 1e-6.")
             break
         end
