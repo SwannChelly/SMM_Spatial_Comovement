@@ -190,8 +190,8 @@ println(" N_rho (optimisation) = $N_rho ; N_RHO_INFERENCE = $N_RHO_INFERENCE")
 #  • CELLS  — the simulated (sector, ZE) cells, CELL_MASK = filter == 1 inside active
 #    areas (control cells included: they inherit T_{s,a} > 0). Drives n_good, GOOD_S/R.
 #  • T COLUMNS — attraction areas: the columns of the T parameter matrix AND of the γ
-#    moment block (T[s,a] column ↔ γ[s,a] row, both s-major). T[s,l] = T_par[s, AA_OF_ZE[l]] n_ls^κ.
-#    The LAST column, FOREIGN_COL = n_AA + 1, is the foreign competitor: T_par[s, F] = Φ^F_s
+#    moment block (T[s,a] column ↔ γ[s,a] row, both s-major). T[s,l] = T_area[s, AA_OF_ZE[l]] n_ls^κ.
+#    The LAST column, FOREIGN_COL = n_AA + 1, is the foreign competitor: T_area[s, F] = Φ^F_s
 #    and γ[s, F] = the import share f_s. T_COL_DIM = n_AA + 1; no ZE maps to F.
 # ═══════════════════════════════════════════════════════════════════════════
 

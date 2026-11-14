@@ -132,41 +132,41 @@ kappa_index()   = S + R_downstream + 2 + N_TAU
 unpack_kappa(params) = params[kappa_index()]
 
 """
-    unpack_T_par(params) -> Matrix (S × T_COL_DIM)
+    unpack_T_area(params) -> Matrix (S × T_COL_DIM)
 
 The area-level comparative-advantage matrix: the reduced T block scattered s-major
 over `T_MASK`, reference-normalised per sector (`T[s, ref] = 1`).
 """
-function unpack_T_par(params)
+function unpack_T_area(params)
     T_full = zeros(eltype(params), T_COL_DIM * S)
     T_full[T_MASK] = params[t_param_start():end]
-    T_par = permutedims(reshape(T_full, T_COL_DIM, S))
+    T_area = permutedims(reshape(T_full, T_COL_DIM, S))
     for s in 1:S
         ref_c = T_REF_REGION[s]
-        (ref_c > 0 && T_par[s, ref_c] > 0) && (T_par[s, :] ./= T_par[s, ref_c])
+        (ref_c > 0 && T_area[s, ref_c] > 0) && (T_area[s, :] ./= T_area[s, ref_c])
     end
-    return T_par
+    return T_area
 end
 
 """
-    gather_T_to_ze(T_par, kappa) -> Matrix (S × R)
+    gather_T_to_ze(T_area, kappa) -> Matrix (S × R)
 
-`T[s, l] = T_par[s, a(l)] · n_ls^κ`: every ZE of an area shares the Fréchet scale, so
+`T[s, l] = T_area[s, a(l)] · n_ls^κ`: every ZE of an area shares the Fréchet scale, so
 each ZE still runs its own Ricardian competition.
 """
-function gather_T_to_ze(T_par::AbstractMatrix, kappa)
-    T_mat = Matrix{promote_type(eltype(T_par), typeof(kappa))}(undef, S, R)
+function gather_T_to_ze(T_area::AbstractMatrix, kappa)
+    T_mat = Matrix{promote_type(eltype(T_area), typeof(kappa))}(undef, S, R)
     @inbounds for l in 1:R, s in 1:S
-        T_mat[s, l] = T_par[s, T_GATHER[l]] * exp(kappa * LOG_N_LS[s, l])
+        T_mat[s, l] = T_area[s, T_GATHER[l]] * exp(kappa * LOG_N_LS[s, l])
     end
     return T_mat
 end
 
 """
-    foreign_phi(T_par) -> Vector (S):  Φ^F_s = T_par[s, FOREIGN_COL], zero where s does not import
+    foreign_phi(T_area) -> Vector (S):  Φ^F_s = T_area[s, FOREIGN_COL], zero where s does not import
 """
-foreign_phi(T_par::AbstractMatrix) =
-    [FOREIGN_ACTIVE[s] ? T_par[s, FOREIGN_COL] : zero(eltype(T_par)) for s in 1:S]
+foreign_phi(T_area::AbstractMatrix) =
+    [FOREIGN_ACTIVE[s] ? T_area[s, FOREIGN_COL] : zero(eltype(T_area)) for s in 1:S]
 
 """
     unpack_params(params) -> (χ^L, χ^s, A, α, vec(T), Φ^F)
@@ -180,9 +180,9 @@ function unpack_params(params)
     A = params[(S + 2):(S + R_downstream + 1)]
     A = A ./ A[1]
     alpha = params[alpha_range()]
-    T_par = unpack_T_par(params)
-    T_mat = gather_T_to_ze(T_par, unpack_kappa(params))
-    return chi_L, chi_s, A, alpha, vec(T_mat), foreign_phi(T_par)
+    T_area = unpack_T_area(params)
+    T_mat = gather_T_to_ze(T_area, unpack_kappa(params))
+    return chi_L, chi_s, A, alpha, vec(T_mat), foreign_phi(T_area)
 end
 
 """

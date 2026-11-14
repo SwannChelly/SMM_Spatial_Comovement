@@ -80,14 +80,14 @@ function compute_prices_analytical(chi_L::FT, chi_s_vec, A_r, T_mat::AbstractMat
 end
 
 """
-    gamma_T_analytical(χ^L, χ^s, A, T_par, kappa, tau) -> γ (T_COL_DIM × S)
+    gamma_T_analytical(χ^L, χ^s, A, T_area, kappa, tau) -> γ (T_COL_DIM × S)
 
 Closed-form shares of each sector's TOTAL purchases at the area level, the import share
 `Σ_r ω_sr Φ^F_s/Φ_sr / Σ_r ω_sr` on the foreign row (Σ over the columns = 1).
 """
-function gamma_T_analytical(chi_L::Real, chi_s, A, T_par::AbstractMatrix, kappa, tau::AbstractMatrix)
-    T_mat = gather_T_to_ze(T_par, kappa)
-    PhiF  = foreign_phi(T_par)
+function gamma_T_analytical(chi_L::Real, chi_s, A, T_area::AbstractMatrix, kappa, tau::AbstractMatrix)
+    T_mat = gather_T_to_ze(T_area, kappa)
+    PhiF  = foreign_phi(T_area)
     (; P_sr, P_r, c_r, Y_r, mu, Phi) = compute_prices_analytical(chi_L, chi_s, A, T_mat, tau; PhiF = PhiF)
     spend_w = similar(Phi)
     for s in 1:S, dr in 1:R_downstream
@@ -127,11 +127,11 @@ function gamma_T_from_weights(T_ze::AbstractMatrix, PhiF::AbstractVector, tau::A
 end
 
 """
-    with_T(x, T_par) -> copy of the level vector `x` with its T block set to `T_par`
+    with_T(x, T_area) -> copy of the level vector `x` with its T block set to `T_area`
 """
-function with_T(x::AbstractVector, T_par::AbstractMatrix)
+function with_T(x::AbstractVector, T_area::AbstractMatrix)
     xf = copy(x)
-    xf[t_param_start():end] = vec(permutedims(T_par))[T_MASK]
+    xf[t_param_start():end] = vec(permutedims(T_area))[T_MASK]
     return xf
 end
 
@@ -317,7 +317,7 @@ function profile_ge(alpha; kappa::Real,
     # 1) Start from T_init in the reference gauge, T[s, ref] = 1.
     tau   = build_tau(alpha)
     # T_area (S × T_COL_DIM): the Fréchet scales at the AREA level, T_a,s for every attraction
-    # area a and, in column FOREIGN_COL, the foreign scale Φ^F_s (the layout of T_par elsewhere).
+    # area a and, in column FOREIGN_COL, the foreign scale Φ^F_s.
     # The cell-level T_ls = T_{a(l)s} n_ls^κ is rebuilt from it at every pass.
     T_area = Matrix{Float64}(undef, S, T_COL_DIM)
     T_area .= T_init

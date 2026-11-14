@@ -135,7 +135,7 @@ function world_reference(theta_hat::AbstractVector)
     chi_L, chi_s, A, alpha, _ = unpack_params(theta_hat)
     return (theta = collect(Float64, theta_hat), chi_L = chi_L, chi_s = collect(chi_s), A = collect(A),
             alpha = collect(alpha), kappa = Float64(unpack_kappa(theta_hat)),
-            T = Matrix(unpack_T_par(theta_hat)))
+            T = Matrix(unpack_T_area(theta_hat)))
 end
 
 """

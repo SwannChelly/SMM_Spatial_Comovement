@@ -41,7 +41,7 @@ with the search-window lines ×BOUND_LO / ×BOUND_HI. Never blocks estimation.
 """
 function plot_T_vs_initial(params, folder)
     try
-        T_best = unpack_T_par(params)
+        T_best = unpack_T_area(params)
         alpha = round(params[alpha_range()][1], digits = 3)
         kappa = round(unpack_kappa(params), digits = 3)   # T* depends on (α, κ), not on α alone
         idx = [(s, c) for s in 1:S for c in 1:T_COL_DIM if T_rs_init[s, c] > 1e-8 && T_best[s, c] > 1e-8]
@@ -122,7 +122,7 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
         println(io, "\n>> Import share f_s (foreign row of the γ block; Φ^F_s profiled with T):")
         for s in 1:S
             @printf(io, "%-10s Empirical: %8.3f | Simulated: %8.3f | Φ^F_s %10.4g\n", SECTOR_NAMES[s],
-                    FOREIGN_SHARE[s], sim[5][FOREIGN_COL, s], foreign_phi(unpack_T_par(params))[s])
+                    FOREIGN_SHARE[s], sim[5][FOREIGN_COL, s], foreign_phi(unpack_T_area(params))[s])
         end
         println(io, "\n>> Block 4 — cell-level cloglog:")
         for (i, lab) in enumerate(REG_COEF_LABELS)
