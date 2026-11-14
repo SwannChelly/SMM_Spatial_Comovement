@@ -701,7 +701,7 @@ def granularity_report(data, radii=None, value_col="share", verbose=True,
     spread is how much a single draw can move the answer.
 
     `continuum` is the benchmark frame, in `suppliers.parquet`'s schema -- build it with
-    `utils.continuum_data(data, xp)["suppliers"]`. Omitted, Julia's own
+    `utils.continuum_data(data, theta_plus)["suppliers"]`. Omitted, Julia's own
     `suppliers_continuum.parquet` is used if the tree carries one.
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
@@ -709,7 +709,7 @@ def granularity_report(data, radii=None, value_col="share", verbose=True,
     if cont is None:
         raise FileNotFoundError(
             "no infinite-variety benchmark. Build one with `utils.continuum_data(data, "
-            "xp)` and pass its `suppliers` frame as `continuum=`, or point `data` at a "
+            "theta_plus)` and pass its `suppliers` frame as `continuum=`, or point `data` at a "
             "tree carrying Julia's own `suppliers_continuum.parquet`.")
 
     per = replication_summaries(data, radii=radii, value_col=value_col)
@@ -937,7 +937,7 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
     norm = plt.Normalize(vmin=vmin, vmax=vmax)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.5, hf=1.0))
+        _, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.5, height_fraction=1.0))
     geo[geo[col].isna()].plot(facecolor=missing_color, ax=ax, edgecolor="white",
                               linewidth=0.25)
     shocked.plot(column=col, ax=ax, norm=norm, cmap=cmap, edgecolor="black",
@@ -979,7 +979,7 @@ def plot_local_share_profile(data, radii=(25, 50, 75, 100, 150, 200, 300, 500),
     """
     p = (local_share_profile(data, radii=radii, value_col=value_col)
          if profile is None else profile)
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
     ax.fill_between(p.index, p["p25"], p["p75"], color=sim_color, alpha=0.20,
                     label="interquartile range across regions")
     ax.plot(p.index, p["median"], marker="o", color=sim_color, label="median region")
@@ -1015,7 +1015,7 @@ def plot_amplification_vs_local(data, radius_km=AMPLIFICATION_RADIUS_KM,
     col = f"share_within_{int(radius_km)}km"
     flagged = set(s.nsmallest(n_label, col).index) | set(s.nlargest(n_label, "amplification").index)
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.7))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.7))
     plain = s.loc[~s.index.isin(flagged)]
     named = s.loc[s.index.isin(flagged)]
     ax.scatter(plain["amplification"], plain[col], s=30, color=toulouse_color, alpha=0.8)
@@ -1182,7 +1182,7 @@ def plot_counterfactual_profile(data, regimes=CF_REGIMES,
     frames = (counterfactual_frames(data, regimes=regimes, value_col=value_col,
                                     diffusion=base) if frames is None else frames)
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
     curves = {lab: local_share_profile(data, radii=radii, value_col=value_col,
                                        diffusion=f) for lab, f in frames.items()}
     for lab, p in curves.items():
@@ -1486,7 +1486,7 @@ def plot_distance_distribution(data, regimes=CF_REGIMES, value_col="share", deta
     """
     dist = distance_distribution(data, regimes=regimes, value_col=value_col, detail=detail,
                                  frames=frames, diffusion=diffusion)
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
     for lab in dist.columns:
         v = np.sort(dist[lab].dropna().to_numpy())
         if v.size == 0:
@@ -1556,7 +1556,7 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
         ax.axvline(np.median(v), color=col, linewidth=1.0, alpha=0.55, linestyle=":")
 
     if layout == "overlay":
-        fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
+        fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
         for lab in labels:
             _draw(ax, lab)
         ax.set_xlabel("Mean distance travelled by the upstream euro (km)")
@@ -1566,8 +1566,8 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
         axes = ax
     else:
         fig, axs = plt.subplots(len(labels), 1, sharex=True, sharey=True,
-                                figsize=figsize or get_figsize(wf=0.8,
-                                                               hf=0.28 * len(labels)))
+                                figsize=figsize or get_figsize(width_fraction=0.8,
+                                                               height_fraction=0.28 * len(labels)))
         axs = np.atleast_1d(axs)
         for ax, lab in zip(axs, labels):
             _draw(ax, lab)
@@ -1780,7 +1780,7 @@ def plot_sourcing_barycentre(data, bary=None, value_col="share", diffusion=None,
         geo = geo.to_crs(crs)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.5, hf=1.0))
+        _, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.5, height_fraction=1.0))
     geo.plot(facecolor=ground_color, ax=ax, edgecolor=edge_color, linewidth=0.25)
 
     v = b.dropna(subset=["bary_x", "origin_x"])
@@ -1843,7 +1843,7 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
     labels = list(regimes)
     ncol, nrow = len(datasets), len(labels)
     fig, axes = plt.subplots(nrow, ncol, squeeze=False,
-                             figsize=figsize or get_figsize(wf=1.0, hf=0.30 * nrow * 2 / max(ncol, 1)))
+                             figsize=figsize or get_figsize(width_fraction=1.0, height_fraction=0.30 * nrow * 2 / max(ncol, 1)))
 
     out = {}
     for j, (name, data) in enumerate(datasets):
@@ -1861,7 +1861,7 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
                                      title=name if i == 0 else None)
             if save_each:
                 slug = lambda t: re.sub(r"[^a-z0-9]+", "_", str(t).lower()).strip("_")
-                single, sax = plt.subplots(figsize=get_figsize(wf=0.5, hf=1.0))
+                single, sax = plt.subplots(figsize=get_figsize(width_fraction=0.5, height_fraction=1.0))
                 plot_sourcing_barycentre(data, bary=b, crs=crs, coords=coords, ax=sax,
                                          color=CF_COLORS.get(lab, "0.3"), min_km=min_km,
                                          title=f"{name} — {lab}",
@@ -2675,12 +2675,12 @@ def plot_incidence_plane(tables, regimes=("Both forces", "Equal comparative adva
     ylim = (min(np.nanmin(ys), 0.0) - pad_y, np.nanmax(ys) + pad_y)
 
     if layout == "single":
-        fig, axes = plt.subplots(figsize=figsize or get_figsize(hf=0.62))
+        fig, axes = plt.subplots(figsize=figsize or get_figsize(height_fraction=0.62))
         axes = [axes] * len(series)
         axl = [axes[0]]
     else:
         fig, arr = plt.subplots(1, len(series), sharex=True, sharey=True,
-                                figsize=figsize or get_figsize(hf=0.52))
+                                figsize=figsize or get_figsize(height_fraction=0.52))
         axes = list(np.atleast_1d(arr))
         axl = axes
 
@@ -2987,7 +2987,7 @@ def plot_io_benchmark(data, benchmark=None, figsize=None, save_to=None, **kw):
               "places the model, but the spread is an artefact — pass a per-sector "
               "`intermediate_share` for a real distribution.")
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.85, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.85, height_fraction=0.6))
     ax.plot(mult.to_numpy(), np.linspace(0, 1, len(mult)), color=sim_color, lw=1.6,
             label="all A129 sectors (Leontief total)")
     for x, c, lab in ((mult.get(d, np.nan), reference_color,

@@ -117,7 +117,7 @@ try:
                            atol=1e-12)
     with contextlib.redirect_stdout(io.StringIO()):
         e1 = utils.simulate_economy(d1, n_rep=5, seed=7)
-        eE = utils.simulate_economy(dE, xpE, n_rep=5, seed=7, geom=gE)
+        eE = utils.simulate_economy(dE, xpE, n_rep=5, seed=7, geometry=gE)
     for s in e1:
         assert np.array_equal(e1[s]["winner"], eE[s]["winner"]), s
         assert np.allclose(e1[s]["v"], eE[s]["v"], atol=1e-12), s

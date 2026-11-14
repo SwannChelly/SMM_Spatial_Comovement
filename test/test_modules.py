@@ -78,14 +78,14 @@ print(f"2 ok  a tree with no moment, inference or Jacobian artefact opens under 
 
 # --- 3. the parquet-free path --------------------------------------------------------
 assert data["suppliers"] is None                     # there is no parquet in this tree
-xp = utils.extended_parameters(data, verbose=False)
-regs = utils.economy_by_regime(data, xp, n_rep=3, verbose=False)
+theta_plus = utils.extended_parameters(data, verbose=False)
+regs = utils.economy_by_regime(data, theta_plus, n_rep=3, verbose=False)
 assert set(regs) == set(utils.CF_REGIMES)
 
 D_of, loc_of = {}, {}
 for reg, (econ, dl) in regs.items():
     assert dl["suppliers"] is not None and len(dl["suppliers"]) > 0
-    utils.economy_identities(econ, xp, verbose=False)
+    utils.economy_identities(econ, theta_plus, verbose=False)
     summ = diffusion_lib.amplification_summary(dl, radii=(200,))
     # the identity the section quotes: D_r = 1 + sum over upstream cells
     hand = 1.0 + econ.value["D_r"].mean(axis=0) - 1.0
@@ -120,7 +120,7 @@ assert max(D_fixed.values()) - min(D_fixed.values()) < 1e-9, \
     ("the closed-form reallocation holds the sector spend fixed, so D_r cannot move",
      D_fixed)
 # the continuum benchmark is simulated here instead of read from a second parquet
-cont = utils.continuum_data(data, xp, n_var=40, n_rep=2)
+cont = utils.continuum_data(data, theta_plus, n_var=40, n_rep=2)
 rep = diffusion_lib.granularity_report(data=regs["Both forces"][1], radii=(200,),
                                        continuum=cont["suppliers"], verbose=False)
 assert "granularity" in rep.columns and np.isfinite(rep["granularity"]).any()

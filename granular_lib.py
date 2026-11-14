@@ -101,7 +101,7 @@ def plot_ca_distribution(data, figsize=None, save_to=None, floor_ratio=1e-4):
     caf = comparative_advantage_frame(data)
     order = [s for s in _sectors_in_code_order(data) if s in set(caf["sector"])][::-1]
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.95, hf=0.75))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.75))
     for y, sec in enumerate(order):
         sub = caf[caf["sector"] == sec]
         ratio = np.power(10.0, sub["log10_T_dev"].to_numpy(float))
@@ -251,7 +251,7 @@ def plot_ca_distance_equivalence(data, figsize=None, save_to=None, reference_km=
     km = reference_km * np.exp(np.minimum(df["equiv_log_d"].to_numpy(float), 700.0))
     y = np.arange(len(df))
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.95, hf=0.62))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.62))
     ax.plot(km, y, linestyle="none", marker="o", markersize=7, color=reference_color,
             markeredgecolor="black", markeredgewidth=0.5)
     for yi, (x_i, area) in enumerate(zip(km, df["top_area"].astype(str))):
@@ -375,7 +375,7 @@ def plot_ca_win_margin(data, figsize=None, save_to=None):
                          "there is no cross-area comparison to draw.")
     df = df[::-1]
     y = np.arange(len(df))
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.95, hf=0.7))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.7))
     ax.barh(y, df["mean_win_margin"],
             color=[reference_color if v else sim_color
                    for v in df["area_beats_own_geography"]], alpha=0.85,
@@ -509,7 +509,7 @@ def ca_covariance_benchmark(data):
 
 # Test 6 — how much sourcing DISTANCE comparative advantage is buying, in kilometres.
 
-def _representative_buyer(data, geom=None):
+def _representative_buyer(data, geometry=None):
     """
     The buyer the alignment figure is drawn for: the one of MEDIAN sourcing reach.
 
@@ -518,8 +518,8 @@ def _representative_buyer(data, geom=None):
     buyer the model actually sources for, and it is neither the most local nor the most
     remote — which is what makes it representative rather than flattering.
     """
-    geom = sourcing_geometry(data) if geom is None else geom
-    blocks = [b for b in geom["by_sector"].values() if b["cells"].size >= 2]
+    geometry = sourcing_geometry(data) if geometry is None else geometry
+    blocks = [b for b in geometry["by_sector"].values() if b["cells"].size >= 2]
     if not blocks:
         raise ValueError("no sector with two competing cells; nothing to draw")
     reach = np.mean([(b["rho"] * b["distance"]).sum(axis=0) for b in blocks], axis=0)
@@ -527,7 +527,7 @@ def _representative_buyer(data, geom=None):
     return int(order[order.size // 2])
 
 
-def alignment_frame(data, buyer=None, geom=None):
+def alignment_frame(data, buyer=None, geometry=None):
     """
     The panel behind the alignment regression: one row per (sector, buyer, competing cell).
 
@@ -549,12 +549,12 @@ def alignment_frame(data, buyer=None, geom=None):
     weight; the slope of a WLS is invariant to that scale, but the reported dispersions
     are not.
     """
-    geom = sourcing_geometry(data) if geom is None else geom
+    geometry = sourcing_geometry(data) if geometry is None else geometry
     w = _buyer_weights(data)
     buyers = range(w.size) if buyer is None else (int(buyer),)
     aa_names = aa_display_names(data)
     frames = []
-    for s, blk in geom["by_sector"].items():
+    for s, blk in geometry["by_sector"].items():
         if blk["cells"].size < 2:
             continue
         name = data["sector_names"][s]
@@ -783,7 +783,7 @@ def plot_spatial_alignment(data, buyer=None, n_label=4, figsize=None, save_to=No
         return x - mu
     x, y = _dev("log_T"), _dev("distance_km")
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.95, hf=0.72))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.72))
     scale = w / w.max() if w.max() > 0 else w
     ax.scatter(x, y, s=18 + 320 * scale, color=reference_color, alpha=0.55,
                edgecolor="black", linewidth=0.4, zorder=2)
@@ -915,7 +915,7 @@ def alignment_covariance(data, weights="rho", frame=None):
 
     Built off `alignment_frame`, so the figure and the regression cannot drift apart.
     """
-    fr = alignment_frame(data, geom=None) if frame is None else frame
+    fr = alignment_frame(data, geometry=None) if frame is None else frame
     if weights not in ("rho", "cell"):
         raise ValueError(f"weights must be 'rho' or 'cell', not {weights!r}")
     rows = []
@@ -1062,7 +1062,7 @@ def plot_alignment_correlation(datasets, statistic="cov_km", weights=None, bins=
         raise ValueError(f"no {level} with a finite {col}.")
     edges = np.histogram_bin_edges(pooled, bins=bins)
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
     palette = colors or {}
     default = [sim_color, toulouse_color, reference_color]
     for k, (name, fr) in enumerate(frs.items()):
@@ -1245,7 +1245,7 @@ def plot_alignment_covariance(datasets, weights="rho", bins=24, frames=None, col
     pad = 0.15 * (pooled.max() - pooled.min() or 1.0)
     xs = np.linspace(pooled.min() - pad, pooled.max() + pad, int(grid))
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
     palette = colors or {}
     default = [sim_color, toulouse_color, reference_color]
     for k, (name, v) in enumerate(vals.items()):
@@ -1810,7 +1810,7 @@ def variety_concentration(data, value_col="share", panel=None, spend=None,
 
 def simulate_granular_regime(data, alpha=None, equalise_T=False, kappa=None, n_rep=None,
                              seed=20260912, value_col="share", spend=None, n_hat=None,
-                             xp=None, u=None):
+                             theta_plus=None, u_draws=None):
     """
     The finite-variety economy of a COUNTERFACTUAL regime — now a thin delegation to
     `simulate_economy`, the single forward map from the extended parameter set.
@@ -1837,9 +1837,9 @@ def simulate_granular_regime(data, alpha=None, equalise_T=False, kappa=None, n_r
     realisation, and any number pinned to that realisation moves.
     """
     sp = _sector_spend(data, value_col) if spend is None else spend
-    return simulate_economy(data, xp, alpha=alpha, equalise_T=equalise_T, kappa=kappa,
+    return simulate_economy(data, theta_plus, alpha=alpha, equalise_T=equalise_T, kappa=kappa,
                             n_rep=n_rep,
-                            seed=seed, u=u, n_hat=n_hat,
+                            seed=seed, u_draws=u_draws, n_hat=n_hat,
                             buyers=np.asarray(sp.index).astype(int), verbose=False)
 
 # --- P7: the BUYER-level object, and what each force does to it ----------------------
@@ -3347,7 +3347,7 @@ def concentration_report(data, value_col="share", industry="", out_folder=None,
 
 
 def portfolio_matrix(data, sector, weights="pi_r", alpha=None, equalise_T=False,
-                     geom=None):
+                     geometry=None):
     """
     Sector `sector`'s (cell x buyer) SALES matrix: row `j` is supplier cell `j`'s portfolio
     of customers, `x_{jr} = pi_r * gamma_{jrs}`.
@@ -3358,7 +3358,7 @@ def portfolio_matrix(data, sector, weights="pi_r", alpha=None, equalise_T=False,
     scaling a whole portfolio, so the per-sector spending level cancels, but rescaling the
     BUYER axis reweights the coordinates and changes the angle between two portfolios.
     """
-    g = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T) if geom is None else geom
+    g = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T) if geometry is None else geometry
     blk = g["by_sector"][sector]
     X = np.asarray(blk["rho"], dtype=float)                 # (cell, buyer), columns sum to 1
     if weights is None:
@@ -3514,7 +3514,7 @@ def customer_portfolio_report(data, taus=None, weights="pi_r", n_draws=200, seed
     for s, blk in geom["by_sector"].items():
         if np.asarray(blk["cells"]).size < 3:
             continue
-        X, cells = portfolio_matrix(data, s, weights=weights, geom=geom)
+        X, cells = portfolio_matrix(data, s, weights=weights, geometry=geom)
         C, ok = portfolio_similarity(X)
         if C.shape[0] < 3:
             continue

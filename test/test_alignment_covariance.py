@@ -72,7 +72,7 @@ def _parquet_sector_index(data, sup): return sup["A129"].to_numpy().astype(int) 
 def _despine(ax=None):
     for side in ("top", "right"):
         (ax or plt.gca()).spines[side].set_visible(False)
-def get_figsize(wf=1.0, hf=0.5): return [7.0 * wf, 7.0 * wf * hf]
+def get_figsize(width_fraction=1.0, height_fraction=0.5): return [7.0 * width_fraction, 7.0 * width_fraction * height_fraction]
 
 # spending is deliberately LOPSIDED across sectors, so a spend-weighted buyer average
 # cannot coincide with a plain one and gate 5 is not vacuous

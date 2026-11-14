@@ -663,7 +663,7 @@ def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
                                else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
                                else " (95% band)")
     if ax is None:
-        fig, ax = plt.subplots(figsize=get_figsize(hf=0.62))
+        fig, ax = plt.subplots(figsize=get_figsize(height_fraction=0.62))
     else:
         fig = ax.figure
     _paired_errorbar(ax, reg_bin_labels(nd), emp, sim, band_sim=band,
@@ -887,10 +887,10 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, q=WORLD_Q)
                                else " (95% band)")
     nds = nd + (1 if nd > 1 else 0)
     if density:
-        fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.62),
+        fig, axs = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.62),
                                 gridspec_kw={"width_ratios": [nds + 0.6, 1.6]})
     else:
-        fig, ax0 = plt.subplots(figsize=get_figsize(hf=0.62))
+        fig, ax0 = plt.subplots(figsize=get_figsize(height_fraction=0.62))
         axs = [ax0]
     sl = [slice(0, nds), slice(nds, nds + 1)]
     for k, a in enumerate(axs):
@@ -969,7 +969,7 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
     wb = g_curve_world_band(data, K_values=(0,), q=q)
     band = None if wb is None else (wb[0][:, 0], wb[1][:, 0])
 
-    fig, ax = (plt.subplots(figsize=get_figsize(hf=0.62)) if ax is None else (ax.figure, ax))
+    fig, ax = (plt.subplots(figsize=get_figsize(height_fraction=0.62)) if ax is None else (ax.figure, ax))
     _paired_errorbar(ax, data["sector_names"], emp, sim, ci=ci, band_sim=band,
                      ylabel=r"$\bar{G}_s(0)$", rotate=45,
                      sim_label="Simulated" if band is None else
@@ -1027,7 +1027,7 @@ def plot_parameter_ci(data, save_to=None, q=WORLD_Q):
     head = tab[[_is_trade_param(l) for l in tab.index]]
     Ns = tab.loc[[f"N_s[{s}]" for s in data["sector_names"]]]
 
-    fig, axs = plt.subplots(1, 2, figsize=get_figsize(hf=0.55),
+    fig, axs = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.55),
                             gridspec_kw={"width_ratios": [len(head) + 0.6, len(Ns) + 0.6]})
 
     def _draw(a, df, labels, ylabel):
@@ -1382,7 +1382,7 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     axes = {}
     for K in Ks:
         sub = df.xs(K, level="K").reindex(sectors)
-        _, ax = plt.subplots(figsize=get_figsize(hf=0.62))
+        _, ax = plt.subplots(figsize=get_figsize(height_fraction=0.62))
         band = ((sub["sim_lo"].values, sub["sim_hi"].values)
                 if np.isfinite(sub["sim_lo"].values).any() else None)
         _paired_errorbar(
@@ -1490,7 +1490,7 @@ def plot_sensitivity_profiles(data, params=None, moments=None, save_to=None, ban
         n = len(idx)
         nc = ncols or min(n, 3)
         nr = int(np.ceil(n / nc))
-        w, h = get_figsize(hf=0.62)
+        w, h = get_figsize(height_fraction=0.62)
         fig, axs = plt.subplots(nr, nc, figsize=(w * min(nc, 2) / 1.3, h * nr / 1.1 + 0.2),
                                 squeeze=False)
         g = np.asarray(pr["grid"], float)
@@ -2071,7 +2071,7 @@ def plot_world_covariance(data, figsize=None, save_to=None):
     d = np.sqrt(np.clip(np.diag(Om), 1e-300, None))
     C = Om / np.outer(d, d)
     k = Om.shape[0]
-    fig, axs = plt.subplots(1, 2, figsize=figsize or get_figsize(hf=0.5))
+    fig, axs = plt.subplots(1, 2, figsize=figsize or get_figsize(height_fraction=0.5))
     v = np.abs(Om).max() or 1.0
     for a, M, norm, fmt in ((axs[0], Om, TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v), "{:.2g}"),
                             (axs[1], C, TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1), "{:.2f}")):
@@ -2797,7 +2797,7 @@ def plot_untargeted_moment(results, figsize=None, save_to=None):
     ratio can lie beyond it, so how close the markers sit to it says how much room the
     scale has left.
     """
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.95, hf=0.65))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.65))
     x = np.arange(len(results))
 
     for i, r in enumerate(results):
@@ -3210,7 +3210,7 @@ def plot_structural_vs_measured(structural_results, figsize=None, save_to=None):
     extensive and substitution parts (they sum exactly), and the MEASURED one. The distance
     between the bar tops is R, annotated with its three parts.
     """
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.95, hf=0.62))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.62))
     x = np.arange(len(structural_results))
     wdt = 0.34
     for i, r in enumerate(structural_results):
@@ -3361,7 +3361,7 @@ def plot_untargeted_ladder(ladder, industry, figsize=None, save_to=None):
     vals = df["delta/gamma"].to_numpy(float)
     lo, hi = df["ci_lo"].to_numpy(float), df["ci_hi"].to_numpy(float)
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=1.0, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=1.0, height_fraction=0.6))
     if emp.get("ci_lo") is not None:
         ax.axvspan(emp["ci_lo"], emp["ci_hi"], color=reference_color, alpha=0.15,
                    label=f"data 95{pct()} CI")

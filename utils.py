@@ -141,10 +141,10 @@ def name_axis_fontsize(ax, n_rows, axis="y", size_at_ref=None, min_size=5.0,
                      if isinstance(plt.rcParams[key], str) else plt.rcParams[key])
     else:
         size = fs(size_at_ref)
-    h = axes_height_inches(ax) if axis == "y" else axes_width_inches(ax)
+    axis_length_in = axes_height_inches(ax) if axis == "y" else axes_width_inches(ax)
     n = int(n_rows or 0)
-    if h is not None and n > 0:
-        size = min(size, fill * 72.0 * h / n)
+    if axis_length_in is not None and n > 0:
+        size = min(size, fill * 72.0 * axis_length_in / n)
     return max(float(min_size), float(size))
 
 
@@ -173,13 +173,13 @@ def set_paper_style(font_size=None, usetex=False, preamble=None, family="serif")
     # call site -- so the rebinding goes through `globals()` rather than `global`.
     if font_size is not None:
         globals()["font_size"] = float(font_size)
-    rc = _rc_from_base(globals()["font_size"])
-    rc["font.family"] = family
-    rc["text.usetex"] = bool(usetex)
+    rc_params = _rc_from_base(globals()["font_size"])
+    rc_params["font.family"] = family
+    rc_params["text.usetex"] = bool(usetex)
     if usetex:
-        rc["text.latex.preamble"] = LATEX_PREAMBLE if preamble is None else preamble
-    plt.rcParams.update(rc)
-    return rc
+        rc_params["text.latex.preamble"] = LATEX_PREAMBLE if preamble is None else preamble
+    plt.rcParams.update(rc_params)
+    return rc_params
 
 
 def pct():
@@ -195,10 +195,10 @@ def pct():
     return r"\%" if plt.rcParams.get("text.usetex", False) else "%"
 
 
-def get_figsize(document_width_pt=document_width_pt, wf=1.0, hf=0.5):
+def get_figsize(document_width_pt=document_width_pt, width_fraction=1.0, height_fraction=0.5):
     """Figure size in inches from a LaTeX \\showthe\\columnwidth width in points."""
-    fig_width = document_width_pt * wf / 72.27
-    return [fig_width, fig_width * hf]
+    fig_width = document_width_pt * width_fraction / 72.27
+    return [fig_width, fig_width * height_fraction]
 
 
 def _despine(ax=None):
@@ -364,14 +364,14 @@ def reporting_folder(industry, base="..", profile_T=True, ca_level="aa",
 def _read_named_value(coefs, name):
     """stats.csv scalar by name: a column called `name`, else a labelled row."""
     if name in coefs.columns:
-        vals = coefs[name].dropna().values
-        if len(vals):
-            return float(vals[0])
+        values = coefs[name].dropna().values
+        if len(values):
+            return float(values[0])
     if "value" in coefs.columns:
-        for col in coefs.columns:
-            hit = coefs.index[coefs[col].astype(str).str.strip().str.lower() == name.lower()]
-            if len(hit):
-                return float(coefs.loc[hit[0], "value"])
+        for column in coefs.columns:
+            matching_rows = coefs.index[coefs[column].astype(str).str.strip().str.lower() == name.lower()]
+            if len(matching_rows):
+                return float(coefs.loc[matching_rows[0], "value"])
     return None
 
 
@@ -407,58 +407,58 @@ def load_sensitivity(sens_dir, n_moments=None):
     blocks in column order.
     """
     sens_dir = Path(sens_dir)
-    out = {"jacobian": None, "profiles": {}, "report": None, "dir": sens_dir}
-    p = sens_dir / "jacobian.npz"
-    if p.exists():
-        with np.load(p) as z:
-            js = {k: z[k] for k in z.files}
-        js["labels"] = [l for l in (sens_dir / "jacobian_param_labels.txt").read_text()
+    result = {"jacobian": None, "profiles": {}, "report": None, "dir": sens_dir}
+    jacobian_path = sens_dir / "jacobian.npz"
+    if jacobian_path.exists():
+        with np.load(jacobian_path) as archive:
+            jacobian = {k: archive[k] for k in archive.files}
+        jacobian["labels"] = [l for l in (sens_dir / "jacobian_param_labels.txt").read_text()
                         .splitlines() if l.strip()]
-        js["kind"] = np.rint(js["kind"]).astype(int)
-        J, J_sd = np.atleast_2d(js["J"]), np.atleast_2d(js["J_sd"])
+        jacobian["kind"] = np.rint(jacobian["kind"]).astype(int)
+        J, J_sd = np.atleast_2d(jacobian["J"]), np.atleast_2d(jacobian["J_sd"])
         if n_moments is not None and J.shape[0] != n_moments:
-            raise ValueError(f"{p} has {J.shape[0]} moment rows, the layout rebuilt here "
+            raise ValueError(f"{jacobian_path} has {J.shape[0]} moment rows, the layout rebuilt here "
                              f"has {n_moments}.")
-        K = max(int(np.ravel(js["K"])[0]), 1)
-        js["J_se"] = J_sd / np.sqrt(K)
-        scale = np.where(js["kind"] == 3, 1.0, np.asarray(js["theta"], float))
-        m = np.asarray(js["m_base"], float)
+        K = max(int(np.ravel(jacobian["K"])[0]), 1)
+        jacobian["J_se"] = J_sd / np.sqrt(K)
+        scale = np.where(jacobian["kind"] == 3, 1.0, np.asarray(jacobian["theta"], float))
+        base_moments = np.asarray(jacobian["m_base"], float)
         with np.errstate(divide="ignore", invalid="ignore"):
-            f = scale[None, :] / np.where(np.abs(m) > 1e-12, m, np.nan)[:, None]
-        js["J_elast"], js["J_elast_se"] = J * f, js["J_se"] * np.abs(f)
+            elasticity_factor = scale[None, :] / np.where(np.abs(base_moments) > 1e-12, base_moments, np.nan)[:, None]
+        jacobian["J_elast"], jacobian["J_elast_se"] = J * elasticity_factor, jacobian["J_se"] * np.abs(elasticity_factor)
         names = [SENS_BLOCK_NAMES[k] or _sens_aggregate_block(l)
-                 for k, l in zip(js["kind"], js["labels"])]
-        bn, bs = [], []
-        for nm in names:
-            if bn and bn[-1] == nm:
-                bs[-1] += 1
+                 for k, l in zip(jacobian["kind"], jacobian["labels"])]
+        block_names, block_sizes = [], []
+        for name in names:
+            if block_names and block_names[-1] == name:
+                block_sizes[-1] += 1
             else:
-                bn.append(nm); bs.append(1)
-        js["block_names"], js["block_sizes"] = bn, bs
-        out["jacobian"] = js
-    idx = sens_dir / "profiles_index.txt"
-    if idx.exists():
-        for line in idx.read_text().splitlines():
+                block_names.append(name); block_sizes.append(1)
+        jacobian["block_names"], jacobian["block_sizes"] = block_names, block_sizes
+        result["jacobian"] = jacobian
+    index_path = sens_dir / "profiles_index.txt"
+    if index_path.exists():
+        for line in index_path.read_text().splitlines():
             if not line.strip():
                 continue
-            label, fn = line.split("\t")
-            with np.load(sens_dir / fn) as z:
-                pr = {k: z[k] for k in z.files}
-            pr["targets"] = np.rint(pr["targets"]).astype(int) - 1      # 0-based
-            pr["kind"] = SENS_KINDS[int(np.ravel(pr["kind"])[0])]
-            pr["estimate"] = float(np.ravel(pr["estimate"])[0])
-            out["profiles"][label] = pr
-    rp = sens_dir / "profiles_report.txt"
-    out["report"] = rp.read_text() if rp.exists() else None
-    return out
+            label, file_name = line.split("\t")
+            with np.load(sens_dir / file_name) as archive:
+                profile = {k: archive[k] for k in archive.files}
+            profile["targets"] = np.rint(profile["targets"]).astype(int) - 1      # 0-based
+            profile["kind"] = SENS_KINDS[int(np.ravel(profile["kind"])[0])]
+            profile["estimate"] = float(np.ravel(profile["estimate"])[0])
+            result["profiles"][label] = profile
+    report_path = sens_dir / "profiles_report.txt"
+    result["report"] = report_path.read_text() if report_path.exists() else None
+    return result
 
 
 def _gk_col(G_K, cands):
     """Column of G_K.csv by case-insensitive name, mirroring load_parameters.jl's _gk_col."""
-    hit = next((c for c in G_K.columns if c.strip().lower() in cands), None)
-    if hit is None:
+    match = next((column for column in G_K.columns if column.strip().lower() in cands), None)
+    if match is None:
         raise KeyError(f"G_K.csv is missing a column among {cands}; has {list(G_K.columns)}")
-    return hit
+    return match
 
 
 def _as_ze_string(col):
@@ -477,14 +477,14 @@ def _aa_names(X_dr, n_AA):
     order of X_dr.csv restricted to the downstream rows. The names live in
     `X_dr.query('downstream').ze2010_downstream`.
     """
-    flag = next((c for c in ("downstream", "downstream_region") if c in X_dr.columns), None)
-    if flag is None:
+    downstream_flag = next((column for column in ("downstream", "downstream_region") if column in X_dr.columns), None)
+    if downstream_flag is None:
         raise KeyError("X_dr.csv has neither a `downstream` nor a `downstream_region` column")
-    sub = X_dr[X_dr[flag].astype(bool)]
-    col = next((c for c in ("ze2010_downstream", "ze2010") if c in sub.columns), None)
-    if col is None:
+    downstream_rows = X_dr[X_dr[downstream_flag].astype(bool)]
+    ze_column = next((column for column in ("ze2010_downstream", "ze2010") if column in downstream_rows.columns), None)
+    if ze_column is None:
         raise KeyError("X_dr.csv has neither `ze2010_downstream` nor `ze2010`")
-    names = _as_ze_string(sub[col]).tolist()
+    names = _as_ze_string(downstream_rows[ze_column]).tolist()
     if len(names) != n_AA:
         raise ValueError(f"{len(names)} downstream rows in X_dr.csv vs n_AA = {n_AA} "
                          "attraction areas in attraction_area_linkages.npy")
@@ -501,30 +501,30 @@ def _region_labels(data):
     commuting zones than the model does, so the join is on the CODE, and a zone with no
     name falls back to its code rather than to NaN.
     """
-    fdf = data.get("filter_N_upstream_df")
-    if fdf is None:
+    filter_df = data.get("filter_N_upstream_df")
+    if filter_df is None:
         codes = [str(i) for i in range(1, data["R"] + 1)]
     else:
-        codes = sorted(_as_ze_string(fdf["ze2010"]).unique())
+        codes = sorted(_as_ze_string(filter_df["ze2010"]).unique())
     if len(codes) != data["R"]:
         raise ValueError(f"{len(codes)} ZE codes in filter_N_upstream.csv but R = "
                          f"{data['R']} regions in the model.")
-    out = pd.DataFrame({"index": np.arange(1, data["R"] + 1), "ze2010": codes})
-    fr = data.get("france")
-    if fr is not None and "ze2010_name" in fr.columns:
-        names = fr[["ze2010", "ze2010_name"]].copy()
+    labels = pd.DataFrame({"index": np.arange(1, data["R"] + 1), "ze2010": codes})
+    france = data.get("france")
+    if france is not None and "ze2010_name" in france.columns:
+        names = france[["ze2010", "ze2010_name"]].copy()
         names["ze2010"] = _as_ze_string(names["ze2010"])
-        out = out.merge(names.drop_duplicates("ze2010"), on="ze2010", how="left")
+        labels = labels.merge(names.drop_duplicates("ze2010"), on="ze2010", how="left")
     else:
-        out["ze2010_name"] = out["ze2010"]
-    out["ze2010_name"] = out["ze2010_name"].fillna(out["ze2010"])
-    return out
+        labels["ze2010_name"] = labels["ze2010"]
+    labels["ze2010_name"] = labels["ze2010_name"].fillna(labels["ze2010"])
+    return labels
 
 
 def ze_name_of_code(data):
     """ZE code -> display name, for anything keyed on the code rather than the index."""
-    lab = _region_labels(data)
-    return dict(zip(lab["ze2010"], lab["ze2010_name"]))
+    labels = _region_labels(data)
+    return dict(zip(labels["ze2010"], labels["ze2010_name"]))
 
 
 def aa_display_names(data):
@@ -534,8 +534,8 @@ def aa_display_names(data):
     Area `a` is anchored on the a-th downstream region, so its name is that commuting
     zone's name — which is what a reader recognises, unlike the bare ZE code.
     """
-    m = ze_name_of_code(data)
-    return [m.get(str(a), str(a)) for a in data["aa_names"]]
+    name_of_code = ze_name_of_code(data)
+    return [name_of_code.get(str(a), str(a)) for a in data["aa_names"]]
 
 
 PARTS_ALL = ("counts", "moments", "inference", "jacobian", "sensitivity", "geography",
@@ -554,22 +554,22 @@ def resolve_parts(parts):
     """Expand a requested part set through PART_IMPLIES, and refuse an unknown name."""
     if parts is None:
         return set(PARTS_ALL)
-    want = {parts} if isinstance(parts, str) else set(parts)
-    bad = want - set(PARTS_ALL) - {"core", "all"}
-    if bad:
-        raise ValueError(f"unknown part(s) {sorted(bad)}; known parts are "
+    wanted = {parts} if isinstance(parts, str) else set(parts)
+    unknown = wanted - set(PARTS_ALL) - {"core", "all"}
+    if unknown:
+        raise ValueError(f"unknown part(s) {sorted(unknown)}; known parts are "
                          f"{list(PARTS_ALL)} (plus 'core' and 'all')")
-    if "all" in want:
+    if "all" in wanted:
         return set(PARTS_ALL)
-    want.discard("core")
+    wanted.discard("core")
     for _ in range(len(PART_IMPLIES) + 1):
-        grown = set(want)
-        for p in list(want):
-            grown |= set(PART_IMPLIES.get(p, ()))
-        if grown == want:
+        grown = set(wanted)
+        for part in list(wanted):
+            grown |= set(PART_IMPLIES.get(part, ()))
+        if grown == wanted:
             break
-        want = grown
-    return want
+        wanted = grown
+    return wanted
 
 
 def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
@@ -644,7 +644,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                               granular=granular, relax_n_lo=relax_n_lo, optimizer=optimizer,
                               kappa=kappa)
     if not folder.exists():
-        found = sorted(p.name for p in Path(base).glob(f"reporting_{industry}_*") if p.is_dir())
+        found = sorted(file_path.name for file_path in Path(base).glob(f"reporting_{industry}_*") if file_path.is_dir())
         hint = ("existing trees for this industry: " + ", ".join(found)) if found else \
                f"no reporting_{industry}_* tree under {Path(base).resolve()}"
         raise FileNotFoundError(f"run folder {folder} not found — {hint}. Set relax_n_lo "
@@ -719,9 +719,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # reference AA per sector = largest empirical share among the active columns
     T_REF_AA = np.full(S, -1, dtype=int)
     for s in range(S):
-        act = np.flatnonzero(AA_ACTIVE[s])
-        if act.size:
-            T_REF_AA[s] = act[np.argmax(emp_gamma_aa[s, act])]
+        active_areas = np.flatnonzero(AA_ACTIVE[s])
+        if active_areas.size:
+            T_REF_AA[s] = active_areas[np.argmax(emp_gamma_aa[s, active_areas])]
 
     # ------------------------------------------------- the foreign competitor
     # One per sector (load_parameters.jl): f_s = 1 - domestic_share[s] is the import share,
@@ -731,9 +731,9 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     foreign_share = np.clip(1.0 - domestic_share.astype(float), 0.0, 1.0)
     FOREIGN_ACTIVE = (foreign_share > 1e-12) & AA_ACTIVE.any(axis=1)
     for s in range(S):
-        dom = emp_gamma_aa[s].sum()
-        if dom > 0 and abs(dom - (1.0 - foreign_share[s])) > 1e-12:
-            emp_gamma_aa[s] *= (1.0 - foreign_share[s]) / dom
+        domestic_total = emp_gamma_aa[s].sum()
+        if domestic_total > 0 and abs(domestic_total - (1.0 - foreign_share[s])) > 1e-12:
+            emp_gamma_aa[s] *= (1.0 - foreign_share[s]) / domestic_total
     n_Tcol = n_AA + 1                                   # areas + the foreign column
     T_ACTIVE = np.hstack([AA_ACTIVE, FOREIGN_ACTIVE[:, None]])
     emp_gamma_T = np.hstack([emp_gamma_aa, np.where(FOREIGN_ACTIVE, foreign_share, 0.0)[:, None]])
@@ -756,36 +756,42 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # documentation/granular_validation.md), and load_parameters.jl reads the K = 0
         # row alone, so nothing on the Julia side carries it.
         G_K = pd.read_csv(gk_path)
-        c_sector = _gk_col(G_K, ("a129", "sector"))
-        c_K = _gk_col(G_K, ("k",))
-        c_G = _gk_col(G_K, ("g",))
-        c_N = _gk_col(G_K, ("n_supplier_s", "n_supplier", "n_suppliers"))
-        sector_codes = sorted(G_K[c_sector].unique())
+        col_sector = _gk_col(G_K, ("a129", "sector"))
+        col_K = _gk_col(G_K, ("k",))
+        col_G = _gk_col(G_K, ("g",))
+        col_N_supplier = _gk_col(G_K, ("n_supplier_s", "n_supplier", "n_suppliers"))
+        sector_codes = sorted(G_K[col_sector].unique())
         if len(sector_codes) != S:
             raise ValueError(f"G_K.csv covers {len(sector_codes)} sectors, expected S = {S}")
-        G_curve_K = sorted({int(k) for k in G_K[c_K].astype(float).round()})
-        G_curve = np.full((S, len(G_curve_K)), np.nan)
-        c_cs = next((c for c in G_K.columns if c.strip().lower() == "g_cs"), None)
-        for s, code in enumerate(sector_codes):
-            sub = G_K[G_K[c_sector] == code]
-            k_sub = sub[c_K].astype(float).round().astype(int).values
-            g_sub = sub[c_G].astype(float).values
-            for kk, gg in zip(k_sub, g_sub):
-                G_curve[s, G_curve_K.index(kk)] = gg
-            if 0 not in k_sub:
-                raise ValueError(f"G_K.csv has no K=0 row for A129={code}")
-            G_target[s] = G_curve[s, G_curve_K.index(0)]
-            N_supplier_s[s] = float(pd.unique(sub[c_N])[0])
+        G_curve_K = sorted({int(k) for k in G_K[col_K].astype(float).round()})
+        col_cumulative = next((c for c in G_K.columns if c.strip().lower() == "g_cs"), None)
+        # One row per (sector, K) in the file: the curve is that table laid out as
+        # sectors x K, in the model's sector order. A (sector, K) pair the file does not
+        # list stays missing here and is read as a zero share below.
+        K_rounded = G_K[col_K].astype(float).round().astype(int)
+        sectors_with_K0 = set(G_K.loc[K_rounded == 0, col_sector])
+        missing_K0 = [code for code in sector_codes if code not in sectors_with_K0]
+        if missing_K0:
+            raise ValueError(f"G_K.csv has no K=0 row for A129={missing_K0[0]}")
+        curve_table = (G_K.assign(K_rounded=K_rounded, share=G_K[col_G].astype(float))
+                       .pivot_table(index=col_sector, columns="K_rounded", values="share",
+                                    aggfunc="last")
+                       .reindex(index=sector_codes, columns=G_curve_K))
+        G_curve = curve_table.to_numpy(dtype=float)
+        G_target = G_curve[:, G_curve_K.index(0)].copy()
+        # The number of observed suppliers is a sector constant, repeated on every K row.
+        N_supplier_s = (G_K.groupby(col_sector)[col_N_supplier].first()
+                        .reindex(sector_codes).astype(float).to_numpy())
 
         # G is already the pmf p_s(K) = Pr[K_ls = K], which is what the reporting plots
         # (the CDF would re-test the fitted K = 0 level in every panel). It is read as
         # is -- never differenced. When the file carries G_cs, check it is the cumsum
         # of G: that is the only thing pinning down which convention `G` follows.
-        if c_cs is not None:
+        if col_cumulative is not None:
             for code in sector_codes:
-                sub = G_K[G_K[c_sector] == code].sort_values(c_K)
-                gap = np.max(np.abs(np.cumsum(sub[c_G].astype(float).values)
-                                    - sub[c_cs].astype(float).values))
+                sector_rows = G_K[G_K[col_sector] == code].sort_values(col_K)
+                gap = np.max(np.abs(np.cumsum(sector_rows[col_G].astype(float).values)
+                                    - sector_rows[col_cumulative].astype(float).values))
                 if gap > 1e-8:
                     raise ValueError(f"G_K.csv, A129={code}: G_cs is not the cumulative sum "
                                      f"of G (max gap {gap:.2e}) -- the pmf reading of G "
@@ -795,18 +801,18 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         G_curve = G_curve[:, keep]
         # A (sector, K) row absent from G_K.csv is a K no cell has: share 0 (the
         # pipeline's own convention, Step 13 of the build).
-        miss = ~np.isfinite(G_curve)
-        if miss.any():
+        missing = ~np.isfinite(G_curve)
+        if missing.any():
             print(f"[load] G_K.csv has no row for "
-                  f"{[(sector_codes[i], G_curve_K[j]) for i, j in zip(*np.where(miss))]}; "
+                  f"{[(sector_codes[i], G_curve_K[j]) for i, j in zip(*np.where(missing))]}; "
                   "read as a share of 0.")
-            G_curve[miss] = 0.0
+            G_curve[missing] = 0.0
         G_pmf = G_curve
 
     # sector names, in the model's 1..S order (sorted A129), as in load_parameters.jl
-    fdf_path = input_folder / "filter_N_upstream.csv"
-    if fdf_path.exists():
-        filter_N_upstream_df = pd.read_csv(fdf_path)
+    filter_df_path = input_folder / "filter_N_upstream.csv"
+    if filter_df_path.exists():
+        filter_N_upstream_df = pd.read_csv(filter_df_path)
         filter_N_upstream_df["ze2010"] = filter_N_upstream_df["ze2010"].astype(str).str.zfill(4)
         sector_names = [str(a) for a in sorted(filter_N_upstream_df["A129"].unique())]
     else:
@@ -822,11 +828,11 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # fit failure (or a suspiciously good fit) in the wrong sector, in Julia and here
     # alike. Compare the sets, not the counts.
     if granular and sector_codes is not None and filter_N_upstream_df is not None:
-        _gk = [str(a) for a in sector_codes]
-        if _gk != list(sector_names):
+        count_curve_sectors = [str(a) for a in sector_codes]
+        if count_curve_sectors != list(sector_names):
             raise ValueError(
                 "G_K.csv and filter_N_upstream.csv do not enumerate the same sectors:\n"
-                f"  G_K.csv            : {_gk}\n"
+                f"  G_K.csv            : {count_curve_sectors}\n"
                 f"  filter_N_upstream  : {list(sector_names)}\n"
                 "Gbar_s(0) would be attached to the wrong sector (in load_parameters.jl too).")
 
@@ -838,24 +844,24 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     log_n_ls = None
     cells_path = input_folder / "cells_ls.csv"
     if cells_path.exists() and filter_N_upstream_df is not None:
-        cdf = pd.read_csv(cells_path)
-        sec_keys = sorted(filter_N_upstream_df["A129"].astype(str).unique())
+        cells_df = pd.read_csv(cells_path)
+        sector_keys = sorted(filter_N_upstream_df["A129"].astype(str).unique())
         ze_keys = sorted(filter_N_upstream_df["ze2010"].map(_ze_key).unique())
-        if len(sec_keys) == S and len(ze_keys) == R:
-            s_of = {k: i for i, k in enumerate(sec_keys)}
-            l_of = {k: i for i, k in enumerate(ze_keys)}
+        if len(sector_keys) == S and len(ze_keys) == R:
+            sector_index_of = {k: i for i, k in enumerate(sector_keys)}
+            ze_index_of = {k: i for i, k in enumerate(ze_keys)}
             log_n_ls = np.zeros((S, R))
-            si = cdf["A129"].astype(str).map(s_of)
-            li = cdf["ze2010"].map(_ze_key).map(l_of)
-            ok = si.notna() & li.notna()
-            si, li = si[ok].astype(int).values, li[ok].astype(int).values
-            n = cdf.loc[ok, "n_ls"].astype(float).values
-            keep = CELL_MASK[si, li]
-            log_n_ls[si[keep], li[keep]] = np.log(np.maximum(n[keep], 1.0))
-            has = np.zeros((S, R), dtype=bool)
-            has[si[keep], li[keep]] = True
-            if (CELL_MASK & ~has).any():
-                print(f"[load] cells_ls.csv has no n_ls for {int((CELL_MASK & ~has).sum())} "
+            sector_index = cells_df["A129"].astype(str).map(sector_index_of)
+            ze_index = cells_df["ze2010"].map(_ze_key).map(ze_index_of)
+            ok = sector_index.notna() & ze_index.notna()
+            sector_index, ze_index = sector_index[ok].astype(int).values, ze_index[ok].astype(int).values
+            n_firms = cells_df.loc[ok, "n_ls"].astype(float).values
+            keep = CELL_MASK[sector_index, ze_index]
+            log_n_ls[sector_index[keep], ze_index[keep]] = np.log(np.maximum(n_firms[keep], 1.0))
+            has_n_ls = np.zeros((S, R), dtype=bool)
+            has_n_ls[sector_index[keep], ze_index[keep]] = True
+            if (CELL_MASK & ~has_n_ls).any():
+                print(f"[load] cells_ls.csv has no n_ls for {int((CELL_MASK & ~has_n_ls).sum())} "
                       "simulated cells; ln n_ls set to 0 there (Julia refuses such a tree).")
     elif kappa:
         print(f"[load] {cells_path} not found: T_ls = T_a n_ls^kappa cannot be gathered "
@@ -915,17 +921,17 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
       emp_blocks = dict(zip(keys, np.split(empirical_moments_full, edges)))
       sim_blocks = dict(zip(keys, np.split(sim_vec, edges)))
       # The gamma block is (S, n_AA + 1): the areas, then the import share.
-      for blk in (emp_blocks, sim_blocks):
-          g = blk["gamma_aa"].reshape(S, n_Tcol)
-          blk["gamma_aa"], blk["foreign_share"] = g[:, :n_AA], g[:, n_AA]
+      for blocks in (emp_blocks, sim_blocks):
+          gamma_block = blocks["gamma_aa"].reshape(S, n_Tcol)
+          blocks["gamma_aa"], blocks["foreign_share"] = gamma_block[:, :n_AA], gamma_block[:, n_AA]
 
       # All stages, block by block, with the STAGE axis last — the layout
       # analysis.ipynb's `best_simulated_moments_dict[key][..., K]` expects.
       stage_blocks = {}
       for k, b in zip(keys, np.split(best_simulated_moments, edges, axis=0)):
         if k == "gamma_aa":
-          g = b.reshape(S, n_Tcol, b.shape[1])
-          stage_blocks["gamma_aa"], stage_blocks["foreign_share"] = g[:, :n_AA], g[:, n_AA]
+          gamma_block = b.reshape(S, n_Tcol, b.shape[1])
+          stage_blocks["gamma_aa"], stage_blocks["foreign_share"] = gamma_block[:, :n_AA], gamma_block[:, n_AA]
         else:
           stage_blocks[k] = b
 
@@ -953,36 +959,36 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     n_gamma_kept = int(mask[off_gam:off_gam + S * n_Tcol].sum())
     world_residuals = Omega_world = W_world = world_inference = None
     if "inference" in parts:
-        p = folder / "step2" / "world_residuals.npz"
-        if p.exists():
-            with np.load(p) as z:
-                world_residuals = {k: z[k] for k in z.files}
+        file_path = folder / "step2" / "world_residuals.npz"
+        if file_path.exists():
+            with np.load(file_path) as archive:
+                world_residuals = {k: archive[k] for k in archive.files}
             for k in ("e", "beta_world", "beta_sim", "N_hat_world"):
                 if k in world_residuals and world_residuals[k].ndim == 1:
                     world_residuals[k] = world_residuals[k][:, None]
             if world_residuals["e"].shape[1] != reg_coef.size:
-                raise ValueError(f"{p} carries {world_residuals['e'].shape[1]} block-4 "
+                raise ValueError(f"{file_path} carries {world_residuals['e'].shape[1]} block-4 "
                                  f"entries, the layout rebuilt here has {reg_coef.size}.")
-        for nm in ("Omega_world", "W_world"):
-            q = folder / "step2" / f"{nm}.npy"
-            if q.exists():
-                M = np.atleast_2d(np.load(q))
-                if nm == "Omega_world":
-                    Omega_world = M
+        for name in ("Omega_world", "W_world"):
+            artefact_path = folder / "step2" / f"{name}.npy"
+            if artefact_path.exists():
+                matrix = np.atleast_2d(np.load(artefact_path))
+                if name == "Omega_world":
+                    Omega_world = matrix
                 else:
-                    W_world = M
-        q = folder / inf_step / "inference_world" / "world_inference_draws.npz"
-        lq = q.parent / "world_inference_labels.txt"
-        if q.exists() and lq.exists():
-            with np.load(q) as z:
-                world_inference = {k: z[k] for k in z.files}
-            world_inference["labels"] = [l for l in lq.read_text().splitlines() if l.strip()]
-            P = np.atleast_2d(world_inference["params"])
-            if P.shape[1] != len(world_inference["labels"]):
-                raise ValueError(f"{q.name} has {P.shape[1]} parameter columns but "
-                                 f"{lq.name} lists {len(world_inference['labels'])}.")
-            world_inference["params"] = P
-            world_inference["folder"] = q.parent
+                    W_world = matrix
+        artefact_path = folder / inf_step / "inference_world" / "world_inference_draws.npz"
+        labels_path = artefact_path.parent / "world_inference_labels.txt"
+        if artefact_path.exists() and labels_path.exists():
+            with np.load(artefact_path) as archive:
+                world_inference = {k: archive[k] for k in archive.files}
+            world_inference["labels"] = [l for l in labels_path.read_text().splitlines() if l.strip()]
+            param_draws = np.atleast_2d(world_inference["params"])
+            if param_draws.shape[1] != len(world_inference["labels"]):
+                raise ValueError(f"{artefact_path.name} has {param_draws.shape[1]} parameter columns but "
+                                 f"{labels_path.name} lists {len(world_inference['labels'])}.")
+            world_inference["params"] = param_draws
+            world_inference["folder"] = artefact_path.parent
 
     # ----------------------------------------- moment and parameter labels ----
     # Both axes of the Jacobian, rebuilt exactly as load_parameters.jl SECTION 13 does.
@@ -998,16 +1004,16 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     moment_block_sizes.append(S - 1)
     moment_labels += [f"pi_r[{a}]" for a in aa_names[1:]]
     moment_block_sizes.append(len(aa_names) - 1)
-    moment_labels += [f"beta_d[{lab}]" for lab in reg_coef_labels[:-1]] + ["beta_kappa"]
+    moment_labels += [f"beta_d[{label}]" for label in reg_coef_labels[:-1]] + ["beta_kappa"]
     moment_block_sizes.append(reg_coef.size)
-    gam_free = T_ACTIVE.copy()
+    gamma_free = T_ACTIVE.copy()
     for s in range(S):
         if T_REF_AA[s] >= 0:
-            gam_free[s, T_REF_AA[s]] = False
+            gamma_free[s, T_REF_AA[s]] = False
     moment_labels += [(f"f_foreign[{sector_names[s]}]" if a == n_AA else
                        f"gamma[{sector_names[s]}-AA{aa_names[a]}]")
-                      for s in range(S) for a in range(n_Tcol) if gam_free[s, a]]
-    moment_block_sizes.append(int(gam_free.sum()))
+                      for s in range(S) for a in range(n_Tcol) if gamma_free[s, a]]
+    moment_block_sizes.append(int(gamma_free.sum()))
     if granular:
         moment_labels += [f"G0[{sector_names[s]}]" for s in range(S)]
         moment_block_sizes.append(S)
@@ -1024,8 +1030,8 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     param_block_sizes.append(n_tau + 1)
     param_labels += [(f"PhiF[{sector_names[s]}]" if a == n_AA else
                       f"T[{sector_names[s]}-AA{aa_names[a]}]")
-                     for s in range(S) for a in range(n_Tcol) if gam_free[s, a]]
-    param_block_sizes.append(int(gam_free.sum()))
+                     for s in range(S) for a in range(n_Tcol) if gamma_free[s, a]]
+    param_block_sizes.append(int(gamma_free.sum()))
 
     moment_block_names = ["Labor share", "Industry shares", "Downstream sales",
                           "Extensive margin", "Regional sourcing shares"] \
@@ -1052,28 +1058,28 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     #   profile_<p>.npz  one per swept parameter (see `load_sensitivity`).
     # The Jacobian REPLACES the parameter axis rebuilt above: its columns are Julia's
     # (head without the normalised-out entries, alpha, kappa, the identified T, N_s).
-    jac = {k: None for k in ("J", "J_elast", "J_sd", "J_elast_sd",
+    jacobian_entries = {k: None for k in ("J", "J_elast", "J_sd", "J_elast_sd",
                              "jacobian_param_indices")}
     n_N_cols = 0
     J_est = sensitivity = None
     sens_dir = folder / inf_step / "sensitivity"
     if ("jacobian" in parts or "sensitivity" in parts) and sens_dir.exists():
         sensitivity = load_sensitivity(sens_dir, n_moments=int(mask.sum()))
-        js = sensitivity.get("jacobian")
-        if js is not None:
-            jac.update(J=js["J"], J_sd=js["J_se"], J_elast=js["J_elast"],
-                       J_elast_sd=js["J_elast_se"])
-            J_est = js["J_est"]
-            param_labels = list(js["labels"])
-            param_block_names, param_block_sizes = js["block_names"], js["block_sizes"]
-            n_N_cols = int(np.sum(js["kind"] == 5))
+        jacobian = sensitivity.get("jacobian")
+        if jacobian is not None:
+            jacobian_entries.update(J=jacobian["J"], J_sd=jacobian["J_se"], J_elast=jacobian["J_elast"],
+                       J_elast_sd=jacobian["J_elast_se"])
+            J_est = jacobian["J_est"]
+            param_labels = list(jacobian["labels"])
+            param_block_names, param_block_sizes = jacobian["block_names"], jacobian["block_sizes"]
+            n_N_cols = int(np.sum(jacobian["kind"] == 5))
 
     # ------------------------------------------------- granular diagnostics
     granular_diag = None
     diag_path = folder / inf_step / "granular_diagnostics.npz"
     if granular and diag_path.exists():
-        with np.load(diag_path) as z:
-            granular_diag = {k: z[k] for k in z.files}
+        with np.load(diag_path) as archive:
+            granular_diag = {k: archive[k] for k in archive.files}
 
     # ------------------------------- optional artefacts (geography, panels) -----
     # Everything below is best-effort: it is what the DOWNSTREAM cells of the old
@@ -1189,10 +1195,10 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "param_labels": param_labels, "param_block_sizes": param_block_sizes,
         "param_block_names": param_block_names,
         # Jacobian (None when the file is absent)
-        "J": jac["J"], "J_elast": jac["J_elast"], "J_sd": jac["J_sd"],
-        "J_elast_sd": jac["J_elast_sd"], "n_N_cols": n_N_cols, "J_est": J_est,
+        "J": jacobian_entries["J"], "J_elast": jacobian_entries["J_elast"], "J_sd": jacobian_entries["J_sd"],
+        "J_elast_sd": jacobian_entries["J_elast_sd"], "n_N_cols": n_N_cols, "J_est": J_est,
         "sensitivity": sensitivity,
-        "jacobian_param_indices": jac["jacobian_param_indices"],
+        "jacobian_param_indices": jacobian_entries["jacobian_param_indices"],
         # inference: fake worlds (None when the step has not run)
         "world_residuals": world_residuals, "Omega_world": Omega_world,
         "W_world": W_world, "world_inference": world_inference,
@@ -1232,20 +1238,20 @@ def _theta_from_julia(root=None):
     leaving it to be noticed. Returns None when the file is not reachable.
     """
     import re
-    for cand in ([Path(root)] if root is not None else []) + [Path("."), Path(".."),
+    for candidate in ([Path(root)] if root is not None else []) + [Path("."), Path(".."),
                                                               Path(__file__).parent
                                                               if "__file__" in globals()
                                                               else Path(".")]:
-        f = Path(cand) / "load_parameters.jl"
-        if not f.exists():
+        julia_file = Path(candidate) / "load_parameters.jl"
+        if not julia_file.exists():
             continue
-        m = re.search(r"const\s+theta\s*=\s*\$\(\s*([0-9.eE+-]+)\s*\)", f.read_text())
-        if m:
+        match = re.search(r"const\s+theta\s*=\s*\$\(\s*([0-9.eE+-]+)\s*\)", julia_file.read_text())
+        if match:
             try:
-                v = float(m.group(1))
+                value = float(match.group(1))
             except ValueError:
                 return None
-            return v if np.isfinite(v) and v > 0 else None
+            return value if np.isfinite(value) and value > 0 else None
     return None
 
 
@@ -1263,16 +1269,16 @@ def model_theta(data, verbose=False):
 
     `THETA_DEFAULT` remains as a last resort for a tree detached from the source.
     """
-    jl = _theta_from_julia(data.get("base") if isinstance(data, dict) else None)
-    cv = _read_named_value(data["coefs"], "theta") if data.get("coefs") is not None else None
-    cv = float(cv) if cv is not None and np.isfinite(cv) and cv > 0 else None
-    if jl is not None and cv is not None and abs(jl - cv) > 1e-12 and verbose:
-        print(f"  [theta] load_parameters.jl says {jl:g}, stats.csv says {cv:g} — taking "
+    julia_value = _theta_from_julia(data.get("base") if isinstance(data, dict) else None)
+    stats_value = _read_named_value(data["coefs"], "theta") if data.get("coefs") is not None else None
+    stats_value = float(stats_value) if stats_value is not None and np.isfinite(stats_value) and stats_value > 0 else None
+    if julia_value is not None and stats_value is not None and abs(julia_value - stats_value) > 1e-12 and verbose:
+        print(f"  [theta] load_parameters.jl says {julia_value:g}, stats.csv says {stats_value:g} — taking "
               "the Julia value, which is what the economy was solved at. One of the two "
               "is stale.")
-    if jl is not None:
-        return jl
-    return cv if cv is not None else float(THETA_DEFAULT)
+    if julia_value is not None:
+        return julia_value
+    return stats_value if stats_value is not None else float(THETA_DEFAULT)
 
 
 def unpack_estimated_T(data):
@@ -1294,33 +1300,33 @@ def unpack_estimated_T(data):
     CELL_MASK. The Python economy has no foreign competitor yet: it reads `T` and
     `T_cell` only.
     """
-    bp = data.get("best_params")
-    if bp is None:
+    best_params = data.get("best_params")
+    if best_params is None:
         raise FileNotFoundError(
             f"no best_params in {data['folder']}/{data['step_dir']}/ — "
             "best_parameters_list.npy is written by run_reporting.")
-    bp = np.asarray(bp, dtype=float).ravel()
+    best_params = np.asarray(best_params, dtype=float).ravel()
 
     S, n_AA, n_tau = data["S"], data["n_AA"], data["n_tau"]
     T_ACTIVE = data["T_ACTIVE"]                       # (S, n_AA + 1): areas + foreign
     R_d = len(data["aa_names"])                       # one area per downstream region
     n_T = int(T_ACTIVE.sum())
     expected = 1 + S + R_d + n_tau + 1 + n_T
-    if bp.size != expected:
+    if best_params.size != expected:
         raise ValueError(
-            f"best_params has {bp.size} entries but the layout rebuilt here is "
+            f"best_params has {best_params.size} entries but the layout rebuilt here is "
             f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T} — the run's "
             "flags and the ones passed here disagree.")
 
-    off = 1 + S + R_d
-    alpha = bp[off: off + n_tau]
-    kappa = float(bp[off + n_tau])
+    offset = 1 + S + R_d
+    alpha = best_params[offset: offset + n_tau]
+    kappa = float(best_params[offset + n_tau])
     T_full = np.zeros((S, n_AA + 1))
-    T_full[T_ACTIVE] = bp[off + n_tau + 1:]           # C-order on (S, n_AA + 1) == s-major
+    T_full[T_ACTIVE] = best_params[offset + n_tau + 1:]           # C-order on (S, n_AA + 1) == s-major
     for s in range(S):
-        ref = data["T_REF_AA"][s]
-        if ref >= 0 and T_full[s, ref] > 0:
-            T_full[s] = T_full[s] / T_full[s, ref]    # the gauge rescales Phi^F_s too
+        reference_area = data["T_REF_AA"][s]
+        if reference_area >= 0 and T_full[s, reference_area] > 0:
+            T_full[s] = T_full[s] / T_full[s, reference_area]    # the gauge rescales Phi^F_s too
     T, PhiF = T_full[:, :n_AA], T_full[:, n_AA]
     log_n = data.get("log_n_ls")
     if log_n is None:
@@ -1335,12 +1341,12 @@ def unpack_estimated_T(data):
 
 def _downstream_ze_index(data):
     """The 1..R ZE index of each attraction area, in AA column order."""
-    Nd = np.asarray(data["N_downstream"]).ravel()
-    idx = np.flatnonzero(Nd != 0) + 1                 # 1-based, sorted — the model's order
-    if idx.size != data["n_AA"]:
-        raise ValueError(f"{idx.size} downstream regions in N_downstream_per_region.npy "
+    N_downstream = np.asarray(data["N_downstream"]).ravel()
+    downstream_index = np.flatnonzero(N_downstream != 0) + 1                 # 1-based, sorted — the model's order
+    if downstream_index.size != data["n_AA"]:
+        raise ValueError(f"{downstream_index.size} downstream regions in N_downstream_per_region.npy "
                          f"but {data['n_AA']} attraction areas.")
-    return idx
+    return downstream_index
 
 
 # --- Trade costs: ONE map from (alpha, distance) to log tau, whatever N_TAU is -------
@@ -1378,9 +1384,9 @@ def tau_log_knots(data):
     if n_tau != n_coef or n_coef not in TAU_BIN_EDGES:
         raise ValueError(f"n_tau must be 1 or n_coef (4 or 5); got n_tau = {n_tau}, "
                          f"n_coef = {n_coef}.")
-    D = np.load(data["input_folder"] / "distances.npy")
-    down = _downstream_ze_index(data)
-    d_max = float(np.nanmax(np.nanmin(D[:, down - 1], axis=1)))
+    distances = np.load(data["input_folder"] / "distances.npy")
+    downstream = _downstream_ze_index(data)
+    d_max = float(np.nanmax(np.nanmin(distances[:, downstream - 1], axis=1)))
     edges = np.array(TAU_BIN_EDGES[n_coef] + (d_max,))
     if d_max <= edges[-2]:
         raise ValueError(f"no region lies beyond {edges[-2]:g} km of its nearest downstream "
@@ -1399,41 +1405,41 @@ def resolve_alpha(data, alpha=None):
     n_tau = int(data["n_tau"])
     if alpha is None:
         return np.asarray(unpack_estimated_T(data)["alpha"], dtype=float).ravel()
-    a = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
-    if a.size == 1:
-        return np.full(n_tau, float(a[0]))
-    if a.size != n_tau:
-        raise ValueError(f"alpha has {a.size} entries against N_TAU = {n_tau}.")
-    return a
+    alpha_vector = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
+    if alpha_vector.size == 1:
+        return np.full(n_tau, float(alpha_vector[0]))
+    if alpha_vector.size != n_tau:
+        raise ValueError(f"alpha has {alpha_vector.size} entries against N_TAU = {n_tau}.")
+    return alpha_vector
 
 
 def log_tau(alpha, log_d, knots=None):
     """`ln tau` at `log_d` (any shape), the port of `build_tau`. `knots` is
     `tau_log_knots(data)`; it is ignored (and may be None) when alpha has one entry."""
-    a = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
-    ld = np.asarray(log_d, dtype=float)
-    if a.size == 1:
-        return a[0] * ld
-    x = np.asarray(knots, dtype=float)
-    K = a.size
-    if x.size != K + 1:
-        raise ValueError(f"{K} segment elasticities need {K + 1} knots, got {x.size}.")
-    out = a[0] * (np.minimum(ld, x[1]) - x[0])
+    alpha_vector = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
+    log_distance = np.asarray(log_d, dtype=float)
+    if alpha_vector.size == 1:
+        return alpha_vector[0] * log_distance
+    log_knots = np.asarray(knots, dtype=float)
+    K = alpha_vector.size
+    if log_knots.size != K + 1:
+        raise ValueError(f"{K} segment elasticities need {K + 1} knots, got {log_knots.size}.")
+    log_tau_value = alpha_vector[0] * (np.minimum(log_distance, log_knots[1]) - log_knots[0])
     for k in range(1, K):
-        upper = ld if k == K - 1 else np.minimum(ld, x[k + 1])
-        out = out + np.where(ld > x[k], a[k] * (upper - x[k]), 0.0)
-    return out
+        upper = log_distance if k == K - 1 else np.minimum(log_distance, log_knots[k + 1])
+        log_tau_value = log_tau_value + np.where(log_distance > log_knots[k], alpha_vector[k] * (upper - log_knots[k]), 0.0)
+    return log_tau_value
 
 
 def tau_elasticity(alpha, log_d, knots=None):
     """`d ln tau / d ln d` at `log_d`: alpha for the power law, the elasticity of the
     segment `log_d` falls in when tau is binned (the left one at a knot)."""
-    a = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
-    ld = np.asarray(log_d, dtype=float)
-    if a.size == 1:
-        return np.full(ld.shape, a[0])
-    x = np.asarray(knots, dtype=float)
-    return a[np.searchsorted(x[1:a.size], ld, side="left")]
+    alpha_vector = np.atleast_1d(np.asarray(alpha, dtype=float)).ravel()
+    log_distance = np.asarray(log_d, dtype=float)
+    if alpha_vector.size == 1:
+        return np.full(log_distance.shape, alpha_vector[0])
+    log_knots = np.asarray(knots, dtype=float)
+    return alpha_vector[np.searchsorted(log_knots[1:alpha_vector.size], log_distance, side="left")]
 
 
 
@@ -1473,24 +1479,24 @@ def sourcing_geometry(data, alpha=None, equalise_T=False, kappa=None):
     """
     if equalise_T not in (False, True, "area"):
         raise ValueError(f"equalise_T must be False, True or 'area', got {equalise_T!r}.")
-    est = unpack_estimated_T(data)
-    a = resolve_alpha(data, alpha)
-    a_hat = np.asarray(est["alpha"], dtype=float).ravel()
+    estimate = unpack_estimated_T(data)
+    alpha_vector = resolve_alpha(data, alpha)
+    a_hat = np.asarray(estimate["alpha"], dtype=float).ravel()
     knots = tau_log_knots(data)
-    theta = est["theta"]
-    k = est["kappa"] if kappa is None else float(kappa)
+    theta = estimate["theta"]
+    kappa_value = estimate["kappa"] if kappa is None else float(kappa)
     if equalise_T is True and kappa is not None:
         raise ValueError("equalise_T=True already sets every T_ls to one; kappa is moot.")
-    regime = bool(equalise_T) or not np.array_equal(a, a_hat) or k != est["kappa"]
-    base = sourcing_geometry(data) if regime and (est["PhiF"] > 0).any() else None
+    regime = bool(equalise_T) or not np.array_equal(alpha_vector, a_hat) or kappa_value != estimate["kappa"]
+    estimate_geometry = sourcing_geometry(data) if regime and (estimate["PhiF"] > 0).any() else None
 
-    D = np.load(data["input_folder"] / "distances.npy")[:data["R"], :data["R"]]
-    down = _downstream_ze_index(data)
+    distances = np.load(data["input_folder"] / "distances.npy")[:data["R"], :data["R"]]
+    downstream = _downstream_ze_index(data)
     aa_of_ze, CELL_MASK = data["aa_of_ze"], data["CELL_MASK"]
-    w = np.asarray(data.get("emp_pi_r", []), dtype=float).ravel()
-    w = w / w.sum() if w.size == down.size and w.sum() > 0 else np.full(down.size, 1.0 / down.size)
+    buyer_weights = np.asarray(data.get("emp_pi_r", []), dtype=float).ravel()
+    buyer_weights = buyer_weights / buyer_weights.sum() if buyer_weights.size == downstream.size and buyer_weights.sum() > 0 else np.full(downstream.size, 1.0 / downstream.size)
 
-    out, ta_s = {}, []
+    by_sector, theta_alpha_by_sector = {}, []
     for s in range(data["S"]):
         cells = np.flatnonzero(CELL_MASK[s])                       # 0-based ZE
         if cells.size == 0:
@@ -1500,33 +1506,33 @@ def sourcing_geometry(data, alpha=None, equalise_T=False, kappa=None):
         if equalise_T is True:
             T_cell = np.ones(cells.size)
         else:
-            dens = np.exp(k * est["log_n"][s, cells])
-            T_cell = dens if equalise_T == "area" else est["T"][s, aa_of_ze[cells]] * dens
-        d = np.maximum(D[np.ix_(cells, down - 1)], 1.0)            # (n_cell, R_d)
-        ld = np.log(d)
-        lt = log_tau(a, ld, knots)
-        log_psi = np.log(np.maximum(T_cell, 1e-300))[:, None] - theta * lt
+            density_term = np.exp(kappa_value * estimate["log_n"][s, cells])
+            T_cell = density_term if equalise_T == "area" else estimate["T"][s, aa_of_ze[cells]] * density_term
+        distance = np.maximum(distances[np.ix_(cells, downstream - 1)], 1.0)            # (n_cell, R_d)
+        log_distance = np.log(distance)
+        log_tau_lr = log_tau(alpha_vector, log_distance, knots)
+        log_psi = np.log(np.maximum(T_cell, 1e-300))[:, None] - theta * log_tau_lr
         psi = np.exp(log_psi)                                       # levels: units of Phi^F
-        tot = psi.sum(axis=0, keepdims=True)
-        rho = np.divide(psi, tot, out=np.zeros_like(psi), where=tot > 0)
-        el = theta * tau_elasticity(a, ld, knots)
-        ta_s.append(float(((rho * el).sum(axis=0)) @ w))
-        phi_f = float(est["PhiF"][s])
-        if base is not None and phi_f > 0:
-            b = base["by_sector"][s]                     # hold f_rs at the estimate
-            phi_r = phi_f * tot[0] / b["phi_dom"]
-            f = b["f"]
+        Phi_domestic = psi.sum(axis=0, keepdims=True)
+        rho = np.divide(psi, Phi_domestic, out=np.zeros_like(psi), where=Phi_domestic > 0)
+        elasticity = theta * tau_elasticity(alpha_vector, log_distance, knots)
+        theta_alpha_by_sector.append(float(((rho * elasticity).sum(axis=0)) @ buyer_weights))
+        PhiF_s = float(estimate["PhiF"][s])
+        if estimate_geometry is not None and PhiF_s > 0:
+            estimate_sector = estimate_geometry["by_sector"][s]                     # hold f_rs at the estimate
+            PhiF_r = PhiF_s * Phi_domestic[0] / estimate_sector["phi_dom"]
+            import_share = estimate_sector["f"]
         else:
-            phi_r = np.full(tot.shape[1], phi_f)
-            f = phi_f / (tot[0] + phi_f)
-        out[s] = {"cells": cells, "areas": aa_of_ze[cells], "T_cell": T_cell,
-                  "distance": d, "log_tau": lt, "elasticity": el,
+            PhiF_r = np.full(Phi_domestic.shape[1], PhiF_s)
+            import_share = PhiF_s / (Phi_domestic[0] + PhiF_s)
+        by_sector[s] = {"cells": cells, "areas": aa_of_ze[cells], "T_cell": T_cell,
+                  "distance": distance, "log_tau": log_tau_lr, "elasticity": elasticity,
                   "log_psi": np.maximum(log_psi, np.log(1e-300)), "rho": rho,
-                  "phi_dom": tot[0], "PhiF": phi_f, "PhiF_r": phi_r, "f": f}
-    return {"by_sector": out, "alpha": a, "theta": theta, "T": est["T"],
-            "PhiF": est["PhiF"], "alpha_hat": a_hat, "knots": knots,
-            "theta_alpha": float(np.mean(ta_s)) if ta_s else float(theta * a.mean()),
-            "downstream": down}
+                  "phi_dom": Phi_domestic[0], "PhiF": PhiF_s, "PhiF_r": PhiF_r, "f": import_share}
+    return {"by_sector": by_sector, "alpha": alpha_vector, "theta": theta, "T": estimate["T"],
+            "PhiF": estimate["PhiF"], "alpha_hat": a_hat, "knots": knots,
+            "theta_alpha": float(np.mean(theta_alpha_by_sector)) if theta_alpha_by_sector else float(theta * alpha_vector.mean()),
+            "downstream": downstream}
 
 
 # ============================================================================
@@ -1539,7 +1545,7 @@ def sourcing_geometry(data, alpha=None, equalise_T=False, kappa=None):
 
 
 
-def _parquet_sector_index(data, sup):
+def _parquet_sector_index(data, suppliers):
     """
     The model's 0-based sector index for every row of `suppliers.parquet`.
 
@@ -1550,18 +1556,18 @@ def _parquet_sector_index(data, sup):
     NAMED rather than silently mapped onto the wrong sectors.
     """
     S = data["S"]
-    col = sup["A129"]
-    if pd.api.types.is_numeric_dtype(col):
-        idx = col.to_numpy().astype(int) - 1
-        if idx.size and idx.min() >= 0 and idx.max() < S:
-            return idx
+    a129_column = suppliers["A129"]
+    if pd.api.types.is_numeric_dtype(a129_column):
+        sector_index = a129_column.to_numpy().astype(int) - 1
+        if sector_index.size and sector_index.min() >= 0 and sector_index.max() < S:
+            return sector_index
     name_of = {str(c): s for s, c in enumerate(data["sector_names"])}
-    mapped = col.astype(str).str.strip().map(name_of)
+    mapped = a129_column.astype(str).str.strip().map(name_of)
     if mapped.notna().all():
         return mapped.to_numpy().astype(int)
-    bad = sorted(set(col[mapped.isna()].astype(str)))[:5]
+    unplaced = sorted(set(a129_column[mapped.isna()].astype(str)))[:5]
     raise ValueError(
-        f"cannot place suppliers.parquet's A129 values {bad} among the model's S = {S} "
+        f"cannot place suppliers.parquet's A129 values {unplaced} among the model's S = {S} "
         f"sectors {list(data['sector_names'])} — the column should be the model index "
         "1..S, as main.jl writes it.")
 
@@ -1571,12 +1577,12 @@ def _n_hat_from_diagnostics(data):
     predates `post_hoc_N_hat.npy`. It is written only when its own step ran, so it can
     be stale relative to the parquet — which is why the post-hoc file is preferred."""
     for step in (data.get("step_dir", "step3"), "step3", "step1"):
-        p = data["folder"] / step / "granular_diagnostics.npz"
-        if p.exists():
-            with np.load(p, allow_pickle=True) as z:
+        diagnostics_path = data["folder"] / step / "granular_diagnostics.npz"
+        if diagnostics_path.exists():
+            with np.load(diagnostics_path, allow_pickle=True) as archive:
                 for k in ("N_hat", "N_s", "N_hat_s"):
-                    if k in z.files:
-                        return np.asarray(z[k], dtype=float)
+                    if k in archive.files:
+                        return np.asarray(archive[k], dtype=float)
     return None
 
 
@@ -1605,8 +1611,8 @@ def _by_sector_code(df, data, level=None):
 
 def _buyer_weights(data):
     """Downstream buyers weighted by their purchases (the empirical pi_r target)."""
-    w = np.asarray(data["emp_pi_r"], dtype=float).ravel()
-    return w / w.sum()
+    weights = np.asarray(data["emp_pi_r"], dtype=float).ravel()
+    return weights / weights.sum()
 
 
 
@@ -1676,35 +1682,35 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
     The source is therefore RECORDED and announced, and the gate requires it to be the
     run's own.
     """
-    bp = data.get("best_params")
-    if bp is None:
+    best_params = data.get("best_params")
+    if best_params is None:
         raise FileNotFoundError(
             f"no best_params in {data['folder']}/{data['step_dir']}/ — "
             "best_parameters_list.npy is written by run_reporting.")
-    bp = np.asarray(bp, dtype=float).ravel()
+    best_params = np.asarray(best_params, dtype=float).ravel()
     S, n_AA, n_tau = data["S"], data["n_AA"], data["n_tau"]
     R_d = len(data["aa_names"])
     n_T = int(data["T_ACTIVE"].sum())               # areas + Phi^F of importing sectors
     expected = 1 + S + R_d + n_tau + 1 + n_T
-    if bp.size != expected:
+    if best_params.size != expected:
         raise ValueError(
-            f"best_params has {bp.size} entries but the layout rebuilt here is "
+            f"best_params has {best_params.size} entries but the layout rebuilt here is "
             f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T}.")
 
-    est = unpack_estimated_T(data)                 # T, gauge-fixed, plus alpha and theta
+    estimate = unpack_estimated_T(data)                 # T, gauge-fixed, plus alpha and theta
     if theta is None:
         # ONE route to theta, `model_theta`, which prefers `load_parameters.jl` — the
         # value the economy on disk was solved at. A second reading here would be a
         # second place for the notebook to drift from the estimator.
         theta = model_theta(data, verbose=verbose)
-        jl = _theta_from_julia(data.get("base"))
-        src = ("load_parameters.jl" if jl is not None and abs(jl - theta) <= 1e-12
+        julia_theta = _theta_from_julia(data.get("base"))
+        theta_source = ("load_parameters.jl" if julia_theta is not None and abs(julia_theta - theta) <= 1e-12
                else ("stats.csv" if data.get("coefs") is not None
                      and _read_named_value(data["coefs"], "theta") is not None
                      else "THETA_DEFAULT"))
     else:
-        src = "caller"
-    if src == "THETA_DEFAULT" and verbose:
+        theta_source = "caller"
+    if theta_source == "THETA_DEFAULT" and verbose:
         print(f"  [theta+] WARNING theta fell back to THETA_DEFAULT = {theta:g}: neither "
               "load_parameters.jl nor stats.csv was readable, so every "
               "theta*alpha-scaled object here rests on a notebook constant rather than "
@@ -1721,25 +1727,25 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
     if n_hat.size < S:
         raise ValueError(f"N_hat has {n_hat.size} sectors against S = {S}.")
 
-    xp = {"chi_L": float(bp[0]),
-          "chi_s": bp[1:1 + S].copy(),
-          "A": bp[1 + S:1 + S + R_d].copy(),
-          "alpha": est["alpha"].copy(),
-          "kappa": est["kappa"],
-          "T": est["T"],                            # (S, n_AA), T[s, ref] = 1
-          "T_cell": est["T_cell"],                  # (S, R), T_a n_ls^kappa
-          "PhiF": est["PhiF"],                      # (S,), the foreign competitor, same gauge as T
+    theta_plus = {"chi_L": float(best_params[0]),
+          "chi_s": best_params[1:1 + S].copy(),
+          "A": best_params[1 + S:1 + S + R_d].copy(),
+          "alpha": estimate["alpha"].copy(),
+          "kappa": estimate["kappa"],
+          "T": estimate["T"],                            # (S, n_AA), T[s, ref] = 1
+          "T_cell": estimate["T_cell"],                  # (S, R), T_a n_ls^kappa
+          "PhiF": estimate["PhiF"],                      # (S,), the foreign competitor, same gauge as T
           "N": n_hat[:S].copy(),
-          "theta": float(theta), "theta_source": src,
+          "theta": float(theta), "theta_source": theta_source,
           "nu_s": np.full(S, float(NU_S_DEFAULT)),
-          "nu": float(NU_ACROSS_DEFAULT), "lam": float(LAMBDA_DEFAULT),
+          "nu": float(NU_ACROSS_DEFAULT), "lambda": float(LAMBDA_DEFAULT),
           "epsilon": float(data["epsilon"]),
           "delta": np.ones(R_d), "wage": np.ones(data["R"])}
     if verbose:
-        print(f"  [theta+] chi_L {xp['chi_L']:.4f}  alpha {np.round(xp['alpha'], 4).tolist()}  "
-              f"theta {xp['theta']:.4f} ({src})  N_s {xp['N'].min()}-{xp['N'].max()}  "
-              f"eps {xp['epsilon']:.3f}  nu {xp['nu']:g}/{NU_S_DEFAULT:g}  lam {xp['lam']:g}")
-    return xp
+        print(f"  [theta+] chi_L {theta_plus['chi_L']:.4f}  alpha {np.round(theta_plus['alpha'], 4).tolist()}  "
+              f"theta {theta_plus['theta']:.4f} ({theta_source})  N_s {theta_plus['N'].min()}-{theta_plus['N'].max()}  "
+              f"eps {theta_plus['epsilon']:.3f}  nu {theta_plus['nu']:g}/{NU_S_DEFAULT:g}  lam {theta_plus['lambda']:g}")
+    return theta_plus
 
 
 def _good_order(data):
@@ -1751,13 +1757,13 @@ def _good_order(data):
     for another and produces a perfectly plausible wrong economy — the same class of trap
     as the s-major T convention, so it is derived here rather than assumed.
     """
-    M = np.asarray(data["CELL_MASK"], dtype=bool)          # (S, R)
-    r_idx, s_idx = np.nonzero(M.T)                         # C-order on (R, S) == r outer
-    return s_idx, r_idx                                    # 0-based
+    cell_mask = np.asarray(data["CELL_MASK"], dtype=bool)          # (S, R)
+    good_region, good_sector = np.nonzero(cell_mask.T)                         # C-order on (R, S) == r outer
+    return good_sector, good_region                                    # 0-based
 
 
-def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, kappa=None, n_rep=None,
-                     u=None, u_foreign=None, seed=20260912, geom=None, n_hat=None,
+def simulate_economy(data, theta_plus=None, *, alpha=None, equalise_T=False, kappa=None, n_rep=None,
+                     u_draws=None, u_foreign=None, seed=20260912, geometry=None, n_hat=None,
                      buyers=None, verbose=False):
     """
     The realised finite-variety economy at `theta+`, by the forward map `solve_network`
@@ -1780,7 +1786,7 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, kappa=None,
     restricted: `P` and `Y_r` are sums over every downstream region, so computing them on
     a subset would answer a different demand system.
 
-    `u` is the uniform draw matrix. Passed (Julia's own, one `(N_max, n_good)` matrix per
+    `u_draws` is the uniform draw matrix. Passed (Julia's own, one `(N_max, n_good)` matrix per
     replication), the economy is Julia's to the bit and the comparison is a test rather
     than an agreement. Omitted, draws come from `default_rng(seed)` — independent across
     replications, and SHARED ACROSS BUYERS within one, because a variety is one physical
@@ -1816,22 +1822,22 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, kappa=None,
     Returns `variety_panel`'s structure per sector (so every existing consumer reads it
     unchanged) plus the value block per (replication, buyer) and the cost shares.
     """
-    if xp is None:
-        xp = extended_parameters(data, n_hat=n_hat, verbose=verbose)
-    g = (sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T,
+    if theta_plus is None:
+        theta_plus = extended_parameters(data, n_hat=n_hat, verbose=verbose)
+    active_geometry = (sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T,
                            **({} if kappa is None else {"kappa": kappa}))
-         if geom is None else geom)
-    theta, a = xp["theta"], g["alpha"]                       # a: the N_TAU vector
-    nu, lam, chi_L, chi_s = xp["nu"], xp["lam"], xp["chi_L"], xp["chi_s"]
+         if geometry is None else geometry)
+    theta, alpha_vector = theta_plus["theta"], active_geometry["alpha"]                       # a: the N_TAU vector
+    nu, lam, chi_L, chi_s = theta_plus["nu"], theta_plus["lambda"], theta_plus["chi_L"], theta_plus["chi_s"]
     S = data["S"]
-    down = np.asarray(g["downstream"]).astype(int)          # 1-based ZE of each buyer
+    down = np.asarray(active_geometry["downstream"]).astype(int)          # 1-based ZE of each buyer
     R_d = down.size
-    A = xp["A"]
+    A = theta_plus["A"]
     if A.size != R_d:
         raise ValueError(f"A has {A.size} entries against {R_d} downstream regions.")
-    wage = np.asarray(xp["wage"], dtype=float)
+    wage = np.asarray(theta_plus["wage"], dtype=float)
 
-    blocks = g["by_sector"]
+    blocks = active_geometry["by_sector"]
     missing = [s for s in range(S) if s not in blocks or blocks[s]["cells"].size == 0]
     if missing:
         # An empty sector sends its own CES index to 0 and `P_sr^(1/(1-nu_s))` to
@@ -1839,179 +1845,179 @@ def simulate_economy(data, xp=None, *, alpha=None, equalise_T=False, kappa=None,
         # it and inherits the same infinity, so this is refused rather than reproduced.
         raise ValueError(f"sectors {missing} have no cells — the within-sector price "
                          "index is not defined there.")
-    Nv = np.array([int(xp["N"][s]) for s in range(S)])
-    if (Nv <= 0).any():
-        raise ValueError(f"a sector was given zero varieties: {Nv}")
+    N_varieties = np.array([int(theta_plus["N"][s]) for s in range(S)])
+    if (N_varieties <= 0).any():
+        raise ValueError(f"a sector was given zero varieties: {N_varieties}")
 
     # `Nv` and the geometry are needed to validate a supplied draw matrix, so the draw
     # setup sits after them.
-    phi_f = np.asarray(xp.get("PhiF", np.zeros(S)), dtype=float)
-    imports = phi_f > 0
+    PhiF_s = np.asarray(theta_plus.get("PhiF", np.zeros(S)), dtype=float)
+    imports = PhiF_s > 0
     # the foreign scale per (sector, buyer): Phi^F_s at the estimate, rescaled in a
     # counterfactual so every buyer's import share stays at its estimate (`sourcing_geometry`)
-    phi_fr = {s: np.asarray(blocks[s].get("PhiF_r", np.full(R_d, phi_f[s])), dtype=float)
+    PhiF_r = {s: np.asarray(blocks[s].get("PhiF_r", np.full(R_d, PhiF_s[s])), dtype=float)
               for s in range(S) if imports[s] and s in blocks}
-    if u is None:
+    if u_draws is None:
         if n_rep is None:
             n_rep = globals().get("ECONOMY_REPLICATIONS") or 1000
         rng, u_list = np.random.default_rng(seed), None
         # the foreign bids from their own stream: the domestic draws are untouched
-        rng_f = np.random.default_rng([seed, 1]) if imports.any() else None
+        rng_foreign = np.random.default_rng([seed, 1]) if imports.any() else None
     else:
-        u_list = [np.asarray(x, dtype=float) for x in (u if isinstance(u, (list, tuple)) else [u])]
+        u_list = [np.asarray(x, dtype=float) for x in (u_draws if isinstance(u_draws, (list, tuple)) else [u_draws])]
         if n_rep is None:
             n_rep = len(u_list)
         if len(u_list) < n_rep:
             raise ValueError(f"{len(u_list)} draw matrices supplied for {n_rep} replications.")
-        gs, gr = _good_order(data)
-        n_good, N_max = gs.size, int(Nv.max())
-        for k, M in enumerate(u_list[:n_rep]):
+        good_sector, good_region = _good_order(data)
+        n_good, N_max = good_sector.size, int(N_varieties.max())
+        for k, draw_matrix in enumerate(u_list[:n_rep]):
             # Validated UP FRONT rather than at the slice: a matrix one column short
             # would otherwise fail as an out-of-range index deep in the sector loop, and
             # one column too MANY would not fail at all -- it would silently read the
             # wrong cell's draws, which is the trap `_good_order` exists to avoid.
-            if M.ndim != 2 or M.shape[1] != n_good or M.shape[0] < N_max:
+            if draw_matrix.ndim != 2 or draw_matrix.shape[1] != n_good or draw_matrix.shape[0] < N_max:
                 raise ValueError(
-                    f"draw matrix {k} has shape {M.shape}; Julia writes "
+                    f"draw matrix {k} has shape {draw_matrix.shape}; Julia writes "
                     f"(N_max, n_good) = (>={N_max}, {n_good}) for this theta+.")
-        rng, rng_f = None, None
+        rng, rng_foreign = None, None
         if imports.any():
             if u_foreign is None:
                 raise ValueError("this theta+ has a foreign competitor (Phi^F > 0) but no "
                                  "foreign draws were passed: pass `u_foreign` "
                                  "(post_hoc_u_foreign.npy), or Julia's economy cannot be rebuilt.")
-            uf_list = [np.asarray(x, dtype=float) for x in
+            u_foreign_list = [np.asarray(x, dtype=float) for x in
                        (u_foreign if isinstance(u_foreign, (list, tuple)) else [u_foreign])]
-            if len(uf_list) < n_rep or any(M.ndim != 2 or M.shape[1] != S or M.shape[0] < N_max
-                                           for M in uf_list[:n_rep]):
+            if len(u_foreign_list) < n_rep or any(draw_matrix.ndim != 2 or draw_matrix.shape[1] != S or draw_matrix.shape[0] < N_max
+                                           for draw_matrix in u_foreign_list[:n_rep]):
                 raise ValueError(f"foreign draws must be {n_rep} matrices of shape "
                                  f"(>={N_max}, {S}), as post_hoc_u_foreign.npy stacks them.")
 
-    mu_inv = xp["epsilon"] / (xp["epsilon"] - 1.0)           # mu = eps/(eps-1)
-    out, val_rows = Economy(), []
-    acc = {s: {"W": [], "v": [], "rep": [], "exp": [], "z": []} for s in range(S)}
+    mu_inv = theta_plus["epsilon"] / (theta_plus["epsilon"] - 1.0)           # mu = eps/(eps-1)
+    economy, val_rows = Economy(), []
+    accumulated = {s: {"W": [], "v": [], "rep": [], "exp": [], "z": []} for s in range(S)}
 
     for b in range(n_rep):
         P_sr = np.empty((S, R_d))
-        p_keep, win_keep, imp_keep = {}, {}, {}
+        price_keep, winner_keep, imported_keep = {}, {}, {}
         for s in range(S):
-            blk = blocks[s]
-            cells, N, nus = blk["cells"], Nv[s], float(xp["nu_s"][s])
-            logT = np.log(np.maximum(blk["T_cell"], 1e-300))
-            ltau = blk["log_tau"]                                     # (cell, buyer)
+            sector_block = blocks[s]
+            cells, N, nu_within = sector_block["cells"], N_varieties[s], float(theta_plus["nu_s"][s])
+            log_T = np.log(np.maximum(sector_block["T_cell"], 1e-300))
+            log_tau_lr = sector_block["log_tau"]                                     # (cell, buyer)
             if u_list is None:
-                uu = rng.random((N, cells.size))
+                u_sector = rng.random((N, cells.size))
             else:
                 # Julia's matrix is (N_max, n_good): take this sector's columns in the
                 # good order, then its first N rows — the rows past N_hat carry weight
                 # zero there and are clamped, so they are not part of the economy.
-                cols = np.flatnonzero(gs == s)
-                order = np.argsort(gr[cols])                          # by ZE, as `cells` is
-                uu = u_list[b][:N, cols[order]]
-                if uu.shape != (N, cells.size):
+                cols = np.flatnonzero(good_sector == s)
+                order = np.argsort(good_region[cols])                          # by ZE, as `cells` is
+                u_sector = u_list[b][:N, cols[order]]
+                if u_sector.shape != (N, cells.size):
                     raise ValueError(
-                        f"draw matrix {b} gives {uu.shape} for sector {s}, expected "
+                        f"draw matrix {b} gives {u_sector.shape} for sector {s}, expected "
                         f"{(N, cells.size)}: the good order or N_hat disagrees with Julia.")
             # Frechet inverse CDF, Julia's branch exactly: z = T^(1/theta) * (-log(1-u))^(-1/theta)
-            logz = logT[None, :] / theta - np.log(-np.log1p(-uu)) / theta
-            lc = ltau.T[None, :, :] - logz[:, None, :]                # (var, buyer, cell)
-            j = lc.argmin(axis=2)
-            p = np.exp(np.take_along_axis(lc, j[:, :, None], axis=2)[:, :, 0])   # (var, buyer)
+            log_z = log_T[None, :] / theta - np.log(-np.log1p(-u_sector)) / theta
+            log_cost = log_tau_lr.T[None, :, :] - log_z[:, None, :]                # (var, buyer, cell)
+            cheapest_cell = log_cost.argmin(axis=2)
+            price = np.exp(np.take_along_axis(log_cost, cheapest_cell[:, :, None], axis=2)[:, :, 0])   # (var, buyer)
             # the winner's own productivity, which is the parquet's `productivity` column
-            zw = np.exp(np.take_along_axis(logz[:, None, :].repeat(j.shape[1], 1),
-                                           j[:, :, None], axis=2)[:, :, 0])
-            win = cells[j] + 1                                        # 1-based zone
+            z_winner = np.exp(np.take_along_axis(log_z[:, None, :].repeat(cheapest_cell.shape[1], 1),
+                                           cheapest_cell[:, :, None], axis=2)[:, :, 0])
+            winner = cells[cheapest_cell] + 1                                        # 1-based zone
             if imports[s]:
                 # the foreign bid, common to every buyer, wins where strictly cheaper
-                uf = (rng_f.random(N) if u_list is None else uf_list[b][:N, s])
-                pF = np.exp((np.log(-np.log1p(-uf))[:, None]
-                             - np.log(phi_fr[s])[None, :]) / theta)   # (var, buyer)
-                imp = pF < p                                          # (var, buyer)
-                p = np.where(imp, pF, p)
-                win = np.where(imp, 0, win)
-                zw = np.where(imp, np.nan, zw)
+                u_foreign_sector = (rng_foreign.random(N) if u_list is None else u_foreign_list[b][:N, s])
+                foreign_price = np.exp((np.log(-np.log1p(-u_foreign_sector))[:, None]
+                             - np.log(PhiF_r[s])[None, :]) / theta)   # (var, buyer)
+                imported = foreign_price < price                                          # (var, buyer)
+                price = np.where(imported, foreign_price, price)
+                winner = np.where(imported, 0, winner)
+                z_winner = np.where(imported, np.nan, z_winner)
             else:
-                imp = np.zeros(p.shape, dtype=bool)
-            acc[s]["z"].append(zw)
-            y = p ** (1.0 - nus)
-            P_sr[s] = (y.mean(axis=0)) ** (1.0 / (1.0 - nus))         # weights are 1/N
-            p_keep[s], win_keep[s], imp_keep[s] = p, win, imp
+                imported = np.zeros(price.shape, dtype=bool)
+            accumulated[s]["z"].append(z_winner)
+            ces_term = price ** (1.0 - nu_within)
+            P_sr[s] = (ces_term.mean(axis=0)) ** (1.0 / (1.0 - nu_within))         # weights are 1/N
+            price_keep[s], winner_keep[s], imported_keep[s] = price, winner, imported
             # v: the variety's share of the buyer's DOMESTIC spending on s (zero if imported)
-            y_dom = np.where(imp, 0.0, y)
+            y_dom = np.where(imported, 0.0, ces_term)
             tot_dom = y_dom.sum(axis=0, keepdims=True)
-            acc[s]["v"].append(np.divide(y_dom, tot_dom, out=np.zeros_like(y_dom),
+            accumulated[s]["v"].append(np.divide(y_dom, tot_dom, out=np.zeros_like(y_dom),
                                          where=tot_dom > 0))
-            acc[s]["W"].append(win_keep[s].astype(float))
-            acc[s]["rep"].append(np.full(N, b))
+            accumulated[s]["W"].append(winner_keep[s].astype(float))
+            accumulated[s]["rep"].append(np.full(N, b))
 
         P_r = (chi_s[:, None] * P_sr ** (1.0 - nu)).sum(axis=0) ** (1.0 / (1.0 - nu))
-        w_d = wage[down - 1]
-        c_r = (chi_L * w_d ** (1.0 - lam) + (1.0 - chi_L) * P_r ** (1.0 - lam)) ** (1.0 / (1.0 - lam))
+        wage_buyer = wage[down - 1]
+        c_r = (chi_L * wage_buyer ** (1.0 - lam) + (1.0 - chi_L) * P_r ** (1.0 - lam)) ** (1.0 / (1.0 - lam))
         c_tilde = c_r / A
-        lab_sub = (1.0 - chi_L) * (P_r / c_r) ** (1.0 - lam)           # TOTAL intermediate share
+        labor_substitution_factor = (1.0 - chi_L) * (P_r / c_r) ** (1.0 - lam)           # TOTAL intermediate share
         M_rs = np.zeros((S, R_d))                                        # imports per unit of cost
         for s in range(S):
-            nus = float(xp["nu_s"][s])
-            e = ((1.0 / Nv[s]) * chi_s[s] * (1.0 - chi_L)
-                 * (p_keep[s] / P_sr[s][None, :]) ** (1.0 - nus)
+            nu_within = float(theta_plus["nu_s"][s])
+            e = ((1.0 / N_varieties[s]) * chi_s[s] * (1.0 - chi_L)
+                 * (price_keep[s] / P_sr[s][None, :]) ** (1.0 - nu_within)
                  * (P_sr[s][None, :] / P_r[None, :]) ** (1.0 - nu)
                  * (P_r[None, :] / c_r[None, :]) ** (1.0 - lam))
             if imports[s]:
-                M_rs[s] = np.where(imp_keep[s], e, 0.0).sum(axis=0)
-                e = np.where(imp_keep[s], 0.0, e)                     # no French linkage
-            acc[s]["exp"].append(e)
+                M_rs[s] = np.where(imported_keep[s], e, 0.0).sum(axis=0)
+                e = np.where(imported_keep[s], 0.0, e)                     # no French linkage
+            accumulated[s]["exp"].append(e)
         # the downstream demand system: p_r = c_tilde/mu, P = (sum p^eps delta)^(1/eps)
-        p_dr = c_tilde / mu_inv
-        P_agg = (p_dr ** xp["epsilon"] * xp["delta"]).sum() ** (1.0 / xp["epsilon"])
-        Y_r = p_dr ** xp["epsilon"] * P_agg ** (-xp["epsilon"]) * xp["delta"]
-        theta_tot = chi_s[:, None] * (P_sr / P_r[None, :]) ** (1.0 - nu)
+        p_r = c_tilde / mu_inv
+        P_agg = (p_r ** theta_plus["epsilon"] * theta_plus["delta"]).sum() ** (1.0 / theta_plus["epsilon"])
+        Y_r = p_r ** theta_plus["epsilon"] * P_agg ** (-theta_plus["epsilon"]) * theta_plus["delta"]
+        theta_total_rs = chi_s[:, None] * (P_sr / P_r[None, :]) ** (1.0 - nu)
         if imports.any():
             # domestic purchases from s per unit of cost, and their mix
-            dom = theta_tot * lab_sub[None, :] - M_rs
+            domestic_purchases = theta_total_rs * labor_substitution_factor[None, :] - M_rs
             # a buyer that imports EVERY variety of every sector in this replication has no
             # domestic bill: its mix is set to zero (and its D_r is exactly 1)
-            dsum = dom.sum(axis=0, keepdims=True)
-            theta_rs = np.divide(dom, dsum, out=np.zeros_like(dom),
-                                 where=dsum > 1e-10 * lab_sub[None, :])
-            D_r = 1.0 + lab_sub - M_rs.sum(axis=0)
+            domestic_total = domestic_purchases.sum(axis=0, keepdims=True)
+            theta_rs = np.divide(domestic_purchases, domestic_total, out=np.zeros_like(domestic_purchases),
+                                 where=domestic_total > 1e-10 * labor_substitution_factor[None, :])
+            D_r = 1.0 + labor_substitution_factor - M_rs.sum(axis=0)
         else:
-            theta_rs, D_r = theta_tot, 1.0 + lab_sub
+            theta_rs, D_r = theta_total_rs, 1.0 + labor_substitution_factor
         val_rows.append({"replication": b, "P_sr": P_sr.copy(), "P_r": P_r,
                          "c_r": c_r, "c_tilde_r": c_tilde, "D_r": D_r,
-                         "D_total_r": 1.0 + lab_sub, "M_rs": M_rs,
+                         "D_total_r": 1.0 + labor_substitution_factor, "M_rs": M_rs,
                          "Y_r": Y_r, "P": float(P_agg), "theta_rs": theta_rs,
-                         "theta_total_rs": theta_tot})
+                         "theta_total_rs": theta_total_rs})
 
     all_buyers = down.astype(int)
     if buyers is None:
         keep, kept = slice(None), all_buyers
     else:
         kept = np.asarray(buyers).astype(int)
-        pos = {int(b): j for j, b in enumerate(all_buyers)}
-        miss = [int(b) for b in kept if int(b) not in pos]
-        if miss:
-            raise KeyError(f"buyers {miss} are not downstream regions of this economy.")
-        keep = np.array([pos[int(b)] for b in kept])
+        buyer_position = {int(b): cheapest_cell for cheapest_cell, b in enumerate(all_buyers)}
+        missing_buyers = [int(b) for b in kept if int(b) not in buyer_position]
+        if missing_buyers:
+            raise KeyError(f"buyers {missing_buyers} are not downstream regions of this economy.")
+        keep = np.array([buyer_position[int(b)] for b in kept])
     for s in range(S):
-        out[int(s)] = {"winner": np.vstack(acc[s]["W"])[:, keep],
-                       "v": np.vstack(acc[s]["v"])[:, keep],
-                       "exp_val": np.vstack(acc[s]["exp"])[:, keep],
-                       "z": np.vstack(acc[s]["z"])[:, keep],
+        economy[int(s)] = {"winner": np.vstack(accumulated[s]["W"])[:, keep],
+                       "v": np.vstack(accumulated[s]["v"])[:, keep],
+                       "exp_val": np.vstack(accumulated[s]["exp"])[:, keep],
+                       "z": np.vstack(accumulated[s]["z"])[:, keep],
                        "buyers": kept,
-                       "replication": np.concatenate(acc[s]["rep"])}
-    val = {k: np.stack([r[k] for r in val_rows]) for k in
+                       "replication": np.concatenate(accumulated[s]["rep"])}
+    value_block = {k: np.stack([r[k] for r in val_rows]) for k in
            ("P_sr", "P_r", "c_r", "c_tilde_r", "D_r", "D_total_r", "M_rs", "Y_r",
             "theta_rs", "theta_total_rs")}
-    val["P"] = np.array([r["P"] for r in val_rows])
-    out.value = val
-    out.meta = {"buyers": kept, "value_buyers": all_buyers, "n_rep": n_rep,
-                "N": Nv, "alpha": a, "PhiF": phi_f,
+    value_block["P"] = np.array([r["P"] for r in val_rows])
+    economy.value = value_block
+    economy.meta = {"buyers": kept, "value_buyers": all_buyers, "n_rep": n_rep,
+                "N": N_varieties, "alpha": alpha_vector, "PhiF": PhiF_s,
                 "equalise_T": equalise_T, "kappa": kappa, "theta": theta,
                 "draws": "julia" if u_list is not None else f"rng({seed})"}
-    return out
+    return economy
 
 
-def economy_identities(econ, xp, tol=1e-12, verbose=True):
+def economy_identities(econ, theta_plus, tol=1e-12, verbose=True):
     """
     The identities the forward map satisfies exactly, as a check on the port rather than
     on the economy: each one fixes a different step, so a mismatch NAMES the step.
@@ -2032,48 +2038,48 @@ def economy_identities(econ, xp, tol=1e-12, verbose=True):
     # The panel can be a buyer SUBSET while the value block is not (P and Y_r are sums
     # over every downstream region), so the value columns are cut to the panel's buyers
     # before any per-buyer identity is checked.
-    allb = np.asarray(econ.meta.get("value_buyers", econ.meta["buyers"])).astype(int)
+    all_buyers = np.asarray(econ.meta.get("value_buyers", econ.meta["buyers"])).astype(int)
     kept = np.asarray(econ.meta["buyers"]).astype(int)
-    col = np.array([int(np.flatnonzero(allb == b)[0]) for b in kept])
-    val = {k: (v[..., col] if getattr(v, "ndim", 0) >= 2 else v)
+    buyer_columns = np.array([int(np.flatnonzero(all_buyers == b)[0]) for b in kept])
+    value_block = {k: (v[..., buyer_columns] if getattr(v, "ndim", 0) >= 2 else v)
            for k, v in econ.value.items()}
-    sec = sorted(econ)
-    rep = econ.meta["n_rep"]
-    res = {}
-    e1, ev, tot = 0.0, 0.0, np.zeros_like(val["D_r"])
-    lab = val["D_total_r"] - 1.0                                   # (rep, buyer)
-    for s in sec:
+    sectors = sorted(econ)
+    n_rep = econ.meta["n_rep"]
+    gaps = {}
+    max_gap_within, max_gap_v, domestic_share_sum = 0.0, 0.0, np.zeros_like(value_block["D_r"])
+    intermediate_share = value_block["D_total_r"] - 1.0                                   # (rep, buyer)
+    for s in sectors:
         v, e, r = econ[s]["v"], econ[s]["exp_val"], econ[s]["replication"]
-        for b in range(rep):
-            es = e[r == b].sum(axis=0)
-            tot[b] += es
-            e1 = max(e1, float(np.abs(es + val["M_rs"][b, s] - val["theta_total_rs"][b, s] * lab[b]).max()))
-            vs = v[r == b].sum(axis=0)
-            has = (econ[s]["winner"][r == b] > 0).any(axis=0)
-            if has.any():
-                ev = max(ev, float(np.abs(vs[has] - 1.0).max()))
-    res["ces_within"] = e1
-    res["v_sums_one"] = ev
-    res["ces_across"] = float(np.abs(
-        (xp["chi_s"][None, :, None] * (val["P_sr"] / val["P_r"][:, None, :]) ** (1.0 - xp["nu"])
+        for b in range(n_rep):
+            exp_sum = e[r == b].sum(axis=0)
+            domestic_share_sum[b] += exp_sum
+            max_gap_within = max(max_gap_within, float(np.abs(exp_sum + value_block["M_rs"][b, s] - value_block["theta_total_rs"][b, s] * intermediate_share[b]).max()))
+            v_sum = v[r == b].sum(axis=0)
+            buys_domestic = (econ[s]["winner"][r == b] > 0).any(axis=0)
+            if buys_domestic.any():
+                max_gap_v = max(max_gap_v, float(np.abs(v_sum[buys_domestic] - 1.0).max()))
+    gaps["ces_within"] = max_gap_within
+    gaps["v_sums_one"] = max_gap_v
+    gaps["ces_across"] = float(np.abs(
+        (theta_plus["chi_s"][None, :, None] * (value_block["P_sr"] / value_block["P_r"][:, None, :]) ** (1.0 - theta_plus["nu"])
          ).sum(axis=1) - 1.0).max())
     # a domestic bill to split (not one lost to rounding when every variety is imported)
-    has_dom = (val["D_r"] - 1.0) > 1e-10 * (val["D_total_r"] - 1.0)
-    res["mix_sums_one"] = float(max(np.abs(val["theta_rs"].sum(axis=1) - 1.0)[has_dom].max(initial=0.0),
-                                    np.abs(val["theta_total_rs"].sum(axis=1) - 1.0).max()))
-    res["D_r_from_shares"] = float(np.abs(val["D_r"] - (1.0 + tot)).max())
-    res["D_total_split"] = float(np.abs(val["D_total_r"] - val["D_r"] - val["M_rs"].sum(axis=1)).max())
-    ok = all(v <= tol for v in res.values())
+    has_domestic_bill = (value_block["D_r"] - 1.0) > 1e-10 * (value_block["D_total_r"] - 1.0)
+    gaps["mix_sums_one"] = float(max(np.abs(value_block["theta_rs"].sum(axis=1) - 1.0)[has_domestic_bill].max(initial=0.0),
+                                    np.abs(value_block["theta_total_rs"].sum(axis=1) - 1.0).max()))
+    gaps["D_r_from_shares"] = float(np.abs(value_block["D_r"] - (1.0 + domestic_share_sum)).max())
+    gaps["D_total_split"] = float(np.abs(value_block["D_total_r"] - value_block["D_r"] - value_block["M_rs"].sum(axis=1)).max())
+    ok = all(v <= tol for v in gaps.values())
     if verbose:
-        print("  [identities] " + "  ".join(f"{k} {v:.2e}" for k, v in res.items())
+        print("  [identities] " + "  ".join(f"{k} {v:.2e}" for k, v in gaps.items())
               + ("  -> ok" if ok else "  -> FAIL"))
     if not ok:
-        raise AssertionError(f"the forward map does not close: {res}")
-    return res
+        raise AssertionError(f"the forward map does not close: {gaps}")
+    return gaps
 
 
 
-def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
+def check_against_julia(data, theta_plus=None, econ=None, tol=1e-10, verbose=True):
     """
     The cross-language gate: rebuild the ESTIMATED economy here from `theta+` and Julia's
     own draws, then compare it with `suppliers.parquet` row by row.
@@ -2082,7 +2088,7 @@ def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
     implementations is statistical and cannot separate a coding error from a convention
     mismatch — the Frechet branch, the column order of the draw matrix, the
     within-sector normalisation of the expenditure share. Handed the same `theta+` and
-    the same `u`, the forward map is deterministic, so the two must agree to the last
+    the same `u_draws`, the forward map is deterministic, so the two must agree to the last
     few bits and anything larger is a defect with an address.
 
     With a foreign competitor the economy is rebuilt with Julia's foreign draws too
@@ -2096,86 +2102,86 @@ def check_against_julia(data, xp=None, econ=None, tol=1e-10, verbose=True):
     block. Then `exp_val`, which additionally depends on the head and the whole price
     chain, so a mismatch there with matching winners localises to the value block.
     """
-    u = data.get("post_hoc_u")
-    if u is None:
+    u_draws = data.get("post_hoc_u")
+    if u_draws is None:
         raise FileNotFoundError(
             f"no post_hoc_u.npy in {data['folder']}/{data['step_dir']}/ — re-run the "
             "post-hoc block of main.jl, which writes the draws beside the economy. "
             "Without them the two implementations can only be compared statistically.")
-    sup = data.get("suppliers")
-    if sup is None or "replication" not in getattr(sup, "columns", []):
+    suppliers = data.get("suppliers")
+    if suppliers is None or "replication" not in getattr(suppliers, "columns", []):
         raise FileNotFoundError("no replicated suppliers.parquet to compare against.")
-    u = np.asarray(u, dtype=float)
-    if u.ndim != 3:
-        raise ValueError(f"post_hoc_u.npy has shape {u.shape}, expected (N_max, n_good, n_rep).")
+    u_draws = np.asarray(u_draws, dtype=float)
+    if u_draws.ndim != 3:
+        raise ValueError(f"post_hoc_u.npy has shape {u_draws.shape}, expected (N_max, n_good, n_rep).")
 
     # (1) the column map, read from the file rather than trusted
-    gs, gr = _good_order(data)
-    ref = data.get("post_hoc_good_sr")
-    if ref is not None:
-        ref = np.asarray(ref, dtype=int)
-        if ref.shape != (gs.size, 2):
-            raise ValueError(f"post_hoc_good_sr.npy is {ref.shape}, expected {(gs.size, 2)}.")
-        bad = int((np.abs(ref[:, 0] - (gs + 1)) + np.abs(ref[:, 1] - (gr + 1))).sum())
-        if bad:
+    good_sector, good_region = _good_order(data)
+    julia_good_sr = data.get("post_hoc_good_sr")
+    if julia_good_sr is not None:
+        julia_good_sr = np.asarray(julia_good_sr, dtype=int)
+        if julia_good_sr.shape != (good_sector.size, 2):
+            raise ValueError(f"post_hoc_good_sr.npy is {julia_good_sr.shape}, expected {(good_sector.size, 2)}.")
+        n_mismatched = int((np.abs(julia_good_sr[:, 0] - (good_sector + 1)) + np.abs(julia_good_sr[:, 1] - (good_region + 1))).sum())
+        if n_mismatched:
             raise AssertionError(
-                f"the draw column map disagrees with Julia on {bad} entries — "
+                f"the draw column map disagrees with Julia on {n_mismatched} entries — "
                 "`_good_order` and `findall(cell_mask)` are not walking the mask the "
                 "same way, and every comparison below would be meaningless.")
 
-    if xp is None:
-        xp = extended_parameters(data, verbose=verbose)
-    n_rep = u.shape[2]
+    if theta_plus is None:
+        theta_plus = extended_parameters(data, verbose=verbose)
+    n_rep = u_draws.shape[2]
     if econ is None:
-        uf = data.get("post_hoc_u_foreign")
-        uf = None if uf is None else [np.asarray(uf, dtype=float)[:, :, b] for b in range(n_rep)]
-        econ = simulate_economy(data, xp, u=[u[:, :, b] for b in range(n_rep)],
-                                u_foreign=uf, n_rep=n_rep, verbose=verbose)
+        u_foreign = data.get("post_hoc_u_foreign")
+        u_foreign = None if u_foreign is None else [np.asarray(u_foreign, dtype=float)[:, :, b] for b in range(n_rep)]
+        econ = simulate_economy(data, theta_plus, u_draws=[u_draws[:, :, b] for b in range(n_rep)],
+                                u_foreign=u_foreign, n_rep=n_rep, verbose=verbose)
 
-    sec = _parquet_sector_index(data, sup)
-    rep = sup["replication"].to_numpy().astype(int)
-    rep0 = rep - rep.min()                     # Julia writes 1..n_rep
-    var = sup["variety"].to_numpy().astype(int) - 1
-    buy = sup["ze2010_downstream"].to_numpy().astype(int)
-    win = sup["ze2010"].to_numpy().astype(int)
-    val = sup["share"].to_numpy(dtype=float)
-    bpos = {int(b): j for j, b in enumerate(np.asarray(econ.meta["buyers"]).astype(int))}
+    sector = _parquet_sector_index(data, suppliers)
+    replication = suppliers["replication"].to_numpy().astype(int)
+    replication0 = replication - replication.min()                     # Julia writes 1..n_rep
+    variety = suppliers["variety"].to_numpy().astype(int) - 1
+    buyer_zone = suppliers["ze2010_downstream"].to_numpy().astype(int)
+    winner_zone = suppliers["ze2010"].to_numpy().astype(int)
+    share = suppliers["share"].to_numpy(dtype=float)
+    position_of_buyer = {int(b): buyer_position for buyer_position, b in enumerate(np.asarray(econ.meta["buyers"]).astype(int))}
 
     rows = []
     for s in sorted(econ):
         N = int(econ.meta["N"][s])
-        m = (sec == s) & (rep0 < n_rep) & (var < N)
-        if not m.any():
+        row_mask = (sector == s) & (replication0 < n_rep) & (variety < N)
+        if not row_mask.any():
             rows.append({"sector": s, "rows": 0, "missing_rows": np.nan, "winner_mismatch": np.nan,
                          "max_abs_exp": np.nan, "max_rel_exp": np.nan})
             continue
-        j = np.array([bpos[b] for b in buy[m]])
-        r = rep0[m] * N + var[m]
-        W = econ[s]["winner"].astype(int)[r, j]
-        E = econ[s]["exp_val"][r, j]
-        d = np.abs(E - val[m])
+        buyer_position = np.array([position_of_buyer[b] for b in buyer_zone[row_mask]])
+        r = replication0[row_mask] * N + variety[row_mask]
+        winner_python = econ[s]["winner"].astype(int)[r, buyer_position]
+        exp_val_python = econ[s]["exp_val"][r, buyer_position]
+        abs_gap = np.abs(exp_val_python - share[row_mask])
         # the linkages Python finds and the parquet lacks: an imported (variety, buyer)
         # has no row in either, so the two counts must agree
-        Wall = econ[s]["winner"][:n_rep * N]
-        rows.append({"sector": s, "rows": int(m.sum()),
-                     "missing_rows": int((Wall > 0).sum()) - int(m.sum()),
-                     "winner_mismatch": int((W != win[m]).sum()),
-                     "max_abs_exp": float(d.max()),
-                     "max_rel_exp": float((d / np.maximum(np.abs(val[m]), 1e-300)).max())})
-    out = pd.DataFrame(rows).set_index("sector")
-    worst_w = int(np.nansum(out["winner_mismatch"])) + int(np.nansum(np.abs(out["missing_rows"])))
-    worst_e = float(np.nanmax(out["max_rel_exp"]))
-    out.attrs["agrees"] = bool(worst_w == 0 and worst_e <= tol)
+        winners_all = econ[s]["winner"][:n_rep * N]
+        rows.append({"sector": s, "rows": int(row_mask.sum()),
+                     "missing_rows": int((winners_all > 0).sum()) - int(row_mask.sum()),
+                     "winner_mismatch": int((winner_python != winner_zone[row_mask]).sum()),
+                     "max_abs_exp": float(abs_gap.max()),
+                     "max_rel_exp": float((abs_gap / np.maximum(np.abs(share[row_mask]), 1e-300)).max())})
+    comparison = pd.DataFrame(rows).set_index("sector")
+    worst_w = int(np.nansum(comparison["winner_mismatch"])) + int(np.nansum(np.abs(comparison["missing_rows"])))
+    worst_e = float(np.nanmax(comparison["max_rel_exp"]))
+    comparison.attrs["agrees"] = bool(worst_w == 0 and worst_e <= tol)
     if verbose:
-        print(f"  [julia] {int(out['rows'].sum())} linkages compared over {n_rep} "
+        print(f"  [julia] {int(comparison['rows'].sum())} linkages compared over {n_rep} "
               f"replications: {worst_w} winner mismatches, max relative gap on exp_val "
               f"{worst_e:.2e}" + ("  -> the two implementations are the same economy"
-                                  if out.attrs["agrees"] else
+                                  if comparison.attrs["agrees"] else
                                   "  -> THEY DISAGREE; read the winners before the shares"))
-    return out
+    return comparison
 
 
-def economy_frame(econ, xp, drop_zero=False):
+def economy_frame(econ, theta_plus, drop_zero=False):
     """
     The economy as a frame in `suppliers.parquet`'s own schema.
 
@@ -2197,46 +2203,46 @@ def economy_frame(econ, xp, drop_zero=False):
     a parquet rather than a correction.
     """
     rows = []
-    mu = xp["epsilon"] / (xp["epsilon"] - 1.0)
-    allb = np.asarray(econ.meta.get("value_buyers", econ.meta["buyers"])).astype(int)
+    mu = theta_plus["epsilon"] / (theta_plus["epsilon"] - 1.0)
+    all_buyers = np.asarray(econ.meta.get("value_buyers", econ.meta["buyers"])).astype(int)
     kept = np.asarray(econ.meta["buyers"]).astype(int)
-    col = np.array([int(np.flatnonzero(allb == b)[0]) for b in kept])
-    Y = econ.value["Y_r"][:, col]                 # (n_rep, n_buyer)
+    buyer_columns = np.array([int(np.flatnonzero(all_buyers == b)[0]) for b in kept])
+    Y_r_buyers = econ.value["Y_r"][:, buyer_columns]                 # (n_rep, n_buyer)
     # Julia's `intermediate_derivative` divides by the TOTAL intermediate share (the
     # labour-substitution factor), imports included
-    Dm1 = econ.value.get("D_total_r", econ.value["D_r"])[:, col] - 1.0
+    total_share = econ.value.get("D_total_r", econ.value["D_r"])[:, buyer_columns] - 1.0
     for s in sorted(econ):
-        blk = econ[s]
+        sector_block = econ[s]
         N = int(econ.meta["N"][s])
-        rep = np.asarray(blk["replication"]).astype(int)
-        W = np.asarray(blk["winner"]).astype(int)
-        E = np.asarray(blk["exp_val"], dtype=float)
-        Z = np.asarray(blk.get("z", np.full(E.shape, np.nan)), dtype=float)
-        var = np.tile(np.arange(N), E.shape[0] // N)
-        nb_ = kept.size
+        replication = np.asarray(sector_block["replication"]).astype(int)
+        winner = np.asarray(sector_block["winner"]).astype(int)
+        exp_val = np.asarray(sector_block["exp_val"], dtype=float)
+        productivity = np.asarray(sector_block.get("z", np.full(exp_val.shape, np.nan)), dtype=float)
+        variety = np.tile(np.arange(N), exp_val.shape[0] // N)
+        n_buyers = kept.size
         rows.append(pd.DataFrame({
             "A129": s + 1,
-            "ze2010": W.ravel(order="C"),
-            "ze2010_downstream": np.tile(kept, E.shape[0]),
-            "share": E.ravel(order="C"),
-            "downstream_purchase": (Y[rep] * mu).ravel(order="C"),
-            "intermediate_derivative": (E / Dm1[rep]).ravel(order="C"),
-            "productivity": Z.ravel(order="C"),
+            "ze2010": winner.ravel(order="C"),
+            "ze2010_downstream": np.tile(kept, exp_val.shape[0]),
+            "share": exp_val.ravel(order="C"),
+            "downstream_purchase": (Y_r_buyers[replication] * mu).ravel(order="C"),
+            "intermediate_derivative": (exp_val / total_share[replication]).ravel(order="C"),
+            "productivity": productivity.ravel(order="C"),
             "sample_weight": 1.0 / N,
-            "variety": np.repeat(var + 1, nb_),
-            "replication": np.repeat(rep + 1, nb_)}))
-    out = pd.concat(rows, ignore_index=True)
-    out = out[out["ze2010"] > 0].reset_index(drop=True)     # imported: no French linkage, no row
+            "variety": np.repeat(variety + 1, n_buyers),
+            "replication": np.repeat(replication + 1, n_buyers)}))
+    frame = pd.concat(rows, ignore_index=True)
+    frame = frame[frame["ze2010"] > 0].reset_index(drop=True)     # imported: no French linkage, no row
     if drop_zero:
-        out = out[out["share"] != 0.0].reset_index(drop=True)
-    key = out[["replication", "ze2010", "A129", "variety"]].astype(int)
-    out["SIREN"] = pd.factorize(pd.MultiIndex.from_frame(key))[0] + 1
-    return out[["SIREN", "A129", "ze2010", "ze2010_downstream", "share",
+        frame = frame[frame["share"] != 0.0].reset_index(drop=True)
+    firm_key = frame[["replication", "ze2010", "A129", "variety"]].astype(int)
+    frame["SIREN"] = pd.factorize(pd.MultiIndex.from_frame(firm_key))[0] + 1
+    return frame[["SIREN", "A129", "ze2010", "ze2010_downstream", "share",
                 "downstream_purchase", "intermediate_derivative", "productivity",
                 "sample_weight", "variety", "replication"]]
 
 
-def continuum_economy(data, xp=None, n_var=200, n_rep=8, seed=20260913, **kw):
+def continuum_economy(data, theta_plus=None, n_var=200, n_rep=8, seed=20260913, **kw):
     """
     The `N_s -> infinity` limit of the same economy: every sector given `n_var` varieties
     instead of its calibrated `N_hat_s`.
@@ -2252,22 +2258,22 @@ def continuum_economy(data, xp=None, n_var=200, n_rep=8, seed=20260913, **kw):
     low -- the continuum quantities carry far less sampling noise than the granular ones
     they are the benchmark for, since granularity is exactly what averaging out.
     """
-    if xp is None:
-        xp = extended_parameters(data, verbose=False)
+    if theta_plus is None:
+        theta_plus = extended_parameters(data, verbose=False)
     S = data["S"]
-    return simulate_economy(data, xp, n_rep=n_rep, seed=seed,
+    return simulate_economy(data, theta_plus, n_rep=n_rep, seed=seed,
                             n_hat=np.full(S, int(n_var)), **kw)
 
 
-def continuum_data(data, xp=None, n_var=200, n_rep=8, seed=20260913, **kw):
+def continuum_data(data, theta_plus=None, n_var=200, n_rep=8, seed=20260913, **kw):
     """`simulated_data` for the infinite-variety limit -- the benchmark frame."""
-    if xp is None:
-        xp = extended_parameters(data, verbose=False)
-    econ = continuum_economy(data, xp, n_var=n_var, n_rep=n_rep, seed=seed, **kw)
-    return simulated_data(data, econ, xp)
+    if theta_plus is None:
+        theta_plus = extended_parameters(data, verbose=False)
+    econ = continuum_economy(data, theta_plus, n_var=n_var, n_rep=n_rep, seed=seed, **kw)
+    return simulated_data(data, econ, theta_plus)
 
 
-def simulated_data(data, econ, xp):
+def simulated_data(data, econ, theta_plus):
     """
     A shallow copy of `data` whose `suppliers` frame IS this economy.
 
@@ -2275,7 +2281,7 @@ def simulated_data(data, econ, xp):
     threaded through it — which is what lets a counterfactual be measured by the SAME
     functions as the estimated economy rather than by re-derivations of them.
     """
-    return {**data, "suppliers": economy_frame(econ, xp),
+    return {**data, "suppliers": economy_frame(econ, theta_plus),
             "post_hoc_N_hat": np.asarray(econ.meta["N"]).astype(float),
             "suppliers_path": f"<simulated: {econ.meta}>"}
 
@@ -2291,7 +2297,7 @@ def reporting_data(industry, mu=2, parts=("core", "geography"), n_rep=None,
 
     Returns `{regime: data_like}` -- for each regime in `CF_REGIMES`, a copy of `data`
     whose `suppliers` frame IS that regime's economy, plus `economy` (the `Economy`
-    object, which carries the value block) and `xp` (the extended parameter set it was
+    object, which carries the value block) and `theta_plus` (the extended parameter set it was
     built from). Every downstream function therefore reads a counterfactual through
     exactly the code it reads the estimate through, and `suppliers.parquet` is not opened
     at all -- `parts` defaults to what the tests notebook needs and excludes `firm`.
@@ -2316,15 +2322,15 @@ def reporting_data(industry, mu=2, parts=("core", "geography"), n_rep=None,
         _REPORTING_CACHE.pop(key, None)
     if key not in _REPORTING_CACHE:
         data = load_granular_data(industry, mu=mu, parts=parts, base=base, **kw)
-        xp = extended_parameters(data, verbose=verbose)
-        regs = economy_by_regime(data, xp, regimes=regimes, n_rep=n_rep, seed=seed,
+        theta_plus = extended_parameters(data, verbose=verbose)
+        regime_economies = economy_by_regime(data, theta_plus, regimes=regimes, n_rep=n_rep, seed=seed,
                                  verbose=verbose)
-        _REPORTING_CACHE[key] = {reg: {**dl, "economy": e, "xp": xp}
-                                 for reg, (e, dl) in regs.items()}
+        _REPORTING_CACHE[key] = {regime: {**data_like, "economy": e, "theta_plus": theta_plus}
+                                 for regime, (e, data_like) in regime_economies.items()}
     return _REPORTING_CACHE[key]
 
 
-def economy_by_regime(data, xp=None, regimes=None, n_rep=None, seed=20260912,
+def economy_by_regime(data, theta_plus=None, regimes=None, n_rep=None, seed=20260912,
                       baseline="Both forces", verbose=True):
     """
     Read `theta+` off the run and simulate EVERY economy from it — the estimated one and
@@ -2347,15 +2353,15 @@ def economy_by_regime(data, xp=None, regimes=None, n_rep=None, seed=20260912,
     Returns `{regime: (economy, data_like)}` where `data_like` is `data` with the
     regime's own frame in place of the parquet.
     """
-    if xp is None:
-        xp = extended_parameters(data, verbose=verbose)
-    regs = CF_REGIMES if regimes is None else regimes
-    if baseline not in regs:
-        raise KeyError(f"baseline {baseline!r} not among {list(regs)}.")
+    if theta_plus is None:
+        theta_plus = extended_parameters(data, verbose=verbose)
+    regimes_used = CF_REGIMES if regimes is None else regimes
+    if baseline not in regimes_used:
+        raise KeyError(f"baseline {baseline!r} not among {list(regimes_used)}.")
 
     if data.get("post_hoc_u") is not None and data.get("suppliers") is not None:
         try:
-            agree = check_against_julia(data, xp, verbose=verbose)
+            agree = check_against_julia(data, theta_plus, verbose=verbose)
             if not agree.attrs["agrees"] and verbose:
                 print("  [julia] the port and solve_network DISAGREE — fix that before "
                       "reading anything below.")
@@ -2367,13 +2373,13 @@ def economy_by_regime(data, xp=None, regimes=None, n_rep=None, seed=20260912,
               "is unverified against solve_network. Run main.jl's post-hoc block once to "
               "get that check; it is not needed for anything below.")
 
-    out = {}
-    for reg, kw in regs.items():
-        e = simulate_economy(data, xp, n_rep=n_rep, seed=seed, verbose=False, **kw)
-        economy_identities(e, xp, verbose=False)
-        out[reg] = (e, simulated_data(data, e, xp))
+    economies = {}
+    for regime, kw in regimes_used.items():
+        e = simulate_economy(data, theta_plus, n_rep=n_rep, seed=seed, verbose=False, **kw)
+        economy_identities(e, theta_plus, verbose=False)
+        economies[regime] = (e, simulated_data(data, e, theta_plus))
         if verbose:
-            V = e.value
-            print(f"  {reg:<28s} D_r {V['D_r'].mean():.4f}  P_r {V['P_r'].mean():.4f}  "
+            value_block = e.value
+            print(f"  {regime:<28s} D_r {value_block['D_r'].mean():.4f}  P_r {value_block['P_r'].mean():.4f}  "
                   f"n_rep {e.meta['n_rep']}  draws {e.meta['draws']}")
-    return out
+    return economies

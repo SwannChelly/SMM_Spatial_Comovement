@@ -105,7 +105,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=False):
                  else np.asarray(n_hat).astype(int),
             "theta": THETA, "theta_source": "fixture",
             "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT,
-            "lam": LAMBDA_DEFAULT, "epsilon": -16.0,
+            "lambda": LAMBDA_DEFAULT, "epsilon": -16.0,
             "delta": np.ones(nb_), "wage": np.ones(R)}
 
 # The library, with the fixture installed where its functions resolve their globals.

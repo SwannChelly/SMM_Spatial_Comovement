@@ -77,7 +77,7 @@ install(globals(), [utils, granular_lib],
 XP = {"chi_L": 0.31, "chi_s": np.array([0.2, 0.3, 0.5]),
       "A": np.array([1.0, 1.4, 0.8, 1.1, 0.9]), "alpha": np.array([ALPHA]),
       "T": None, "N": N_HAT.copy(), "theta": THETA, "theta_source": "fixture",
-      "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT, "lam": LAMBDA_DEFAULT,
+      "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT, "lambda": LAMBDA_DEFAULT,
       "epsilon": -16.0, "delta": np.ones(buyers.size), "wage": np.ones(R)}
 B = 40
 
@@ -111,12 +111,12 @@ V = econ.value
 P_sr, P_r = V["P_sr"], V["P_r"]
 h_P_r = (XP["chi_s"][None, :, None] * P_sr ** (1 - XP["nu"])).sum(1) ** (1 / (1 - XP["nu"]))
 assert np.allclose(P_r, h_P_r, rtol=0, atol=1e-13)
-h_c = (XP["chi_L"] * 1.0 + (1 - XP["chi_L"]) * P_r ** (1 - XP["lam"])) ** (1 / (1 - XP["lam"]))
+h_c = (XP["chi_L"] * 1.0 + (1 - XP["chi_L"]) * P_r ** (1 - XP["lambda"])) ** (1 / (1 - XP["lambda"]))
 assert np.allclose(V["c_r"], h_c, atol=1e-13)
 assert np.allclose(V["c_tilde_r"], h_c / XP["A"][None, :], atol=1e-13)
 # D_r is the closed form the section quotes; it follows ONLY because the two CES
 # identities collapse, so this single number fixes the whole expenditure chain
-h_D = 1 + (1 - XP["chi_L"]) * (P_r / V["c_r"]) ** (1 - XP["lam"])
+h_D = 1 + (1 - XP["chi_L"]) * (P_r / V["c_r"]) ** (1 - XP["lambda"])
 assert np.allclose(V["D_r"], h_D, atol=1e-13)
 h_mix = XP["chi_s"][None, :, None] * (P_sr / P_r[:, None, :]) ** (1 - XP["nu"])
 assert np.allclose(V["theta_rs"], h_mix, atol=1e-13)
@@ -208,7 +208,7 @@ for b in range(3):
         order = np.argsort(gr[cols])
         M[:N, cols[order]] = uu
     mats.append(M); want_u.append(per)
-sup_econ = simulate_economy(data, XP, u=mats)
+sup_econ = simulate_economy(data, XP, u_draws=mats)
 assert sup_econ.meta["draws"] == "julia" and sup_econ.meta["n_rep"] == 3
 # reproduce it here from `want_u` with no reference to the function's internals
 for s in range(S):
@@ -221,9 +221,9 @@ for s in range(S):
         Wh.append(cells[lc.argmin(axis=2)] + 1)
     assert np.array_equal(sup_econ[s]["winner"].astype(int), np.vstack(Wh))
 for bad, kw, why in (
-        (ValueError, dict(u=[np.full((N_max - 1, n_good), 0.3)]), "too few rows for N_hat"),
-        (ValueError, dict(u=[np.full((N_max, n_good - 1), 0.3)]), "wrong good count"),
-        (ValueError, dict(u=mats, n_rep=9), "fewer matrices than replications")):
+        (ValueError, dict(u_draws=[np.full((N_max - 1, n_good), 0.3)]), "too few rows for N_hat"),
+        (ValueError, dict(u_draws=[np.full((N_max, n_good - 1), 0.3)]), "wrong good count"),
+        (ValueError, dict(u_draws=mats, n_rep=9), "fewer matrices than replications")):
     try:
         simulate_economy(data, XP, **kw); raise AssertionError(f"no raise: {why}")
     except bad:
@@ -246,7 +246,7 @@ except ValueError:
 EMPTY = CELL_MASK.copy(); EMPTY[1] = False
 try:
     simulate_economy({**data, "CELL_MASK": EMPTY}, XP, n_rep=2,
-                     geom={"by_sector": {0: sourcing_geometry(data)["by_sector"][0],
+                     geometry={"by_sector": {0: sourcing_geometry(data)["by_sector"][0],
                                          1: {"cells": np.array([], int),
                                              "T_cell": np.array([]),
                                              "distance": np.zeros((0, buyers.size)),
