@@ -81,11 +81,11 @@ ell0 = chi_L0 .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr0.c_r) .^ (1 - lambda)
 pi0  = pr0.Y_r ./ sum(pr0.Y_r)
 s0   = chi_s0 .* (pr0.P_sr ./ reshape(pr0.P_r, 1, :)) .^ (1 - nu)
 wI0  = pi0 .* (1 .- ell0)
-tg0  = profile_targets(L = sum(pi0 .* ell0), Os = (s0 * wI0) ./ sum(wI0), pi = pi0)
-rt = profile_ge(alpha0; kappa = kappa0, target = g0, tg = tg0, tol = 1e-12, max_iter = 5000)
+tg0  = profile_targets(labor_share = sum(pi0 .* ell0), sector_shares = (s0 * wI0) ./ sum(wI0), sales_shares = pi0)
+rt = profile_ge(alpha0; kappa = kappa0, gamma_target = g0, targets = tg0, tol = 1e-12, max_iter = 5000)
 eT = maximum(abs.(log.(rt.T[act]) .- log.(T0[act])))
 eF = maximum(abs.(log.(rt.T[imp, F]) .- log.(T0[imp, F])))
-@printf("  iters=%d converged=%s  max|Δlog T| = %.1e  max|Δlog Φ^F| = %.1e\n", rt.iters, rt.converged, eT, eF)
+@printf("  iters=%d converged=%s  max|Δlog T| = %.1e  max|Δlog Φ^F| = %.1e\n", rt.iterations, rt.converged, eT, eF)
 eA = maximum(abs.(log.(rt.A) .- log.(A0))); e_chi = max(abs(rt.chi_L - chi_L0), maximum(abs.(rt.chi_s .- chi_s0)))
 @printf("  max|Δlog A| = %.1e  max|Δχ| = %.1e\n", eA, e_chi)
 check("round-trip recovers T, Φ^F, χ and A to 1e-7", rt.converged && max(eT, eF, eA, e_chi) < 1e-7)
@@ -95,14 +95,14 @@ println("\n(3) Profile at the data (α, κ at their priors)")
 x0 = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), alpha0, kappa0,
           vec(permutedims(T_rs_init))[T_MASK])
 pf = profile_theta(x0)
-theta_vec  = pf.theta
+theta_vec  = pf.theta_vec
 chi_L, chi_s, A, alpha, _ = unpack_params(theta_vec)
 kappa = unpack_kappa(theta_vec)
 Tp = unpack_T_area(theta_vec)
 g_theta = gamma_T_analytical(chi_L, chi_s, A, Tp, kappa, build_tau(alpha))
 ef = maximum(abs.(g_theta[F, imp] .- FOREIGN_SHARE[imp]))
 eg = maximum(abs.(g_theta[act'] .- EMP_GAMMA_T[act']))
-@printf("  converged=%s iters=%d | max|f − f̂| = %.1e  max|γ − γ̂| = %.1e\n", pf.converged, pf.iters, ef, eg)
+@printf("  converged=%s iters=%d | max|f − f̂| = %.1e  max|γ − γ̂| = %.1e\n", pf.converged, pf.iterations, ef, eg)
 @printf("  Φ^F_s = %s ; Φ^F_s / Σ_l T_ls (wτ)^{−θ} at the median buyer = %s\n",
         string(round.(foreign_phi(Tp), sigdigits = 4)),
         string(round.([begin

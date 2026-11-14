@@ -126,7 +126,7 @@ function _sens_theta(theta::AbstractVector, c, sign::Int, h::Float64)
     if c.kind in (:alpha, :kappa)
         r = sens_profile(x)
         r.converged || return nothing
-        return r.theta
+        return r.theta_vec
     end
     return x
 end
@@ -247,7 +247,7 @@ function _profile_task(theta, c, grid, k::Int, N_base::Vector{Int}, seed::Int)
         try
             r = sens_profile(x)
             r.converged || continue
-            m, N = sens_moments(r.theta, ds)       # N̂_s re-calibrated, as in estimation
+            m, N = sens_moments(r.theta_vec, ds)       # N̂_s re-calibrated, as in estimation
             M[i, :] .= m; Nh[i, :] .= N; conv[i] = true
         catch err
             @warn "profile $(c.label) = $v, draw set $k failed: $(sprint(showerror, err))"

@@ -85,7 +85,7 @@ the statistics computed on it as on the real data:
               for at least one buyer}`: ONE network, ONE fit (`ok = false` if it fails);
   * `G`     — per sector, the share of cells hosting no supplier;
   * `gamma` — the shares of total purchases by area, and the import share on the foreign
-              row, summing to one per sector (the form `profile_ge` takes as `target`;
+              row, summing to one per sector (the form `profile_ge` takes as `gamma_target`;
               `EMP_GAMMA_T_TILDE` on the data);
   * `pi`    — downstream sales shares, `DOWNSTREAM_REGIONS` order;
   * `L`, `Os` — the labour share and the sector shares of intermediate spending
@@ -151,9 +151,11 @@ function profile_world(ref, alpha, kappa, world;
     for s in 1:S, c in SECTOR_T_COLS[s]
         (world.gamma[c, s] <= 0 && c != T_REF_REGION[s]) && (T[s, c] = EMPTY_T)
     end
-    res = profile_ge(alpha; kappa = kappa, target = world.gamma, T_init = T, x_init = x_init,
-                     tg = profile_targets(L = world.L, Os = world.Os, pi = world.pi))
-    return (T = res.T, A = res.A, chi_L = res.chi_L, chi_s = res.chi_s, x = res.x,
+    res = profile_ge(alpha; kappa = kappa, gamma_target = world.gamma, T_init = T,
+                     aggregate_coordinates_init = x_init,
+                     targets = profile_targets(labor_share = world.L, sector_shares = world.Os,
+                                               sales_shares = world.pi))
+    return (T = res.T, A = res.A, chi_L = res.chi_L, chi_s = res.chi_s, x = res.aggregate_coordinates,
             converged = res.converged)
 end
 

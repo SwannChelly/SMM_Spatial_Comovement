@@ -60,15 +60,15 @@ ell0  = chi_L0 .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr0.c_r) .^ (1 - lambda
 pi0   = pr0.Y_r ./ sum(pr0.Y_r)
 s0    = chi_s0 .* (pr0.P_sr ./ reshape(pr0.P_r, 1, :)) .^ (1 - nu)
 wI0   = pi0 .* (1 .- ell0)
-tg0   = profile_targets(L = sum(pi0 .* ell0), Os = (s0 * wI0) ./ sum(wI0), pi = pi0)
+tg0   = profile_targets(labor_share = sum(pi0 .* ell0), sector_shares = (s0 * wI0) ./ sum(wI0), sales_shares = pi0)
 g0    = gamma_T_analytical(chi_L0, chi_s0, A0, T0, kappa0, tau0)
 target0 = g0 ./ sum(g0; dims = 1)
 
-rt = profile_ge(alpha0; kappa = kappa0, target = target0, tg = tg0, tol = 1e-11, max_iter = 3000)
+rt = profile_ge(alpha0; kappa = kappa0, gamma_target = target0, targets = tg0, tol = 1e-11, max_iter = 3000)
 errT = maximum(abs.(log.(rt.T[act]) .- log.(T0[act])))
 e_chi_s  = maximum(abs.(rt.chi_s .- chi_s0)); eA = maximum(abs.(log.(rt.A) .- log.(A0)))
 @printf("  iters=%d converged=%s  max|Δlog T|=%.1e |ΔχL|=%.1e max|Δχs|=%.1e max|Δlog A|=%.1e\n",
-        rt.iters, rt.converged, errT, abs(rt.chi_L - chi_L0), e_chi_s, eA)
+        rt.iterations, rt.converged, errT, abs(rt.chi_L - chi_L0), e_chi_s, eA)
 check("round-trip recovers (T, χ^L, χ^s, A) to 1e-6",
       rt.converged && max(errT, abs(rt.chi_L - chi_L0), e_chi_s, eA) < 1e-6)
 
@@ -80,7 +80,7 @@ hr   = aggregate_moment_residuals(res.chi_L, res.chi_s, res.A, T_ze, build_tau(a
 gr   = gamma_T_analytical(res.chi_L, res.chi_s, res.A, res.T, kappa0, build_tau(alpha0))
 gamma_err = maximum(abs.((gr ./ sum(gr; dims = 1))[act'] .- EMP_GAMMA_T_TILDE[act']))
 @printf("  iters=%d converged=%s | |block1|=%.1e max|block2|=%.1e max|block3|=%.1e max|γ̃|=%.1e\n",
-        res.iters, res.converged, hr.labor, hr.industry, hr.pi_r, gamma_err)
+        res.iterations, res.converged, hr.labor, hr.industry, hr.pi_r, gamma_err)
 @printf("  χ^L=%.4f  χ^s=%s\n", res.chi_L, string(round.(res.chi_s, digits = 4)))
 check("blocks 1–3 and γ on target to 1e-7", res.converged && max(hr.labor, hr.industry, hr.pi_r, gamma_err) < 1e-7)
 
@@ -89,7 +89,7 @@ println("\n(3) Uniqueness: 8 perturbed starts")
 dmax = 0.0
 for k in 1:8
     Ti = T_rs_init .* exp.(0.7 .* randn(rng, S, T_COL_DIM)) .* (T_rs_init .> 0)
-    r  = profile_ge(alpha0; kappa = kappa0, T_init = Ti, x_init = randn(rng, S), tol = 1e-11, max_iter = 3000)
+    r  = profile_ge(alpha0; kappa = kappa0, T_init = Ti, aggregate_coordinates_init = randn(rng, S), tol = 1e-11, max_iter = 3000)
     global dmax = max(dmax, maximum(abs.(log.(r.T[act]) .- log.(res.T[act]))),
                       maximum(abs.(log.(r.A) .- log.(res.A))), abs(r.chi_L - res.chi_L))
 end
@@ -101,7 +101,7 @@ println("\n(4) Convergence of the profile vs α (✓/✗ and iterations)")
 @printf("  %6s | %-22s\n", "α", "δ=0.3 / δ=0.9")
 for a in sort(unique(vcat(alpha0[1] .* [0.5, 1.0, 2.0, 4.0], [1.0, 1.5])))
     alpha_v = fill(a, N_TAU)
-    cell(r) = @sprintf("%s%4d", r.converged ? "✓" : "✗", r.iters)
+    cell(r) = @sprintf("%s%4d", r.converged ? "✓" : "✗", r.iterations)
     h = [cell(profile_ge(alpha_v; kappa = kappa0, damping = damp)) for damp in (0.3, 0.9)]
     @printf("  %6.3f | %-22s\n", a, join(h, " / "))
 end
@@ -111,16 +111,16 @@ println("\n(5) Simulated blocks 1–3 at the profile (N_rho = $N_rho)")
 x0 = vcat(zeros(first(alpha_range()) - 1), alpha0, kappa0, vec(permutedims(T_rs_init))[T_MASK])
 p  = profile_theta(x0)
 check("profile_theta converges and writes the profiled aggregates",
-      p.converged && p.theta[1] ≈ res.chi_L && p.theta[2:(S + 1)] ≈ res.chi_s)
-_, m = full_SMM(p.theta)
+      p.converged && p.theta_vec[1] ≈ res.chi_L && p.theta_vec[2:(S + 1)] ≈ res.chi_s)
+_, m = full_SMM(p.theta_vec)
 tg = profile_targets()
-@printf("  |labor sim − target| = %.2e\n", abs(m[1][1] - tg.L))
-@printf("  max|industry sim − target| = %.2e (scale %.2e)\n", maximum(abs.(vec(m[2]) .- tg.Os)), maximum(tg.Os))
-@printf("  max|π_r sim − target| = %.2e (scale %.2e)\n", maximum(abs.(vec(m[3]) .- tg.pi)), maximum(tg.pi))
+@printf("  |labor sim − target| = %.2e\n", abs(m[1][1] - tg.labor_share))
+@printf("  max|industry sim − target| = %.2e (scale %.2e)\n", maximum(abs.(vec(m[2]) .- tg.sector_shares)), maximum(tg.sector_shares))
+@printf("  max|π_r sim − target| = %.2e (scale %.2e)\n", maximum(abs.(vec(m[3]) .- tg.sales_shares)), maximum(tg.sales_shares))
 
 # ── (6) Fake worlds ─────────────────────────────────────────────────────────
 println("\n(6) Fake world: profile of (T, χ^L, χ^s, A) on the world's moments")
-ref = world_reference(p.theta)
+ref = world_reference(p.theta_vec)
 pr  = compute_prices_analytical(ref.chi_L, ref.chi_s, ref.A, gather_T_to_ze(ref.T, kappa0), build_tau(alpha0); PhiF = foreign_phi(ref.T))
 ellm = ref.chi_L .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr.c_r) .^ (1 - lambda)
 pim  = pr.Y_r ./ sum(pr.Y_r)
@@ -133,9 +133,9 @@ dm = max(abs(cm.chi_L - ref.chi_L), maximum(abs.(cm.chi_s .- ref.chi_s)), maximu
          maximum(abs.(log.(cm.T[act]) .- log.(ref.T[act]))))
 @printf("  world = analytical model: converged=%s  max deviation from θ̂ = %.1e\n", cm.converged, dm)
 check("a world equal to the model returns the estimate (1e-6)", cm.converged && dm < 1e-6)
-N_hat = granular_report(p.theta).N_hat
+N_hat = granular_report(p.theta_vec).N_hat
 for b in 1:3
-    w = draw_world(p.theta, N_hat, 31_000_000 + b)
+    w = draw_world(p.theta_vec, N_hat, 31_000_000 + b)
     w.ref_empty && (println("  world $b: empty reference area, skipped"); continue)
     c = profile_world(ref, alpha0, kappa0, w)
     @printf("  world %d: converged=%s  χ^L %.4f (θ̂ %.4f)  max|Δχ^s| %.3f  max|Δlog A| %.3f\n",

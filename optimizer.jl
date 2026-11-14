@@ -247,7 +247,7 @@ function train_stage(n_particles::Int, max_iter::Int;
     function objective(x)
         prof = profile_theta(to_full(x))
         prof.converged || return Inf
-        result = safe_SMM(prof.theta; W_override = weight_matrix, moment_blocks = moment_blocks)
+        result = safe_SMM(prof.theta_vec; W_override = weight_matrix, moment_blocks = moment_blocks)
         return (result === nothing || !isfinite(result[1][1])) ? Inf : result[1][1]
     end
     # 4) Diagnostic only: report whether the profile converges at a particle, without scoring it.
@@ -272,8 +272,8 @@ function train_stage(n_particles::Int, max_iter::Int;
     # 6) Profile once more at the best particle, because the PSO returns only (α, κ).
     prof = profile_theta(to_full(best_x))
     prof.converged || @warn "the profile did NOT converge at the stage optimum (no particle " *
-        "converged): the returned T is the last iterate." resid=prof.resid iters=prof.iters
-    return prof.theta, best_fitness, history
+        "converged): the returned T is the last iterate." max_residual=prof.max_residual iterations=prof.iterations
+    return prof.theta_vec, best_fitness, history
 end
 
 """
