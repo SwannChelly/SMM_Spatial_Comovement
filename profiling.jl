@@ -205,6 +205,7 @@ end
 
 # Blocks 1–2 at x: S equations (labour share, then sector shares 2..S).
 function aggregate_residual(x::AbstractVector, P_sr::AbstractMatrix, tg)
+    # Swann : Missing comments on this function.  
     _, _, ell, s_rs, _, _ = aggregate_shares(x, P_sr)
     wI = tg.pi .* (1 .- ell)
     Ot = (s_rs * wI) ./ sum(wI)
@@ -223,7 +224,7 @@ end
 
 """
     solve_aggregates(P_sr; x0, tg, tol=1e-12, max_iter=50) -> (x, converged, resid, iters)
-
+Swann : Be a bit more explicit here. What is F, what is the central-difference Jacobian ? 
 Newton with backtracking on ‖F‖², central-difference Jacobian (S × S; the residual is
 exact, so an approximate Jacobian costs speed, not precision). A singular Newton step
 falls back to a damped gradient step.
@@ -231,7 +232,7 @@ falls back to a damped gradient step.
 function solve_aggregates(P_sr::AbstractMatrix; x0 = nothing, tg = profile_targets(),
                     tol::Float64 = 1e-12, max_iter::Int = 50)
     x = x0 === nothing ? aggregate_init(P_sr, tg) : collect(Float64, x0)
-    F = aggregate_residual(x, P_sr, tg)
+    F = aggregate_residual(x, P_sr, tg) # Swann : What is the residual about ? 
     n = length(x)
     J = zeros(n, n)
     iters = 0
@@ -292,7 +293,7 @@ function profile_ge(alpha; kappa::Real,
                           max_iter::Int = 2000, tol::Float64 = 1e-9, damping::Float64 = 0.3)
     # 1) Start from T_init in the reference gauge, T[s, ref] = 1.
     tau   = build_tau(alpha)
-    T_par = Matrix{Float64}(undef, S, T_COL_DIM)
+    T_par = Matrix{Float64}(undef, S, T_COL_DIM) # Swann : T_par n'est pas un nom explicit. 
     T_par .= T_init
     for s in 1:S
         ref = T_REF_REGION[s]
@@ -305,8 +306,8 @@ function profile_ge(alpha; kappa::Real,
     for it in 1:max_iter
         iters = it
         # 2) Solve the aggregates (χ^L, χ^s) at the prices implied by the current T.
-        T_ze = gather_T_to_ze(T_par, kappa)
-        PhiF = foreign_phi(T_par)
+        T_ze = gather_T_to_ze(T_par, kappa) # Swann : Ajoute la densité. 
+        PhiF = foreign_phi(T_par) # Swann : Extrait la colonne liée aux export dans T. 
         P_sr, Phi = expected_sector_prices(T_ze, tau; PhiF = PhiF)
         x = solve_aggregates(P_sr; x0 = x, tg = tg).x
         # 3) Compute the model γ with the expenditure weights pinned at the target sales shares.
@@ -358,7 +359,7 @@ end
 const PROFILE_WARM_CACHE = Ref{Union{Nothing, Tuple{Matrix{Float64}, Vector{Float64}}}}(nothing)
 
 function profile_ge_warm(alpha; kwargs...)
-    cached = PROFILE_WARM_CACHE[]
+    cached = PROFILE_WARM_CACHE[] # Swann : A quoi ça sert le cache ? 
     if cached !== nothing && all(isfinite, cached[1])
         res = profile_ge(alpha; T_init = copy(cached[1]), x_init = copy(cached[2]), kwargs...)
         res.converged && (PROFILE_WARM_CACHE[] = (copy(res.T), copy(res.x)); return res)
