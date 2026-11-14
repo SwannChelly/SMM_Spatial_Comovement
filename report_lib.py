@@ -56,8 +56,8 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     industries_config : [{'industry': 'aero', 'display_name': 'Aerospace'}, ...]
     mu                : 1 (step1 best parameters) or 2 (step3 best parameters)
     """
-    all_data = {c["industry"]: load_granular_data(c["industry"], mu=mu, **load_kwargs)
-                for c in industries_config}
+    all_data = {industry_config["industry"]: load_granular_data(industry_config["industry"], mu=mu, **load_kwargs)
+                for industry_config in industries_config}
 
     try:
         name_A129 = pd.read_csv(name_A129_path)
@@ -67,60 +67,60 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     n_ind = len(industries_config)
     col_spec = "l " + " ".join(["S[table-format=-1.4] S[table-format=-1.4]"] * n_ind)
     header_row1 = " & " + " & ".join(
-        [f"\\multicolumn{{2}}{{c}}{{{c['display_name']}}}" for c in industries_config]) + r" \\"
+        [f"\\multicolumn{{2}}{{c}}{{{industry_config['display_name']}}}" for industry_config in industries_config]) + r" \\"
     cmidrules = " ".join([f"\\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(n_ind)])
     header_row2 = " & " + " & ".join(["{Emp.} & {Sim.}"] * n_ind) + r" \\"
 
     # --- Panel A -------------------------------------------------------------
     row_A = ["Aggregate Labor Share"]
-    for c in industries_config:
-        d = all_data[c["industry"]]
-        row_A += [float(d["empirical_moments_dict"]["agg_labor_share"][0]),
-                  float(d["simulated_moments_dict"]["agg_labor_share"][0])]
+    for industry_config in industries_config:
+        industry_data = all_data[industry_config["industry"]]
+        row_A += [float(industry_data["empirical_moments_dict"]["agg_labor_share"][0]),
+                  float(industry_data["simulated_moments_dict"]["agg_labor_share"][0])]
 
     # --- Panel B -------------------------------------------------------------
-    all_codes = sorted({code for d in all_data.values() for code in d["sector_names"]})
+    all_codes = sorted({code for industry_data in all_data.values() for code in industry_data["sector_names"]})
     shares = {}
-    for c in industries_config:
-        d = all_data[c["industry"]]
-        shares[c["industry"]] = pd.DataFrame({
-            "A129": d["sector_names"],
-            "Empirical": d["empirical_moments_dict"]["agg_industry_share"],
-            "Simulated": d["simulated_moments_dict"]["agg_industry_share"],
+    for industry_config in industries_config:
+        industry_data = all_data[industry_config["industry"]]
+        shares[industry_config["industry"]] = pd.DataFrame({
+            "A129": industry_data["sector_names"],
+            "Empirical": industry_data["empirical_moments_dict"]["agg_industry_share"],
+            "Simulated": industry_data["simulated_moments_dict"]["agg_industry_share"],
         })
 
     def _label(code):
         if name_A129 is not None and "A129" in name_A129.columns:
-            hit = name_A129.loc[name_A129["A129"].astype(str) == str(code), "name"].values
-            if len(hit):
-                return hit[0]
+            name_match = name_A129.loc[name_A129["A129"].astype(str) == str(code), "name"].values
+            if len(name_match):
+                return name_match[0]
         return code
 
     # --- Panel D: import shares (the foreign row of the gamma block) ----------
     imports = {}
-    for c in industries_config:
-        d = all_data[c["industry"]]
-        act = np.asarray(d.get("FOREIGN_ACTIVE", np.zeros(len(d["sector_names"]), bool)))
-        sim_f = d["simulated_moments_dict"].get("foreign_share")
-        imports[c["industry"]] = {
-            str(code): (float(d["foreign_share"][s]),
+    for industry_config in industries_config:
+        industry_data = all_data[industry_config["industry"]]
+        foreign_active = np.asarray(industry_data.get("FOREIGN_ACTIVE", np.zeros(len(industry_data["sector_names"]), bool)))
+        sim_f = industry_data["simulated_moments_dict"].get("foreign_share")
+        imports[industry_config["industry"]] = {
+            str(code): (float(industry_data["foreign_share"][s]),
                         np.nan if sim_f is None else float(sim_f[s]))
-            for s, code in enumerate(d["sector_names"]) if act[s]}
-    import_codes = sorted({code for v in imports.values() for code in v})
-    panel_D_rows = [[_label(code)] + [x for c in industries_config
-                                      for x in imports[c["industry"]].get(code, ("---", "---"))]
+            for s, code in enumerate(industry_data["sector_names"]) if foreign_active[s]}
+    import_codes = sorted({code for value in imports.values() for code in value})
+    panel_D_rows = [[_label(code)] + [x for industry_config in industries_config
+                                      for x in imports[industry_config["industry"]].get(code, ("---", "---"))]
                     for code in import_codes]
 
     panel_B_rows = []
     for code in all_codes:
         label = code
         if name_A129 is not None and "A129" in name_A129.columns:
-            hit = name_A129.loc[name_A129["A129"].astype(str) == str(code), "name"].values
-            if len(hit):
-                label = hit[0]
+            name_match = name_A129.loc[name_A129["A129"].astype(str) == str(code), "name"].values
+            if len(name_match):
+                label = name_match[0]
         row = [label]
-        for c in industries_config:
-            df = shares[c["industry"]]
+        for industry_config in industries_config:
+            df = shares[industry_config["industry"]]
             m = df[df["A129"].astype(str) == str(code)]
             row += ([float(m.iloc[0]["Empirical"]), float(m.iloc[0]["Simulated"])]
                     if len(m) else ["---", "---"])
@@ -129,76 +129,76 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     # --- Panel C: block 4 -----------------------------------------------------
     # Rows are keyed on the coefficient LABEL (bins or ln d, then ln n), so two industries
     # estimated with the same n_coef line up; a label absent from one industry is `---`.
-    c_labels, c_vals, c_sds = [], {}, {}
-    for c in industries_config:
-        d = all_data[c["industry"]]
-        labs = reg_bin_labels(d["n_coef"], with_kappa=True)
-        for l in labs:
-            if l not in c_labels:
-                c_labels.append(l)
-        emp = d["empirical_moments_dict"]["reg_coef"]
-        sim = d["simulated_moments_dict"]["reg_coef"]
-        wt = reg_coef_world_table(d)
-        c_vals[c["industry"]] = {l: (float(e), float(m)) for l, e, m in zip(labs, emp, sim)}
-        c_sds[c["industry"]] = ({} if wt is None else
-                                dict(zip(labs, wt["world_sd_e"].values)))
+    all_coef_labels, coef_values, coef_sds = [], {}, {}
+    for industry_config in industries_config:
+        industry_data = all_data[industry_config["industry"]]
+        coef_labels = reg_bin_labels(industry_data["n_coef"], with_kappa=True)
+        for l in coef_labels:
+            if l not in all_coef_labels:
+                all_coef_labels.append(l)
+        emp_coef = industry_data["empirical_moments_dict"]["reg_coef"]
+        sim_coef = industry_data["simulated_moments_dict"]["reg_coef"]
+        world_table = reg_coef_world_table(industry_data)
+        coef_values[industry_config["industry"]] = {l: (float(e), float(m)) for l, e, m in zip(coef_labels, emp_coef, sim_coef)}
+        coef_sds[industry_config["industry"]] = ({} if world_table is None else
+                                dict(zip(coef_labels, world_table["world_sd_e"].values)))
     # ln n last, whatever the order the industries listed the bins in
-    c_labels = [l for l in c_labels if "n_{ls}" not in l] + [l for l in c_labels if "n_{ls}" in l]
+    all_coef_labels = [l for l in all_coef_labels if "n_{ls}" not in l] + [l for l in all_coef_labels if "n_{ls}" in l]
 
-    def fmt(v, decimals=4):
-        if isinstance(v, str) or (isinstance(v, float) and np.isnan(v)):
+    def fmt(value, decimals=4):
+        if isinstance(value, str) or (isinstance(value, float) and np.isnan(value)):
             return "{---}"
-        return f"{v:.{decimals}f}"
+        return f"{value:.{decimals}f}"
 
     mu_label = r"$\hat{\mu}_1$ (Step~1)" if mu == 1 else r"$\hat{\mu}_2$ (Step~3)"
-    tex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
+    latex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
            r"\caption{Empirical and Simulated Moments: Comparison Across Industries}" "\n"
            r"\label{tab:moments_comparison_combined}" "\n"
            r"\renewcommand{\arraystretch}{1.2}" "\n" r"\small" "\n"
            r"\begin{tabular}{" + col_spec + "}\n" r"\toprule" "\n"
            + header_row1 + "\n" + cmidrules + "\n" + header_row2 + "\n")
 
-    tex += "\\midrule\n"
-    tex += f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel A: Aggregate Labor Share}}}} \\\\\n"
-    tex += "\\midrule\n"
-    tex += row_A[0] + " & " + " & ".join(fmt(v) for v in row_A[1:]) + " \\\\\n"
+    latex += "\\midrule\n"
+    latex += f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel A: Aggregate Labor Share}}}} \\\\\n"
+    latex += "\\midrule\n"
+    latex += row_A[0] + " & " + " & ".join(fmt(value) for value in row_A[1:]) + " \\\\\n"
 
-    tex += "\\midrule\n"
-    tex += f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel B: Aggregate Industry Shares}}}} \\\\\n"
-    tex += "\\midrule\n"
+    latex += "\\midrule\n"
+    latex += f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel B: Aggregate Industry Shares}}}} \\\\\n"
+    latex += "\\midrule\n"
     for row in panel_B_rows:
-        tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
+        latex += str(row[0]) + " & " + " & ".join(fmt(value) for value in row[1:]) + " \\\\\n"
 
-    tex += "\\midrule\n"
-    tex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel C: Extensive Margin "
+    latex += "\\midrule\n"
+    latex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel C: Extensive Margin "
             f"(cell cloglog)}}}} \\\\\n")
-    tex += "\\midrule\n"
+    latex += "\\midrule\n"
     any_sd = False
-    for l in c_labels:
+    for l in all_coef_labels:
         name = (r"Density, $\beta_\kappa$ on " + l if "n_{ls}" in l
                 else r"Distance, $\beta_d$ " + l)
-        row, sds = [name], [""]
-        for c in industries_config:
-            v = c_vals[c["industry"]].get(l)
-            row += ["---", "---"] if v is None else list(v)
-            sd = c_sds[c["industry"]].get(l)
+        row, sd_cells = [name], [""]
+        for industry_config in industries_config:
+            value = coef_values[industry_config["industry"]].get(l)
+            row += ["---", "---"] if value is None else list(value)
+            sd = coef_sds[industry_config["industry"]].get(l)
             ok = sd is not None and np.isfinite(sd)
-            sds += ["{}", f"{{({sd:.4f})}}" if ok else "{}"]
+            sd_cells += ["{}", f"{{({sd:.4f})}}" if ok else "{}"]
             any_sd |= ok
-        tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
-        if any(x not in ("", "{}") for x in sds):
-            tex += " & ".join(sds) + " \\\\\n"
+        latex += str(row[0]) + " & " + " & ".join(fmt(value) for value in row[1:]) + " \\\\\n"
+        if any(x not in ("", "{}") for x in sd_cells):
+            latex += " & ".join(sd_cells) + " \\\\\n"
 
     if panel_D_rows:
-        tex += "\\midrule\n"
-        tex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel D: Import Shares "
+        latex += "\\midrule\n"
+        latex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel D: Import Shares "
                 f"(profiled)}}}} \\\\\n")
-        tex += "\\midrule\n"
+        latex += "\\midrule\n"
         for row in panel_D_rows:
-            tex += str(row[0]) + " & " + " & ".join(fmt(v) for v in row[1:]) + " \\\\\n"
+            latex += str(row[0]) + " & " + " & ".join(fmt(value) for value in row[1:]) + " \\\\\n"
 
-    tex += "\\bottomrule\n" + r"\end{tabular}" + "\n\n"
-    tex += (r"\vspace{0.3cm}" "\n"
+    latex += "\\bottomrule\n" + r"\end{tabular}" + "\n\n"
+    latex += (r"\vspace{0.3cm}" "\n"
             r"\caption*{\footnotesize \emph{Notes}: Empirical moments against moments simulated "
             r"from the model calibrated on each industry, evaluated at " + mu_label + r". "
             r"``Emp.'' = Empirical, ``Sim.'' = Simulated. Panel~A reports the aggregate labor "
@@ -221,13 +221,13 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     if output_file is not None:
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
         with open(output_file, "w") as f:
-            f.write(tex)
+            f.write(latex)
         print(f"Combined table saved to: {output_file}")
-    return tex
+    return latex
 
 
 def generate_parameter_table(industries_config, output_file="parameters_combined.tex",
-                             mu=2, q=WORLD_Q, **load_kwargs):
+                             mu=2, quantiles=WORLD_Q, **load_kwargs):
     """
     LaTeX table of the searched parameters with their fake-world 95% intervals.
 
@@ -237,77 +237,77 @@ def generate_parameter_table(industries_config, output_file="parameters_combined
     (`<inf_step>/inference_world/`): Step 2 at theta_hat_1 (mu = 1), Step 4 at
     theta_hat_2 (mu = 2). Below each estimate, in parentheses, the sd across worlds.
     """
-    all_data = {c["industry"]: load_granular_data(c["industry"], mu=mu, **load_kwargs)
-                for c in industries_config}
-    tabs = {k: world_param_table(d, q=q) for k, d in all_data.items()}
+    all_data = {industry_config["industry"]: load_granular_data(industry_config["industry"], mu=mu, **load_kwargs)
+                for industry_config in industries_config}
+    tabs = {k: world_param_table(industry_data, quantiles=quantiles) for k, industry_data in all_data.items()}
     n_ind = len(industries_config)
 
-    def _key_label(l, d):
+    def _key_label(l, industry_data):
         if l.startswith("alpha"):
-            return r"$\alpha$" if d["n_tau"] == 1 else rf"$\alpha_{{{l[6:-1]}}}$"
+            return r"$\alpha$" if industry_data["n_tau"] == 1 else rf"$\alpha_{{{l[6:-1]}}}$"
         if l == "kappa":
             return r"$\kappa$"
         return rf"$\hat N_s$, {l[4:-1]}"
 
     rows = []                                   # (label, {industry: (est, sd, lo, hi)})
-    for c in industries_config:
-        t, d = tabs[c["industry"]], all_data[c["industry"]]
-        if t is None:
+    for industry_config in industries_config:
+        world_table, industry_data = tabs[industry_config["industry"]], all_data[industry_config["industry"]]
+        if world_table is None:
             continue
-        for l in t.index:
+        for l in world_table.index:
             if not (_is_trade_param(l) or l.startswith("N_s[")):
                 continue
-            key = _key_label(l, d)
-            hit = next((r for r in rows if r[0] == key), None)
-            if hit is None:
-                hit = (key, {})
-                rows.append(hit)
-            r = t.loc[l]
-            hit[1][c["industry"]] = (r["estimate"], r["sd"], r["q_lo"], r["q_hi"])
+            key = _key_label(l, industry_data)
+            row_entry = next((param_row for param_row in rows if param_row[0] == key), None)
+            if row_entry is None:
+                row_entry = (key, {})
+                rows.append(row_entry)
+            param_row = world_table.loc[l]
+            row_entry[1][industry_config["industry"]] = (param_row["estimate"], param_row["sd"], param_row["q_lo"], param_row["q_hi"])
 
     col_spec = "l " + " ".join(["c c"] * n_ind)
-    head1 = " & " + " & ".join(rf"\multicolumn{{2}}{{c}}{{{c['display_name']}}}"
-                               for c in industries_config) + r" \\"
+    head1 = " & " + " & ".join(rf"\multicolumn{{2}}{{c}}{{{industry_config['display_name']}}}"
+                               for industry_config in industries_config) + r" \\"
     cmid = " ".join(rf"\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(n_ind))
     head2 = " & " + " & ".join([r"Estimate & 95\% interval"] * n_ind) + r" \\"
     mu_label = r"$\hat{\mu}_1$ (Step~1)" if mu == 1 else r"$\hat{\mu}_2$ (Step~3)"
-    tex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
+    latex = (r"\begin{table}[H]" "\n" r"\centering" "\n"
            r"\caption{Parameter Estimates and Confidence Intervals}" "\n"
            r"\label{tab:parameters_combined}" "\n" r"\small" "\n"
            r"\begin{tabular}{" + col_spec + "}\n" r"\toprule" "\n"
            + head1 + "\n" + cmid + "\n" + head2 + "\n" r"\midrule" "\n")
-    for i, (key, vals) in enumerate(rows):
+    for i, (key, values_by_industry) in enumerate(rows):
         if i and key.startswith(r"$\hat N_s$") and not rows[i - 1][0].startswith(r"$\hat N_s$"):
-            tex += r"\midrule" "\n"
+            latex += r"\midrule" "\n"
         is_N = key.startswith(r"$\hat N_s$")
-        cells, sds = [key], [""]
-        for c in industries_config:
-            v = vals.get(c["industry"])
-            if v is None:
-                cells += ["---", "---"]; sds += ["", ""]
+        cells, sd_cells = [key], [""]
+        for industry_config in industries_config:
+            estimates = values_by_industry.get(industry_config["industry"])
+            if estimates is None:
+                cells += ["---", "---"]; sd_cells += ["", ""]
                 continue
-            e, sd, lo, hi = v
-            f = (lambda x: f"{x:.0f}") if is_N else (lambda x: f"{x:.3f}")
-            cells += [f(e), f"[{f(lo)}, {f(hi)}]"]
-            sds += [f"({sd:.1f})" if is_N else f"({sd:.3f})", ""]
-        tex += " & ".join(cells) + r" \\" "\n" + " & ".join(sds) + r" \\" "\n"
-    nw = {k: (t.attrs["n_worlds"] if t is not None else 0) for k, t in tabs.items()}
-    tex += (r"\bottomrule" "\n" r"\end{tabular}" "\n\n" r"\vspace{0.3cm}" "\n"
+            e, sd, lo, hi = estimates
+            formatter = (lambda x: f"{x:.0f}") if is_N else (lambda x: f"{x:.3f}")
+            cells += [formatter(e), f"[{formatter(lo)}, {formatter(hi)}]"]
+            sd_cells += [f"({sd:.1f})" if is_N else f"({sd:.3f})", ""]
+        latex += " & ".join(cells) + r" \\" "\n" + " & ".join(sd_cells) + r" \\" "\n"
+    n_worlds_by_industry = {k: (world_table.attrs["n_worlds"] if world_table is not None else 0) for k, world_table in tabs.items()}
+    latex += (r"\bottomrule" "\n" r"\end{tabular}" "\n\n" r"\vspace{0.3cm}" "\n"
             r"\caption*{\footnotesize \emph{Notes}: Estimates at " + mu_label + r". "
             r"Inference from economies simulated from the model at the estimate: in each one, "
             r"one network of $\hat N_s$ varieties with independent draws gives its own data "
             r"moments, on which the whole estimator is re-run (T and A re-inverted, "
             r"$N_s$ re-calibrated, $(\alpha,\kappa)$ re-estimated). 95\% interval: "
             r"2.5--97.5\% quantiles across simulations; standard deviation in parentheses. "
-            r"Usable simulations: " + ", ".join(f"{c['display_name']} {nw[c['industry']]}"
-                                           for c in industries_config) + r".}" "\n"
+            r"Usable simulations: " + ", ".join(f"{industry_config['display_name']} {n_worlds_by_industry[industry_config['industry']]}"
+                                           for industry_config in industries_config) + r".}" "\n"
             r"\end{table}" "\n")
     if output_file is not None:
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        with open(output_file, "w") as f:
-            f.write(tex)
+        with open(output_file, "w") as formatter:
+            formatter.write(latex)
         print(f"Parameter table saved to: {output_file}")
-    return tex
+    return latex
 
 
 # ============================================================================
@@ -320,21 +320,21 @@ def bubble_scatter(ax, x, y, xlabel, ylabel, title, size_scale=300,
     x, y = np.asarray(x, float), np.asarray(y, float)
     keep = x > 0
     x, y = x[keep], y[keep]
-    w = np.ones_like(x) if weights is None else np.asarray(weights, float)[keep]
+    weights_used = np.ones_like(x) if weights is None else np.asarray(weights, float)[keep]
 
     lims = [min(x.min(), y.min()) * 0.9, max(x.max(), y.max()) * 1.1]
     ax.scatter(x, y, s=size_scale * x / x.max(), alpha=1, edgecolor="black",
                linewidths=0.5, color=color or toulouse_color, label=label)
 
-    b, t = wls_through_origin(x, y, w)
-    ax.text(0.98, 0.09, rf"Coefficient: ${np.round(b, 3)}$", ha="right", va="bottom",
+    slope, t_stat = wls_through_origin(x, y, weights_used)
+    ax.text(0.98, 0.09, rf"Coefficient: ${np.round(slope, 3)}$", ha="right", va="bottom",
             fontsize=fs(10), transform=ax.transAxes)
-    ax.text(0.98, 0.01, rf"t-stat: ${np.round(t, 1)}$", ha="right", va="bottom",
+    ax.text(0.98, 0.01, rf"t-stat: ${np.round(t_stat, 1)}$", ha="right", va="bottom",
             fontsize=fs(10), transform=ax.transAxes)
 
     if regression_line:
-        xx = np.linspace(0, lims[1], 100)
-        ax.plot(xx, b * xx, linestyle="--", color="green")
+        x_line = np.linspace(0, lims[1], 100)
+        ax.plot(x_line, slope * x_line, linestyle="--", color="green")
     else:
         ax.plot(lims, lims, color="black")
 
@@ -345,19 +345,19 @@ def bubble_scatter(ax, x, y, xlabel, ylabel, title, size_scale=300,
     ax.set_title(title)
     ax.grid(linestyle="dashed", alpha=0.5)
     _despine(ax)
-    return b, t
+    return slope, t_stat
 
 
 def wls_through_origin(x, y, weights=None):
     """b and its t-stat for y = b*x (no intercept); weights default to x."""
     x, y = np.asarray(x, float), np.asarray(y, float)
-    w = x if weights is None else np.asarray(weights, float)
-    denom = np.sum(w * x ** 2)
-    b = np.sum(w * x * y) / denom
-    resid = y - b * x
-    s2 = np.sum(w * resid ** 2) / max(len(x) - 1, 1)
-    se = np.sqrt(s2 / denom)
-    return b, (b / se if se > 0 else np.inf)
+    weights_used = x if weights is None else np.asarray(weights, float)
+    denom = np.sum(weights_used * x ** 2)
+    slope = np.sum(weights_used * x * y) / denom
+    resid = y - slope * x
+    residual_variance = np.sum(weights_used * resid ** 2) / max(len(x) - 1, 1)
+    slope_se = np.sqrt(residual_variance / denom)
+    return slope, (slope / slope_se if slope_se > 0 else np.inf)
 
 
 def gamma_aa_points(data):
@@ -374,23 +374,23 @@ def gamma_aa_points(data):
                     applied to the SIMULATED gammas and import share f_s; its x is the
                     observed share.
     """
-    emp, sim = data["empirical_moments_dict"]["gamma_aa"], data["simulated_moments_dict"]["gamma_aa"]
-    S, ref, act = data["S"], data["T_REF_AA"], data["AA_ACTIVE"]
+    emp_gamma, sim_gamma = data["empirical_moments_dict"]["gamma_aa"], data["simulated_moments_dict"]["gamma_aa"]
+    S, reference_area, active = data["S"], data["T_REF_AA"], data["AA_ACTIVE"]
     f_sim = data["simulated_moments_dict"].get("foreign_share")
-    c = 1.0 - (np.zeros(S) if f_sim is None else np.asarray(f_sim, float))
+    domestic_total = 1.0 - (np.zeros(S) if f_sim is None else np.asarray(f_sim, float))
 
-    free = act.copy()
+    free = active.copy()
     for s in range(S):
-        if ref[s] >= 0:
-            free[s, ref[s]] = False
+        if reference_area[s] >= 0:
+            free[s, reference_area[s]] = False
 
-    x_free, y_free = emp[free], sim[free]
+    x_free, y_free = emp_gamma[free], sim_gamma[free]
     x_ref, y_ref = [], []
     for s in range(S):
-        if ref[s] < 0 or not free[s].any() or emp[s, ref[s]] <= 0:
+        if reference_area[s] < 0 or not free[s].any() or emp_gamma[s, reference_area[s]] <= 0:
             continue
-        x_ref.append(emp[s, ref[s]])
-        y_ref.append(c[s] - sim[s, free[s]].sum())
+        x_ref.append(emp_gamma[s, reference_area[s]])
+        y_ref.append(domestic_total[s] - sim_gamma[s, free[s]].sum())
     keep = x_free > 0
     return x_free[keep], y_free[keep], np.array(x_ref), np.array(y_ref)
 
@@ -411,11 +411,11 @@ def plot_gamma_aa(data, ax=None, save_to=None):
                    linewidths=0.5, color=reference_color, label="Reference")
 
     # WLS through the origin on the NON-REFERENCE points only.
-    b, t = wls_through_origin(x_free, y_free, weights=x_free)
+    slope, t_stat = wls_through_origin(x_free, y_free, weights=x_free)
     ax.plot(lims, lims, color="black", linewidth=1)
-    ax.text(0.98, 0.09, rf"Coefficient: ${np.round(b, 3)}$", ha="right", va="bottom",
+    ax.text(0.98, 0.09, rf"Coefficient: ${np.round(slope, 3)}$", ha="right", va="bottom",
             fontsize=fs(10), transform=ax.transAxes)
-    ax.text(0.98, 0.01, rf"t-stat: ${np.round(t, 1)}$", ha="right", va="bottom",
+    ax.text(0.98, 0.01, rf"t-stat: ${np.round(t_stat, 1)}$", ha="right", va="bottom",
             fontsize=fs(10), transform=ax.transAxes)
 
     ax.set_xlim(lims)
@@ -449,7 +449,7 @@ def plot_pi_r(data, ax=None, save_to=None):
 # Fit with standard errors: extensive margin, zero-supplier share, count curve
 # ============================================================================
 
-def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
+def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, z_critical=1.96,
                      ylabel="", xlabel="", title=None, rotate=0,
                      band_emp=None, band_sim=None, sim_label="Simulated", legend=True):
     """
@@ -488,7 +488,7 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, ci=1.96,
         has = np.isfinite(se) & (se > 0)
         # With bars, then without — one legend entry, taken from whichever is non-empty.
         if has.any():
-            ax.errorbar(xs[has], vals[has], yerr=ci * se[has], **kw)
+            ax.errorbar(xs[has], vals[has], yerr=z_critical * se[has], **kw)
             kw = {**kw, "label": None}
         if (~has).any():
             ax.errorbar(xs[~has], vals[~has], yerr=None, **kw)
@@ -520,20 +520,20 @@ def _legend_below_xaxis(ax, pad=0.02, ncol=2, size_at_ref=11):
     """One-row legend centred under the x-axis, just clear of its (rotated) tick labels."""
     fig = ax.figure
     fig.canvas.draw()
-    bb = ax.xaxis.get_tightbbox(fig.canvas.get_renderer())
-    y0 = ax.transAxes.inverted().transform((0.0, bb.y0))[1] if bb is not None else -0.15
-    return ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, y0 - pad),
+    axis_bbox = ax.xaxis.get_tightbbox(fig.canvas.get_renderer())
+    axis_bottom = ax.transAxes.inverted().transform((0.0, axis_bbox.y0))[1] if axis_bbox is not None else -0.15
+    return ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, axis_bottom - pad),
                      ncol=ncol, fontsize=fs(size_at_ref), handletextpad=0.3,
                      columnspacing=1.2)
 
 
 def reg_bin_labels(n_coef, with_kappa=False):
     """Tick labels of block 4: the distance coefficients, then (optionally) ln n."""
-    d = {1: [r"$\ln d$"],
+    labels_by_n_coef = {1: [r"$\ln d$"],
          4: [r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"],
          5: [r"$]20,50]$", r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"]}
-    out = d.get(n_coef, [rf"$\beta_{{{i + 1}}}$" for i in range(n_coef)])
-    return out + ([r"$\ln n_{ls}$"] if with_kappa else [])
+    labels = labels_by_n_coef.get(n_coef, [rf"$\beta_{{{i + 1}}}$" for i in range(n_coef)])
+    return labels + ([r"$\ln n_{ls}$"] if with_kappa else [])
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +544,7 @@ def _sim_block4(data):
     return np.asarray(data["simulated_moments_dict"]["reg_coef"], float)
 
 
-def reg_coef_world_table(data, q=WORLD_Q):
+def reg_coef_world_table(data, quantiles=WORLD_Q):
     """
     Block 4 = [beta_d ; beta_kappa]: data, simulated, and the fake-world 95% band.
 
@@ -565,35 +565,35 @@ def reg_coef_world_table(data, q=WORLD_Q):
     for mu = 2 it is re-centred on the step-3 simulated moment. Returns None when the
     residuals are absent.
     """
-    wr = data.get("world_residuals")
-    if wr is None:
+    world_residuals = data.get("world_residuals")
+    if world_residuals is None:
         return None
-    e = np.asarray(wr["e"], float)
-    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
-    sim = _sim_block4(data)
-    lo_e, hi_e = np.nanquantile(e, q[0], axis=0), np.nanquantile(e, q[1], axis=0)
-    mu_e, sd_e = np.nanmean(e, axis=0), np.nanstd(e, axis=0, ddof=1)
+    residual_draws = np.asarray(world_residuals["e"], float)
+    emp_coef = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    sim_coef = _sim_block4(data)
+    lo_e, hi_e = np.nanquantile(residual_draws, quantiles[0], axis=0), np.nanquantile(residual_draws, quantiles[1], axis=0)
+    mu_e, sd_e = np.nanmean(residual_draws, axis=0), np.nanstd(residual_draws, axis=0, ddof=1)
     labels = [f"beta_d[{l}]" for l in data["reg_coef_labels"][:-1]] + ["beta_kappa"]
     df = pd.DataFrame({
-        "data": emp, "simulated": sim, "residual": emp - sim,
+        "data": emp_coef, "simulated": sim_coef, "residual": emp_coef - sim_coef,
         "world_mean_e": mu_e, "world_sd_e": sd_e,
-        "band_lo": sim + lo_e, "band_hi": sim + hi_e,
-        "z": (emp - sim - mu_e) / sd_e,
+        "band_lo": sim_coef + lo_e, "band_hi": sim_coef + hi_e,
+        "z": (emp_coef - sim_coef - mu_e) / sd_e,
     }, index=pd.Index(labels, name="moment"))
     df["inside_band"] = (df["data"] >= df["band_lo"]) & (df["data"] <= df["band_hi"])
     W = data.get("W_world")
-    r = emp - sim
-    J = float(r @ W @ r) if W is not None and W.shape == (emp.size, emp.size) else np.nan
+    residual = emp_coef - sim_coef
+    J = float(residual @ W @ residual) if W is not None and W.shape == (emp_coef.size, emp_coef.size) else np.nan
     # Under the model e_data is one more draw of e, so J is read against the same
     # quadratic form over the worlds (uncentred on both sides: the simulator's bias
     # against a finite world is part of what e_data carries too).
-    Jw = (np.einsum("bi,ij,bj->b", e, W, e) if np.isfinite(J) else None)
-    df.attrs.update(n_worlds=int(e.shape[0]), q=q, J=J,
-                    J_pvalue=(float(np.mean(Jw >= J)) if Jw is not None else np.nan))
+    J_worlds = (np.einsum("bi,ij,bj->b", residual_draws, W, residual_draws) if np.isfinite(J) else None)
+    df.attrs.update(n_worlds=int(residual_draws.shape[0]), q=quantiles, J=J,
+                    J_pvalue=(float(np.mean(J_worlds >= J)) if J_worlds is not None else np.nan))
     return df
 
 
-def world_param_table(data, select=None, q=WORLD_Q, prefixes=None):
+def world_param_table(data, select=None, quantiles=WORLD_Q, prefixes=None):
     """
     Parameter-level inference from the fake worlds of `<inf_step>/inference_world/`.
 
@@ -605,25 +605,25 @@ def world_param_table(data, select=None, q=WORLD_Q, prefixes=None):
     is an area that won nothing there (T set to zero); `empty_share` counts them and the
     statistics are over the other worlds, as in Julia's report.
     """
-    wi = data.get("world_inference")
-    if wi is None:
+    world_inference = data.get("world_inference")
+    if world_inference is None:
         return None
-    lbl, P, est = wi["labels"], np.asarray(wi["params"], float), np.asarray(wi["estimate"], float)
-    keep = [j for j, l in enumerate(lbl) if (select is None or select(l))
+    labels, param_draws, estimate = world_inference["labels"], np.asarray(world_inference["params"], float), np.asarray(world_inference["estimate"], float)
+    keep = [j for j, l in enumerate(labels) if (select is None or select(l))
             and (prefixes is None or l.startswith(tuple(prefixes)))]
     rows = []
     for j in keep:
-        x = P[:, j]
-        f = x[np.isfinite(x)]
-        rows.append({"parameter": lbl[j], "estimate": est[j],
-                     "mean": f.mean() if f.size else np.nan,
-                     "bias": (f.mean() - est[j]) if f.size else np.nan,
-                     "sd": f.std(ddof=1) if f.size > 1 else np.nan,
-                     "q_lo": np.quantile(f, q[0]) if f.size else np.nan,
-                     "q_hi": np.quantile(f, q[1]) if f.size else np.nan,
-                     "empty_share": float(np.mean(~np.isfinite(x)))})
+        draws_j = param_draws[:, j]
+        finite_draws = draws_j[np.isfinite(draws_j)]
+        rows.append({"parameter": labels[j], "estimate": estimate[j],
+                     "mean": finite_draws.mean() if finite_draws.size else np.nan,
+                     "bias": (finite_draws.mean() - estimate[j]) if finite_draws.size else np.nan,
+                     "sd": finite_draws.std(ddof=1) if finite_draws.size > 1 else np.nan,
+                     "q_lo": np.quantile(finite_draws, quantiles[0]) if finite_draws.size else np.nan,
+                     "q_hi": np.quantile(finite_draws, quantiles[1]) if finite_draws.size else np.nan,
+                     "empty_share": float(np.mean(~np.isfinite(draws_j)))})
     df = pd.DataFrame(rows).set_index("parameter")
-    df.attrs.update(n_worlds=int(P.shape[0]), folder=str(wi.get("folder", "")))
+    df.attrs.update(n_worlds=int(param_draws.shape[0]), folder=str(world_inference.get("folder", "")))
     return df
 
 
@@ -633,17 +633,17 @@ def _is_trade_param(label):
 
 def _n_hat_world(data):
     """(B, S) variety counts re-calibrated in each fake world, or None."""
-    wi = data.get("world_inference")
-    if wi is None:
+    world_inference = data.get("world_inference")
+    if world_inference is None:
         return None
-    cols = [wi["labels"].index(f"N_s[{s}]") for s in data["sector_names"]
-            if f"N_s[{s}]" in wi["labels"]]
+    cols = [world_inference["labels"].index(f"N_s[{s}]") for s in data["sector_names"]
+            if f"N_s[{s}]" in world_inference["labels"]]
     if len(cols) != data["S"]:
         return None
-    return np.rint(np.asarray(wi["params"], float)[:, cols]).astype(int)
+    return np.rint(np.asarray(world_inference["params"], float)[:, cols]).astype(int)
 
 
-def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
+def plot_reg_coef(data, ax=None, save_to=None, quantiles=WORLD_Q):
     """
     The distance coefficients beta_d of block 4, empirical against simulated, with the
     95% fake-world band on the simulated point (`reg_coef_world_table`).
@@ -654,11 +654,11 @@ def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
     data covariance, and the band already contains the sampling noise of one finite
     network.
     """
-    nd = data["n_coef"]
-    emp = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)[:nd]
-    sim = _sim_block4(data)[:nd]
-    tab = reg_coef_world_table(data, q=q)
-    band = None if tab is None else (tab["band_lo"].values[:nd], tab["band_hi"].values[:nd])
+    n_distance = data["n_coef"]
+    emp_coef = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)[:n_distance]
+    sim_coef = _sim_block4(data)[:n_distance]
+    world_table = reg_coef_world_table(data, quantiles=quantiles)
+    band = None if world_table is None else (world_table["band_lo"].values[:n_distance], world_table["band_hi"].values[:n_distance])
     sim_label = "Simulated" + ("" if band is None
                                else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
                                else " (95% band)")
@@ -666,19 +666,19 @@ def plot_reg_coef(data, ax=None, save_to=None, q=WORLD_Q):
         fig, ax = plt.subplots(figsize=get_figsize(height_fraction=0.62))
     else:
         fig = ax.figure
-    _paired_errorbar(ax, reg_bin_labels(nd), emp, sim, band_sim=band,
+    _paired_errorbar(ax, reg_bin_labels(n_distance), emp_coef, sim_coef, band_sim=band,
                      ylabel="Cell cloglog coefficient on distance",
-                     xlabel="Distance bin (km)" if nd > 1 else "",
+                     xlabel="Distance bin (km)" if n_distance > 1 else "",
                      sim_label=sim_label, legend=False)
     # legend above the axes: inside, it sits on the bands of the far bins
     ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2)
     fig.tight_layout()
-    if tab is not None:
-        out = tab.iloc[:nd]
-        out = list(out.index[~out["inside_band"]])
-        if out:
+    if world_table is not None:
+        outside = world_table.iloc[:n_distance]
+        outside = list(outside.index[~outside["inside_band"]])
+        if outside:
             print(f"[plot_reg_coef] {data['industry']}: data outside the 95% simulation band "
-                  f"for {out}.")
+                  f"for {outside}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, format="pdf", bbox_inches="tight")
@@ -710,8 +710,8 @@ def _cloglog_F(eta):
 
 
 def _cloglog_f(eta):
-    e = np.exp(np.minimum(eta, 30.0))
-    return e * np.exp(-e)
+    exp_eta = np.exp(np.minimum(eta, 30.0))
+    return exp_eta * np.exp(-exp_eta)
 
 
 def reg_cell_sample(data):
@@ -725,80 +725,80 @@ def reg_cell_sample(data):
     Groups without variation in the data y are dropped (`cell_cloglog_beta` drops them;
     their fixed effect would be infinite). Returns a DataFrame, one row per cell.
     """
-    inp = data["input_folder"]
+    input_folder = data["input_folder"]
     S, R, n_coef = data["S"], data["R"], int(data["n_coef"])
     CELL_MASK = np.asarray(data["CELL_MASK"], bool)
-    cdf = pd.read_csv(inp / "cells_ls.csv")
-    fdf = pd.read_csv(inp / "filter_N_upstream.csv")
-    sec_keys = sorted(fdf["A129"].astype(str).unique())
-    ze_keys = sorted(fdf["ze2010"].map(_ze_key).unique())
-    if len(sec_keys) != S or len(ze_keys) != R:
+    cells_df = pd.read_csv(input_folder / "cells_ls.csv")
+    filter_df = pd.read_csv(input_folder / "filter_N_upstream.csv")
+    sector_keys = sorted(filter_df["A129"].astype(str).unique())
+    ze_keys = sorted(filter_df["ze2010"].map(_ze_key).unique())
+    if len(sector_keys) != S or len(ze_keys) != R:
         raise ValueError("filter_N_upstream.csv does not match the run's S x R.")
-    s_of = {k: i for i, k in enumerate(sec_keys)}
-    l_of = {k: i for i, k in enumerate(ze_keys)}
+    sector_index_of = {k: i for i, k in enumerate(sector_keys)}
+    ze_index_of = {k: i for i, k in enumerate(ze_keys)}
     y = np.full((S, R), np.nan)
-    logn = np.zeros((S, R))
-    si = cdf["A129"].astype(str).map(s_of)
-    li = cdf["ze2010"].map(_ze_key).map(l_of)
-    ok = si.notna() & li.notna()
-    si, li = si[ok].astype(int).to_numpy(), li[ok].astype(int).to_numpy()
-    keep = CELL_MASK[si, li]
-    si, li = si[keep], li[keep]
-    y[si, li] = cdf.loc[ok, "has_sup"].to_numpy(float)[keep]
-    logn[si, li] = np.log(cdf.loc[ok, "n_ls"].to_numpy(float)[keep])
+    log_n = np.zeros((S, R))
+    sector_index = cells_df["A129"].astype(str).map(sector_index_of)
+    ze_index = cells_df["ze2010"].map(_ze_key).map(ze_index_of)
+    ok = sector_index.notna() & ze_index.notna()
+    sector_index, ze_index = sector_index[ok].astype(int).to_numpy(), ze_index[ok].astype(int).to_numpy()
+    keep = CELL_MASK[sector_index, ze_index]
+    sector_index, ze_index = sector_index[keep], ze_index[keep]
+    y[sector_index, ze_index] = cells_df.loc[ok, "has_sup"].to_numpy(float)[keep]
+    log_n[sector_index, ze_index] = np.log(cells_df.loc[ok, "n_ls"].to_numpy(float)[keep])
 
-    D = np.load(inp / "distances.npy")[:R, :R]
-    Dd = D[:, _downstream_ze_index(data) - 1]                  # (R, R_d)
-    d = Dd.min(axis=1)
+    distances = np.load(input_folder / "distances.npy")[:R, :R]
+    distance_to_downstream = distances[:, _downstream_ze_index(data) - 1]                  # (R, R_d)
+    distance = distance_to_downstream.min(axis=1)
     edges = {5: (20, 50, 100, 150, 200), 4: (50, 100, 150, 200)}.get(n_coef, ())
-    b = np.zeros(R, int)
-    for e in edges:
-        b += d > e
-    aa = np.asarray(data["aa_of_ze"]).astype(int)
-    if not np.array_equal(Dd.argmin(axis=1), aa):
+    distance_bin = np.zeros(R, int)
+    for edge in edges:
+        distance_bin += distance > edge
+    area_of_ze = np.asarray(data["aa_of_ze"]).astype(int)
+    if not np.array_equal(distance_to_downstream.argmin(axis=1), area_of_ze):
         # load_parameters.jl asserts it: the group is (sector, nearest downstream region)
-        raise ValueError(f"{int((Dd.argmin(axis=1) != aa).sum())} ZE whose nearest downstream "
+        raise ValueError(f"{int((distance_to_downstream.argmin(axis=1) != area_of_ze).sum())} ZE whose nearest downstream "
                          "region is not their attraction area.")
-    ss, ll = np.nonzero(CELL_MASK)          # order does not matter: groups are labels
-    take = (d[ll] > 0) & np.isfinite(y[ss, ll])
-    ss, ll = ss[take], ll[take]
-    out = pd.DataFrame({"s": ss, "ze": ll, "group": ss * (aa.max() + 1) + aa[ll],
-                        "y": y[ss, ll], "dist": d[ll], "bin": b[ll],
-                        "log_d": np.log(d[ll]), "log_n": logn[ss, ll]})
-    gm = out.groupby("group")["y"].transform("mean")
-    out = out[(gm > 0) & (gm < 1)].reset_index(drop=True)
-    out["group"] = pd.factorize(out["group"])[0]
-    return out
+    cell_sector, cell_ze = np.nonzero(CELL_MASK)          # order does not matter: groups are labels
+    in_sample = (distance[cell_ze] > 0) & np.isfinite(y[cell_sector, cell_ze])
+    cell_sector, cell_ze = cell_sector[in_sample], cell_ze[in_sample]
+    sample = pd.DataFrame({"s": cell_sector, "ze": cell_ze, "group": cell_sector * (area_of_ze.max() + 1) + area_of_ze[cell_ze],
+                        "y": y[cell_sector, cell_ze], "dist": distance[cell_ze], "bin": distance_bin[cell_ze],
+                        "log_d": np.log(distance[cell_ze]), "log_n": log_n[cell_sector, cell_ze]})
+    group_mean_y = sample.groupby("group")["y"].transform("mean")
+    sample = sample[(group_mean_y > 0) & (group_mean_y < 1)].reset_index(drop=True)
+    sample["group"] = pd.factorize(sample["group"])[0]
+    return sample
 
 
 def _index_no_fe(sample, beta, n_coef, drop_distance=False):
     """x_i' beta without the fixed effect; `drop_distance` sets every distance term to 0."""
     beta = np.asarray(beta, float)
-    xb = beta[-1] * sample["log_n"].to_numpy()
+    linear_index = beta[-1] * sample["log_n"].to_numpy()
     if drop_distance:
-        return xb
+        return linear_index
     if n_coef == 1:
-        return xb + beta[0] * sample["log_d"].to_numpy()
-    bd = np.concatenate([[0.0], beta[:n_coef]])
-    return xb + bd[sample["bin"].to_numpy()]
+        return linear_index + beta[0] * sample["log_d"].to_numpy()
+    bin_effects = np.concatenate([[0.0], beta[:n_coef]])
+    return linear_index + bin_effects[sample["bin"].to_numpy()]
 
 
-def calibrate_cloglog_fe(sample, xb, n_iter=100):
+def calibrate_cloglog_fe(sample, linear_index, n_iter=100):
     """
     a_g with sum_{i in g} F(a_g + xb_i) = sum_{i in g} y_i, for every group at once.
     The left side is increasing in a_g, so the root is unique; bisection on a bracket
     that puts every eta in [-40, 40] (F saturates well inside it).
     """
-    g = sample["group"].to_numpy()
-    G = int(g.max()) + 1
-    target = np.bincount(g, weights=sample["y"].to_numpy(), minlength=G)
-    xmin = np.full(G, np.inf); np.minimum.at(xmin, g, xb)
-    xmax = np.full(G, -np.inf); np.maximum.at(xmax, g, xb)
+    group = sample["group"].to_numpy()
+    n_groups = int(group.max()) + 1
+    target = np.bincount(group, weights=sample["y"].to_numpy(), minlength=n_groups)
+    xmin = np.full(n_groups, np.inf); np.minimum.at(xmin, group, linear_index)
+    xmax = np.full(n_groups, -np.inf); np.maximum.at(xmax, group, linear_index)
     lo, hi = -40.0 - xmax, 40.0 - xmin
     for _ in range(n_iter):
-        mid = 0.5 * (lo + hi)
-        up = np.bincount(g, weights=_cloglog_F(mid[g] + xb), minlength=G) < target
-        lo, hi = np.where(up, mid, lo), np.where(up, hi, mid)
+        midpoint = 0.5 * (lo + hi)
+        below_target = np.bincount(group, weights=_cloglog_F(midpoint[group] + linear_index), minlength=n_groups) < target
+        lo, hi = np.where(below_target, midpoint, lo), np.where(below_target, hi, midpoint)
     return 0.5 * (lo + hi)
 
 
@@ -809,19 +809,19 @@ def extensive_ame(sample, beta, n_coef):
     when n_coef > 1, of length 1 (per unit of ln d) when n_coef = 1.
     """
     beta = np.asarray(beta, float)
-    xb = _index_no_fe(sample, beta, n_coef)
-    a = calibrate_cloglog_fe(sample, xb)[sample["group"].to_numpy()]
-    eta = a + xb
-    ame_k = float(np.mean(_cloglog_f(eta)) * beta[-1])
+    linear_index = _index_no_fe(sample, beta, n_coef)
+    group_effect = calibrate_cloglog_fe(sample, linear_index)[sample["group"].to_numpy()]
+    eta = group_effect + linear_index
+    ame_kappa = float(np.mean(_cloglog_f(eta)) * beta[-1])
     if n_coef == 1:
-        return np.array([np.mean(_cloglog_f(eta)) * beta[0]]), ame_k
-    eta0 = a + _index_no_fe(sample, beta, n_coef, drop_distance=True)
-    F0 = _cloglog_F(eta0)
-    ame = np.array([0.0] + [np.mean(_cloglog_F(eta0 + bk) - F0) for bk in beta[:n_coef]])
-    return ame, ame_k
+        return np.array([np.mean(_cloglog_f(eta)) * beta[0]]), ame_kappa
+    eta0 = group_effect + _index_no_fe(sample, beta, n_coef, drop_distance=True)
+    F_reference = _cloglog_F(eta0)
+    ame_distance = np.array([0.0] + [np.mean(_cloglog_F(eta0 + beta_bin) - F_reference) for beta_bin in beta[:n_coef]])
+    return ame_distance, ame_kappa
 
 
-def extensive_ame_table(data, q=WORLD_Q, sample=None):
+def extensive_ame_table(data, quantiles=WORLD_Q, sample=None):
     """
     Block 4 as average marginal effects in PERCENTAGE POINTS, data against simulated,
     with the fake-world band: the AME of each world's `beta_sim + e_b` (a_g re-solved
@@ -832,42 +832,42 @@ def extensive_ame_table(data, q=WORLD_Q, sample=None):
     `.attrs`: the data's supply rate in the reference bin, the sample size, the number
     of groups and worlds.
     """
-    smp = reg_cell_sample(data) if sample is None else sample
-    nd = int(data["n_coef"])
-    emp_b = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
-    sim_b = _sim_block4(data)
-    e_d, e_k = extensive_ame(smp, emp_b, nd)
-    s_d, s_k = extensive_ame(smp, sim_b, nd)
-    emp = 100 * np.append(e_d, e_k)
-    sim = 100 * np.append(s_d, s_k)
-    labels = _ame_labels(nd)
-    df = pd.DataFrame({"data": emp, "simulated": sim},
+    sample_cells = reg_cell_sample(data) if sample is None else sample
+    n_distance = int(data["n_coef"])
+    emp_beta = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    sim_beta = _sim_block4(data)
+    emp_ame_d, emp_ame_kappa = extensive_ame(sample_cells, emp_beta, n_distance)
+    sim_ame_d, sim_ame_kappa = extensive_ame(sample_cells, sim_beta, n_distance)
+    emp_ame = 100 * np.append(emp_ame_d, emp_ame_kappa)
+    sim_ame = 100 * np.append(sim_ame_d, sim_ame_kappa)
+    labels = _ame_labels(n_distance)
+    df = pd.DataFrame({"data": emp_ame, "simulated": sim_ame},
                       index=pd.Index(labels, name="AME (pp)"))
-    wr = data.get("world_residuals")
-    n_w = 0
-    if wr is not None:
-        e = np.asarray(wr["e"], float)
-        e = e[np.isfinite(e).all(axis=1)]
-        n_w = e.shape[0]
-        draws = np.array([100 * np.append(*extensive_ame(smp, sim_b + eb, nd)) for eb in e])
-        df["band_lo"] = np.quantile(draws, q[0], axis=0)
-        df["band_hi"] = np.quantile(draws, q[1], axis=0)
+    world_residuals = data.get("world_residuals")
+    n_worlds = 0
+    if world_residuals is not None:
+        residual_draws = np.asarray(world_residuals["e"], float)
+        residual_draws = residual_draws[np.isfinite(residual_draws).all(axis=1)]
+        n_worlds = residual_draws.shape[0]
+        draws = np.array([100 * np.append(*extensive_ame(sample_cells, sim_beta + residual_draw, n_distance)) for residual_draw in residual_draws])
+        df["band_lo"] = np.quantile(draws, quantiles[0], axis=0)
+        df["band_hi"] = np.quantile(draws, quantiles[1], axis=0)
         df["inside_band"] = (df["data"] >= df["band_lo"]) & (df["data"] <= df["band_hi"])
-        if nd > 1:
+        if n_distance > 1:
             df.iloc[0, df.columns.get_loc("inside_band")] = True
-    ref = (smp.loc[smp["bin"] == 0, "y"].mean() if nd > 1 else np.nan)
-    df.attrs.update(ref_rate=float(ref), n_cells=len(smp),
-                    n_groups=int(smp["group"].nunique()), n_worlds=n_w, q=q)
+    reference_rate = (sample_cells.loc[sample_cells["bin"] == 0, "y"].mean() if n_distance > 1 else np.nan)
+    df.attrs.update(ref_rate=float(reference_rate), n_cells=len(sample_cells),
+                    n_groups=int(sample_cells["group"].nunique()), n_worlds=n_worlds, q=quantiles)
     return df
 
 
 def _ame_labels(n_coef):
     dist = reg_bin_labels(n_coef)
-    ref = {4: [r"$]0,50]$"], 5: [r"$]0,20]$"]}.get(n_coef, [r"ref."])
-    return (dist if n_coef == 1 else ref + dist) + [r"$\ln n_{ls}$"]
+    reference_label = {4: [r"$]0,50]$"], 5: [r"$]0,20]$"]}.get(n_coef, [r"ref."])
+    return (dist if n_coef == 1 else reference_label + dist) + [r"$\ln n_{ls}$"]
 
 
-def plot_extensive_ame(data, table=None, density=False, save_to=None, q=WORLD_Q):
+def plot_extensive_ame(data, table=None, density=False, save_to=None, quantiles=WORLD_Q):
     """
     Block 4 as Fig. 4, Panel A reads it: the effect of each distance bin on the
     probability that a cell hosts a supplier, in percentage points RELATIVE TO the
@@ -877,48 +877,48 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, q=WORLD_Q)
     ln n_ls (pp per unit of ln n). The reference-bin supply rate of the
     data is in `table.attrs["ref_rate"]` and belongs in the caption.
     """
-    tab = extensive_ame_table(data, q=q) if table is None else table
-    nd = int(data["n_coef"])
-    labels = list(tab.index)
-    has_band = "band_lo" in tab
-    band = (tab["band_lo"].to_numpy(), tab["band_hi"].to_numpy()) if has_band else None
+    ame_table = extensive_ame_table(data, quantiles=quantiles) if table is None else table
+    n_distance = int(data["n_coef"])
+    labels = list(ame_table.index)
+    has_band = "band_lo" in ame_table
+    band = (ame_table["band_lo"].to_numpy(), ame_table["band_hi"].to_numpy()) if has_band else None
     sim_label = "Simulated" + ("" if not has_band
                                else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
                                else " (95% band)")
-    nds = nd + (1 if nd > 1 else 0)
+    n_distance_ticks = n_distance + (1 if n_distance > 1 else 0)
     if density:
-        fig, axs = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.62),
-                                gridspec_kw={"width_ratios": [nds + 0.6, 1.6]})
+        fig, panel_axes = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.62),
+                                gridspec_kw={"width_ratios": [n_distance_ticks + 0.6, 1.6]})
     else:
-        fig, ax0 = plt.subplots(figsize=get_figsize(height_fraction=0.62))
-        axs = [ax0]
-    sl = [slice(0, nds), slice(nds, nds + 1)]
-    for k, a in enumerate(axs):
-        s_ = sl[k]
-        _paired_errorbar(a, labels[s_], tab["data"].to_numpy()[s_],
-                         tab["simulated"].to_numpy()[s_],
-                         band_sim=None if band is None else (band[0][s_], band[1][s_]),
+        fig, single_ax = plt.subplots(figsize=get_figsize(height_fraction=0.62))
+        panel_axes = [single_ax]
+    panel_slices = [slice(0, n_distance_ticks), slice(n_distance_ticks, n_distance_ticks + 1)]
+    for k, panel_ax in enumerate(panel_axes):
+        panel_slice = panel_slices[k]
+        _paired_errorbar(panel_ax, labels[panel_slice], ame_table["data"].to_numpy()[panel_slice],
+                         ame_table["simulated"].to_numpy()[panel_slice],
+                         band_sim=None if band is None else (band[0][panel_slice], band[1][panel_slice]),
                          ylabel=("Supply probability\ndifference (in pp)" if k == 0
                                  else "pp per unit of ln n"),
-                         xlabel=("Distance" if nd > 1 else "") if k == 0 else "Density",
+                         xlabel=("Distance" if n_distance > 1 else "") if k == 0 else "Density",
                          sim_label=sim_label, legend=(k == 0))
-        a.axhline(0, color="black", ls="dashed", lw=0.8, zorder=0)
-        if k == 0 and nds >= 5:
+        panel_ax.axhline(0, color="black", ls="dashed", lw=0.8, zorder=0)
+        if k == 0 and n_distance_ticks >= 5:
             # five bin labels plus the reference do not fit at the default size
-            a.tick_params(axis="x", labelsize=0.75 * mpl.rcParams["xtick.labelsize"]
+            panel_ax.tick_params(axis="x", labelsize=0.75 * mpl.rcParams["xtick.labelsize"]
                           if isinstance(mpl.rcParams["xtick.labelsize"], (int, float))
                           else "small")
     fig.tight_layout()
-    if has_band and not tab["inside_band"].all():
+    if has_band and not ame_table["inside_band"].all():
         print(f"[plot_extensive_ame] {data['industry']}: data outside the 95% simulation "
-              f"band for {list(tab.index[~tab['inside_band']])}.")
+              f"band for {list(ame_table.index[~ame_table['inside_band']])}.")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, format="pdf", bbox_inches="tight")
-    return axs
+    return panel_axes
 
 
-def g_curve_world_band(data, K_values=(0,), q=WORLD_Q):
+def g_curve_world_band(data, K_values=(0,), quantiles=WORLD_Q):
     """
     (lo, hi) arrays (S, |K|) for the simulated count curve, from the variety counts
     re-calibrated in each fake world.
@@ -929,32 +929,32 @@ def g_curve_world_band(data, K_values=(0,), q=WORLD_Q):
     theta_hat (the worlds' own (alpha, kappa, T) are not re-simulated here), so it is a
     lower bound on the full band. None when the worlds or the diagnostics are absent.
     """
-    Nw = _n_hat_world(data)
+    N_worlds = _n_hat_world(data)
     diag = data.get("granular_diagnostics")
-    if Nw is None or diag is None or "q_hat" not in diag:
+    if N_worlds is None or diag is None or "q_hat" not in diag:
         return None
-    Ks = list(K_values)
+    K_list = list(K_values)
     q_hat = np.asarray(diag["q_hat"], float).ravel()
     N_HI = np.asarray(diag["N_HI"], float).ravel() if "N_HI" in diag else np.array([100.0])
     n_rho = max(100, int(round(np.nanmax(N_HI))))
     k_counts = np.rint(q_hat * n_rho).astype(int)
-    lg = _logfact(n_rho)
+    log_factorial = _logfact(n_rho)
     good_s = _cell_sectors(data)
     S = data["S"]
-    lo, hi = np.full((S, len(Ks)), np.nan), np.full((S, len(Ks)), np.nan)
+    lo, hi = np.full((S, len(K_list)), np.nan), np.full((S, len(K_list)), np.nan)
     for s in range(S):
         cells = good_s == s
         if not cells.any():
             continue
-        vals = {}
-        for n in np.unique(Nw[:, s]):
-            vals[n] = [gbar_cells(k_counts[cells], n_rho, n, K, lg).mean() for K in Ks]
-        draws = np.array([vals[n] for n in Nw[:, s]])          # (B, |K|)
-        lo[s], hi[s] = np.quantile(draws, q[0], axis=0), np.quantile(draws, q[1], axis=0)
+        curve_by_N = {}
+        for N_value in np.unique(N_worlds[:, s]):
+            curve_by_N[N_value] = [gbar_cells(k_counts[cells], n_rho, N_value, K, log_factorial).mean() for K in K_list]
+        draws = np.array([curve_by_N[N_value] for N_value in N_worlds[:, s]])          # (B, |K|)
+        lo[s], hi[s] = np.quantile(draws, quantiles[0], axis=0), np.quantile(draws, quantiles[1], axis=0)
     return lo, hi
 
 
-def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
+def plot_G0(data, ax=None, save_to=None, z_critical=1.96, annotate_N=True, quantiles=WORLD_Q):
     """
     Empirical vs simulated Gbar_s(0) -- the share of cells with no supplier.
 
@@ -964,13 +964,13 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
     """
     if not data["granular"]:
         raise ValueError("Gbar_s(0) only exists under --granular=true")
-    emp = np.asarray(data["empirical_moments_dict"]["G0"], float)
-    sim = np.asarray(data["simulated_moments_dict"]["G0"], float)
-    wb = g_curve_world_band(data, K_values=(0,), q=q)
-    band = None if wb is None else (wb[0][:, 0], wb[1][:, 0])
+    emp_G0 = np.asarray(data["empirical_moments_dict"]["G0"], float)
+    sim_G0 = np.asarray(data["simulated_moments_dict"]["G0"], float)
+    world_band = g_curve_world_band(data, K_values=(0,), quantiles=quantiles)
+    band = None if world_band is None else (world_band[0][:, 0], world_band[1][:, 0])
 
     fig, ax = (plt.subplots(figsize=get_figsize(height_fraction=0.62)) if ax is None else (ax.figure, ax))
-    _paired_errorbar(ax, data["sector_names"], emp, sim, ci=ci, band_sim=band,
+    _paired_errorbar(ax, data["sector_names"], emp_G0, sim_G0, z_critical=z_critical, band_sim=band,
                      ylabel=r"$\bar{G}_s(0)$", rotate=45,
                      sim_label="Simulated" if band is None else
                      ("Simulated (95\\% band)" if mpl.rcParams.get("text.usetex")
@@ -986,14 +986,14 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
     if annotate_N and diag is not None and "N_hat" in diag:
         N_hat = np.asarray(diag["N_hat"]).ravel()
         clamped = np.asarray(diag.get("clamped", np.zeros_like(N_hat))).ravel()
-        Nw = _n_hat_world(data)
-        top = ax.get_ylim()[1]
-        for i, (n, cl) in enumerate(zip(N_hat, clamped)):
-            txt = rf"$\hat{{N}}_s={int(n)}$" + ("*" if cl != 0 else "")
-            if Nw is not None:
-                a, b = np.quantile(Nw[:, i], q)
-                txt += rf" $[{int(a)},{int(b)}]$"
-            ax.text(i, top, txt, ha="center", va="bottom", fontsize=fs(12), rotation=45)
+        N_worlds = _n_hat_world(data)
+        y_top = ax.get_ylim()[1]
+        for i, (n, clamp_state) in enumerate(zip(N_hat, clamped)):
+            annotation = rf"$\hat{{N}}_s={int(n)}$" + ("*" if clamp_state != 0 else "")
+            if N_worlds is not None:
+                N_world_lo, N_world_hi = np.quantile(N_worlds[:, i], quantiles)
+                annotation += rf" $[{int(N_world_lo)},{int(N_world_hi)}]$"
+            ax.text(i, y_top, annotation, ha="center", va="bottom", fontsize=fs(12), rotation=45)
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         ax.figure.savefig(save_to, format="pdf", bbox_inches="tight")
@@ -1001,15 +1001,15 @@ def plot_G0(data, ax=None, save_to=None, ci=1.96, annotate_N=True, q=WORLD_Q):
     # The same two numbers are printed by Julia's own reporting; a gap between the
     # figure and that report is a wiring fault, not a modelling result, so say so
     # rather than leaving it to be discovered by eye.
-    chk = g0_consistency(data, verbose=False)
-    if chk is not None and not bool(chk.attrs.get("agrees", True)):
+    consistency = g0_consistency(data, verbose=False)
+    if consistency is not None and not bool(consistency.attrs.get("agrees", True)):
         print(f"[plot_G0] {data['industry']}: the figure and "
               f"{data['inference_step']}/granular_diagnostics.npz disagree on "
               "Gbar_s(0) — run g0_consistency(data) for the per-sector table.")
     return ax
 
 
-def plot_parameter_ci(data, save_to=None, q=WORLD_Q):
+def plot_parameter_ci(data, save_to=None, quantiles=WORLD_Q):
     """
     (alpha, kappa) and N_hat_s with their 95% fake-world intervals.
 
@@ -1019,16 +1019,16 @@ def plot_parameter_ci(data, save_to=None, q=WORLD_Q):
     distribution). Points are the estimate, bars the 2.5/97.5% quantiles across worlds,
     open circles the world mean (its distance to the point is the bias).
     """
-    tab = world_param_table(data, q=q)
-    if tab is None:
+    world_table = world_param_table(data, quantiles=quantiles)
+    if world_table is None:
         raise FileNotFoundError(
             f"no {data['inference_step']}/inference_world/world_inference_draws.npz under "
             f"{data['folder']} — run the inference step of main.jl.")
-    head = tab[[_is_trade_param(l) for l in tab.index]]
-    Ns = tab.loc[[f"N_s[{s}]" for s in data["sector_names"]]]
+    head = world_table[[_is_trade_param(l) for l in world_table.index]]
+    N_table = world_table.loc[[f"N_s[{s}]" for s in data["sector_names"]]]
 
-    fig, axs = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.55),
-                            gridspec_kw={"width_ratios": [len(head) + 0.6, len(Ns) + 0.6]})
+    fig, panel_axes = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.55),
+                            gridspec_kw={"width_ratios": [len(head) + 0.6, len(N_table) + 0.6]})
 
     def _draw(a, df, labels, ylabel):
         x = np.arange(len(df), dtype=float)
@@ -1046,17 +1046,17 @@ def plot_parameter_ci(data, save_to=None, q=WORLD_Q):
         a.grid(axis="y", linestyle="dashed", alpha=0.5)
         _despine(a)
 
-    hl = [(r"$\alpha$" if l == "alpha[1]" and data["n_tau"] == 1 else
+    head_labels = [(r"$\alpha$" if l == "alpha[1]" and data["n_tau"] == 1 else
            rf"$\alpha_{{{l[6:-1]}}}$" if l.startswith("alpha") else r"$\kappa$")
           for l in head.index]
-    _draw(axs[0], head, hl, "Estimate")
-    axs[0].axhline(0, color="black", linewidth=0.6, alpha=0.5)
-    _draw(axs[1], Ns, data["sector_names"], r"$\hat N_s$")
+    _draw(panel_axes[0], head, head_labels, "Estimate")
+    panel_axes[0].axhline(0, color="black", linewidth=0.6, alpha=0.5)
+    _draw(panel_axes[1], N_table, data["sector_names"], r"$\hat N_s$")
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, format="pdf", bbox_inches="tight")
-    return axs
+    return panel_axes
 
 
 G0_TOL = 1e-6
@@ -1130,13 +1130,13 @@ def g0_consistency(data, tol=None, verbose=True):
     df.attrs.update(agrees=agrees, max_abs_target_gap=worst_t, max_abs_fit_gap=worst_f)
 
     if verbose or not agrees:
-        src = (f"{data['folder'].name}: moments {data['step_dir']}/best_simulated_moments.npy "
+        source_text = (f"{data['folder'].name}: moments {data['step_dir']}/best_simulated_moments.npy "
                f"vs {data['inference_step']}/granular_diagnostics.npz")
         if agrees:
-            print(f"[g0_consistency] {data['industry']} (mu = {data['mu']}) OK — {src}; "
+            print(f"[g0_consistency] {data['industry']} (mu = {data['mu']}) OK — {source_text}; "
                   f"max |gap| target {worst_t:.2e}, fit {worst_f:.2e}")
         else:
-            print(f"[g0_consistency] {data['industry']} (mu = {data['mu']}) MISMATCH — {src}\n"
+            print(f"[g0_consistency] {data['industry']} (mu = {data['mu']}) MISMATCH — {source_text}\n"
                   f"  max |gap| on the target {worst_t:.2e}, on the fit {worst_f:.2e} "
                   f"(tol {tol:.0e}).\n"
                   "  A TARGET gap means G_K.csv changed since the run: the figure reads the "
@@ -1157,17 +1157,17 @@ _DEFAULT_COUNT_K = tuple(range(int(globals().get("COUNT_CURVE_K_MAX", 3)) + 1))
 
 def _logfact(m):
     """`lg[i] = log(i!)` for i = 0..m, by cumulative sum — Julia's gbar_logfact_table."""
-    lg = np.zeros(int(m) + 1)
+    log_factorial = np.zeros(int(m) + 1)
     if m >= 1:
-        lg[1:] = np.cumsum(np.log(np.arange(1, int(m) + 1, dtype=float)))
-    return lg
+        log_factorial[1:] = np.cumsum(np.log(np.arange(1, int(m) + 1, dtype=float)))
+    return log_factorial
 
 
-def _log_binom(a, b, lg):
-    return lg[a] - lg[b] - lg[a - b]
+def _log_binom(a, b, log_factorial):
+    return log_factorial[a] - log_factorial[b] - log_factorial[a - b]
 
 
-def gbar_cells(k, m, n, K, lg):
+def gbar_cells(k, m, n, K, log_factorial):
     """
     Unbiased per-cell estimate of `Pr(K_ls == K)` -- EXACTLY K suppliers, not at most K.
 
@@ -1191,25 +1191,25 @@ def gbar_cells(k, m, n, K, lg):
     m, n, K = int(m), int(n), int(K)
     if n <= 0:
         return np.ones(k.shape) if K == 0 else np.zeros(k.shape)
-    out = np.zeros(k.shape, float)
+    pmf = np.zeros(k.shape, float)
     if K < 0 or K > n:
-        return out
+        return pmf
     ok = (K <= k) & (n - K <= m - k)
     if ok.any():
-        kk = k[ok]
-        out[ok] = np.exp(_log_binom(kk, K, lg)
-                         + _log_binom(m - kk, n - K, lg) - _log_binom(m, n, lg))
-    return out
+        k_ok = k[ok]
+        pmf[ok] = np.exp(_log_binom(k_ok, K, log_factorial)
+                         + _log_binom(m - k_ok, n - K, log_factorial) - _log_binom(m, n, log_factorial))
+    return pmf
 
 
-def _plugin_cells(q, n, K):
+def _plugin_cells(q_hat, n, K):
     """Plug-in fallback: the Binomial(n, q_hat) pmf at exactly K. Biased (Jensen), robust."""
-    q = np.clip(np.asarray(q, float), 0.0, 1.0)
+    q_hat = np.clip(np.asarray(q_hat, float), 0.0, 1.0)
     n, K = int(n), int(K)
     if K < 0 or K > n:
-        return np.zeros(q.shape, float)
-    lg = _logfact(max(n, 1))
-    return float(np.exp(_log_binom(n, K, lg))) * q ** K * (1 - q) ** (n - K)
+        return np.zeros(q_hat.shape, float)
+    log_factorial = _logfact(max(n, 1))
+    return float(np.exp(_log_binom(n, K, log_factorial))) * q_hat ** K * (1 - q_hat) ** (n - K)
 
 
 def _cell_sectors(data):
@@ -1259,7 +1259,7 @@ def count_curve(data, K_values=None, tol=1e-9):
     """
     if not data["granular"]:
         raise ValueError("the count curve only exists under --granular=true")
-    Ks = list(_DEFAULT_COUNT_K if K_values is None else K_values)
+    K_list = list(_DEFAULT_COUNT_K if K_values is None else K_values)
     S = data["S"]
     diag = data.get("granular_diagnostics")
     if diag is None or "q_hat" not in diag or "N_hat" not in diag:
@@ -1269,78 +1269,78 @@ def count_curve(data, K_values=None, tol=1e-9):
             "two, so there is nothing to plot against. Re-run the step that writes it "
             f"({'Step 2' if data['mu'] == 1 else 'Step 4'} of main.jl).")
 
-    q = np.asarray(diag["q_hat"], float).ravel()
+    q_hat = np.asarray(diag["q_hat"], float).ravel()
     N_hat = np.rint(np.asarray(diag["N_hat"], float).ravel()).astype(int)
     N_HI = np.asarray(diag["N_HI"], float).ravel() if "N_HI" in diag else np.array([100.0])
     clamped = (np.asarray(diag["clamped"], float).ravel() if "clamped" in diag
                else np.zeros(S))
     good_s = _cell_sectors(data)
-    if q.size != good_s.size:
-        raise ValueError(f"q_hat has {q.size} cells but CELL_MASK has {good_s.size} — "
+    if q_hat.size != good_s.size:
+        raise ValueError(f"q_hat has {q_hat.size} cells but CELL_MASK has {good_s.size} — "
                          "the run's granular/ca_level flags and the ones passed here disagree.")
 
     n_rho = max(100, int(round(np.nanmax(N_HI))))        # load_parameters.jl's N_rho rule
-    k_counts = np.rint(q * n_rho).astype(int)
-    integral_gap = float(np.max(np.abs(q * n_rho - k_counts))) if q.size else 0.0
-    lg = _logfact(n_rho)
+    k_counts = np.rint(q_hat * n_rho).astype(int)
+    integral_gap = float(np.max(np.abs(q_hat * n_rho - k_counts))) if q_hat.size else 0.0
+    log_factorial = _logfact(n_rho)
 
     def curve(unbiased):
-        out = np.full((S, len(Ks)), np.nan)
+        out = np.full((S, len(K_list)), np.nan)
         for s in range(S):
             cells = good_s == s
             if not cells.any():
                 continue
-            for i, K in enumerate(Ks):
-                out[s, i] = (gbar_cells(k_counts[cells], n_rho, N_hat[s], K, lg).mean()
-                             if unbiased else _plugin_cells(q[cells], N_hat[s], K).mean())
+            for i, K in enumerate(K_list):
+                out[s, i] = (gbar_cells(k_counts[cells], n_rho, N_hat[s], K, log_factorial).mean()
+                             if unbiased else _plugin_cells(q_hat[cells], N_hat[s], K).mean())
         return out
 
     block6 = np.asarray(data["simulated_moments_dict"]["G0"], float)
-    sim = curve(True)
+    sim_curve = curve(True)
     estimator, gap = "unbiased (gbar_cell)", np.inf
-    if 0 in Ks:
-        gap = float(np.nanmax(np.abs(sim[:, Ks.index(0)] - block6)))
-    if integral_gap > 1e-6 or (0 in Ks and gap > 1e-6):
+    if 0 in K_list:
+        gap = float(np.nanmax(np.abs(sim_curve[:, K_list.index(0)] - block6)))
+    if integral_gap > 1e-6 or (0 in K_list and gap > 1e-6):
         sim_pi = curve(False)
-        gap_pi = (float(np.nanmax(np.abs(sim_pi[:, Ks.index(0)] - block6)))
-                  if 0 in Ks else np.inf)
+        gap_pi = (float(np.nanmax(np.abs(sim_pi[:, K_list.index(0)] - block6)))
+                  if 0 in K_list else np.inf)
         print(f"[count_curve] {data['industry']}: the unbiased reconstruction does not "
               f"reproduce block 6 at K = 0 (gap {gap:.2e}, q_hat*N_rho integrality "
               f"{integral_gap:.2e} at N_rho = {n_rho}); falling back to the plug-in "
               f"Binomial pmf (gap {gap_pi:.2e}). K >= 1 is then biased by Jensen "
               "— read it as indicative, and check N_rho against the run's log line.")
-        sim, estimator, gap = sim_pi, "plug-in Binomial(N_hat, q_hat)", gap_pi
+        sim_curve, estimator, gap = sim_pi, "plug-in Binomial(N_hat, q_hat)", gap_pi
 
     # The fake-world band of the simulated curve (variety-count channel).
-    wb = g_curve_world_band(data, K_values=Ks)
-    sim_lo, sim_hi = (np.full((S, len(Ks)), np.nan),) * 2 if wb is None else wb
+    world_band = g_curve_world_band(data, K_values=K_list)
+    sim_lo, sim_hi = (np.full((S, len(K_list)), np.nan),) * 2 if world_band is None else world_band
 
     # ---- empirical: the shares of G_K.csv (exactly K suppliers), no interval ----
-    emp = np.full((S, len(Ks)), np.nan)
-    gk, gp = data.get("G_curve_K"), data.get("G_pmf")
-    if gp is not None and gk is not None:
-        for i, K in enumerate(Ks):
-            if K in gk:
-                emp[:, i] = gp[:, gk.index(K)]
-    missing = [K for K in Ks if gk is not None and K not in gk]
+    emp_curve = np.full((S, len(K_list)), np.nan)
+    K_in_file, pmf_in_file = data.get("G_curve_K"), data.get("G_pmf")
+    if pmf_in_file is not None and K_in_file is not None:
+        for i, K in enumerate(K_list):
+            if K in K_in_file:
+                emp_curve[:, i] = pmf_in_file[:, K_in_file.index(K)]
+    missing = [K for K in K_list if K_in_file is not None and K not in K_in_file]
     if missing:
         print(f"[count_curve] {data['industry']}: G_K.csv has no row for K = {missing} — "
               "those panels show the simulated curve only.")
 
-    idx = pd.MultiIndex.from_product([data["sector_names"], Ks], names=["A129", "K"])
-    df = pd.DataFrame({"empirical": emp.ravel(),
-                       "simulated": sim.ravel(),
+    sector_K_index = pd.MultiIndex.from_product([data["sector_names"], K_list], names=["A129", "K"])
+    df = pd.DataFrame({"empirical": emp_curve.ravel(),
+                       "simulated": sim_curve.ravel(),
                        "sim_lo": sim_lo.ravel(), "sim_hi": sim_hi.ravel(),
-                       "residual": (sim - emp).ravel(),
-                       "N_hat": np.repeat(N_hat, len(Ks)),
-                       "clamped": np.repeat(clamped != 0, len(Ks)),
-                       "targeted": np.tile([K == 0 for K in Ks], S)}, index=idx)
+                       "residual": (sim_curve - emp_curve).ravel(),
+                       "N_hat": np.repeat(N_hat, len(K_list)),
+                       "clamped": np.repeat(clamped != 0, len(K_list)),
+                       "targeted": np.tile([K == 0 for K in K_list], S)}, index=sector_K_index)
     df.attrs.update(estimator=estimator, K0_gap_vs_moment_vector=gap,
-                    n_rho=n_rho, K_values=Ks)
+                    n_rho=n_rho, K_values=K_list)
     return df
 
 
-def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
+def plot_count_curve(data, K_values=None, save_to=None, z_critical=1.96, df=None):
     """
     One INDEPENDENT figure per K: empirical against simulated `Gbar_s(K)` across sectors.
 
@@ -1357,7 +1357,7 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     One band, on the SIMULATED point only: the 2.5/97.5% quantiles of the fitted curve
     across the simulated economies of the inference step, through the variety count each
     re-calibrates (q_hat held at the estimate; `g_curve_world_band`). The empirical
-    points carry NO interval (the data side has no model-based error). `ci` is unused
+    points carry NO interval (the data side has no model-based error). `z_critical` is unused
     and kept so existing calls parse.
 
     `save_to` is a STEM, not a file: K is appended before the extension, so
@@ -1370,24 +1370,24 @@ def plot_count_curve(data, K_values=None, save_to=None, ci=1.96, df=None):
     """
     df = count_curve(data, K_values=K_values) if df is None else df
     available = list(df.attrs["K_values"])
-    Ks = available if K_values is None else [int(K) for K in np.atleast_1d(K_values)]
-    absent = [K for K in Ks if K not in available]
+    K_list = available if K_values is None else [int(K) for K in np.atleast_1d(K_values)]
+    absent = [K for K in K_list if K not in available]
     if absent:
         raise KeyError(f"K = {absent} is not in the count curve passed here "
                        f"(it carries K = {available}) — rebuild it with "
-                       f"`count_curve(data, K_values={Ks})`.")
+                       f"`count_curve(data, K_values={K_list})`.")
     sectors = data["sector_names"]
 
     stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
     axes = {}
-    for K in Ks:
-        sub = df.xs(K, level="K").reindex(sectors)
+    for K in K_list:
+        curve_K = df.xs(K, level="K").reindex(sectors)
         _, ax = plt.subplots(figsize=get_figsize(height_fraction=0.62))
-        band = ((sub["sim_lo"].values, sub["sim_hi"].values)
-                if np.isfinite(sub["sim_lo"].values).any() else None)
+        band = ((curve_K["sim_lo"].values, curve_K["sim_hi"].values)
+                if np.isfinite(curve_K["sim_lo"].values).any() else None)
         _paired_errorbar(
-            ax, sectors, sub["empirical"].values, sub["simulated"].values,
-            None, None, ci=ci, band_sim=band,          # no interval on the data point
+            ax, sectors, curve_K["empirical"].values, curve_K["simulated"].values,
+            None, None, z_critical=z_critical, band_sim=band,          # no interval on the data point
             ylabel=rf"$\bar{{G}}_s({K})$", rotate=45)
         ax.figure.tight_layout()
         if stem:
@@ -1414,27 +1414,27 @@ def _sens(data):
 
 def _moment_block_of(data, i):
     """(block index 0..5, position inside the block) of masked moment `i`."""
-    e = np.cumsum([0] + list(data["moment_block_sizes"]))
-    b = int(np.searchsorted(e, i, side="right") - 1)
-    return b, i - e[b]
+    block_edges = np.cumsum([0] + list(data["moment_block_sizes"]))
+    block = int(np.searchsorted(block_edges, i, side="right") - 1)
+    return block, i - block_edges[block]
 
 
-def world_data_band(data, i, q=(0.05, 0.95)):
+def world_data_band(data, i, quantiles=(0.05, 0.95)):
     """
     The 5/95% band of a DATA moment across the Step-2 fake worlds -- the counterpart of
     Figure D.1's bootstrap band: where one finite economy drawn at theta_hat_1 puts that
     moment. Available for block 4 (`beta_world`) and block 6 (`G_world`); None otherwise.
     """
-    wr = data.get("world_residuals")
-    if wr is None:
+    world_residuals = data.get("world_residuals")
+    if world_residuals is None:
         return None
-    b, k = _moment_block_of(data, i)
-    key = {3: "beta_world", 5: "G_world"}.get(b)
-    if key is None or key not in wr:
+    block, position = _moment_block_of(data, i)
+    key = {3: "beta_world", 5: "G_world"}.get(block)
+    if key is None or key not in world_residuals:
         return None
-    x = np.asarray(wr[key], float)[:, k]
-    x = x[np.isfinite(x)]
-    return None if x.size < 2 else tuple(np.quantile(x, q))
+    draws = np.asarray(world_residuals[key], float)[:, position]
+    draws = draws[np.isfinite(draws)]
+    return None if draws.size < 2 else tuple(np.quantile(draws, quantiles))
 
 
 def _moment_tex(label):
@@ -1480,48 +1480,48 @@ def plot_sensitivity_profiles(data, params=None, moments=None, save_to=None, ban
     """
     sens = _sens(data)
     labels = data["moment_labels"]
-    want = list(sens["profiles"]) if params is None else list(params)
-    out = {}
+    wanted = list(sens["profiles"]) if params is None else list(params)
+    axes_by_param = {}
     stem, ext = os.path.splitext(save_to) if save_to else (None, ".pdf")
-    for p in want:
-        pr = sens["profiles"][p]
-        idx = (list(pr["targets"]) if moments is None
+    for param in wanted:
+        profile = sens["profiles"][param]
+        moment_indices = (list(profile["targets"]) if moments is None
                else [labels.index(m) for m in moments])
-        n = len(idx)
-        nc = ncols or min(n, 3)
-        nr = int(np.ceil(n / nc))
-        w, h = get_figsize(height_fraction=0.62)
-        fig, axs = plt.subplots(nr, nc, figsize=(w * min(nc, 2) / 1.3, h * nr / 1.1 + 0.2),
+        n = len(moment_indices)
+        n_cols = ncols or min(n, 3)
+        n_rows = int(np.ceil(n / n_cols))
+        fig_width, fig_height = get_figsize(height_fraction=0.62)
+        fig, panel_axes = plt.subplots(n_rows, n_cols, figsize=(fig_width * min(n_cols, 2) / 1.3, fig_height * n_rows / 1.1 + 0.2),
                                 squeeze=False)
-        g = np.asarray(pr["grid"], float)
-        for a, i in zip(axs.ravel(), idx):
-            ok = np.asarray(pr["converged"], float) > 0
-            y = np.asarray(pr["m_est"], float)[:, i]
-            mu, sd = np.asarray(pr["m_mean"], float)[:, i], np.asarray(pr["m_sd"], float)[:, i]
-            fin = np.isfinite(mu) & np.isfinite(sd)
-            if fin.any():
-                a.fill_between(g[fin], (mu - band_sd * sd)[fin], (mu + band_sd * sd)[fin],
+        grid = np.asarray(profile["grid"], float)
+        for panel_ax, i in zip(panel_axes.ravel(), moment_indices):
+            ok = np.asarray(profile["converged"], float) > 0
+            model_curve = np.asarray(profile["m_est"], float)[:, i]
+            mu, sd = np.asarray(profile["m_mean"], float)[:, i], np.asarray(profile["m_sd"], float)[:, i]
+            finite = np.isfinite(mu) & np.isfinite(sd)
+            if finite.any():
+                panel_ax.fill_between(grid[finite], (mu - band_sd * sd)[finite], (mu + band_sd * sd)[finite],
                                color=sim_color, alpha=0.18, linewidth=0)
-            a.plot(g[ok], y[ok], color=sim_color, marker="o", markersize=3, linewidth=1.4)
-            dat = float(np.asarray(pr["data"], float)[i])
+            panel_ax.plot(grid[ok], model_curve[ok], color=sim_color, marker="o", markersize=3, linewidth=1.4)
+            data_moment = float(np.asarray(profile["data"], float)[i])
             band = world_data_band(data, i)
             if band is not None:
-                a.axhspan(band[0], band[1], color="0.6", alpha=0.3, linewidth=0)
-            a.axhline(dat, color="black", linewidth=1.2)
-            a.axvline(pr["estimate"], color="red", linewidth=1.2)
-            a.set_xlabel(_param_tex(p))
-            a.set_ylabel(_moment_tex(labels[i]))
-            a.grid(linestyle="dashed", alpha=0.4)
-            _despine(a)
-        for a in axs.ravel()[n:]:
-            a.set_visible(False)
+                panel_ax.axhspan(band[0], band[1], color="0.6", alpha=0.3, linewidth=0)
+            panel_ax.axhline(data_moment, color="black", linewidth=1.2)
+            panel_ax.axvline(profile["estimate"], color="red", linewidth=1.2)
+            panel_ax.set_xlabel(_param_tex(param))
+            panel_ax.set_ylabel(_moment_tex(labels[i]))
+            panel_ax.grid(linestyle="dashed", alpha=0.4)
+            _despine(panel_ax)
+        for panel_ax in panel_axes.ravel()[n:]:
+            panel_ax.set_visible(False)
         fig.tight_layout()
         if stem:
-            path = f"{stem}_{re.sub(r'[^A-Za-z0-9]+', '_', p).strip('_')}{ext or '.pdf'}"
+            path = f"{stem}_{re.sub(r'[^A-Za-z0-9]+', '_', param).strip('_')}{ext or '.pdf'}"
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             fig.savefig(path, format="pdf", bbox_inches="tight")
-        out[p] = axs
-    return out
+        axes_by_param[param] = panel_axes
+    return axes_by_param
 
 
 def sensitivity_profile_table(data):
@@ -1534,25 +1534,25 @@ def sensitivity_profile_table(data):
     """
     sens = _sens(data)
     rows = []
-    for p, pr in sens["profiles"].items():
-        g = np.asarray(pr["grid"], float)
-        i0 = int(np.argmin(np.abs(g - pr["estimate"])))
-        for i in pr["targets"]:
-            y = np.asarray(pr["m_est"], float)[:, i]
-            sd = np.asarray(pr["m_sd"], float)[:, i]
-            ok = np.isfinite(y)
-            slope = ((y[i0 + 1] - y[i0 - 1]) / (g[i0 + 1] - g[i0 - 1])
-                     if 0 < i0 < g.size - 1 else np.nan)
-            d = np.diff(y[ok])
-            mono = (np.mean(np.sign(d) == np.sign(slope))
-                    if d.size and np.isfinite(slope) else np.nan)
-            r = y[ok] - float(pr["data"][i])
-            rng_ = np.nanmax(y) - np.nanmin(y) if ok.any() else np.nan
-            rows.append({"parameter": p, "moment": data["moment_labels"][i],
-                         "estimate": pr["estimate"], "model": y[i0],
-                         "data": float(pr["data"][i]), "slope": slope, "monotone": mono,
-                         "crosses_data": bool(r.size > 1 and np.any(r[:-1] * r[1:] <= 0)),
-                         "noise_to_range": (sd[i0] / rng_ if rng_ and rng_ > 0 else np.nan)})
+    for param, profile in sens["profiles"].items():
+        grid = np.asarray(profile["grid"], float)
+        estimate_position = int(np.argmin(np.abs(grid - profile["estimate"])))
+        for i in profile["targets"]:
+            model_curve = np.asarray(profile["m_est"], float)[:, i]
+            sd = np.asarray(profile["m_sd"], float)[:, i]
+            ok = np.isfinite(model_curve)
+            slope = ((model_curve[estimate_position + 1] - model_curve[estimate_position - 1]) / (grid[estimate_position + 1] - grid[estimate_position - 1])
+                     if 0 < estimate_position < grid.size - 1 else np.nan)
+            steps = np.diff(model_curve[ok])
+            monotone_share = (np.mean(np.sign(steps) == np.sign(slope))
+                    if steps.size and np.isfinite(slope) else np.nan)
+            gap_to_data = model_curve[ok] - float(profile["data"][i])
+            curve_range = np.nanmax(model_curve) - np.nanmin(model_curve) if ok.any() else np.nan
+            rows.append({"parameter": param, "moment": data["moment_labels"][i],
+                         "estimate": profile["estimate"], "model": model_curve[estimate_position],
+                         "data": float(profile["data"][i]), "slope": slope, "monotone": monotone_share,
+                         "crosses_data": bool(gap_to_data.size > 1 and np.any(gap_to_data[:-1] * gap_to_data[1:] <= 0)),
+                         "noise_to_range": (sd[estimate_position] / curve_range if curve_range and curve_range > 0 else np.nan)})
     return pd.DataFrame(rows).set_index(["parameter", "moment"])
 
 
@@ -1607,7 +1607,7 @@ def jacobian_noise_ratio(data, kind="elasticity"):
     structural zero (the N_s columns outside block 6) carries no simulation noise, and
     conflating it with an unmeasured entry is precisely what this diagnostic is for.
     """
-    E = np.asarray(jacobian_matrix(data, kind), float)
+    elasticities = np.asarray(jacobian_matrix(data, kind), float)
     sd = data.get("J_elast_sd" if "elast" in kind else "J_sd")
     if sd is None:
         raise FileNotFoundError(
@@ -1615,12 +1615,12 @@ def jacobian_noise_ratio(data, kind="elasticity"):
             f"{data['inference_step']}/ — compute_jacobian writes it as "
             "jacobian_all*_elasticity_sd.npy when K > 1.")
     sd = np.abs(np.asarray(sd, float))
-    A = np.abs(E)
+    abs_elasticities = np.abs(elasticities)
     with np.errstate(divide="ignore", invalid="ignore"):
-        R = sd / A
-    R[(A == 0) & (sd == 0)] = 0.0          # structural zero: measured, and exactly zero
-    R[~np.isfinite(R)] = np.inf            # nonzero noise on a zero signal: unreadable
-    return R
+        noise_ratio = sd / abs_elasticities
+    noise_ratio[(abs_elasticities == 0) & (sd == 0)] = 0.0          # structural zero: measured, and exactly zero
+    noise_ratio[~np.isfinite(noise_ratio)] = np.inf            # nonzero noise on a zero signal: unreadable
+    return noise_ratio
 
 
 def jacobian_noise_mask(data, kind="elasticity", noise_max=NOISE_MAX):
@@ -1654,13 +1654,13 @@ def _block_grid(ax, data, m_edges, p_edges, block_names=True):
 
 
 def _axis_labels(ax, data, shape):
-    xs = np.arange(shape[1])[::_tick_every(shape[1])]
-    ax.set_xticks(xs)
-    ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=fs(7))
+    x_ticks = np.arange(shape[1])[::_tick_every(shape[1])]
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(np.array(data["param_labels"])[x_ticks], rotation=90, fontsize=fs(7))
     ax.xaxis.set_ticks_position("bottom")
-    ys = np.arange(shape[0])[::_tick_every(shape[0])]
-    ax.set_yticks(ys)
-    ax.set_yticklabels(np.array(data["moment_labels"])[ys], fontsize=fs(7))
+    y_ticks = np.arange(shape[0])[::_tick_every(shape[0])]
+    ax.set_yticks(y_ticks)
+    ax.set_yticklabels(np.array(data["moment_labels"])[y_ticks], fontsize=fs(7))
     ax.set_xlabel("Parameter")
     ax.set_ylabel("Moment")
 
@@ -1679,25 +1679,25 @@ def _sector_subblocks(data, block_name="Regional sourcing shares"):
     names = list(data["moment_block_names"])
     if block_name not in names:
         return []
-    e = _edges(data["moment_block_sizes"])
-    lo, hi = int(e[names.index(block_name)]), int(e[names.index(block_name) + 1])
+    block_edges = _edges(data["moment_block_sizes"])
+    lo, hi = int(block_edges[names.index(block_name)]), int(block_edges[names.index(block_name) + 1])
     labels = list(data["moment_labels"])[lo:hi]
 
-    def _sector(lab):
-        if lab.startswith("f_foreign[") and lab.endswith("]"):   # the import share, last row
-            return lab[len("f_foreign["):-1]
-        if not lab.startswith("gamma[") or "-AA" not in lab:
+    def _sector(label):
+        if label.startswith("f_foreign[") and label.endswith("]"):   # the import share, last row
+            return label[len("f_foreign["):-1]
+        if not label.startswith("gamma[") or "-AA" not in label:
             return None
-        return lab[len("gamma["):lab.rfind("-AA")]
+        return label[len("gamma["):label.rfind("-AA")]
 
-    runs, start, cur = [], 0, _sector(labels[0]) if labels else None
-    if cur is None:
+    runs, start, current_sector = [], 0, _sector(labels[0]) if labels else None
+    if current_sector is None:
         return []
-    for i, lab in enumerate(labels[1:] + [None], start=1):
-        s = _sector(lab) if lab is not None else object()
-        if s != cur:
-            runs.append((lo + start, lo + i, cur))
-            start, cur = i, s
+    for i, label in enumerate(labels[1:] + [None], start=1):
+        s = _sector(label) if label is not None else object()
+        if s != current_sector:
+            runs.append((lo + start, lo + i, current_sector))
+            start, current_sector = i, s
     return runs
 
 
@@ -1734,11 +1734,11 @@ def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
     cmap, norm = _binned_cmap(JACOBIAN_BOUNDARIES, coarse=coarse)
     cmap = cmap.copy()
     cmap.set_bad("white")
-    M = np.ma.masked_where(np.asarray(mask, bool), J) if mask is not None else J
+    shown_matrix = np.ma.masked_where(np.asarray(mask, bool), J) if mask is not None else J
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
 
     fig, ax = plt.subplots(figsize=figsize)
-    im = ax.matshow(M, cmap=cmap, norm=norm, aspect="auto")
+    image = ax.matshow(shown_matrix, cmap=cmap, norm=norm, aspect="auto")
     _block_grid(ax, data, m_edges, p_edges)
     _axis_labels(ax, data, J.shape)
 
@@ -1749,7 +1749,7 @@ def plot_jacobian_full(data, kind="elasticity", coarse=False, figsize=(15, 11),
             kept = float((~np.asarray(mask, bool)).mean())
             title += f"\nnoise-purged: {100 * kept:.1f}% of entries readable"
     ax.set_title(title, pad=28)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
+    cbar = fig.colorbar(image, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
                         ticks=(None if coarse else JACOBIAN_BOUNDARIES))
     cbar.set_label("Elasticity" if "elast" in kind else "d m / d theta")
     if not coarse:
@@ -1771,27 +1771,27 @@ def plot_jacobian_noise(data, kind="elasticity", noise_max=NOISE_MAX, figsize=(1
     purged panel blanks out. Reading this panel first says WHICH parts of the Jacobian
     can be interpreted at all, before any statement is made about what they show.
     """
-    R = jacobian_noise_ratio(data, kind)
-    bad = R >= noise_max
+    noise_ratio = jacobian_noise_ratio(data, kind)
+    unreadable = noise_ratio >= noise_max
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
 
     fig, ax = plt.subplots(figsize=figsize)
     cmap = plt.get_cmap("YlOrRd").copy()
     cmap.set_over("black")
-    im = ax.matshow(np.clip(R, 0, noise_max * 2), cmap=cmap, aspect="auto",
+    image = ax.matshow(np.clip(noise_ratio, 0, noise_max * 2), cmap=cmap, aspect="auto",
                     vmin=0, vmax=noise_max * 2)
     # mark the failures explicitly, so a reader is not left inferring them from a colour
-    ys, xs = np.where(bad)
-    ax.scatter(xs, ys, s=1.5, marker="s", color="black", alpha=0.35, linewidths=0)
+    y_unreadable, x_unreadable = np.where(unreadable)
+    ax.scatter(x_unreadable, y_unreadable, s=1.5, marker="s", color="black", alpha=0.35, linewidths=0)
     _block_grid(ax, data, m_edges, p_edges)
-    _axis_labels(ax, data, R.shape)
+    _axis_labels(ax, data, noise_ratio.shape)
 
-    share = float(bad.mean())
+    share = float(unreadable.mean())
     ax.set_title(f"Jacobian noise-to-signal $\\sigma/|\\varepsilon|$ — "
                  f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
                  f"\n{100 * share:.1f}{pct()} of entries at or above {noise_max:g} "
                  "(black squares) — not readable", pad=28)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
+    cbar = fig.colorbar(image, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22,
                         extend="max")
     cbar.set_label(r"$\sigma_{jk} / |\varepsilon_{jk}|$ across the Jacobian replications"
                    f"   (threshold {noise_max:g})")
@@ -1802,27 +1802,27 @@ def plot_jacobian_noise(data, kind="elasticity", noise_max=NOISE_MAX, figsize=(1
 
 
 def plot_jacobian_triptych(data, kind="elasticity", noise_max=NOISE_MAX,
-                           figsize=(15, 11), out_folder=None, tag="jacobian",
+                           figsize=(15, 11), out_folder=None, file_tag="jacobian",
                            show=True):
     """
     The three panels together: the elasticity Jacobian, the noise-to-signal map, and the
-    Jacobian purged of the entries the map rejects. Saves `<tag>`, `<tag>_noise` and
-    `<tag>_purged` under `out_folder` when one is given.
+    Jacobian purged of the entries the map rejects. Saves `<file_tag>`, `<file_tag>_noise` and
+    `<file_tag>_purged` under `out_folder` when one is given.
     """
-    def _p(name):
+    def output_path(name):
         return None if out_folder is None else \
             f"{out_folder}/{name}_{data['industry']}_mu{data['mu']}.pdf"
 
     mask = jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
-    axes = [plot_jacobian_full(data, kind=kind, figsize=figsize, save_to=_p(tag))]
+    axes = [plot_jacobian_full(data, kind=kind, figsize=figsize, save_to=output_path(file_tag))]
     if show:
         plt.show()
     axes.append(plot_jacobian_noise(data, kind=kind, noise_max=noise_max,
-                                    figsize=figsize, save_to=_p(tag + "_noise")))
+                                    figsize=figsize, save_to=output_path(file_tag + "_noise")))
     if show:
         plt.show()
     axes.append(plot_jacobian_full(data, kind=kind, figsize=figsize, mask=mask,
-                                   save_to=_p(tag + "_purged")))
+                                   save_to=output_path(file_tag + "_purged")))
     if show:
         plt.show()
     return axes
@@ -1847,25 +1847,25 @@ def plot_jacobian_blocks(data, kind="elasticity", coarse=True, ncols=3,
 
     for i, (name, block) in enumerate(zip(names, blocks)):
         ax = axes[i]
-        im = ax.matshow(block, cmap=cmap, norm=norm, aspect="auto")
+        image = ax.matshow(block, cmap=cmap, norm=norm, aspect="auto")
         for e in p_edges[1:-1]:
             ax.axvline(e - 0.5, color="black", linewidth=1.2, alpha=0.5)
 
-        cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.12)
+        cbar = fig.colorbar(image, ax=ax, orientation="horizontal", fraction=0.05, pad=0.12)
         cbar.set_label("Elasticity", fontsize=fs(9))
         ax.set_title(f"{name}\n({block.shape[0]}x{block.shape[1]})",
                      fontsize=fs(13), fontweight="bold", pad=12)
         ax.set_xlabel("Parameter", fontsize=fs(10))
 
-        xs = np.arange(block.shape[1])[::_tick_every(block.shape[1], 20)]
-        ax.set_xticks(xs)
-        ax.set_xticklabels(np.array(data["param_labels"])[xs], rotation=90, fontsize=fs(7))
+        x_ticks = np.arange(block.shape[1])[::_tick_every(block.shape[1], 20)]
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(np.array(data["param_labels"])[x_ticks], rotation=90, fontsize=fs(7))
         ax.xaxis.set_ticks_position("bottom")
 
         row_labels = np.array(data["moment_labels"][m_edges[i]:m_edges[i + 1]])
-        ys = np.arange(block.shape[0])[::_tick_every(block.shape[0], 20)]
-        ax.set_yticks(ys)
-        ax.set_yticklabels(row_labels[ys], fontsize=fs(7))
+        y_ticks = np.arange(block.shape[0])[::_tick_every(block.shape[0], 20)]
+        ax.set_yticks(y_ticks)
+        ax.set_yticklabels(row_labels[y_ticks], fontsize=fs(7))
 
     for ax in axes[len(names):]:
         ax.axis("off")
@@ -1885,21 +1885,21 @@ def jacobian_block_summary(data, kind="elasticity", noise_max=NOISE_MAX):
     A large mean elasticity in a block whose readable share is low is a statement about
     the simulation, not about the model.
     """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
+    abs_elasticities = np.abs(np.asarray(jacobian_matrix(data, kind), float))
     try:
-        ok = ~jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
+        readable = ~jacobian_noise_mask(data, kind=kind, noise_max=noise_max)
     except FileNotFoundError:
-        ok = np.ones_like(E, dtype=bool)
+        readable = np.ones_like(abs_elasticities, dtype=bool)
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
     rows = []
     for i, mname in enumerate(data["moment_block_names"]):
         for j, pname in enumerate(data["param_block_names"]):
-            sl = (slice(m_edges[i], m_edges[i + 1]), slice(p_edges[j], p_edges[j + 1]))
-            sub, sub_ok = E[sl], ok[sl]
+            block_slice = (slice(m_edges[i], m_edges[i + 1]), slice(p_edges[j], p_edges[j + 1]))
+            block_values, block_readable = abs_elasticities[block_slice], readable[block_slice]
             rows.append({"moment_block": mname, "param_block": pname,
-                         "mean_abs": sub.mean() if sub.size else np.nan,
-                         "max_abs": sub.max() if sub.size else np.nan,
-                         "share_readable": sub_ok.mean() if sub.size else np.nan})
+                         "mean_abs": block_values.mean() if block_values.size else np.nan,
+                         "max_abs": block_values.max() if block_values.size else np.nan,
+                         "share_readable": block_readable.mean() if block_values.size else np.nan})
     df = pd.DataFrame(rows)
     return df.set_index(["moment_block", "param_block"]).unstack("param_block") \
              .reindex(index=data["moment_block_names"]) \
@@ -1927,18 +1927,18 @@ def _gb_edges(data):
     return np.cumsum([0] + sizes), names
 
 
-def _cov_panel(ax, M, data, title, mode="cov", pct=95):
+def _cov_panel(ax, matrix, data, title, mode="cov", percentile=95):
     """One matrix panel with the block grid drawn on; `mode` is "cov" or "corr"."""
     from matplotlib.colors import TwoSlopeNorm
     edges, names = _gb_edges(data)
     if mode == "corr":
-        d = np.sqrt(np.clip(np.diag(M), 1e-300, None))
-        M = M / np.outer(d, d)
-        im = ax.matshow(M, cmap="RdBu_r", vmin=-1, vmax=1)
+        sd_diagonal = np.sqrt(np.clip(np.diag(matrix), 1e-300, None))
+        matrix = matrix / np.outer(sd_diagonal, sd_diagonal)
+        image = ax.matshow(matrix, cmap="RdBu_r", vmin=-1, vmax=1)
     else:
-        v = np.percentile(np.abs(M), pct)
-        v = v if v > 0 else (np.abs(M).max() or 1.0)
-        im = ax.matshow(M, cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v))
+        color_limit = np.percentile(np.abs(matrix), percentile)
+        color_limit = color_limit if color_limit > 0 else (np.abs(matrix).max() or 1.0)
+        image = ax.matshow(matrix, cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-color_limit, vcenter=0, vmax=color_limit))
     for e in edges[1:-1]:
         ax.axhline(e - 0.5, color="black", linewidth=0.8, alpha=0.6)
         ax.axvline(e - 0.5, color="black", linewidth=0.8, alpha=0.6)
@@ -1948,7 +1948,7 @@ def _cov_panel(ax, M, data, title, mode="cov", pct=95):
     ax.set_yticks(ticks)
     ax.set_yticklabels(names, fontsize=fs(9), rotation=90, va="center")
     ax.set_title(title, pad=14)
-    return im
+    return image
 
 
 def _cov_matrices(data):
@@ -1957,20 +1957,20 @@ def _cov_matrices(data):
             ("$\\Omega = \\Sigma_{data} + \\Sigma_{sim}$", data.get("Omega"))]
 
 
-def plot_variance_covariance(data, figsize=(16, 5.5), pct=95, save_to=None):
+def plot_variance_covariance(data, figsize=(16, 5.5), percentile=95, save_to=None):
     """Sigma_sim, Sigma_data and Omega side by side, each on its own diverging scale."""
-    mats = _cov_matrices(data)
-    if all(m is None for _, m in mats):
+    matrices = _cov_matrices(data)
+    if all(m is None for _, m in matrices):
         raise FileNotFoundError(f"no Sigma_*/Omega in {data['folder']}/step2/ — "
                                 "build_step3_weight_matrix writes them in Step 2.")
-    fig, axes = plt.subplots(1, len(mats), figsize=figsize)
-    for ax, (title, M) in zip(np.atleast_1d(axes), mats):
-        if M is None:
+    fig, axes = plt.subplots(1, len(matrices), figsize=figsize)
+    for ax, (title, matrix) in zip(np.atleast_1d(axes), matrices):
+        if matrix is None:
             ax.axis("off")
             ax.set_title(title + "\n(absent)")
             continue
-        im = _cov_panel(ax, M, data, title, mode="cov", pct=pct)
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        image = _cov_panel(ax, matrix, data, title, mode="cov", percentile=percentile)
+        fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     fig.suptitle(f"Moment variance-covariance — {data['industry']} "
                  "(extensive margin, sourcing shares, zero-supplier shares)", fontsize=fs(14))
     fig.tight_layout()
@@ -1990,17 +1990,17 @@ def plot_moment_correlation(data, figsize=(16, 5.5), save_to=None):
     whether the simulator's noise is (it is, through the shared draws), and which of the
     two Omega inherits its structure from.
     """
-    mats = _cov_matrices(data)
-    if all(m is None for _, m in mats):
+    matrices = _cov_matrices(data)
+    if all(m is None for _, m in matrices):
         raise FileNotFoundError(f"no Sigma_*/Omega in {data['folder']}/step2/")
-    fig, axes = plt.subplots(1, len(mats), figsize=figsize)
-    for ax, (title, M) in zip(np.atleast_1d(axes), mats):
-        if M is None:
+    fig, axes = plt.subplots(1, len(matrices), figsize=figsize)
+    for ax, (title, matrix) in zip(np.atleast_1d(axes), matrices):
+        if matrix is None:
             ax.axis("off")
             ax.set_title(title + "\n(absent)")
             continue
-        im = _cov_panel(ax, M, data, title, mode="corr")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        image = _cov_panel(ax, matrix, data, title, mode="corr")
+        fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     fig.suptitle(f"Moment CORRELATION — {data['industry']} "
                  "(same three matrices, rescaled by their own diagonal)", fontsize=fs(14))
     fig.tight_layout()
@@ -2020,23 +2020,23 @@ def variance_covariance_summary(data):
     thing the correlation figure shows, as one number per matrix. The condition numbers
     say whether inverting Omega to build W is safe.
     """
-    out = {}
+    summary = {}
     for name in ("Sigma_data", "Sigma_sim", "Omega"):
-        M = data.get(name)
-        if M is None:
+        matrix = data.get(name)
+        if matrix is None:
             continue
-        ev = np.linalg.eigvalsh((M + M.T) / 2)
-        d = np.sqrt(np.clip(np.diag(M), 1e-300, None))
-        C = M / np.outer(d, d)
-        off = ~np.eye(C.shape[0], dtype=bool)
-        out[name] = {"trace": float(np.trace(M)),
-                     "eig_min": float(ev.min()), "eig_max": float(ev.max()),
-                     "cond": float(ev.max() / ev.min()) if ev.min() > 0 else np.inf,
-                     "mean_abs_offdiag_corr": float(np.abs(C[off]).mean())}
-    if "Sigma_sim" in out and "Sigma_data" in out and out["Sigma_data"]["trace"] != 0:
-        out["Sigma_sim"]["share_of_data_trace"] = \
-            out["Sigma_sim"]["trace"] / out["Sigma_data"]["trace"]
-    return pd.DataFrame(out).T
+        eigenvalues = np.linalg.eigvalsh((matrix + matrix.T) / 2)
+        sd_diagonal = np.sqrt(np.clip(np.diag(matrix), 1e-300, None))
+        correlation = matrix / np.outer(sd_diagonal, sd_diagonal)
+        off_diagonal = ~np.eye(correlation.shape[0], dtype=bool)
+        summary[name] = {"trace": float(np.trace(matrix)),
+                     "eig_min": float(eigenvalues.min()), "eig_max": float(eigenvalues.max()),
+                     "cond": float(eigenvalues.max() / eigenvalues.min()) if eigenvalues.min() > 0 else np.inf,
+                     "mean_abs_offdiag_corr": float(np.abs(correlation[off_diagonal]).mean())}
+    if "Sigma_sim" in summary and "Sigma_data" in summary and summary["Sigma_data"]["trace"] != 0:
+        summary["Sigma_sim"]["share_of_data_trace"] = \
+            summary["Sigma_sim"]["trace"] / summary["Sigma_data"]["trace"]
+    return pd.DataFrame(summary).T
 
 
 # ============================================================================
@@ -2064,30 +2064,30 @@ def plot_world_covariance(data, figsize=None, save_to=None):
     estimator: W_world = inv(Omega_world) on block 4, gamma and G being matched exactly.
     """
     from matplotlib.colors import TwoSlopeNorm
-    Om = data.get("Omega_world")
-    if Om is None:
+    Omega_world = data.get("Omega_world")
+    if Omega_world is None:
         raise FileNotFoundError(f"no step2/Omega_world.npy under {data['folder']}")
     labels = reg_bin_labels(data["n_coef"], with_kappa=True)
-    d = np.sqrt(np.clip(np.diag(Om), 1e-300, None))
-    C = Om / np.outer(d, d)
-    k = Om.shape[0]
-    fig, axs = plt.subplots(1, 2, figsize=figsize or get_figsize(height_fraction=0.5))
-    v = np.abs(Om).max() or 1.0
-    for a, M, norm, fmt in ((axs[0], Om, TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v), "{:.2g}"),
-                            (axs[1], C, TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1), "{:.2f}")):
-        a.matshow(M, cmap="RdBu_r", norm=norm)
-        for i in range(k):
-            for j in range(k):
-                a.text(j, i, fmt.format(M[i, j]), ha="center", va="center", fontsize=fs(8))
-        a.set_xticks(range(k)); a.set_xticklabels(labels, rotation=45, ha="left", fontsize=fs(9))
-        a.set_yticks(range(k)); a.set_yticklabels(labels, fontsize=fs(9))
-    axs[0].set_xlabel(r"$\tilde\Omega$ (covariance)")
-    axs[1].set_xlabel("correlation")
+    sd_diagonal = np.sqrt(np.clip(np.diag(Omega_world), 1e-300, None))
+    correlation = Omega_world / np.outer(sd_diagonal, sd_diagonal)
+    n_coefficients = Omega_world.shape[0]
+    fig, panel_axes = plt.subplots(1, 2, figsize=figsize or get_figsize(height_fraction=0.5))
+    color_limit = np.abs(Omega_world).max() or 1.0
+    for panel_ax, matrix, norm, number_format in ((panel_axes[0], Omega_world, TwoSlopeNorm(vmin=-color_limit, vcenter=0, vmax=color_limit), "{:.2g}"),
+                            (panel_axes[1], correlation, TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1), "{:.2f}")):
+        panel_ax.matshow(matrix, cmap="RdBu_r", norm=norm)
+        for i in range(n_coefficients):
+            for j in range(n_coefficients):
+                panel_ax.text(j, i, number_format.format(matrix[i, j]), ha="center", va="center", fontsize=fs(8))
+        panel_ax.set_xticks(range(n_coefficients)); panel_ax.set_xticklabels(labels, rotation=45, ha="left", fontsize=fs(9))
+        panel_ax.set_yticks(range(n_coefficients)); panel_ax.set_yticklabels(labels, fontsize=fs(9))
+    panel_axes[0].set_xlabel(r"$\tilde\Omega$ (covariance)")
+    panel_axes[1].set_xlabel("correlation")
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, format="pdf", bbox_inches="tight")
-    return axs
+    return panel_axes
 
 
 def world_weight_summary(data):
@@ -2099,22 +2099,22 @@ def world_weight_summary(data):
     in each world and lose N_TAU + 1 degrees of freedom). With as many block-4 entries as (alpha, kappa) the system
     is exactly identified, so J is ~0 at theta_hat_2 by construction and carries no test.
     """
-    tab = reg_coef_world_table(data)
-    if tab is None:
+    world_table = reg_coef_world_table(data)
+    if world_table is None:
         return None
-    k = len(tab)
-    exact = k == data["n_tau"] + 1
-    print(f"{data['industry']} (mu = {data['mu']}): {tab.attrs['n_worlds']} usable worlds; "
-          f"J = {tab.attrs['J']:.3g}, share of worlds with a larger quadratic form "
-          f"{tab.attrs['J_pvalue']:.3f}"
+    n_block4 = len(world_table)
+    exact = n_block4 == data["n_tau"] + 1
+    print(f"{data['industry']} (mu = {data['mu']}): {world_table.attrs['n_worlds']} usable worlds; "
+          f"J = {world_table.attrs['J']:.3g}, share of worlds with a larger quadratic form "
+          f"{world_table.attrs['J_pvalue']:.3f}"
           + ("  [exactly identified: no over-identification test]" if exact else ""))
-    return tab
+    return world_table
 
 
-def _blocks_2d(data, M):
+def _blocks_2d(data, matrix):
     """M split into (moment block x parameter block) sub-matrices."""
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
-    return {(i, j): M[m_edges[i]:m_edges[i + 1], p_edges[j]:p_edges[j + 1]]
+    return {(i, j): matrix[m_edges[i]:m_edges[i + 1], p_edges[j]:p_edges[j + 1]]
             for i in range(len(data["moment_block_names"]))
             for j in range(len(data["param_block_names"]))}
 
@@ -2143,20 +2143,20 @@ def identification_summary(data, threshold=IDENT_THRESHOLD, kind="elasticity",
     the channel does not exist (the N_s columns outside block 6, asserted in Julia),
     whereas an unreadable entry says nothing at all.
     """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+    abs_elasticities = np.abs(np.asarray(jacobian_matrix(data, kind), float))
+    readable = _readable(data, kind, noise_max)
     rows = []
-    for (i, j), sub in _blocks_2d(data, E).items():
-        sub_ok = _blocks_2d(data, ok)[(i, j)]
+    for (i, j), block_values in _blocks_2d(data, abs_elasticities).items():
+        block_readable = _blocks_2d(data, readable)[(i, j)]
         rows.append({
             "moment_block": data["moment_block_names"][i],
             "param_block": data["param_block_names"][j],
-            "share_above": float((sub >= threshold).mean()) if sub.size else np.nan,
-            "share_readable": float(sub_ok.mean()) if sub.size else np.nan,
-            "share_live": float(((sub >= threshold) & sub_ok).mean()) if sub.size else np.nan,
-            "max_abs": float(sub.max()) if sub.size else np.nan,
-            "mean_abs": float(sub.mean()) if sub.size else np.nan,
-            "share_exact_zero": float((sub == 0).mean()) if sub.size else np.nan,
+            "share_above": float((block_values >= threshold).mean()) if block_values.size else np.nan,
+            "share_readable": float(block_readable.mean()) if block_values.size else np.nan,
+            "share_live": float(((block_values >= threshold) & block_readable).mean()) if block_values.size else np.nan,
+            "max_abs": float(block_values.max()) if block_values.size else np.nan,
+            "mean_abs": float(block_values.mean()) if block_values.size else np.nan,
+            "share_exact_zero": float((block_values == 0).mean()) if block_values.size else np.nan,
         })
     df = pd.DataFrame(rows)
     return df.set_index(["moment_block", "param_block"]).unstack("param_block") \
@@ -2173,36 +2173,36 @@ def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
     at all. A near-diagonal pattern down the (Trade cost, Comparative advantage, Variety
     count) columns is the identification claim, read off directly.
     """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+    abs_elasticities = np.abs(np.asarray(jacobian_matrix(data, kind), float))
+    readable = _readable(data, kind, noise_max)
     m_names, p_names = data["moment_block_names"], data["param_block_names"]
-    blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
-    n_m, n_p = len(m_names), len(p_names)
+    blocks, blocks_ok = _blocks_2d(data, abs_elasticities), _blocks_2d(data, readable)
+    n_moment_blocks, n_param_blocks = len(m_names), len(p_names)
 
     def _grid(fn):
         return np.array([[fn(blocks[(i, j)], blocks_ok[(i, j)])
                           if blocks[(i, j)].size else np.nan
-                          for j in range(n_p)] for i in range(n_m)])
+                          for j in range(n_param_blocks)] for i in range(n_moment_blocks)])
 
     live = _grid(lambda s, o: ((s >= threshold) & o).mean())
-    mx = _grid(lambda s, o: s.max())
-    read = _grid(lambda s, o: o.mean())
+    max_abs = _grid(lambda s, o: s.max())
+    readable_share = _grid(lambda s, o: o.mean())
 
     fig, ax = plt.subplots(figsize=figsize)
-    im = ax.matshow(live, cmap="Blues", vmin=0, vmax=1, aspect="auto")
-    for i in range(n_m):
-        for j in range(n_p):
+    image = ax.matshow(live, cmap="Blues", vmin=0, vmax=1, aspect="auto")
+    for i in range(n_moment_blocks):
+        for j in range(n_param_blocks):
             if not np.isfinite(live[i, j]):
                 continue
-            txt = f"{100 * live[i, j]:.0f}{pct()}\nmax {mx[i, j]:.3g}"
-            if read[i, j] < 0.999:
-                txt += f"\n({100 * read[i, j]:.0f}{pct()} readable)"
-            ax.text(j, i, txt, ha="center", va="center", fontsize=fs(8),
+            annotation = f"{100 * live[i, j]:.0f}{pct()}\nmax {max_abs[i, j]:.3g}"
+            if readable_share[i, j] < 0.999:
+                annotation += f"\n({100 * readable_share[i, j]:.0f}{pct()} readable)"
+            ax.text(j, i, annotation, ha="center", va="center", fontsize=fs(8),
                     color="white" if live[i, j] > 0.55 else "black")
-    ax.set_xticks(range(n_p))
+    ax.set_xticks(range(n_param_blocks))
     ax.set_xticklabels(p_names, rotation=30, ha="left", fontsize=fs(10))
     ax.xaxis.set_ticks_position("top")
-    ax.set_yticks(range(n_m))
+    ax.set_yticks(range(n_moment_blocks))
     ax.set_yticklabels(m_names, fontsize=fs(10))
     ax.set_xlabel("Parameter block")
     ax.set_ylabel("Moment block")
@@ -2210,7 +2210,7 @@ def plot_identification_map(data, threshold=IDENT_THRESHOLD, kind="elasticity",
                  rf"$\hat{{\mu}}_{data['mu']}$"
                  f"\nshare of $|\\varepsilon| \\geq {threshold:g}$ AND "
                  f"$\\sigma/|\\varepsilon| < {noise_max:g}$", pad=52)
-    cbar = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.03)
+    cbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.03)
     cbar.set_label("share of entries that are both large and measured")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -2234,24 +2234,24 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
     """
     from matplotlib.colors import SymLogNorm
 
-    E = np.asarray(jacobian_matrix(data, kind), float)
-    A = np.abs(E)
-    ok = _readable(data, kind, noise_max)
-    vmax = A[ok].max() if ok.any() and A[ok].max() > 0 else 1.0
+    elasticities = np.asarray(jacobian_matrix(data, kind), float)
+    abs_elasticities = np.abs(elasticities)
+    readable = _readable(data, kind, noise_max)
+    vmax = abs_elasticities[readable].max() if readable.any() and abs_elasticities[readable].max() > 0 else 1.0
 
     cmap = plt.get_cmap("RdBu_r").copy()
     cmap.set_bad("#f2f2f2")                     # below threshold
-    small = np.ma.masked_where(A < threshold, E)
-    M = np.ma.masked_where(~ok, small)          # unreadable painted white on top
+    above_threshold = np.ma.masked_where(abs_elasticities < threshold, elasticities)
+    shown_matrix = np.ma.masked_where(~readable, above_threshold)          # unreadable painted white on top
     m_edges, p_edges = _edges(data["moment_block_sizes"]), _edges(data["param_block_sizes"])
 
     fig, ax = plt.subplots(figsize=figsize)
     ax.set_facecolor("white")
-    im = ax.matshow(M, cmap=cmap, aspect="auto",
+    image = ax.matshow(shown_matrix, cmap=cmap, aspect="auto",
                     norm=SymLogNorm(linthresh=threshold, vmin=-vmax, vmax=vmax, base=10))
     # the noise-rejected cells, drawn white over the grey "below threshold" background
-    ys, xs = np.where(~ok)
-    ax.scatter(xs, ys, s=2.0, marker="s", color="white", linewidths=0)
+    y_unreadable, x_unreadable = np.where(~readable)
+    ax.scatter(x_unreadable, y_unreadable, s=2.0, marker="s", color="white", linewidths=0)
     _block_grid(ax, data, m_edges, p_edges)
     # No per-moment / per-parameter tick labels: on a matrix this size the individual
     # (sector, area) names are unreadable and they crowd out the only labels that are
@@ -2264,12 +2264,12 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
     ax.set_xlabel("Parameter")
     ax.set_ylabel("Sector (regional sourcing shares)")
 
-    kept = float(((A >= threshold) & ok).mean())
+    kept = float(((abs_elasticities >= threshold) & readable).mean())
     ax.set_title(f"Elasticity Jacobian, $|\\varepsilon| \\geq {threshold:g}$ and "
                  f"$\\sigma/|\\varepsilon| < {noise_max:g}$ — "
                  f"{data['industry']}, " rf"$\hat{{\mu}}_{data['mu']}$"
-                 f"   ({100 * kept:.1f}{pct()} of {A.size} entries shown)", pad=28)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22)
+                 f"   ({100 * kept:.1f}{pct()} of {abs_elasticities.size} entries shown)", pad=28)
+    cbar = fig.colorbar(image, ax=ax, orientation="horizontal", fraction=0.04, pad=0.22)
     cbar.set_label(r"$\varepsilon = \partial \log m / \partial \log \theta$"
                    "   (symmetric log; grey = below threshold, white = too noisy)")
     if save_to:
@@ -2295,53 +2295,53 @@ def plot_channel_elasticities(data, param_blocks=None,
     excluded from the reduction, so a bar cannot be produced by a single unmeasurable
     outlier; a block with nothing readable left is marked "n/m".
     """
-    E = np.abs(np.asarray(jacobian_matrix(data, kind), float))
-    ok = _readable(data, kind, noise_max)
+    abs_elasticities = np.abs(np.asarray(jacobian_matrix(data, kind), float))
+    readable = _readable(data, kind, noise_max)
     m_names, p_names = data["moment_block_names"], data["param_block_names"]
     if param_blocks is None:              # kappa's block is the only optional channel
-        param_blocks = tuple(p for p in CHANNEL_BLOCKS if p != "Density" or p in p_names)
-    blocks, blocks_ok = _blocks_2d(data, E), _blocks_2d(data, ok)
+        param_blocks = tuple(param_block for param_block in CHANNEL_BLOCKS if param_block != "Density" or param_block in p_names)
+    blocks, blocks_ok = _blocks_2d(data, abs_elasticities), _blocks_2d(data, readable)
     reduce = {"max": np.max, "mean": np.mean}[stat]
     stat_tex = {"max": r"\max", "mean": r"\mathrm{mean}"}[stat]
 
-    wanted = [p for p in param_blocks if p in p_names]
-    missing = [p for p in param_blocks if p not in p_names]
+    wanted = [param_block for param_block in param_blocks if param_block in p_names]
+    missing = [param_block for param_block in param_blocks if param_block not in p_names]
     if missing:
         raise ValueError(f"parameter block(s) {missing} absent — the Jacobian has "
                          f"{p_names}. The sensitivity Jacobian must carry these columns "
                          "(sensitivity.jl sens_columns).")
 
-    vals, unmeasured = {}, {}
-    for p in wanted:
-        j = p_names.index(p)
-        v, nm = [], []
+    values_by_param, unmeasured = {}, {}
+    for param_block in wanted:
+        param_index = p_names.index(param_block)
+        channel_values, unmeasured_flags = [], []
         for i in range(len(m_names)):
-            sub, sub_ok = blocks[(i, j)], blocks_ok[(i, j)]
-            if sub.size == 0 or not sub_ok.any():
-                v.append(0.0)
-                nm.append(sub.size > 0)
+            block_values, block_readable = blocks[(i, param_index)], blocks_ok[(i, param_index)]
+            if block_values.size == 0 or not block_readable.any():
+                channel_values.append(0.0)
+                unmeasured_flags.append(block_values.size > 0)
             else:
-                v.append(float(reduce(sub[sub_ok])))
-                nm.append(False)
-        vals[p], unmeasured[p] = np.array(v), np.array(nm)
+                channel_values.append(float(reduce(block_values[block_readable])))
+                unmeasured_flags.append(False)
+        values_by_param[param_block], unmeasured[param_block] = np.array(channel_values), np.array(unmeasured_flags)
 
-    pos = np.concatenate([v[v > 0] for v in vals.values()] or [np.array([threshold])])
-    bottom = (pos.min() / 4) if pos.size else threshold / 10
+    positive_values = np.concatenate([channel_values[channel_values > 0] for channel_values in values_by_param.values()] or [np.array([threshold])])
+    bottom = (positive_values.min() / 4) if positive_values.size else threshold / 10
 
     fig, axes = plt.subplots(1, len(wanted), figsize=figsize, sharey=True)
     axes = np.atleast_1d(axes)
-    x = np.arange(len(m_names))
+    x_positions = np.arange(len(m_names))
     for ax, pname in zip(axes, wanted):
-        v_p, nm_p = vals[pname], unmeasured[pname]
-        ax.bar(x, v_p, color=[sim_color if v >= threshold else "0.75" for v in v_p])
+        param_values, param_unmeasured = values_by_param[pname], unmeasured[pname]
+        ax.bar(x_positions, param_values, color=[sim_color if channel_values >= threshold else "0.75" for channel_values in param_values])
         ax.set_yscale("log")
         ax.set_ylim(bottom=bottom)
         ax.axhline(threshold, color=reference_color, linestyle="--", linewidth=1.2)
-        for i, (v, nm) in enumerate(zip(v_p, nm_p)):
-            if v == 0:
-                ax.text(i, bottom * 1.35, "n/m" if nm else "0", ha="center", va="bottom",
+        for i, (channel_values, unmeasured_flags) in enumerate(zip(param_values, param_unmeasured)):
+            if channel_values == 0:
+                ax.text(i, bottom * 1.35, "n/m" if unmeasured_flags else "0", ha="center", va="bottom",
                         fontsize=fs(9), color=reference_color, fontweight="bold")
-        ax.set_xticks(x)
+        ax.set_xticks(x_positions)
         ax.set_xticklabels(m_names, rotation=45, ha="right", fontsize=fs(9))
         ax.set_title(pname, fontsize=fs(13), fontweight="bold")
         _despine(ax)
@@ -2406,8 +2406,8 @@ def build_a_ir_panel(data, min_distance_km=1.0, firm_key=("SIREN",),
     the model uses it. The floor only guards against a data file that happens to store a
     hard zero on the diagonal, which would send log d to -infinity.
     """
-    sup = data.get("suppliers")
-    if sup is None:
+    suppliers = data.get("suppliers")
+    if suppliers is None:
         raise FileNotFoundError(
             f"no suppliers.parquet under {data['folder']}/{data['step_dir']}/ (or it was "
             "unreadable — pyarrow missing?). main.jl writes one per estimate in its "
@@ -2427,39 +2427,41 @@ def build_a_ir_panel(data, min_distance_km=1.0, firm_key=("SIREN",),
     #     `n_rep` times as many varieties as the model gives it. That is handled below
     #     rather than left to the caller, because the failure is silent: the ladder rung
     #     would simply report a flatter profile.
-    has_rep = "replication" in sup.columns
+    has_rep = "replication" in suppliers.columns
     if replication is not None:
         if not has_rep:
             raise KeyError("`replication` was asked for but suppliers.parquet has no "
                            "`replication` column — this tree predates the finite-variety "
                            "post-hoc economy.")
-        sup = sup.loc[sup["replication"] == replication]
-        if sup.empty:
+        suppliers = suppliers.loc[suppliers["replication"] == replication]
+        if suppliers.empty:
             raise ValueError(f"no rows for replication {replication}.")
-    n_rep_pooled = int(sup["replication"].nunique()) if has_rep else 1
+    n_rep_pooled = int(suppliers["replication"].nunique()) if has_rep else 1
 
     dist_path = data["input_folder"] / "distances.npy"
     if not dist_path.exists():
         raise FileNotFoundError(f"{dist_path} not found — needed for log Dist_{{r'r}}.")
-    D = np.load(dist_path)
+    distances = np.load(dist_path)
     R = data["R"]
-    if D.shape[0] < R or D.shape[1] < R:
-        raise ValueError(f"distances.npy is {D.shape}, too small for R = {R} regions.")
-    D = D[:R, :R]
+    if distances.shape[0] < R or distances.shape[1] < R:
+        raise ValueError(f"distances.npy is {distances.shape}, too small for R = {R} regions.")
+    distances = distances[:R, :R]
 
     keep = ["SIREN", "A129", "ze2010", "ze2010_downstream",
             "share", "downstream_purchase", "productivity", "sample_weight"]
-    df = sup[keep + (["replication"] if has_rep else [])].copy()
+    df = suppliers[keep + (["replication"] if has_rep else [])].copy()
 
     # The supplier identifier. Under the default it IS the parquet's SIREN; under an
     # aggregating `firm_key` the column is rebuilt from the key, and the euro flows of the
     # pooled varieties are added before the share is formed — which is what makes the
     # aggregated firm a genuine multi-variety supplier rather than an average of shares.
     if tuple(firm_key) != ("SIREN",):
-        key = list(firm_key)
-        if has_rep and "replication" not in key:
-            key = key + ["replication"]        # never pool two economies into one firm
-        df["SIREN"] = df[key].astype(str).agg("-".join, axis=1)
+        pooling_key = list(firm_key)
+        if has_rep and "replication" not in pooling_key:
+            pooling_key = pooling_key + ["replication"]        # never pool two economies into one firm
+        # one string per pooled firm, built column-wise rather than row by row
+        as_text = [df[column].astype(str) for column in pooling_key]
+        df["SIREN"] = as_text[0].str.cat(as_text[1:], sep="-")
 
     # X_{i->r} = share x (mu Y_r); a_ir = X_{i->r} / sum_r X_{i->r}
     df["X_ir"] = df["share"] * df["downstream_purchase"]
@@ -2470,8 +2472,8 @@ def build_a_ir_panel(data, min_distance_km=1.0, firm_key=("SIREN",),
     df = (df.groupby(["SIREN", "ze2010_downstream"], as_index=False)
             .agg(A129=("A129", "first"), ze2010=("ze2010", "first"),
                  X_ir=("X_ir", "sum"), productivity=("productivity", "mean")))
-    tot = df.groupby("SIREN", sort=False)["X_ir"].transform("sum")
-    df["a_ir"] = np.where(tot > 0, df["X_ir"] / tot, 0.0)
+    firm_total = df.groupby("SIREN", sort=False)["X_ir"].transform("sum")
+    df["a_ir"] = np.where(firm_total > 0, df["X_ir"] / firm_total, 0.0)
 
     # --------------------------------------------------------- zero-filling ---
     firms = df.groupby("SIREN", sort=True).agg(
@@ -2486,9 +2488,9 @@ def build_a_ir_panel(data, min_distance_km=1.0, firm_key=("SIREN",),
     panel["a_ir"] = panel["a_ir"].fillna(0.0)
 
     # ------------------------------------------------------------ regressors --
-    d = D[panel["ze2010"].to_numpy() - 1, panel["ze2010_downstream"].to_numpy() - 1]
-    panel["distance"] = d
-    panel["log_distance"] = np.log(np.maximum(d, min_distance_km))
+    distance = distances[panel["ze2010"].to_numpy() - 1, panel["ze2010_downstream"].to_numpy() - 1]
+    panel["distance"] = distance
+    panel["log_distance"] = np.log(np.maximum(distance, min_distance_km))
     panel["log_productivity"] = np.log(np.maximum(panel["productivity"].to_numpy(), 1e-300))
     panel["served"] = (panel["a_ir"].to_numpy() > 0).astype(float)
     # alpha_{r, s(i)} : sector x downstream-region
@@ -2506,12 +2508,12 @@ def build_a_ir_panel(data, min_distance_km=1.0, firm_key=("SIREN",),
 
 
 
-def fepois_fit(panel, y, rhs=("log_distance",), fe="fe_group", cluster="cluster",
+def fepois_fit(panel, y, regressors=("log_distance",), fixed_effects="fe_group", cluster="cluster",
                weights="sample_weight"):
     """
-    One `pyfixest.fepois` call: E[y | .] = exp(fixed effect + rhs'beta).
+    One `pyfixest.fepois` call: E[y | .] = exp(fixed effect + regressors'beta).
 
-    `fe` is passed to pyfixest as written, so "fe_group" absorbs the sector x
+    `fixed_effects` is passed to pyfixest as written, so "fe_group" absorbs the sector x
     downstream-region effect, "SIREN" absorbs a SUPPLIER effect, and "fe_group + SIREN"
     absorbs both.
 
@@ -2522,8 +2524,8 @@ def fepois_fit(panel, y, rhs=("log_distance",), fe="fe_group", cluster="cluster"
     in `ppmlhdfe`). Returns the fitted object, so `.coef()`, `.se()`, `.tidy()` and
     `.summary()` are all available at the call site.
     """
-    fml = f"{y} ~ " + " + ".join(rhs) + (f" | {fe}" if fe else "")
-    return pf.fepois(fml=fml, data=panel, weights=weights, weights_type="aweights",
+    formula = f"{y} ~ " + " + ".join(regressors) + (f" | {fixed_effects}" if fixed_effects else "")
+    return pf.fepois(fml=formula, data=panel, weights=weights, weights_type="aweights",
                      vcov=None if cluster is None else {"CRV1": cluster},
                      separation_check=["fe"])
 
@@ -2549,16 +2551,16 @@ def delta_over_gamma_from_eta(eta, mean_log_d=None):
     THE REDUCED FORM — the right one here, since the compression is a property of the
     regression that produced the published number, not of the simulated geography.
     """
-    m = EMPIRICAL_MEAN_LOG_D if mean_log_d is None else mean_log_d
-    return float(eta) / (1.0 + abs(float(eta)) * m)
+    mean_log_distance = EMPIRICAL_MEAN_LOG_D if mean_log_d is None else mean_log_d
+    return float(eta) / (1.0 + abs(float(eta)) * mean_log_distance)
 
 
 def eta_from_delta_over_gamma(ratio, mean_log_d=None):
     """The inverse map: the constant elasticity a published `delta/gamma` implies."""
-    m = EMPIRICAL_MEAN_LOG_D if mean_log_d is None else mean_log_d
-    r = float(ratio)
-    denom = 1.0 - abs(r) * m
-    return r / denom if denom > 0 else -np.inf
+    mean_log_distance = EMPIRICAL_MEAN_LOG_D if mean_log_d is None else mean_log_d
+    ratio_value = float(ratio)
+    denom = 1.0 - abs(ratio_value) * mean_log_distance
+    return ratio_value / denom if denom > 0 else -np.inf
 
 
 # The fixed effect the moment is estimated under. ONE specification is the baseline,
@@ -2583,14 +2585,14 @@ def model_nu_s(data):
     Raises if the run carries a sector-specific nu_s: the granular decomposition below is
     written for a scalar, and averaging elasticities across sectors would be silent.
     """
-    v = _read_named_value(data["coefs"], "nu_s") if data.get("coefs") is not None else None
-    if v is None or not np.isfinite(v):
+    nu_s_value = _read_named_value(data["coefs"], "nu_s") if data.get("coefs") is not None else None
+    if nu_s_value is None or not np.isfinite(nu_s_value):
         return float(NU_S_DEFAULT)
-    v = np.asarray(v, dtype=float).ravel()
-    if v.size != 1:
-        raise ValueError(f"stats.csv carries {v.size} values for nu_s; the granular "
+    nu_s_value = np.asarray(nu_s_value, dtype=float).ravel()
+    if nu_s_value.size != 1:
+        raise ValueError(f"stats.csv carries {nu_s_value.size} values for nu_s; the granular "
                          "decomposition is written for a scalar elasticity.")
-    return float(v[0])
+    return float(nu_s_value[0])
 
 
 def theta_alpha(data):
@@ -2606,28 +2608,28 @@ def theta_alpha(data):
     section. theta follows the same rule as `model_theta` there: stats.csv when it carries
     one, else THETA_DEFAULT. Defined here so the section runs on its own.
     """
-    bp = data.get("best_params")
-    if bp is None:
+    best_params = data.get("best_params")
+    if best_params is None:
         raise FileNotFoundError(f"no best_params in {data['folder']}/{data['step_dir']}/.")
-    bp = np.asarray(bp, dtype=float).ravel()
+    best_params = np.asarray(best_params, dtype=float).ravel()
     S, n_tau = data["S"], data["n_tau"]
     R_d = len(data["aa_names"])
     expected = 1 + S + R_d + n_tau + 1 + int(data["T_ACTIVE"].sum())   # + kappa; T incl. Phi^F
-    if bp.size != expected:
-        raise ValueError(f"best_params has {bp.size} entries, layout rebuilt here is "
+    if best_params.size != expected:
+        raise ValueError(f"best_params has {best_params.size} entries, layout rebuilt here is "
                          f"{expected} — the run's flags and the ones passed here disagree.")
-    v = _read_named_value(data["coefs"], "theta") if data.get("coefs") is not None else None
-    theta = float(v) if v is not None and np.isfinite(v) and v > 0 else THETA_DEFAULT
+    theta_stats = _read_named_value(data["coefs"], "theta") if data.get("coefs") is not None else None
+    theta = float(theta_stats) if theta_stats is not None and np.isfinite(theta_stats) and theta_stats > 0 else THETA_DEFAULT
     if n_tau == 1:
-        return float(theta) * float(bp[1 + S + R_d])
+        return float(theta) * float(best_params[1 + S + R_d])
     # binned tau: no single elasticity -- the rho- and purchase-weighted mean of the local
     # one, d ln tau / d ln d, over the competing cells (`sourcing_geometry`)
-    g = sourcing_geometry(data)
-    return float(theta) * g["theta_alpha"] / g["theta"]
+    geometry = sourcing_geometry(data)
+    return float(theta) * geometry["theta_alpha"] / geometry["theta"]
 
 
 def estimate_untargeted_moment(data, controls=(), cluster="cluster", panel=None,
-                               fe=BASELINE_FE, verbose=True):
+                               fixed_effects=BASELINE_FE, verbose=True):
     """
     The measured moment: PPML of E[a_ir] = exp(alpha_i + alpha_{r,s(i)} + eta log Dist).
 
@@ -2640,44 +2642,44 @@ def estimate_untargeted_moment(data, controls=(), cluster="cluster", panel=None,
     has none). `cluster=None` gives the classical Poisson variance.
     """
     panel = build_a_ir_panel(data) if panel is None else panel
-    cols = ["log_distance"] + list(controls)
-    fit = fepois_fit(panel, "a_ir", rhs=cols, fe=fe, cluster=cluster)
-    eta = float(fit.coef()["log_distance"])
-    se = float(fit.se()["log_distance"])
-    emp = EMPIRICAL_DELTA_OVER_GAMMA.get(data["industry"], {})
+    regressors = ["log_distance"] + list(controls)
+    ppml_fit = fepois_fit(panel, "a_ir", regressors=regressors, fixed_effects=fixed_effects, cluster=cluster)
+    eta = float(ppml_fit.coef()["log_distance"])
+    se = float(ppml_fit.se()["log_distance"])
+    empirical = EMPIRICAL_DELTA_OVER_GAMMA.get(data["industry"], {})
     try:
-        ta = theta_alpha(data)
+        theta_alpha_value = theta_alpha(data)
     except Exception:
-        ta = np.nan
+        theta_alpha_value = np.nan
 
-    out = {"industry": data["industry"], "mu": data["mu"], "spec": "+".join(cols),
-           "fe": fe, "fe_label": BASELINE_FE_LABEL, "theta_alpha": ta,
+    result = {"industry": data["industry"], "mu": data["mu"], "spec": "+".join(regressors),
+           "fe": fixed_effects, "fe_label": BASELINE_FE_LABEL, "theta_alpha": theta_alpha_value,
            "eta": eta, "se": se, "t": eta / se if se > 0 else np.nan,
            "ci_lo": eta - 1.96 * se, "ci_hi": eta + 1.96 * se,
            # the same estimate on the reduced form's own scale — the one that is reported
            "dg": delta_over_gamma_from_eta(eta),
            "dg_lo": delta_over_gamma_from_eta(eta - 1.96 * se),
            "dg_hi": delta_over_gamma_from_eta(eta + 1.96 * se),
-           "n_obs": int(getattr(fit, "_N", len(panel))),
+           "n_obs": int(getattr(ppml_fit, "_N", len(panel))),
            "n_firms": int(panel["SIREN"].nunique()),
            "share_zero": float((panel["a_ir"].to_numpy() == 0).mean()),
-           "emp_estimate": emp.get("estimate"), "emp_ci_lo": emp.get("ci_lo"),
-           "emp_ci_hi": emp.get("ci_hi"), "fit": fit, "panel": panel}
+           "emp_estimate": empirical.get("estimate"), "emp_ci_lo": empirical.get("ci_lo"),
+           "emp_ci_hi": empirical.get("ci_hi"), "fit": ppml_fit, "panel": panel}
 
     if verbose:
         print(f"[{data['industry']}]  {len(panel):,} supplier x downstream-region cells, "
-              f"{out['n_firms']:,} suppliers, {100 * out['share_zero']:.1f}% zeros, "
+              f"{result['n_firms']:,} suppliers, {100 * result['share_zero']:.1f}% zeros, "
               f"from {data['suppliers_path']}")
-        print(f"  measured eta = {eta:+.4f} ({se:.4f})   ->  delta/gamma = {out['dg']:+.4f} "
-              f"[{out['dg_lo']:+.4f}, {out['dg_hi']:+.4f}]   "
-              f"(mean log d = {EMPIRICAL_MEAN_LOG_D}, theta*alpha = {ta:.4f})")
-        if out["emp_estimate"] is not None:
-            print(f"  DATA delta/gamma = {out['emp_estimate']:+.4f}  "
-                  f"[{out['emp_ci_lo']:+.4f}, {out['emp_ci_hi']:+.4f}]")
-    return out
+        print(f"  measured eta = {eta:+.4f} ({se:.4f})   ->  delta/gamma = {result['dg']:+.4f} "
+              f"[{result['dg_lo']:+.4f}, {result['dg_hi']:+.4f}]   "
+              f"(mean log d = {EMPIRICAL_MEAN_LOG_D}, theta*alpha = {theta_alpha_value:.4f})")
+        if result["emp_estimate"] is not None:
+            print(f"  DATA delta/gamma = {result['emp_estimate']:+.4f}  "
+                  f"[{result['emp_ci_lo']:+.4f}, {result['emp_ci_hi']:+.4f}]")
+    return result
 
 
-def untargeted_across_replications(data, fe=BASELINE_FE, controls=(), cluster="cluster",
+def untargeted_across_replications(data, fixed_effects=BASELINE_FE, controls=(), cluster="cluster",
                                    max_replications=None, verbose=True):
     """
     The untargeted moment estimated ONCE PER REALISATION of the finite-variety economy.
@@ -2691,42 +2693,42 @@ def untargeted_across_replications(data, fe=BASELINE_FE, controls=(), cluster="c
 
     A parquet with no `replication` column is one economy and comes back as one row.
     """
-    sup = data.get("suppliers")
-    if sup is None:
+    suppliers = data.get("suppliers")
+    if suppliers is None:
         raise FileNotFoundError("no suppliers.parquet — see build_a_ir_panel.")
-    reps = (sorted(sup["replication"].unique()) if "replication" in sup.columns else [None])
+    replications = (sorted(suppliers["replication"].unique()) if "replication" in suppliers.columns else [None])
     if max_replications is not None:
-        reps = reps[:max_replications]
+        replications = replications[:max_replications]
 
     rows = []
-    for b in reps:
-        panel = build_a_ir_panel(data, replication=b)
-        r = estimate_untargeted_moment(data, controls=controls, cluster=cluster,
-                                       panel=panel, fe=fe, verbose=False)
-        rows.append({"replication": b, "eta": r["eta"], "se_within": r["se"],
-                     "dg": r["dg"], "n_firms": r["n_firms"],
-                     "share_zero": r["share_zero"]})
-    per = pd.DataFrame(rows).set_index("replication")
+    for replication in replications:
+        panel = build_a_ir_panel(data, replication=replication)
+        replication_result = estimate_untargeted_moment(data, controls=controls, cluster=cluster,
+                                       panel=panel, fixed_effects=fixed_effects, verbose=False)
+        rows.append({"replication": replication, "eta": replication_result["eta"], "se_within": replication_result["se"],
+                     "dg": replication_result["dg"], "n_firms": replication_result["n_firms"],
+                     "share_zero": replication_result["share_zero"]})
+    per_replication = pd.DataFrame(rows).set_index("replication")
 
     pooled = estimate_untargeted_moment(data, controls=controls, cluster=cluster,
-                                        fe=fe, verbose=False)
-    per.attrs["pooled_eta"] = pooled["eta"]
-    per.attrs["pooled_se"] = pooled["se"]
-    per.attrs["sd_across"] = float(per["eta"].std(ddof=1)) if len(per) > 1 else np.nan
-    per.attrs["mean_eta"] = float(per["eta"].mean())
+                                        fixed_effects=fixed_effects, verbose=False)
+    per_replication.attrs["pooled_eta"] = pooled["eta"]
+    per_replication.attrs["pooled_se"] = pooled["se"]
+    per_replication.attrs["sd_across"] = float(per_replication["eta"].std(ddof=1)) if len(per_replication) > 1 else np.nan
+    per_replication.attrs["mean_eta"] = float(per_replication["eta"].mean())
 
     if verbose:
-        sd = per.attrs["sd_across"]
-        head = f"[{data['industry']}]  eta_hat over {len(per)} realisation(s): "
-        if len(per) > 1:
-            print(head + f"mean {per.attrs['mean_eta']:.4f}, "
+        sd = per_replication.attrs["sd_across"]
+        head = f"[{data['industry']}]  eta_hat over {len(per_replication)} realisation(s): "
+        if len(per_replication) > 1:
+            print(head + f"mean {per_replication.attrs['mean_eta']:.4f}, "
                          f"sd across draws {sd:.4f}")
             print(f"              pooled fit {pooled['eta']:.4f} (se {pooled['se']:.4f})"
-                  f" — that se reads {len(per)} economies as information about one, so "
+                  f" — that se reads {len(per_replication)} economies as information about one, so "
                   f"the sd above is the interval to report")
         else:
-            print(head + f"{per.attrs['mean_eta']:.4f} (se {pooled['se']:.4f})")
-    return per
+            print(head + f"{per_replication.attrs['mean_eta']:.4f} (se {pooled['se']:.4f})")
+    return per_replication
 
 
 def panel_facts(panel):
@@ -2743,14 +2745,14 @@ def panel_facts(panel):
     sales are spread over many buyers, so that losing one to distance reallocates onto the
     others — and it is the object the substitution term of the granular decomposition needs.
     """
-    a = panel["a_ir"].to_numpy(float)
-    w = panel["sample_weight"].to_numpy(float)
-    served = a > 0
-    denom = float((w * a).sum())
-    n_sup = int(panel["SIREN"].nunique())
-    return {"serving_rate": float(np.average(served.astype(float), weights=w)),
-            "openness_weighted": float(1.0 - (w * a * a).sum() / denom) if denom > 0 else np.nan,
-            "buyers_per_supplier": float(served.sum() / n_sup) if n_sup else np.nan,
+    a_ir = panel["a_ir"].to_numpy(float)
+    weights = panel["sample_weight"].to_numpy(float)
+    served = a_ir > 0
+    denom = float((weights * a_ir).sum())
+    n_suppliers = int(panel["SIREN"].nunique())
+    return {"serving_rate": float(np.average(served.astype(float), weights=weights)),
+            "openness_weighted": float(1.0 - (weights * a_ir * a_ir).sum() / denom) if denom > 0 else np.nan,
+            "buyers_per_supplier": float(served.sum() / n_suppliers) if n_suppliers else np.nan,
             "n_buyers": int(panel["ze2010_downstream"].nunique())}
 
 
@@ -2768,20 +2770,20 @@ def untargeted_summary(results):
     kept, because it is the scale the structural moment is read in (see `structural_eta`).
     """
     rows = []
-    for r in results:
-        emp = EMPIRICAL_DELTA_OVER_GAMMA.get(r["industry"], {})
+    for result in results:
+        empirical = EMPIRICAL_DELTA_OVER_GAMMA.get(result["industry"], {})
         rows.append({
-            "industry": emp.get("display_name", r["industry"]),
-            "fixed effect": r["fe_label"],
-            "delta/gamma (model)": r["dg"],
-            "95% CI (model, delta/gamma)": f"[{r['dg_lo']:+.3f}, {r['dg_hi']:+.3f}]",
-            "delta/gamma (data)": r["emp_estimate"],
-            "95% CI (data)": (f"[{r['emp_ci_lo']:+.3f}, {r['emp_ci_hi']:+.3f}]"
-                              if r["emp_ci_lo"] is not None else "---"),
-            "inside data CI": (None if r["emp_ci_lo"] is None
-                               else bool(r["emp_ci_lo"] <= r["dg"] <= r["emp_ci_hi"])),
-            "theta*alpha": r.get("theta_alpha", np.nan),
-            "suppliers": r["n_firms"], "cells": r["n_obs"],
+            "industry": empirical.get("display_name", result["industry"]),
+            "fixed effect": result["fe_label"],
+            "delta/gamma (model)": result["dg"],
+            "95% CI (model, delta/gamma)": f"[{result['dg_lo']:+.3f}, {result['dg_hi']:+.3f}]",
+            "delta/gamma (data)": result["emp_estimate"],
+            "95% CI (data)": (f"[{result['emp_ci_lo']:+.3f}, {result['emp_ci_hi']:+.3f}]"
+                              if result["emp_ci_lo"] is not None else "---"),
+            "inside data CI": (None if result["emp_ci_lo"] is None
+                               else bool(result["emp_ci_lo"] <= result["dg"] <= result["emp_ci_hi"])),
+            "theta*alpha": result.get("theta_alpha", np.nan),
+            "suppliers": result["n_firms"], "cells": result["n_obs"],
         })
     return pd.DataFrame(rows).set_index("industry")
 
@@ -2798,29 +2800,29 @@ def plot_untargeted_moment(results, figsize=None, save_to=None):
     scale has left.
     """
     fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.65))
-    x = np.arange(len(results))
+    x_positions = np.arange(len(results))
 
-    for i, r in enumerate(results):
-        v, lo, hi = r["dg"], r["dg_lo"], r["dg_hi"]
-        ax.errorbar(x[i] - 0.12, v, yerr=[[v - lo], [hi - v]], fmt="o", color=sim_color,
+    for i, result in enumerate(results):
+        model_value, lo, hi = result["dg"], result["dg_lo"], result["dg_hi"]
+        ax.errorbar(x_positions[i] - 0.12, model_value, yerr=[[model_value - lo], [hi - model_value]], fmt="o", color=sim_color,
                     capsize=4, markersize=7,
                     label="Model (baseline)" if i == 0 else None)
-        if r["emp_estimate"] is not None:
-            ax.errorbar(x[i] + 0.22, r["emp_estimate"],
-                        yerr=[[r["emp_estimate"] - r["emp_ci_lo"]],
-                              [r["emp_ci_hi"] - r["emp_estimate"]]],
+        if result["emp_estimate"] is not None:
+            ax.errorbar(x_positions[i] + 0.22, result["emp_estimate"],
+                        yerr=[[result["emp_estimate"] - result["emp_ci_lo"]],
+                              [result["emp_ci_hi"] - result["emp_estimate"]]],
                         fmt="s", color=reference_color, capsize=4, markersize=8,
                         label="Data $\\delta/\\gamma$ (Table 3)" if i == 0 else None)
 
-    ceil = -1.0 / EMPIRICAL_MEAN_LOG_D
-    ax.axhline(ceil, color="0.4", linestyle=":", linewidth=1.1)
-    ax.annotate(rf"ceiling $-1/\overline{{\log d}}$ = {ceil:.3f}", (0.01, ceil),
+    ceiling = -1.0 / EMPIRICAL_MEAN_LOG_D
+    ax.axhline(ceiling, color="0.4", linestyle=":", linewidth=1.1)
+    ax.annotate(rf"ceiling $-1/\overline{{\log d}}$ = {ceiling:.3f}", (0.01, ceiling),
                 xycoords=("axes fraction", "data"), fontsize=fs(8), color="0.35", va="bottom")
     ax.axhline(0.0, color="0.6", linewidth=0.8)
     ax.set_xlim(-0.5, len(results) - 0.5)
-    ax.set_xticks(x)
-    ax.set_xticklabels([EMPIRICAL_DELTA_OVER_GAMMA.get(r["industry"], {})
-                        .get("display_name", r["industry"]) for r in results])
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([EMPIRICAL_DELTA_OVER_GAMMA.get(result["industry"], {})
+                        .get("display_name", result["industry"]) for result in results])
     ax.set_ylabel(r"$\delta/\gamma$ (reduced-form scale)")
     ax.set_title("Untargeted moment: model against the spatial-comovement regression",
                  fontsize=fs(10))
@@ -2856,11 +2858,11 @@ def _estimated_T(data):
         ) from e
 
 
-def _pair_tau_elasticity(data, panel, est=None):
+def _pair_tau_elasticity(data, panel, estimate=None):
     """d ln tau / d ln d at each panel pair's distance: alpha under the power law, the
     segment elasticity alpha_k(d_ir) under binned tau (`utils.tau_elasticity`)."""
-    est = _estimated_T(data) if est is None else est
-    return tau_elasticity(est["alpha"], panel["log_distance"].to_numpy(float),
+    estimate = _estimated_T(data) if estimate is None else estimate
+    return tau_elasticity(estimate["alpha"], panel["log_distance"].to_numpy(float),
                           tau_log_knots(data))
 
 
@@ -2898,22 +2900,22 @@ def attach_lambda(data, panel, min_distance_km=1.0):
     Raises when the panel was built with an aggregating `firm_key`: a pooled firm's
     `productivity` is a mean of draws, and Lambda is not defined pair by pair for it.
     """
-    key = tuple(panel.attrs.get("firm_key", ("SIREN",)))
-    if key != ("SIREN",):
+    firm_key = tuple(panel.attrs.get("firm_key", ("SIREN",)))
+    if firm_key != ("SIREN",):
         raise ValueError(
-            f"the panel was built with firm_key={key}: `productivity` is then a mean over "
+            f"the panel was built with firm_key={firm_key}: `productivity` is then a mean over "
             "the pooled varieties and Lambda is not defined pair by pair. Build the panel "
             "with the default key for the structural moment.")
 
-    est = _estimated_T(data)                       # T (S, n_AA), alpha (N_TAU), theta
-    alpha, theta = est["alpha"], float(est["theta"])
+    estimate = _estimated_T(data)                       # T (S, n_AA), alpha (N_TAU), theta
+    alpha, theta = estimate["alpha"], float(estimate["theta"])
     S, R = data["S"], data["R"]
     aa_of_ze = np.asarray(data["aa_of_ze"]).ravel()          # region -> area, 0-based
     CELL_MASK = np.asarray(data["CELL_MASK"], dtype=bool)    # (S, R) simulated cells
 
-    D = np.load(data["input_folder"] / "distances.npy")[:R, :R]
-    d = np.maximum(D, min_distance_km)
-    tau = np.exp(log_tau(alpha, np.log(d), tau_log_knots(data)))   # (R, R) origin x buyer
+    distances = np.load(data["input_folder"] / "distances.npy")[:R, :R]
+    distance = np.maximum(distances, min_distance_km)
+    tau = np.exp(log_tau(alpha, np.log(distance), tau_log_knots(data)))   # (R, R) origin x buyer
 
     w_path = data["input_folder"] / "w_rs.npy"
     if w_path.exists():
@@ -2924,24 +2926,24 @@ def attach_lambda(data, panel, min_distance_km=1.0):
         print("  note: w_rs.npy not found — the upstream cost shifter is taken as one, "
               "which is what load_parameters.jl normalises it to anyway.")
 
-    wtau = w_rs[:, None] * tau                                # (R, R): (w_{r'} tau_{r'r})
+    w_tau = w_rs[:, None] * tau                                # (R, R): (w_{r'} tau_{r'r})
     # Phi_{rs} = sum over the sector's simulated cells, at the CELL-level T_a n_ls^kappa
-    T_ze = est["T_cell"]
-    contrib = np.where(CELL_MASK[:, :, None], (T_ze[:, :, None]
-                                               * wtau[None, :, :] ** (-theta)), 0.0)
-    Phi = contrib.sum(axis=1)                                 # (S, R) over origins
-    Phi_minus = Phi[:, None, :] - contrib                     # (S, R_origin, R_buyer)
+    T_ls = estimate["T_cell"]
+    Phi_contribution = np.where(CELL_MASK[:, :, None], (T_ls[:, :, None]
+                                               * w_tau[None, :, :] ** (-theta)), 0.0)
+    Phi = Phi_contribution.sum(axis=1)                                 # (S, R) over origins
+    Phi_minus = Phi[:, None, :] - Phi_contribution                     # (S, R_origin, R_buyer)
 
-    s_idx = panel["A129"].to_numpy() - 1
-    o_idx = panel["ze2010"].to_numpy() - 1
-    b_idx = panel["ze2010_downstream"].to_numpy() - 1
-    z = np.maximum(panel["productivity"].to_numpy(float), 1e-300)
-    out = panel.copy()
-    out["lambda_ir"] = (np.maximum(Phi_minus[s_idx, o_idx, b_idx], 0.0)
-                        * wtau[o_idx, b_idx] ** theta * z ** (-theta))
-    out.attrs.update(panel.attrs)
-    out.attrs.update({"alpha": np.asarray(alpha, dtype=float), "theta": theta})
-    return out
+    sector_index = panel["A129"].to_numpy() - 1
+    origin_index = panel["ze2010"].to_numpy() - 1
+    buyer_index = panel["ze2010_downstream"].to_numpy() - 1
+    productivity = np.maximum(panel["productivity"].to_numpy(float), 1e-300)
+    panel_with_lambda = panel.copy()
+    panel_with_lambda["lambda_ir"] = (np.maximum(Phi_minus[sector_index, origin_index, buyer_index], 0.0)
+                        * w_tau[origin_index, buyer_index] ** theta * productivity ** (-theta))
+    panel_with_lambda.attrs.update(panel.attrs)
+    panel_with_lambda.attrs.update({"alpha": np.asarray(alpha, dtype=float), "theta": theta})
+    return panel_with_lambda
 
 
 def _structural_weights(panel):
@@ -2956,10 +2958,10 @@ def _structural_weights(panel):
     in `model_CP.jl`), so the weight reduces to `a` up to a constant — but it is written out
     so an importance-sampled run would still be weighted correctly.
     """
-    a = panel["a_ir"].to_numpy(float)
-    w = a * panel["sample_weight"].to_numpy(float)
-    assert np.all(w[a <= 0] == 0.0), "unserved cells must carry zero weight"
-    return w
+    a_ir = panel["a_ir"].to_numpy(float)
+    weights = a_ir * panel["sample_weight"].to_numpy(float)
+    assert np.all(weights[a_ir <= 0] == 0.0), "unserved cells must carry zero weight"
+    return weights
 
 
 def structural_eta(data, panel, verbose=True):
@@ -2978,44 +2980,44 @@ def structural_eta(data, panel, verbose=True):
     if "lambda_ir" not in panel.columns:
         raise KeyError("run `attach_lambda(data, panel)` first — the structural moment "
                        "needs the pair-level surprisal.")
-    est = _estimated_T(data)
-    theta = float(est["theta"])
+    estimate = _estimated_T(data)
+    theta = float(estimate["theta"])
     nu_s = model_nu_s(data)
 
-    w = _structural_weights(panel)
-    lam = panel["lambda_ir"].to_numpy(float)
-    a = panel["a_ir"].to_numpy(float)
-    al = _pair_tau_elasticity(data, panel, est)
-    W = w.sum()
+    weights = _structural_weights(panel)
+    lambda_ir = panel["lambda_ir"].to_numpy(float)
+    a_ir = panel["a_ir"].to_numpy(float)
+    alpha_pair = _pair_tau_elasticity(data, panel, estimate)
+    weight_total = weights.sum()
     # alpha is the w-weighted local elasticity; E_lambda and E_open are weighted by it too,
     # so eta_ext = -theta*alpha*E_lambda holds exactly (and reduces to the plain w-means
     # under the power law, where alpha_ir is constant)
-    alpha = float((w * al).sum() / W)
-    E_lambda = float((w * al * lam).sum() / W) / alpha
-    E_open = float((w * al * (1.0 - a)).sum() / W) / alpha
+    alpha = float((weights * alpha_pair).sum() / weight_total)
+    E_lambda = float((weights * alpha_pair * lambda_ir).sum() / weight_total) / alpha
+    E_open = float((weights * alpha_pair * (1.0 - a_ir)).sum() / weight_total) / alpha
 
     eta_ext = -theta * alpha * E_lambda
     eta_int = -(nu_s - 1.0) * alpha * E_open
     eta = eta_ext + eta_int
-    out = {"industry": data["industry"], "theta": theta, "alpha": alpha, "nu_s": nu_s,
+    result = {"industry": data["industry"], "theta": theta, "alpha": alpha, "nu_s": nu_s,
            "theta_alpha": theta * alpha, "eta_struct": eta,
            "eta_struct_ext": eta_ext, "eta_struct_int": eta_int,
            "E_lambda": E_lambda, "E_open": E_open,
            "share_ext": eta_ext / eta if eta != 0 else np.nan,
            "share_int": eta_int / eta if eta != 0 else np.nan,
            "dg_struct": delta_over_gamma_from_eta(eta)}
-    out.update({f"panel_{k}": v for k, v in panel_facts(panel).items()})
+    result.update({f"panel_{k}": v for k, v in panel_facts(panel).items()})
     if verbose:
         print(f"  structural eta = {eta:+.4f}  =  extensive {eta_ext:+.4f} "
-              f"({100 * out['share_ext']:.0f}%) + substitution {eta_int:+.4f} "
-              f"({100 * out['share_int']:.0f}%)   ->  delta/gamma = {out['dg_struct']:+.4f}")
+              f"({100 * result['share_ext']:.0f}%) + substitution {eta_int:+.4f} "
+              f"({100 * result['share_int']:.0f}%)   ->  delta/gamma = {result['dg_struct']:+.4f}")
         print(f"    E_w(Lambda) = {E_lambda:.3f},  E_w(1-a) = {E_open:.3f},  "
               f"theta*alpha = {theta * alpha:.4f},  (nu_s-1)/theta = "
               f"{(nu_s - 1.0) / theta:.3f}")
-    return out
+    return result
 
 
-def validate_structural(data, panel, sres, verbose=True):
+def validate_structural(data, panel, structural, verbose=True):
     """
     Three numerical checks on `attach_lambda`, each comparing a closed form against a
     MEASURED FREQUENCY — never against a fitted coefficient, so nothing here can be
@@ -3034,24 +3036,24 @@ def validate_structural(data, panel, sres, verbose=True):
 
     A failure here is a coding error in `attach_lambda`, not an economic finding.
     """
-    lam = panel["lambda_ir"].to_numpy(float)
+    lambda_ir = panel["lambda_ir"].to_numpy(float)
     served = panel["a_ir"].to_numpy(float) > 0
-    w = _structural_weights(panel)
+    weights = _structural_weights(panel)
 
     # 1. gamma measured cell by cell: the share of (cell, sector) varieties winning in r
-    g = (panel.assign(served=served.astype(float))
+    win_share_by_cell = (panel.assign(served=served.astype(float))
               .groupby(["ze2010", "A129", "ze2010_downstream"])["served"].mean())
-    gamma_pair = panel.set_index(["ze2010", "A129", "ze2010_downstream"]).index.map(g)
-    gamma_w = float((w * np.asarray(gamma_pair, dtype=float)).sum() / w.sum())
-    e_lambda_win = float((w * lam).sum() / w.sum())
+    gamma_pair = panel.set_index(["ze2010", "A129", "ze2010_downstream"]).index.map(win_share_by_cell)
+    gamma_w = float((weights * np.asarray(gamma_pair, dtype=float)).sum() / weights.sum())
+    e_lambda_win = float((weights * lambda_ir).sum() / weights.sum())
 
     # 2. exponentiality
-    p_hat = float(np.mean(np.exp(-lam)))
+    p_hat = float(np.mean(np.exp(-lambda_ir)))
     serving = float(served.mean())
 
     # 3. the substitution scale
-    scale = (sres["nu_s"] - 1.0) / sres["theta"]
-    implied = abs(sres["eta_struct_int"]) / sres["theta_alpha"]
+    scale = (structural["nu_s"] - 1.0) / structural["theta"]
+    implied = abs(structural["eta_struct_int"]) / structural["theta_alpha"]
 
     df = pd.DataFrame([
         {"check": "E(Lambda | win) = 1 - gamma", "closed form": e_lambda_win,
@@ -3060,8 +3062,8 @@ def validate_structural(data, panel, sres, verbose=True):
          "closed form": p_hat, "measured": serving,
          "ratio": p_hat / max(serving, 1e-12)},
         {"check": "eta_int/(theta*alpha) = (nu_s-1)/theta * E(1-a)", "closed form": implied,
-         "measured": scale * sres["E_open"],
-         "ratio": implied / max(scale * sres["E_open"], 1e-12)},
+         "measured": scale * structural["E_open"],
+         "ratio": implied / max(scale * structural["E_open"], 1e-12)},
     ]).set_index("check")
     if verbose:
         print(df.round(4).to_string())
@@ -3070,7 +3072,7 @@ def validate_structural(data, panel, sres, verbose=True):
     return df
 
 
-def decompose_gap(data, panel, res, sres, verbose=True):
+def decompose_gap(data, panel, measured, structural, verbose=True):
     """
     R = eta_measured - eta_structural, split into the parts that can be identified.
 
@@ -3090,57 +3092,57 @@ def decompose_gap(data, panel, res, sres, verbose=True):
     would FLATTEN the measured profile, so a negative R (measured steeper) rules that story
     out and points at (a) and (b).
     """
-    est = _estimated_T(data)
-    theta = float(est["theta"])
+    estimate = _estimated_T(data)
+    theta = float(estimate["theta"])
     nu_s = model_nu_s(data)
-    lam = panel["lambda_ir"].to_numpy(float)
-    a = panel["a_ir"].to_numpy(float)
-    deriv = -_pair_tau_elasticity(data, panel, est) * (theta * lam + (nu_s - 1.0) * (1.0 - a))
+    lambda_ir = panel["lambda_ir"].to_numpy(float)
+    a_ir = panel["a_ir"].to_numpy(float)
+    deriv = -_pair_tau_elasticity(data, panel, estimate) * (theta * lambda_ir + (nu_s - 1.0) * (1.0 - a_ir))
 
-    w = _structural_weights(panel)
-    under_w = float((w * deriv).sum() / w.sum())
+    weights = _structural_weights(panel)
+    under_w = float((weights * deriv).sum() / weights.sum())
 
     # (a) the same derivative under PPML's own weights
     try:
-        mu = np.asarray(res["fit"].predict(), dtype=float).ravel()
-        if mu.size != len(panel):                       # separated groups were dropped
-            mu = None
+        fitted_mean = np.asarray(measured["fit"].predict(), dtype=float).ravel()
+        if fitted_mean.size != len(panel):                       # separated groups were dropped
+            fitted_mean = None
     except Exception:
-        mu = None
-    if mu is None:
+        fitted_mean = None
+    if fitted_mean is None:
         weighting = np.nan
         under_mu = np.nan
     else:
-        mu = np.maximum(mu, 0.0)
-        under_mu = float((mu * deriv).sum() / mu.sum())
+        fitted_mean = np.maximum(fitted_mean, 0.0)
+        under_mu = float((fitted_mean * deriv).sum() / fitted_mean.sum())
         weighting = under_mu - under_w
 
     # (b) the functional form: the same panel in the reduced form's shape
-    lin = linear_delta_over_gamma(panel)
-    eta_linear = eta_from_delta_over_gamma(lin["delta_over_gamma"])
-    functional = res["eta"] - eta_linear
+    linear_fit = linear_delta_over_gamma(panel)
+    eta_linear = eta_from_delta_over_gamma(linear_fit["delta_over_gamma"])
+    functional = measured["eta"] - eta_linear
 
-    R = res["eta"] - sres["eta_struct"]
+    R = measured["eta"] - structural["eta_struct"]
     composition = R - (0.0 if not np.isfinite(weighting) else weighting) - functional
-    out = {"industry": data["industry"], "eta": res["eta"],
-           "eta_struct": sres["eta_struct"], "R": R, "R_weighting": weighting,
+    result = {"industry": data["industry"], "eta": measured["eta"],
+           "eta_struct": structural["eta_struct"], "R": R, "R_weighting": weighting,
            "R_functional": functional, "R_composition": composition,
            "deriv_under_w": under_w, "deriv_under_fitted": under_mu,
            "eta_linear_equivalent": eta_linear,
-           "dg_linear": lin["delta_over_gamma"], "dg_ppml": res["dg"]}
+           "dg_linear": linear_fit["delta_over_gamma"], "dg_ppml": measured["dg"]}
     if verbose:
         sign = "measured STEEPER than structural" if R < 0 else "measured FLATTER"
         print(f"  gap R = {R:+.4f}  ({sign})")
         print(f"    weighting  {weighting:+.4f}   (derivative under fitted weights "
               f"{under_mu:+.4f} vs under a*rho/rho~ {under_w:+.4f})")
         print(f"    functional {functional:+.4f}   (level-linear delta/gamma "
-              f"{lin['delta_over_gamma']:+.4f} vs PPML's {res['dg']:+.4f})")
+              f"{linear_fit['delta_over_gamma']:+.4f} vs PPML's {measured['dg']:+.4f})")
         print(f"    composition {composition:+.4f}   (origin-level primitives covarying "
               "with distance — the term the derivative does not take)")
-    return out
+    return result
 
 
-def within_area_check(data, panel, gap, verbose=True):
+def within_area_check(data, panel, gap_result, verbose=True):
     """
     A bound on the composition term. Restricted to pairs whose ORIGIN lies in the same
     attraction area as ... itself — i.e. to sectors x areas containing several regions —
@@ -3155,51 +3157,52 @@ def within_area_check(data, panel, gap, verbose=True):
     """
     aa_of_ze = np.asarray(data["aa_of_ze"]).ravel()
     area = aa_of_ze[panel["ze2010"].to_numpy() - 1]
-    key = pd.Series(list(zip(panel["A129"].to_numpy(), area)))
-    # keep (sector, area) blocks that hold more than one origin region
-    n_reg = (pd.DataFrame({"k": key, "r": panel["ze2010"].to_numpy()})
-             .groupby("k")["r"].nunique())
-    keep = key.map(n_reg).to_numpy() > 1
-    sub = panel[keep].copy()
-    sub.attrs.update(panel.attrs)
-    n_pairs, n_sup = len(sub), sub["SIREN"].nunique() if len(sub) else 0
-    if n_pairs < 500 or n_sup < 20:
+    # Keep the (sector, area) blocks that hold more than one origin region: only there
+    # do several origins share the same area-level comparative advantage.
+    origins = pd.DataFrame({"A129": panel["A129"].to_numpy(), "area": area,
+                            "origin": panel["ze2010"].to_numpy()})
+    n_origins = origins.groupby(["A129", "area"])["origin"].transform("nunique")
+    kept = n_origins.to_numpy() > 1
+    within_area_panel = panel[kept].copy()
+    within_area_panel.attrs.update(panel.attrs)
+    n_pairs, n_suppliers = len(within_area_panel), within_area_panel["SIREN"].nunique() if len(within_area_panel) else 0
+    if n_pairs < 500 or n_suppliers < 20:
         if verbose:
-            print(f"  within-area check: only {n_pairs} pairs / {n_sup} suppliers survive "
+            print(f"  within-area check: only {n_pairs} pairs / {n_suppliers} suppliers survive "
                   "— too few to quote, the areas are near single-region here")
         return {"industry": data["industry"], "n_pairs": int(n_pairs),
-                "n_suppliers": int(n_sup), "eta": np.nan, "eta_struct": np.nan,
+                "n_suppliers": int(n_suppliers), "eta": np.nan, "eta_struct": np.nan,
                 "R": np.nan, "quotable": False}
-    r_sub = estimate_untargeted_moment(data, panel=sub, verbose=False)
-    s_sub = structural_eta(data, sub, verbose=False)
-    out = {"industry": data["industry"], "n_pairs": int(n_pairs),
-           "n_suppliers": int(n_sup), "eta": r_sub["eta"],
-           "eta_struct": s_sub["eta_struct"],
-           "R": r_sub["eta"] - s_sub["eta_struct"], "quotable": True}
+    measured_sub = estimate_untargeted_moment(data, panel=within_area_panel, verbose=False)
+    structural_sub = structural_eta(data, within_area_panel, verbose=False)
+    result = {"industry": data["industry"], "n_pairs": int(n_pairs),
+           "n_suppliers": int(n_suppliers), "eta": measured_sub["eta"],
+           "eta_struct": structural_sub["eta_struct"],
+           "R": measured_sub["eta"] - structural_sub["eta_struct"], "quotable": True}
     if verbose:
-        print(f"  within-area check ({n_pairs:,} pairs, {n_sup:,} suppliers): "
-              f"eta {out['eta']:+.4f} vs structural {out['eta_struct']:+.4f}, "
-              f"R = {out['R']:+.4f}   (against R = {gap['R']:+.4f} on the full "
+        print(f"  within-area check ({n_pairs:,} pairs, {n_suppliers:,} suppliers): "
+              f"eta {result['eta']:+.4f} vs structural {result['eta_struct']:+.4f}, "
+              f"R = {result['R']:+.4f}   (against R = {gap_result['R']:+.4f} on the full "
               "sample — a smaller |R| here means comparative advantage covarying with "
               "distance was carrying it)")
-    return out
+    return result
 
 
 def structural_summary(structural_results):
     """One row per industry: the theoretical moment, the measured one, and their gap."""
     rows = []
-    for r in structural_results:
-        emp = EMPIRICAL_DELTA_OVER_GAMMA.get(r["industry"], {})
+    for result in structural_results:
+        empirical = EMPIRICAL_DELTA_OVER_GAMMA.get(result["industry"], {})
         rows.append({
-            "industry": emp.get("display_name", r["industry"]),
-            "theta*alpha": r["theta_alpha"], "nu_s": r["nu_s"],
-            "eta struct": r["eta_struct"], "share ext": r["share_ext"],
-            "share int": r["share_int"], "E_w(Lambda)": r["E_lambda"],
-            "E_w(1-a)": r["E_open"], "eta measured": r["eta"],
-            "R": r["R"], "R weighting": r["R_weighting"],
-            "R functional": r["R_functional"], "R composition": r["R_composition"],
-            "serving rate": r["panel_serving_rate"],
-            "buyers per supplier": r["panel_buyers_per_supplier"],
+            "industry": empirical.get("display_name", result["industry"]),
+            "theta*alpha": result["theta_alpha"], "nu_s": result["nu_s"],
+            "eta struct": result["eta_struct"], "share ext": result["share_ext"],
+            "share int": result["share_int"], "E_w(Lambda)": result["E_lambda"],
+            "E_w(1-a)": result["E_open"], "eta measured": result["eta"],
+            "R": result["R"], "R weighting": result["R_weighting"],
+            "R functional": result["R_functional"], "R composition": result["R_composition"],
+            "serving rate": result["panel_serving_rate"],
+            "buyers per supplier": result["panel_buyers_per_supplier"],
         })
     return pd.DataFrame(rows).set_index("industry")
 
@@ -3211,31 +3214,31 @@ def plot_structural_vs_measured(structural_results, figsize=None, save_to=None):
     between the bar tops is R, annotated with its three parts.
     """
     fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.95, height_fraction=0.62))
-    x = np.arange(len(structural_results))
-    wdt = 0.34
-    for i, r in enumerate(structural_results):
-        ext = delta_over_gamma_from_eta(r["eta_struct_ext"])
-        tot = delta_over_gamma_from_eta(r["eta_struct"])
-        ax.bar(x[i] - wdt / 2, ext, wdt, color=sim_color, alpha=0.9,
+    x_positions = np.arange(len(structural_results))
+    bar_width = 0.34
+    for i, result in enumerate(structural_results):
+        dg_extensive = delta_over_gamma_from_eta(result["eta_struct_ext"])
+        dg_total = delta_over_gamma_from_eta(result["eta_struct"])
+        ax.bar(x_positions[i] - bar_width / 2, dg_extensive, bar_width, color=sim_color, alpha=0.9,
                label="structural: extensive" if i == 0 else None)
-        ax.bar(x[i] - wdt / 2, tot - ext, wdt, bottom=ext, color=(0.30, 0.55, 0.40),
+        ax.bar(x_positions[i] - bar_width / 2, dg_total - dg_extensive, bar_width, bottom=dg_extensive, color=(0.30, 0.55, 0.40),
                alpha=0.85, label="structural: substitution" if i == 0 else None)
-        ax.bar(x[i] + wdt / 2, delta_over_gamma_from_eta(r["eta"]), wdt,
+        ax.bar(x_positions[i] + bar_width / 2, delta_over_gamma_from_eta(result["eta"]), bar_width,
                color=reference_color, alpha=0.8,
                label="measured (PPML)" if i == 0 else None)
-        ax.annotate(rf"$\theta\alpha$ = {r['theta_alpha']:.3f}", (x[i], 0.004),
+        ax.annotate(rf"$\theta\alpha$ = {result['theta_alpha']:.3f}", (x_positions[i], 0.004),
                     ha="center", fontsize=fs(8), color="0.3")
-        ax.annotate(f"R: weight {r['R_weighting']:+.2f}, form {r['R_functional']:+.2f}, "
-                    f"comp {r['R_composition']:+.2f}",
-                    (x[i], delta_over_gamma_from_eta(r["eta"])), xytext=(0, -12),
+        ax.annotate(f"R: weight {result['R_weighting']:+.2f}, form {result['R_functional']:+.2f}, "
+                    f"comp {result['R_composition']:+.2f}",
+                    (x_positions[i], delta_over_gamma_from_eta(result["eta"])), xytext=(0, -12),
                     textcoords="offset points", ha="center", fontsize=fs(7), color="0.35")
     ax.axhline(0.0, color="0.6", linewidth=0.8)
-    ceil = -1.0 / EMPIRICAL_MEAN_LOG_D
-    ax.axhline(ceil, color="0.4", linestyle=":", linewidth=1.1)
-    ax.set_xticks(x)
-    ax.set_xticklabels([EMPIRICAL_DELTA_OVER_GAMMA.get(r["industry"], {})
-                        .get("display_name", r["industry"])
-                        for r in structural_results])
+    ceiling = -1.0 / EMPIRICAL_MEAN_LOG_D
+    ax.axhline(ceiling, color="0.4", linestyle=":", linewidth=1.1)
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([EMPIRICAL_DELTA_OVER_GAMMA.get(result["industry"], {})
+                        .get("display_name", result["industry"])
+                        for result in structural_results])
     ax.set_ylabel(r"$\delta/\gamma$ (reduced-form scale)")
     ax.set_title("The moment computed against the moment estimated", fontsize=fs(10))
     ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
@@ -3268,18 +3271,21 @@ def linear_delta_over_gamma(panel, weight="sample_weight"):
     `delta / (gamma + delta * mean log d)`, which is what the ratio would be if the
     empirical regression centred log d.
     """
-    a = panel["a_ir"].to_numpy(float)
-    ld = panel["log_distance"].to_numpy(float)
-    w = np.ones_like(a) if weight is None else panel[weight].to_numpy(float)
-    X = np.column_stack([np.ones_like(ld), ld])
-    WX = X * w[:, None]
-    gamma, delta = np.linalg.solve(X.T @ WX, WX.T @ a)
-    m = float(np.average(ld, weights=w))
-    return {"gamma": float(gamma), "delta": float(delta),
+    # Weighted least squares of the portfolio share on log distance, by pyfixest. The
+    # sample has no missing value by construction (the panel is zero-filled), and the
+    # check below makes sure no observation was dropped from it.
+    sample = panel[["a_ir", "log_distance"]].astype(float)
+    sample["weight"] = 1.0 if weight is None else panel[weight].to_numpy(float)
+    level_fit = pf.feols("a_ir ~ log_distance", data=sample, weights="weight", vcov="iid")
+    assert int(level_fit._N) == len(sample), "pyfixest dropped observations from the panel"
+    gamma = float(level_fit.coef()["Intercept"])
+    delta = float(level_fit.coef()["log_distance"])
+    mean_log_distance = float(np.average(sample["log_distance"], weights=sample["weight"]))
+    return {"gamma": gamma, "delta": delta,
             "delta_over_gamma": float(delta / gamma) if gamma != 0 else np.nan,
-            "elasticity_at_mean_d": float(delta / (gamma + delta * m))
-            if (gamma + delta * m) != 0 else np.nan,
-            "mean_log_distance": m}
+            "elasticity_at_mean_d": float(delta / (gamma + delta * mean_log_distance))
+            if (gamma + delta * mean_log_distance) != 0 else np.nan,
+            "mean_log_distance": mean_log_distance}
 
 
 def untargeted_specification_ladder(data, panel=None, structural=None, verbose=True):
@@ -3301,7 +3307,7 @@ def untargeted_specification_ladder(data, panel=None, structural=None, verbose=T
     published number.
     """
     panel = build_a_ir_panel(data) if panel is None else panel
-    lin = linear_delta_over_gamma(panel)
+    linear_fit = linear_delta_over_gamma(panel)
     rows = []
 
     def _row(label, dg, note, lo=np.nan, hi=np.nan, n=np.nan):
@@ -3309,32 +3315,32 @@ def untargeted_specification_ladder(data, panel=None, structural=None, verbose=T
                      "n_obs": n, "isolates": note})
 
     def _ppml(df, label, note):
-        fit = fepois_fit(df, "a_ir", fe=BASELINE_FE, cluster="cluster")
-        b = float(fit.coef()["log_distance"])
-        se = float(fit.se()["log_distance"])
-        _row(label, delta_over_gamma_from_eta(b), note,
-             lo=delta_over_gamma_from_eta(b - 1.96 * se),
-             hi=delta_over_gamma_from_eta(b + 1.96 * se),
-             n=int(getattr(fit, "_N", len(df))))
+        ppml_fit = fepois_fit(df, "a_ir", fixed_effects=BASELINE_FE, cluster="cluster")
+        eta_hat = float(ppml_fit.coef()["log_distance"])
+        se = float(ppml_fit.se()["log_distance"])
+        _row(label, delta_over_gamma_from_eta(eta_hat), note,
+             lo=delta_over_gamma_from_eta(eta_hat - 1.96 * se),
+             hi=delta_over_gamma_from_eta(eta_hat + 1.96 * se),
+             n=int(getattr(ppml_fit, "_N", len(df))))
 
     _ppml(panel, "Baseline eta (PPML)",
           "the measured moment: within supplier, within buyer cell")
-    _row("Level-linear refit", lin["delta_over_gamma"],
+    _row("Level-linear refit", linear_fit["delta_over_gamma"],
          f"the reduced form's own shape, at the simulated mean log d = "
-         f"{lin['mean_log_distance']:.2f}", n=len(panel))
+         f"{linear_fit['mean_log_distance']:.2f}", n=len(panel))
     _ppml(build_a_ir_panel(data, firm_key=("ze2010", "A129")), "Multi-variety firms",
           "the unit: varieties of a cell pooled into one firm")
     if structural is not None:
         _row("Structural eta", structural["dg_struct"],
              "the granular derivative, computed — no interval, it is not an estimate")
 
-    emp = EMPIRICAL_DELTA_OVER_GAMMA.get(data["industry"], {})
-    if emp.get("estimate") is not None:
-        _row("Empirical delta/gamma (Table 3)", emp["estimate"],
-             "the published reduced form", lo=emp["ci_lo"], hi=emp["ci_hi"])
+    empirical = EMPIRICAL_DELTA_OVER_GAMMA.get(data["industry"], {})
+    if empirical.get("estimate") is not None:
+        _row("Empirical delta/gamma (Table 3)", empirical["estimate"],
+             "the published reduced form", lo=empirical["ci_lo"], hi=empirical["ci_hi"])
 
     df = pd.DataFrame(rows).set_index("specification")
-    df.attrs.update(lin)
+    df.attrs.update(linear_fit)
     df.attrs["mean_log_d_empirical"] = EMPIRICAL_MEAN_LOG_D
     df.attrs["ceiling_on_ratio"] = -1.0 / EMPIRICAL_MEAN_LOG_D
     if verbose:
@@ -3353,30 +3359,30 @@ def plot_untargeted_ladder(ladder, industry, figsize=None, save_to=None):
     with the ceiling -1/mean(log d) drawn in: a bar inside the band reproduces Table 3, and
     how close the bars sit to the ceiling says how much room the ratio scale has left.
     """
-    emp = EMPIRICAL_DELTA_OVER_GAMMA.get(industry, {})
+    empirical = EMPIRICAL_DELTA_OVER_GAMMA.get(industry, {})
     df = ladder[::-1]
-    y = np.arange(len(df))
+    y_positions = np.arange(len(df))
     is_data = df.index.str.startswith("Empirical")
     is_struct = df.index.str.startswith("Structural")
-    vals = df["delta/gamma"].to_numpy(float)
+    ratios = df["delta/gamma"].to_numpy(float)
     lo, hi = df["ci_lo"].to_numpy(float), df["ci_hi"].to_numpy(float)
 
     fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=1.0, height_fraction=0.6))
-    if emp.get("ci_lo") is not None:
-        ax.axvspan(emp["ci_lo"], emp["ci_hi"], color=reference_color, alpha=0.15,
+    if empirical.get("ci_lo") is not None:
+        ax.axvspan(empirical["ci_lo"], empirical["ci_hi"], color=reference_color, alpha=0.15,
                    label=f"data 95{pct()} CI")
-    ax.barh(y, vals, color=[reference_color if d else
-                            (0.30, 0.55, 0.40) if t else sim_color
-                            for d, t in zip(is_data, is_struct)], alpha=0.85)
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        if np.isfinite(l) and np.isfinite(h):
-            ax.plot([l, h], [i, i], color="black", linewidth=1)
-    ceil = -1.0 / EMPIRICAL_MEAN_LOG_D
-    ax.axvline(ceil, color="0.4", linestyle=":", linewidth=1.1)
-    ax.annotate(rf"$-1/\overline{{\log d}}$", (ceil, len(df) - 0.4), fontsize=fs(8),
+    ax.barh(y_positions, ratios, color=[reference_color if is_data_row else
+                            (0.30, 0.55, 0.40) if is_struct_row else sim_color
+                            for is_data_row, is_struct_row in zip(is_data, is_struct)], alpha=0.85)
+    for i, (ci_lo_row, ci_hi_row) in enumerate(zip(lo, hi)):
+        if np.isfinite(ci_lo_row) and np.isfinite(ci_hi_row):
+            ax.plot([ci_lo_row, ci_hi_row], [i, i], color="black", linewidth=1)
+    ceiling = -1.0 / EMPIRICAL_MEAN_LOG_D
+    ax.axvline(ceiling, color="0.4", linestyle=":", linewidth=1.1)
+    ax.annotate(rf"$-1/\overline{{\log d}}$", (ceiling, len(df) - 0.4), fontsize=fs(8),
                 color="0.35", ha="right")
     ax.axvline(0.0, color="0.6", linewidth=0.8)
-    ax.set_yticks(y)
+    ax.set_yticks(y_positions)
     ax.set_yticklabels(df.index, fontsize=fs(9))
     ax.set_xlabel(r"$\delta/\gamma$ (reduced-form scale)")
     ax.set_title(f"Untargeted moment against Table 3 — {industry}", fontsize=fs(11))

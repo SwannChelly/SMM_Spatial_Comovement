@@ -557,11 +557,11 @@ def gate_untargeted():
     gp["cluster"] = gp["cell"].astype(str)
     gp["sample_weight"] = 1.0
 
-    b_tot = float(NS["fepois_fit"](gp, "a_ir", fe=NS["BASELINE_FE"],
+    b_tot = float(NS["fepois_fit"](gp, "a_ir", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
-    b_ext = float(NS["fepois_fit"](gp, "served", fe=NS["BASELINE_FE"],
+    b_ext = float(NS["fepois_fit"](gp, "served", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
-    b_int = float(NS["fepois_fit"](gp[gp["a_ir"] > 0], "a_ir", fe=NS["BASELINE_FE"],
+    b_int = float(NS["fepois_fit"](gp[gp["a_ir"] > 0], "a_ir", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
     print(f"\ngranular economy: theta*alpha = {th * al:.3f}, (1-nu_s)*alpha = "
           f"{(1 - nus) * al:.3f}")
@@ -599,7 +599,7 @@ def gate_untargeted():
     gp2["a_ir"] = gp2["X"] / gp2["SIREN"].map(gp2.groupby("SIREN")["X"].sum())
     gp2["served"] = (gp2["a_ir"] > 0).astype(float)
     gp2["sample_weight"] = 1.0
-    p_ext = float(NS["fepois_fit"](gp2, "served", fe=NS["BASELINE_FE"],
+    p_ext = float(NS["fepois_fit"](gp2, "served", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
     assert abs(b_tot) > abs(b_ext + b_int) + 1e-3, (b_tot, b_ext + b_int)
     assert abs(p_ext) < abs(b_ext), (p_ext, b_ext)        # pooled cells serve everyone
