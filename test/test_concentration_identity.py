@@ -19,16 +19,20 @@ N_HAT = np.array([4., 10., 30.])
 ALPHA = 0.4
 
 def sourcing_geometry(data, alpha=None, equalise_T=False):
-    a = ALPHA if alpha is None else float(alpha)
+    a = ALPHA if alpha is None else float(np.ravel(alpha)[0])
     out = {}
     for s in range(S):
         cells = np.flatnonzero(CELL_MASK[s])
         T = np.ones(cells.size) if equalise_T else Tcell[s]
         d = np.maximum(D[np.ix_(cells, buyers - 1)], 1.0)
         psi = T[:, None] * d ** (-THETA * a)
-        out[s] = {"cells": cells, "T_cell": T, "distance": d,
+        # the power law through the same keys the real geometry carries: log tau and
+        # the local elasticity theta * d ln tau / d ln d
+        out[s] = {"cells": cells, "T_cell": T, "distance": d, "log_tau": a * np.log(d),
+                  "elasticity": np.full(d.shape, THETA * a),
                   "rho": psi / psi.sum(0, keepdims=True)}
-    return {"by_sector": out, "alpha": a, "theta": THETA, "downstream": buyers}
+    return {"by_sector": out, "alpha": np.array([a]), "theta": THETA,
+            "theta_alpha": THETA * a, "downstream": buyers}
 
 def _parquet_sector_index(data, sup): return sup["A129"].to_numpy().astype(int) - 1
 def _region_labels(data):
@@ -100,7 +104,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=False):
                  else np.asarray(n_hat).astype(int),
             "theta": THETA, "theta_source": "fixture",
             "nu_s": np.full(S, NU_S_DEFAULT), "nu": NU_ACROSS_DEFAULT,
-            "lam": LAMBDA_DEFAULT, "epsilon": -16.0,
+            "lambda": LAMBDA_DEFAULT, "epsilon": -16.0,
             "delta": np.ones(nb_), "wage": np.ones(R)}
 
 # The library, with the fixture installed where its functions resolve their globals.

@@ -21,6 +21,8 @@ import matplotlib
 matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
+import pyfixest as pf
 
 RNG = np.random.default_rng(20260805)
 
@@ -114,37 +116,45 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/domestic_share.npy", domestic_share)
     np.save(f"{BASE}/N_downstream_per_region.npy", N_downstream)
     np.save(f"{BASE}/attraction_area_linkages.npy", AA_link)
+    # distances: the nearest downstream region of every ZE is its attraction area (as
+    # load_parameters.jl asserts), at distances spread over the five bins; a downstream
+    # ZE is at 0 from itself and leaves the regression set (d > 0). Own stream, so RNG
+    # is not consumed.
+    _near = np.array([0, 12, 60, 110, 160, 0, 30, 260, 75, 0, 40, 180], float)
+    _D = 400.0 + np.random.default_rng(5).uniform(0, 100, (R, R))
+    _D = (_D + _D.T) / 2
+    np.fill_diagonal(_D, 0.0)
+    for _l in range(R):
+        _j = down_idx[aa_of_ze[_l]]
+        _D[_l, _j] = _D[_j, _l] = _near[_l]
+    np.save(f"{BASE}/distances.npy", _D)
     # block 4 = [beta_d (N_REG) ; beta_kappa (1)], two files as the data notebook writes
     reg_coef_emp = np.array([-0.35, -0.62, -0.81, -1.05, 0.48])
     np.save(f"{BASE}/beta_d_{N_REG}.npy", reg_coef_emp[:N_REG])
     np.save(f"{BASE}/beta_kappa_{N_REG}.npy", reg_coef_emp[N_REG:])
 
     # ---- G_K.csv --------------------------------------------------------------
-    # G = Pr(K_ls <= K), so the curve must be non-decreasing in K and bounded by 1:
-    # the reporting reads K = 0 as the targeted moment and K >= 1 as the untargeted
-    # continuation, and both are checked for monotonicity.
+    # As the data pipeline writes it (`t_G`): G = Pr(K_ls == K), the pmf, and G_cs
+    # its cumulative sum. K = 0 is the targeted moment, K >= 1 the untargeted shape.
     G_target = np.array([0.30, 0.45, 0.20, 0.55])
     N_sup = np.array([40, 26, 51, 18])
     K_ROWS = 4
-    G_curve_emp = np.minimum(1.0, G_target[:, None] + 0.1 * np.arange(K_ROWS)[None, :])
+    # decreasing in K in some sectors, which a CDF could not be
+    G_pmf_true = G_target[:, None] * np.array([1.0, 0.8, 0.5, 0.25])[None, :] \
+        + np.array([0.0, 0.10, 0.05, 0.02])[None, :]
+    G_curve_emp = G_pmf_true
     rows = []
     for s in range(S):
         for k in range(K_ROWS):
             # Real column layout: group, A129, G, K, N_supplier_s — `G` is the value
             # column, G = Pr(K_ls <= K), and the K = 0 row is the targeted moment.
             rows.append({"group": s + 1, "A129": sectors[s], "G": G_curve_emp[s, k],
+                         "G_cs": G_curve_emp[s, :k + 1].sum(),
                          "K": k, "N_supplier_s": N_sup[s]})
     pd.DataFrame(rows).to_csv(f"{BASE}/G_K.csv", index=False)
 
-    # ---- G_K_var.csv: bootstrap variance of the INCREMENTS p_s(K) --------------
-    # Optional file. Its K = 0 column is the SAME object as the G block of Sigma_data
-    # (p_s(0) = G_s(0)), which is what makes it a free consistency check rather than an
-    # extra assumption — planted consistent here, and deliberately broken in one gate.
-    G_pmf_emp = np.diff(G_curve_emp, axis=1, prepend=0.0)
-    G_pmf_se  = np.array([0.03, 0.05, 0.02, 0.04])[:, None] * (1.0 + 0.2 * np.arange(K_ROWS))
-    pd.DataFrame([{"A129": sectors[s], "K": k, "var": G_pmf_se[s, k] ** 2}
-                  for s in range(S) for k in range(K_ROWS)]
-                 ).to_csv(f"{BASE}/G_K_var.csv", index=False)
+    # No G_K_var.csv: the empirical G carries no interval and the file is not read.
+    G_pmf_emp = G_curve_emp
 
     # ---- the model-side structures the loader must rebuild ---------------------
     supplier = (filter_N == 1) & (emp_gamma_ls > 0)
@@ -326,7 +336,7 @@ def _build_industry(ROOT, industry, sectors):
     expected = {
         "S": S, "R": R, "n_AA": R_D, "n_coef": N_REG, "n_gb": n_gb,
         "G_curve_emp": G_curve_emp.tolist(), "K_rows": list(range(K_ROWS)),
-        "G_pmf_emp": G_pmf_emp.tolist(), "G_pmf_se": G_pmf_se.tolist(),
+        "G_pmf_emp": G_pmf_emp.tolist(),
         "world_e": e.tolist(), "world_labels": w_lbl, "world_draws": W_DRAWS,
         "q_hat": q_hat_plant.tolist(), "N_LS": N_LS.tolist(),
         "sens_labels": s_lbl, "sens_K": K_S, "sens_Jd": Jd.tolist(), "sens_m": m_base.tolist(),
@@ -444,6 +454,23 @@ def run_checks(ns, ROOT, exp):
     finally:
         open(gk_path, "w").write(gk_orig)
 
+    # G_cs pins the convention: a file whose G_cs is not the cumsum of G is refused.
+    gk_path3 = os.path.join(ROOT, "baseline_test", "G_K.csv")
+    gk_orig3 = open(gk_path3).read()
+    try:
+        g = pd.read_csv(io.StringIO(gk_orig3))
+        g["G_cs"] = g["G"]
+        g.to_csv(gk_path3, index=False)
+        raised = False
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ns["load_granular_data"]("test", mu=2, base=ROOT)
+        except ValueError as e:
+            raised = "not the cumulative sum" in str(e)
+        check("a G_K.csv whose G_cs is not the cumsum of G is refused", raised)
+    finally:
+        open(gk_path3, "w").write(gk_orig3)
+
     print("\n=== 2c. the count curve Gbar_s(K), K = 0..3 ===")
     # K = 0 is block 6 of the moment vector and N_hat_s is calibrated on it; K >= 1 is
     # untargeted and exists nowhere on the Julia side, so the notebook rebuilds it from
@@ -453,12 +480,11 @@ def run_checks(ns, ROOT, exp):
     cc = ns["count_curve"](d2, K_values=(0, 1, 2, 3))
     check("curve is indexed by (sector, K)", list(cc.index.names) == ["A129", "K"] and
           len(cc) == exp["S"] * 4)
-    # The panels are INCREMENTS: p_s(K) = Pr[K_ls = K] = G(K) - G(K-1). G_K.csv stores
-    # the CDF, so the empirical series must be its first difference, with p_s(0) = G(0)
-    # — the targeted moment is the same number under either convention.
-    check("empirical curve is the INCREMENT of G_K.csv, p_s(K) = G(K) - G(K-1)",
-          close(cc["empirical"].values.reshape(exp["S"], 4),
-                np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)))
+    # G_K.csv stores the pmf p_s(K) = Pr[K_ls = K] (G_cs is its cumsum): read as is,
+    # never differenced -- differencing gave negative "shares" on the real data.
+    emp_cc = cc["empirical"].values.reshape(exp["S"], 4)
+    check("empirical curve is G of G_K.csv as is (the pmf), not its difference",
+          close(emp_cc, np.array(exp["G_curve_emp"])) and bool((emp_cc >= 0).all()))
     check("the unbiased estimator was used (no fallback)",
           cc.attrs["estimator"].startswith("unbiased"))
     check("N_rho recovered from N_HI as load_parameters.jl fixes it",
@@ -481,13 +507,11 @@ def run_checks(ns, ROOT, exp):
           close(cc.xs(0, level="K")["N_hat"].values, exp["N_hat"]))
     check("residual is simulated - empirical",
           close(cc["residual"].values, cc["simulated"].values - cc["empirical"].values))
-    # ---- bands on both series ------------------------------------------------
-    # The simulated band is the fake-world one: the variety counts each world
-    # re-calibrates (step3/inference_world for mu = 2), pushed through the closed form at
-    # q_hat. The empirical band is the bootstrap variance of the increments (G_K_var.csv).
-    check("empirical SE read from G_K_var.csv as sqrt(var)",
-          close(cc["se_empirical"].values.reshape(exp["S"], 4),
-                np.array(exp["G_pmf_se"])))
+    # ---- the band, on the simulated series only -------------------------------
+    # The variety counts each simulated economy re-calibrates (step3/inference_world for
+    # mu = 2), pushed through the closed form at q_hat. The empirical series has none.
+    check("the count curve carries no empirical interval column",
+          "se_empirical" not in cc.columns)
     P3 = np.array(exp["world_draws"]["step3"][0])
     Nw = np.rint(P3[:, 2:2 + exp["S"]]).astype(int)
     lgf = ns["_logfact"](exp["n_rho"])
@@ -527,128 +551,54 @@ def run_checks(ns, ROOT, exp):
     except KeyError as e:
         check("an absent K raises", "7" in str(e))
 
-    # p_s(0) = G_s(0), so a G_K_var.csv whose K = 0 column disagrees with the G block of
-    # Sigma_data is measuring a different object — most likely the CDF's variance. That
-    # must be SAID, not silently plotted.
+    # G_K_var.csv (a bootstrap variance) is NOT read: one left in the input folder changes
+    # nothing -- no key, no column, and no empirical bar on any count-curve panel.
     gkv_path = os.path.join(ROOT, "baseline_test", "G_K_var.csv")
-    gkv_orig = open(gkv_path).read()
-
-    # A sector whose bootstrap variance is 0 (or missing) must keep its POINT and simply
-    # lose its bar: the value is known, only its uncertainty is not. Drawing it through
-    # errorbar with a zero yerr would put a bare cap on the marker; a NaN yerr drops the
-    # point entirely. Both are wrong, and the second is what makes a point look absent.
     try:
-        z = pd.read_csv(io.StringIO(gkv_orig))
-        z.loc[z["K"] == 2, "var"] = 0.0
-        z.to_csv(gkv_path, index=False)
-        d_z = ns["load_granular_data"]("test", mu=2, base=ROOT)
-        cc_z = ns["count_curve"](d_z, K_values=(0, 1, 2, 3))
-        check("a zero bootstrap variance keeps the empirical VALUE",
-              bool(np.isfinite(cc_z.xs(2, level="K")["empirical"].values).all()) and
-              close(cc_z.xs(2, level="K")["se_empirical"].values, np.zeros(exp["S"])))
-        axs_z = ns["plot_count_curve"](d_z, K_values=(0, 1, 2, 3))
-        ax_k2 = axs_z[2]               # one figure per K, keyed by K
-        emp = [c for c in ax_k2.containers if c.get_label() == "Empirical"]
-        n_pts = sum(len(c[0].get_xdata()) for c in emp)
-        check("every sector is still plotted at K = 2 despite a zero variance",
-              n_pts == exp["S"])
-        check("and none of them carries an error bar",
-              not any(getattr(c, "has_yerr", False) for c in emp))
-        # the K = 0 panel, where the variances are nonzero, must still show bars
-        emp0 = [c for c in axs_z[0].containers if c.get_label() == "Empirical"]
-        check("a panel with nonzero variances still draws its bars",
-              any(getattr(c, "has_yerr", False) for c in emp0))
+        pd.DataFrame([{"A129": c, "K": k, "var": 0.01} for c in exp["sector_names"]
+                      for k in range(4)]).to_csv(gkv_path, index=False)
+        d_v = ns["load_granular_data"]("test", mu=2, base=ROOT)
+        cc_v = ns["count_curve"](d_v, K_values=(0, 1, 2, 3))
+        axs_v = ns["plot_count_curve"](d_v, K_values=(0, 1, 2, 3))
+        emp_all = [c for ax_ in axs_v.values() for c in ax_.containers
+                   if c.get_label() == "Empirical"]
+        check("G_K_var.csv is ignored: no G_pmf_se, no se_empirical, no empirical bar",
+              "G_pmf_se" not in d_v and "se_empirical" not in cc_v.columns
+              and emp_all and not any(getattr(c, "has_yerr", False) for c in emp_all)
+              and sum(len(c[0].get_xdata()) for c in emp_all if c[0] is not None)
+              == 4 * exp["S"])
     finally:
-        open(gkv_path, "w").write(gkv_orig)
-
-    # A G_K_var.csv written off G_K.csv's own schema keeps the value column called `G`,
-    # which names the object measured, not the statistic. It must still be read, as a
-    # variance, and the fallback must SAY so rather than guess silently.
-    try:
-        gcol = pd.read_csv(io.StringIO(gkv_orig)).rename(columns={"var": "G"})
-        gcol.to_csv(gkv_path, index=False)
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            cc_g = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
-                                     K_values=(0, 1, 2, 3))
-        check("a value column named `G` is read as the variance, and the choice announced",
-              "as the VARIANCE" in buf.getvalue() and
-              close(cc_g["se_empirical"].values.reshape(exp["S"], 4),
-                    np.array(exp["G_pmf_se"])))
-    finally:
-        open(gkv_path, "w").write(gkv_orig)
-
-    # An ambiguous file (two spare columns) must refuse rather than pick one.
-    try:
-        amb = pd.read_csv(io.StringIO(gkv_orig)).rename(columns={"var": "G"})
-        amb["other"] = 1.0
-        amb.to_csv(gkv_path, index=False)
-        raised = False
-        try:
-            ns["load_granular_data"]("test", mu=2, base=ROOT)
-        except KeyError as e:
-            raised = "cannot tell which column holds the variance" in str(e)
-        check("an ambiguous G_K_var.csv is refused, not guessed", raised)
-    finally:
-        open(gkv_path, "w").write(gkv_orig)
+        if os.path.exists(gkv_path):
+            os.remove(gkv_path)
 
     # k_max truncates every count-curve input at once, so raising the constant is the
     # single place that widens the reporting.
     d_k1 = ns["load_granular_data"]("test", mu=2, base=ROOT, k_max=1)
-    check("k_max truncates the empirical curve and its bootstrap SE together",
-          d_k1["G_curve_K"] == [0, 1] and d_k1["G_pmf"].shape[1] == 2
-          and d_k1["G_pmf_se"].shape[1] == 2)
+    check("k_max truncates the empirical curve",
+          d_k1["G_curve_K"] == [0, 1] and d_k1["G_pmf"].shape[1] == 2)
     check("k_max leaves G_target (the K = 0 targeted moment) untouched",
           close(d_k1["G_target"], d2["G_target"]))
 
-    # Sectors are matched by VALUE on the A129 code. A file whose codes do not line up
-    # (a renamed sector, or an int64 column against a string one) would otherwise hand
-    # back an all-NaN band with no complaint.
-    try:
-        wrong = pd.read_csv(io.StringIO(gkv_orig))
-        wrong["A129"] = wrong["A129"].replace({exp["sector_names"][0]: "ZZZZ"})
-        wrong.to_csv(gkv_path, index=False)
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            cc_w = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
-                                     K_values=(0, 1, 2, 3))
-        check("an A129 code absent from G_K_var.csv is named, not silently NaN",
-              "G_K_var.csv has no row for A129" in buf.getvalue() and
-              bool(np.isnan(cc_w["se_empirical"].values.reshape(exp["S"], 4)[0]).all()) and
-              bool(np.isfinite(cc_w["se_empirical"].values.reshape(exp["S"], 4)[1]).all()))
-    finally:
-        open(gkv_path, "w").write(gkv_orig)
-
-    # Absent the optional file, the empirical band must be empty rather than guessed.
-    os.rename(gkv_path, gkv_path + ".off")
-    try:
-        cc_nb = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
-                                  K_values=(0, 1, 2, 3))
-        check("no G_K_var.csv => empirical SE is all NaN, never invented",
-              bool(np.isnan(cc_nb["se_empirical"].values).all()))
-    finally:
-        os.rename(gkv_path + ".off", gkv_path)
-
-    # G is CUMULATIVE, so a (sector, K) row absent from G_K.csv means no mass was added
-    # there, not that the level is unknown. Differencing a NaN would poison TWO
-    # increments (K and K+1) and erase two empirical points from the figure.
+    # A (sector, K) row absent from G_K.csv is a K no cell has: a share of 0, announced,
+    # rather than a NaN that erases the point from the figure.
     gk_path2 = os.path.join(ROOT, "baseline_test", "G_K.csv")
     gk_orig2 = open(gk_path2).read()
     try:
         g = pd.read_csv(io.StringIO(gk_orig2))
         g = g[~((g["K"] == 2) & (g["A129"] == exp["sector_names"][0]))]
+        g = g.drop(columns="G_cs")   # a dropped row breaks the cumsum by construction
         g.to_csv(gk_path2, index=False)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             cc_gap = ns["count_curve"](ns["load_granular_data"]("test", mu=2, base=ROOT),
                                        K_values=(0, 1, 2, 3))
         emp_gap = cc_gap["empirical"].values.reshape(exp["S"], 4)
-        ref = np.diff(np.array(exp["G_curve_emp"]), axis=1, prepend=0.0)
-        check("a missing K row is read as a flat CDF (increment 0), not two NaNs",
+        ref = np.array(exp["G_curve_emp"])
+        check("a missing K row is read as a share of 0, the neighbours untouched",
               bool(np.isfinite(emp_gap).all()) and abs(emp_gap[0, 2]) < 1e-12
-              and abs(emp_gap[0, 3] - (ref[0, 2] + ref[0, 3])) < 1e-12)
+              and abs(emp_gap[0, 3] - ref[0, 3]) < 1e-12)
         check("and the fill is announced rather than silent",
-              "the CDF is flat there" in buf.getvalue())
+              "read as a share of 0" in buf.getvalue())
         check("other sectors are untouched by one sector's gap",
               close(emp_gap[1:], ref[1:]))
     finally:
@@ -793,12 +743,66 @@ def run_checks(ns, ROOT, exp):
           ns["reg_bin_labels"](4) == ns["reg_bin_labels"](5)[1:])
     check("reg bin labels for n_coef=5 keep all", len(ns["reg_bin_labels"](5)) == 5)
     check("with_kappa appends ln n", ns["reg_bin_labels"](1, with_kappa=True)[-1] == r"$\ln n_{ls}$")
-    axs4 = ns["plot_reg_coef"](d2)
-    sims = [c for c in axs4[1].containers if c.get_label().startswith("Simulated")]
-    yerr = sims[0][2][0].get_segments()[0] if sims and sims[0][2] else None
-    check("plot_reg_coef: distance panel + density panel, the band drawn on beta_kappa",
-          len(axs4) == 2 and yerr is not None
-          and close(sorted([yerr[0][1], yerr[1][1]]), [wt["band_lo"].iloc[-1], wt["band_hi"].iloc[-1]], 1e-9))
+    ax4 = ns["plot_reg_coef"](d2)
+    nd = d2["n_coef"]
+    sims = [c for c in ax4.containers if c.get_label().startswith("Simulated")]
+    seg = sims[0][2][0].get_segments() if sims and sims[0][2] else []
+    check("plot_reg_coef: one panel, beta_d only, the band drawn on each distance bin",
+          len(ax4.get_xticks()) == nd and len(seg) == nd
+          and close(sorted([seg[-1][0][1], seg[-1][1][1]]),
+                    [wt["band_lo"].iloc[nd - 1], wt["band_hi"].iloc[nd - 1]], 1e-9))
+
+    # block 4 as average marginal effects in pp (Fig. 4, Panel A's reading)
+    smp = ns["reg_cell_sample"](d2)
+    nd = exp["n_coef"]
+    xb = ns["_index_no_fe"](smp, d2["empirical_moments_dict"]["reg_coef"], nd)
+    a_g = ns["calibrate_cloglog_fe"](smp, xb)
+    gsum = np.bincount(smp["group"], smp["y"])
+    check("AME: the calibrated fixed effects close every group's supplier count",
+          close(np.bincount(smp["group"], ns["_cloglog_F"](a_g[smp["group"]] + xb)), gsum, 1e-9))
+    check("AME: every group of the regression set has variation in y",
+          bool(((gsum > 0) & (gsum < np.bincount(smp["group"]))).all()))
+    at = ns["extensive_ame_table"](d2, sample=smp)
+    check("AME table: reference bin first and zero, distance bins, then ln n",
+          len(at) == nd + (nd > 1) + 1 and (nd == 1 or (at["data"].iloc[0] == 0
+                                                        and at["simulated"].iloc[0] == 0))
+          and at.index[-1] == r"$\ln n_{ls}$")
+    dr = np.array([100 * np.append(*ns["extensive_ame"](smp, sim4 + e, nd)) for e in E])
+    check("AME band = quantiles of the AME of each world's beta_sim + e_b (not of the "
+          "transformed band end points)",
+          close(at["band_lo"].values, np.quantile(dr, 0.025, axis=0))
+          and close(at["band_hi"].values, np.quantile(dr, 0.975, axis=0)))
+    z0, _ = ns["extensive_ame"](smp, np.r_[np.zeros(nd), 0.4], nd)
+    check("AME: zero distance coefficients give zero distance effects", np.abs(z0).max() == 0)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ns["plot_extensive_ame"](d2, table=at, save_to=os.path.join(outdir, "plot_extensive_ame.pdf"))
+        check("plot_extensive_ame -> pdf", os.path.getsize(os.path.join(outdir, "plot_extensive_ame.pdf")) > 0)
+    except Exception as e:
+        check("plot_extensive_ame -> pdf", False, f"{type(e).__name__}: {e}")
+    # on a planted cloglog with fixed effects, the AME at the cloglog MLE reproduces the
+    # within-group LPM coefficient (the reduced-form object) to a fraction of a point
+    rg = np.random.default_rng(7)
+    gg = np.repeat(np.arange(120), 60); bb = rg.integers(0, 5, gg.size); ln_ = rg.normal(1, .8, gg.size)
+    bt = np.array([-0.3, -0.5, -0.6, -1.0, 0.45])
+    yy = (rg.uniform(size=gg.size) < ns["_cloglog_F"](rg.normal(-3, .7, 120)[gg]
+          + np.r_[0, bt[:4]][bb] + bt[4] * ln_)).astype(float)
+    sp = pd.DataFrame({"group": gg, "y": yy, "bin": bb, "log_n": ln_, "log_d": 0.0})
+    gmean = sp.groupby("group")["y"].transform("mean")
+    sp = sp[(gmean > 0) & (gmean < 1)].reset_index(drop=True)
+    sp["group"] = pd.factorize(sp["group"])[0]
+    Xd = pd.get_dummies(sp["bin"], prefix="b", drop_first=True).astype(float)
+    Xd["log_n"] = sp["log_n"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mle = sm.GLM(sp["y"], pd.concat([Xd, pd.get_dummies(sp["group"]).astype(float)], axis=1),
+                     family=sm.families.Binomial(link=sm.families.links.CLogLog())).fit()
+        lpm = pf.feols("y ~ C(bin) + log_n | group", data=sp).coef().iloc[:4].to_numpy()
+    ame_mle, _ = ns["extensive_ame"](sp, mle.params[list(Xd.columns)].to_numpy(), 4)
+    check("AME at the cloglog MLE = within-group LPM coefficients within 0.3 pp",
+          np.abs(100 * ame_mle[1:] - 100 * lpm).max() < 0.3,
+          f"{np.round(100 * ame_mle[1:], 3)} vs {np.round(100 * lpm, 3)}")
 
     print("\n=== 9. LaTeX table: JOINT (two industries), labor + industry only ===")
     tex = ns["generate_combined_table"](
@@ -836,8 +840,8 @@ def run_checks(ns, ROOT, exp):
     check("Panel C: the extensive margin, beta_d bins and beta_kappa",
           "Panel C: Extensive Margin" in tex and r"$\beta_\kappa$" in tex
           and all(f"{v:.4f}" in tex for v in exp["reg_coef"]))
-    check("Panel C carries the 95% fake-world band under each simulated coefficient",
-          f"[{wt['band_lo'].iloc[-1]:.3f}, {wt['band_hi'].iloc[-1]:.3f}]" in tex)
+    check("Panel C carries the fake-world sd under each simulated coefficient, beta_kappa included",
+          all(f"({v:.4f})" in tex for v in wt["world_sd_e"].values))
     ptex = ns["generate_parameter_table"](
         [{"industry": "test", "display_name": "Synthetic A"},
          {"industry": "test2", "display_name": "Synthetic B"}],

@@ -13,7 +13,10 @@ import pandas as pd
 KAPPA = 0.3          # the density elasticity planted in theta_hat (after alpha)
 
 
-def build(seed=11):
+def build(seed=11, alpha=(0.4,)):
+    """`alpha` is the trade-cost block: one entry (the power law) or n_coef = 4 segment
+    elasticities (binned tau); it is the only thing that sets N_TAU."""
+    alpha = tuple(float(a) for a in alpha)
     S, R, R_D, n_coef = 3, 8, 4, 4
     rng = np.random.default_rng(seed)
     TMP = tempfile.mkdtemp(prefix="parts_gate_")
@@ -53,7 +56,7 @@ def build(seed=11):
                   "ze2010": list(range(1000, 1000 + R)) * S}).to_csv(
         f"{inp}/filter_N_upstream.csv", index=False)
     pd.DataFrame({"group": 1, "A129": np.repeat(["A", "B", "C"], 4),
-                  "K": list(range(4)) * S, "G": np.tile([0.4, 0.7, 0.9, 1.0], S),
+                  "K": list(range(4)) * S, "G": np.tile([0.4, 0.3, 0.2, 0.1], S),
                   "N_supplier_s": np.repeat([20, 24, 30], 4)}).to_csv(f"{inp}/G_K.csv",
                                                                      index=False)
     # cells_ls.csv: n_ls on every simulated cell (T_ls = T_a n_ls^kappa), no RNG draw
@@ -62,7 +65,7 @@ def build(seed=11):
                   for s in range(S) for r in range(6)]).to_csv(f"{inp}/cells_ls.csv",
                                                                index=False)
     np.save(f"{run}/n_reg_coef.npy", np.array(n_coef))
-    np.save(f"{run}/n_tau.npy", np.array(1))
+    np.save(f"{run}/n_tau.npy", np.array(len(alpha)))
 
     n_T = 0
     aa_of_ze = AA.argmax(axis=1)
@@ -75,7 +78,8 @@ def build(seed=11):
     # before the foreign column existed and Phi^F from its own stream, so the Python
     # economy (which has no foreign competitor) sees the same T.
     n_T = int(AA_ACTIVE.sum())
-    head = np.concatenate([[0.31], rng.uniform(.2, .5, S), rng.uniform(.8, 1.2, R_D), [0.4], [KAPPA]])
+    head = np.concatenate([[0.31], rng.uniform(.2, .5, S), rng.uniform(.8, 1.2, R_D),
+                           list(alpha), [KAPPA]])
     T_area = np.zeros((S, R_D)); T_area[AA_ACTIVE] = rng.lognormal(0, .3, n_T)
     phi_f = np.random.default_rng(99).lognormal(-1, .3, S)
     T_blk = [np.append(T_area[s, AA_ACTIVE[s]], phi_f[s]) for s in range(S) if AA_ACTIVE[s].any()]

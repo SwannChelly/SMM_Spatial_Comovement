@@ -557,11 +557,11 @@ def gate_untargeted():
     gp["cluster"] = gp["cell"].astype(str)
     gp["sample_weight"] = 1.0
 
-    b_tot = float(NS["fepois_fit"](gp, "a_ir", fe=NS["BASELINE_FE"],
+    b_tot = float(NS["fepois_fit"](gp, "a_ir", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
-    b_ext = float(NS["fepois_fit"](gp, "served", fe=NS["BASELINE_FE"],
+    b_ext = float(NS["fepois_fit"](gp, "served", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
-    b_int = float(NS["fepois_fit"](gp[gp["a_ir"] > 0], "a_ir", fe=NS["BASELINE_FE"],
+    b_int = float(NS["fepois_fit"](gp[gp["a_ir"] > 0], "a_ir", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
     print(f"\ngranular economy: theta*alpha = {th * al:.3f}, (1-nu_s)*alpha = "
           f"{(1 - nus) * al:.3f}")
@@ -599,7 +599,7 @@ def gate_untargeted():
     gp2["a_ir"] = gp2["X"] / gp2["SIREN"].map(gp2.groupby("SIREN")["X"].sum())
     gp2["served"] = (gp2["a_ir"] > 0).astype(float)
     gp2["sample_weight"] = 1.0
-    p_ext = float(NS["fepois_fit"](gp2, "served", fe=NS["BASELINE_FE"],
+    p_ext = float(NS["fepois_fit"](gp2, "served", fixed_effects=NS["BASELINE_FE"],
                                    cluster=None).coef()["log_distance"])
     assert abs(b_tot) > abs(b_ext + b_int) + 1e-3, (b_tot, b_ext + b_int)
     assert abs(p_ext) < abs(b_ext), (p_ext, b_ext)        # pooled cells serve everyone
@@ -1005,15 +1005,26 @@ def gate_comparative_advantage():
     NS["plt"].close(ax_al.figure)
     print("spatial-alignment figure: the drawn line IS the reported slope, hubs named")
 
-    # a binned trade cost has no single elasticity and must say so
-    try:
-        bad = dict(data, n_tau=2,
-                   best_params=np.insert(best_params, 1 + S + n_AA + 1, 0.2))
-        NS["sourcing_geometry"](bad)
-    except ValueError as e:
-        print("\nexpected under N_TAU > 1:", str(e)[:70], "...")
-    else:
-        raise AssertionError("should have raised")
+    # Binned trade costs (N_TAU = K) go through the same geometry. With every alpha_k equal
+    # to alpha, ln tau = alpha (ln d - ln dbar_0): the shift is common to a buyer's
+    # origins, so rho must be the power law's EXACTLY; and alpha = 0 (scalar, broadcast
+    # to every segment) must remove distance altogether, as under the power law.
+    K = 4
+    binned = dict(data, n_tau=K, n_coef=K, best_params=np.insert(
+        best_params, 1 + S + n_AA + 1, [ALPHA] * (K - 1)))
+    g1, gK = NS["sourcing_geometry"](data), NS["sourcing_geometry"](binned)
+    assert gK["alpha"].size == K and gK["knots"].size == K + 1
+    for s_ in g1["by_sector"]:
+        assert np.allclose(gK["by_sector"][s_]["rho"], g1["by_sector"][s_]["rho"],
+                           atol=1e-12), s_
+    assert np.isclose(gK["theta_alpha"], g1["theta_alpha"], rtol=1e-12)
+    g0 = NS["sourcing_geometry"](binned, alpha=0.0)
+    for s_, blk in g0["by_sector"].items():
+        assert np.allclose(blk["log_tau"], 0.0)
+        T_ = blk["T_cell"]
+        assert np.allclose(blk["rho"], (T_ / T_.sum())[:, None] * np.ones(blk["rho"].shape[1]))
+    print("binned tau: equal alpha_k reproduce the power law's rho to 1e-12; alpha = 0 "
+          "removes distance in every segment")
 
     print("\nALL OK")
 

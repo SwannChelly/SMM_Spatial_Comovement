@@ -129,6 +129,9 @@ than data.
 
 ### 4.2 `G_K_var.csv` has no value-column name
 
+**Closed (2026-11-03): the file is no longer read.** The empirical G carries no interval in
+any figure, so `G_K_var.csv` can be deleted. The original note follows.
+
 The loader reports: *reading column 'G' as the VARIANCE of the increment, no var/se
 column name to go on*. It is guessing. Rename the column to `var` or `se` in the data
 pipeline. If it is in fact the variance of the **CDF** rather than of the increment,

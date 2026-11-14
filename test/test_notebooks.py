@@ -31,7 +31,8 @@ from _fixture_tree import build as build_tree                         # noqa: E4
 
 LIB = {"utils": utils, "report_lib": report_lib,
        "diffusion_lib": diffusion_lib, "granular_lib": granular_lib}
-NOTEBOOKS = ["tests_counterfactuals.ipynb", "model_report.ipynb"]
+NOTEBOOKS = ["tests_counterfactuals.ipynb", "model_report.ipynb",
+             "tests_counterfactuals_local.ipynb"]
 
 
 def _bound(src, known):

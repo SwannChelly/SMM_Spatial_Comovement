@@ -73,7 +73,9 @@ def build(out, S=3, R=60, R_D=6, seed=7):
         n_sup = int(sup[s].sum())
         g0 = 1 - sup[s][c].mean()
         for K in range(4):
-            rows.append({"group": s + 1, "A129": sectors[s], "G": min(1.0, g0 + 0.15 * K),
+            # G = share of cells with EXACTLY K suppliers (the pipeline's pmf)
+            rows.append({"group": s + 1, "A129": sectors[s],
+                         "G": g0 if K == 0 else (1 - g0) * 0.5 ** K,
                          "K": K, "N_supplier_s": 4 * n_sup})
     pd.DataFrame(rows).to_csv(f"{out}/G_K.csv", index=False)
     n_ls = rng.integers(1, 30, (S, R))

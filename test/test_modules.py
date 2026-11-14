@@ -78,14 +78,14 @@ print(f"2 ok  a tree with no moment, inference or Jacobian artefact opens under 
 
 # --- 3. the parquet-free path --------------------------------------------------------
 assert data["suppliers"] is None                     # there is no parquet in this tree
-xp = utils.extended_parameters(data, verbose=False)
-regs = utils.economy_by_regime(data, xp, n_rep=3, verbose=False)
+theta_plus = utils.extended_parameters(data, verbose=False)
+regs = utils.economy_by_regime(data, theta_plus, n_rep=3, verbose=False)
 assert set(regs) == set(utils.CF_REGIMES)
 
 D_of, loc_of = {}, {}
 for reg, (econ, dl) in regs.items():
     assert dl["suppliers"] is not None and len(dl["suppliers"]) > 0
-    utils.economy_identities(econ, xp, verbose=False)
+    utils.economy_identities(econ, theta_plus, verbose=False)
     summ = diffusion_lib.amplification_summary(dl, radii=(200,))
     # the identity the section quotes: D_r = 1 + sum over upstream cells
     hand = 1.0 + econ.value["D_r"].mean(axis=0) - 1.0
@@ -120,7 +120,7 @@ assert max(D_fixed.values()) - min(D_fixed.values()) < 1e-9, \
     ("the closed-form reallocation holds the sector spend fixed, so D_r cannot move",
      D_fixed)
 # the continuum benchmark is simulated here instead of read from a second parquet
-cont = utils.continuum_data(data, xp, n_var=40, n_rep=2)
+cont = utils.continuum_data(data, theta_plus, n_var=40, n_rep=2)
 rep = diffusion_lib.granularity_report(data=regs["Both forces"][1], radii=(200,),
                                        continuum=cont["suppliers"], verbose=False)
 assert "granularity" in rep.columns and np.isfinite(rep["granularity"]).any()
@@ -279,5 +279,28 @@ print(f"6 ok  the foreign competitor: the simulated import frequency matches the
       f"form Phi^F/Phi_rs within {worst:.2f} binomial sd ({n6} economies) at the estimate AND "
       f"in both counterfactuals, which hold it at the estimate; the domestic "
       f"amplification sits below the total one by the leakage (mean {leak.mean():.3f})")
+
+# --- 7. the two layers of comparative advantage, removed one at a time ---------------
+#   T_ls = T_a n_ls^kappa. kappa = kappa_hat is the estimate exactly; "area" at kappa = 0
+#   is the full equalisation; each regime holds f_rs at the estimate and moves rho.
+est6 = utils.unpack_estimated_T(data6)
+g_k = utils.sourcing_geometry(data6, kappa=est6["kappa"])
+g_a = utils.sourcing_geometry(data6, equalise_T="area")
+g_0 = utils.sourcing_geometry(data6, kappa=0.0)
+g_T = utils.sourcing_geometry(data6, equalise_T=True)
+g_a0 = utils.sourcing_geometry(data6, equalise_T="area", kappa=0.0)
+moved = []
+for s, b in geom["by_sector"].items():
+    assert np.array_equal(b["T_cell"], est6["T_cell"][s, b["cells"]])
+    assert np.array_equal(g_k["by_sector"][s]["rho"], b["rho"])
+    assert np.allclose(g_a0["by_sector"][s]["rho"], g_T["by_sector"][s]["rho"], rtol=0, atol=1e-15)
+    for g in (g_a, g_0):
+        assert np.allclose(g["by_sector"][s]["f"], b["f"], rtol=0, atol=1e-14)
+        moved.append(float(np.abs(g["by_sector"][s]["rho"] - b["rho"]).max()))
+assert est6["kappa"] != 0 and min(moved) > 1e-3, moved
+assert set(utils.CF_REGIMES_KAPPA) <= set(utils.CF_COLORS)
+print(f"7 ok  comparative advantage split in two: kappa = kappa_hat is the estimate, "
+      f"'area' at kappa = 0 is the full equalisation, both regimes hold f_rs and move rho "
+      f"(min max|drho| {min(moved):.3f})")
 
 print("\nall gates pass")

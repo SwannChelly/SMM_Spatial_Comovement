@@ -78,48 +78,48 @@ def build_diffusion_frame(data, value_col="share", per_replication=False):
     point, in the map. Distances come from `distances.npy` read by the model's own
     integer region indices, so there is no ZE-name round trip to get wrong.
     """
-    sup = data.get("suppliers")
-    if sup is None:
+    suppliers = data.get("suppliers")
+    if suppliers is None:
         raise FileNotFoundError(
             f"no suppliers.parquet under {data['folder']}/{data.get('step_dir','<step>')}/ "
             f"or {data['folder']}/ — main.jl writes one per estimate in its post-hoc block.")
-    if value_col not in sup.columns:
+    if value_col not in suppliers.columns:
         raise KeyError(f"`{value_col}` is not a column of suppliers.parquet "
-                       f"({list(sup.columns)}).")
+                       f"({list(suppliers.columns)}).")
 
     R = data["R"]
-    D = np.load(data["input_folder"] / "distances.npy")[:R, :R]
+    distances = np.load(data["input_folder"] / "distances.npy")[:R, :R]
 
     # The parquet holds `n_rep` INDEPENDENT realisations of the finite-variety economy
     # (see the section header). Pooling and dividing by `n_rep` gives E[X_lr], on which
     # D_r -- linear in the euros -- is the exact expectation. `per_replication=True`
     # keeps the realisations apart instead, which is what the dispersion needs.
     keys = ["ze2010_downstream", "ze2010"]
-    has_rep = "replication" in sup.columns
-    n_rep = int(sup["replication"].nunique()) if has_rep else 1
+    has_rep = "replication" in suppliers.columns
+    n_rep = int(suppliers["replication"].nunique()) if has_rep else 1
     if per_replication and has_rep:
         keys = ["replication"] + keys
         scale = 1.0
     else:
         scale = 1.0 / n_rep
-    agg = (sup.groupby(keys, as_index=False)
+    sales_by_pair = (suppliers.groupby(keys, as_index=False)
               .agg(upstream_sales=(value_col, "sum"),
                    n_links=(value_col, "size")))
-    agg["upstream_sales"] *= scale
-    agg["n_links"] = agg["n_links"] * scale
-    shocked = np.sort(sup["ze2010_downstream"].unique())
+    sales_by_pair["upstream_sales"] *= scale
+    sales_by_pair["n_links"] = sales_by_pair["n_links"] * scale
+    shocked = np.sort(suppliers["ze2010_downstream"].unique())
 
-    levels = ([np.sort(sup["replication"].unique())] if keys[0] == "replication" else []) \
+    levels = ([np.sort(suppliers["replication"].unique())] if keys[0] == "replication" else []) \
         + [shocked, np.arange(1, R + 1)]
     grid = pd.MultiIndex.from_product(levels, names=keys).to_frame(index=False)
-    df = grid.merge(agg, on=keys, how="left").fillna(
+    df = grid.merge(sales_by_pair, on=keys, how="left").fillna(
         {"upstream_sales": 0.0, "n_links": 0})
-    df["distance"] = D[df["ze2010"].to_numpy() - 1, df["ze2010_downstream"].to_numpy() - 1]
+    df["distance"] = distances[df["ze2010"].to_numpy() - 1, df["ze2010_downstream"].to_numpy() - 1]
 
-    lab = _region_labels(data)
-    df = (df.merge(lab.rename(columns={"index": "ze2010", "ze2010": "ze_code",
+    region_labels = _region_labels(data)
+    df = (df.merge(region_labels.rename(columns={"index": "ze2010", "ze2010": "ze_code",
                                        "ze2010_name": "ze_name"}), on="ze2010")
-            .merge(lab.rename(columns={"index": "ze2010_downstream",
+            .merge(region_labels.rename(columns={"index": "ze2010_downstream",
                                        "ze2010": "shocked_code",
                                        "ze2010_name": "shocked_name"}),
                    on="ze2010_downstream"))
@@ -136,23 +136,23 @@ def amplification_summary(data, radii=(AMPLIFICATION_RADIUS_KM,), value_col="sha
     `radii` is a tuple, so 100 km and 200 km (or any other) come out of one pass.
     """
     df = build_diffusion_frame(data, value_col) if diffusion is None else diffusion
-    tot = df.groupby("ze2010_downstream")["upstream_sales"].sum()
-    out = pd.DataFrame({
+    upstream_total = df.groupby("ze2010_downstream")["upstream_sales"].sum()
+    summary = pd.DataFrame({
         "region": df.groupby("ze2010_downstream")["shocked_name"].first(),
-        "upstream_sales": tot,
-        "amplification": 1.0 + tot,          # DOMESTIC: the parquet has French rows only
+        "upstream_sales": upstream_total,
+        "amplification": 1.0 + upstream_total,          # DOMESTIC: the parquet has French rows only
         "supplier_cells": df.assign(hit=df["upstream_sales"] > 0)
                             .groupby("ze2010_downstream")["hit"].sum(),
         "mean_upstream_distance": df.eval("upstream_sales * distance")
-                                    .groupby(df["ze2010_downstream"]).sum() / tot.replace(0, np.nan),
+                                    .groupby(df["ze2010_downstream"]).sum() / upstream_total.replace(0, np.nan),
     })
-    for d in radii:
-        near = df.loc[df["distance"] <= d].groupby("ze2010_downstream")["upstream_sales"].sum()
-        out[f"share_within_{int(d)}km"] = (near.reindex(out.index).fillna(0.0)
-                                           / tot.replace(0, np.nan))
-    out.attrs["value_col"] = value_col
-    out.attrs["radii"] = tuple(radii)
-    return out.sort_values("amplification", ascending=False)
+    for radius in radii:
+        near = df.loc[df["distance"] <= radius].groupby("ze2010_downstream")["upstream_sales"].sum()
+        summary[f"share_within_{int(radius)}km"] = (near.reindex(summary.index).fillna(0.0)
+                                           / upstream_total.replace(0, np.nan))
+    summary.attrs["value_col"] = value_col
+    summary.attrs["radii"] = tuple(radii)
+    return summary.sort_values("amplification", ascending=False)
 
 
 def local_share_profile(data, radii=(25, 50, 75, 100, 150, 200, 300, 500),
@@ -164,15 +164,15 @@ def local_share_profile(data, radii=(25, 50, 75, 100, 150, 200, 300, 500),
     knife edge or a plateau.
     """
     df = build_diffusion_frame(data, value_col) if diffusion is None else diffusion
-    tot = df.groupby("ze2010_downstream")["upstream_sales"].sum()
+    upstream_total = df.groupby("ze2010_downstream")["upstream_sales"].sum()
     rows = []
-    for d in radii:
-        near = (df.loc[df["distance"] <= d].groupby("ze2010_downstream")["upstream_sales"]
-                  .sum().reindex(tot.index).fillna(0.0))
-        sh = (near / tot.replace(0, np.nan)).dropna()
-        rows.append({"radius_km": d, "mean": sh.mean(), "median": sh.median(),
-                     "p25": sh.quantile(0.25), "p75": sh.quantile(0.75),
-                     "weighted_mean": float(near.sum() / tot.sum()) if tot.sum() > 0 else np.nan})
+    for radius in radii:
+        near = (df.loc[df["distance"] <= radius].groupby("ze2010_downstream")["upstream_sales"]
+                  .sum().reindex(upstream_total.index).fillna(0.0))
+        local_share = (near / upstream_total.replace(0, np.nan)).dropna()
+        rows.append({"radius_km": radius, "mean": local_share.mean(), "median": local_share.median(),
+                     "p25": local_share.quantile(0.25), "p75": local_share.quantile(0.75),
+                     "weighted_mean": float(near.sum() / upstream_total.sum()) if upstream_total.sum() > 0 else np.nan})
     return pd.DataFrame(rows).set_index("radius_km")
 
 
@@ -225,15 +225,15 @@ def counterfactual_diffusion_frame(data, alpha=None, equalise_T=False,
     """
     base = (build_diffusion_frame(data, value_col) if diffusion is None
             else diffusion).copy()
-    sup = data.get("suppliers")
-    if sup is None:
+    suppliers = data.get("suppliers")
+    if suppliers is None:
         raise FileNotFoundError(
             f"no suppliers.parquet under {data['folder']}/{data.get('step_dir','<step>')}/ "
             "— the counterfactual needs the realised sector-level spending.")
 
-    geom = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T)
-    col_of_rd = {int(z): j for j, z in enumerate(geom["downstream"])}
-    spend = (sup.assign(_s=_parquet_sector_index(data, sup))
+    geometry = sourcing_geometry(data, alpha=alpha, equalise_T=equalise_T)
+    col_of_rd = {int(zone): buyer_column for buyer_column, zone in enumerate(geometry["downstream"])}
+    spend = (suppliers.assign(_s=_parquet_sector_index(data, suppliers))
                 .groupby(["ze2010_downstream", "_s"])[value_col].sum())
     # `sup` pools `n_rep` realisations of the finite-variety economy, so the sector spend
     # is AVERAGED over them, exactly as `build_diffusion_frame` averages the euros it
@@ -241,32 +241,33 @@ def counterfactual_diffusion_frame(data, alpha=None, equalise_T=False,
     # frame allocates one and $D_r$ — linear in those euros — would come out `n_rep`
     # times too large. $L_r(d)$ is a ratio within a regime and would not have shown it,
     # which is why the division is here rather than left to the reader.
-    if "replication" in sup.columns:
-        spend = spend / float(sup["replication"].nunique())
+    if "replication" in suppliers.columns:
+        spend = spend / float(suppliers["replication"].nunique())
 
     R = data["R"]
-    X = np.zeros((R, R))                      # [upstream region, shocked region], 0-based
+    X_lr = np.zeros((R, R))                      # [upstream region, shocked region], 0-based
     dropped = []
-    for (rd, s), tot in spend.items():
-        blk = geom["by_sector"].get(int(s))
-        j = col_of_rd.get(int(rd))
-        if blk is None or j is None:
-            dropped.append((int(rd), int(s), float(tot)))
+    for (buyer, s), sector_spend in spend.items():
+        sector_block = geometry["by_sector"].get(int(s))
+        buyer_column = col_of_rd.get(int(buyer))
+        if sector_block is None or buyer_column is None:
+            dropped.append((int(buyer), int(s), float(sector_spend)))
             continue
-        X[blk["cells"], int(rd) - 1] += float(tot) * blk["rho"][:, j]
+        X_lr[sector_block["cells"], int(buyer) - 1] += float(sector_spend) * sector_block["rho"][:, buyer_column]
     if dropped and verbose:
         lost = sum(t for _, _, t in dropped)
         print(f"  [counterfactual] {len(dropped)} (buyer, sector) pairs have no modelled "
               f"cells or no downstream column and were dropped "
               f"({lost:.3g} of upstream sales): {[(r, s) for r, s, _ in dropped[:4]]}")
 
-    out = base.drop(columns=[c for c in ("upstream_sales", "n_links") if c in base.columns])
-    out["upstream_sales"] = X[out["ze2010"].to_numpy() - 1,
-                              out["ze2010_downstream"].to_numpy() - 1]
-    out["n_links"] = np.nan       # a closed-form allocation has no realised linkages
-    out.attrs["regime"] = ("alpha=0 " if alpha == 0 else "") + ("T equalised" if equalise_T else "")
-    out.attrs["value_col"] = value_col
-    return out
+    frame = base.drop(columns=[c for c in ("upstream_sales", "n_links") if c in base.columns])
+    frame["upstream_sales"] = X_lr[frame["ze2010"].to_numpy() - 1,
+                              frame["ze2010_downstream"].to_numpy() - 1]
+    frame["n_links"] = np.nan       # a closed-form allocation has no realised linkages
+    no_tau = alpha is not None and bool(np.all(np.asarray(alpha, dtype=float) == 0))
+    frame.attrs["regime"] = ("alpha=0 " if no_tau else "") + ("T equalised" if equalise_T else "")
+    frame.attrs["value_col"] = value_col
+    return frame
 
 
 def counterfactual_frames(data, regimes=CF_REGIMES, value_col="share", diffusion=None,
@@ -287,9 +288,9 @@ def simulated_frames(economies, value_col="share"):
     reads an economy in which the intermediate expenditure share and the sector mix have
     responded, not one in which they were pinned at the estimate.
     """
-    economies = {lab: ({**v[1], "economy": v[0]} if isinstance(v, tuple) else v)
-                 for lab, v in economies.items()}
-    return {lab: build_diffusion_frame(dl, value_col) for lab, dl in economies.items()}
+    economies = {regime: ({**entry[1], "economy": entry[0]} if isinstance(entry, tuple) else entry)
+                 for regime, entry in economies.items()}
+    return {regime: build_diffusion_frame(data_like, value_col) for regime, data_like in economies.items()}
 
 
 def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col="share",
@@ -309,16 +310,16 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
                                     diffusion=base, verbose=verbose)
               if frames is None else frames)
 
-    rows = {lab: amplification_summary(data, radii=radii, value_col=value_col,
-                                       diffusion=f) for lab, f in frames.items()}
-    out = pd.concat([s.assign(regime=lab) for lab, s in rows.items()])
-    out["regime"] = pd.Categorical(out["regime"], categories=list(rows), ordered=True)
-    out = out.reset_index().set_index(["ze2010_downstream", "regime"]).sort_index()
+    rows = {regime: amplification_summary(data, radii=radii, value_col=value_col,
+                                       diffusion=frame) for regime, frame in frames.items()}
+    detail = pd.concat([s.assign(regime=regime) for regime, s in rows.items()])
+    detail["regime"] = pd.Categorical(detail["regime"], categories=list(rows), ordered=True)
+    detail = detail.reset_index().set_index(["ze2010_downstream", "regime"]).sort_index()
 
     if verbose:
-        amp = out["amplification"].unstack("regime")
-        spread = float((amp[list(frames)].max(axis=1) - amp[list(frames)].min(axis=1)).max())
-        col = f"share_within_{int(radii[0])}km"
+        amplification = detail["amplification"].unstack("regime")
+        spread = float((amplification[list(frames)].max(axis=1) - amplification[list(frames)].min(axis=1)).max())
+        headline_column = f"share_within_{int(radii[0])}km"
         if spread < 1e-9:
             print(f"  [counterfactual] D_r is identical across regimes to {spread:.2e} "
                   "-- because these frames hold the upstream spend fixed, not because "
@@ -327,7 +328,7 @@ def counterfactual_amplification(data, regimes=CF_REGIMES, radii=None, value_col
             print(f"  [counterfactual] D_r RANGES {spread:.4f} across regimes: these "
                   "frames come from re-solved economies, so the intermediate "
                   "expenditure share has responded")
-    return out
+    return detail
 
 
 def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="share",
@@ -341,23 +342,23 @@ def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="shar
     region by the upstream sales it generates (the aggregate euro).
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
-    det = (counterfactual_amplification(data, regimes=regimes, radii=radii,
+    detail_table = (counterfactual_amplification(data, regimes=regimes, radii=radii,
                                         value_col=value_col, frames=frames,
                                         diffusion=diffusion, verbose=verbose)
            if detail is None else detail)
-    w = det["upstream_sales"]
-    out = pd.DataFrame({
-        "amplification": det["amplification"].groupby(level="regime", observed=True).mean(),
+    upstream_weight = detail_table["upstream_sales"]
+    summary = pd.DataFrame({
+        "amplification": detail_table["amplification"].groupby(level="regime", observed=True).mean(),
         "mean_upstream_distance":
-            (det["mean_upstream_distance"] * w).groupby(level="regime", observed=True).sum()
-            / w.groupby(level="regime", observed=True).sum(),
+            (detail_table["mean_upstream_distance"] * upstream_weight).groupby(level="regime", observed=True).sum()
+            / upstream_weight.groupby(level="regime", observed=True).sum(),
     })
-    for d in radii:
-        c = f"share_within_{int(d)}km"
-        out[c] = det[c].groupby(level="regime", observed=True).mean()
-        out[f"weighted_{c}"] = ((det[c] * w).groupby(level="regime", observed=True).sum()
-                                / w.groupby(level="regime", observed=True).sum())
-    return out
+    for radius in radii:
+        column = f"share_within_{int(radius)}km"
+        summary[column] = detail_table[column].groupby(level="regime", observed=True).mean()
+        summary[f"weighted_{column}"] = ((detail_table[column] * upstream_weight).groupby(level="regime", observed=True).sum()
+                                / upstream_weight.groupby(level="regime", observed=True).sum())
+    return summary
 
 
 # --- The counterfactual, with the SPENDING SHARES allowed to respond -----------------
@@ -400,28 +401,28 @@ def counterfactual_summary(data, regimes=CF_REGIMES, radii=None, value_col="shar
 # equalising `T` changes relative sector price indices and sectors differ in geography.
 
 
-def _regime_profile(data, geom, mix, radii):
+def _regime_profile(data, geometry, mix, radii):
     """`p_rs(d)` and `d_rs` per (sector, buyer), and their mix-weighted aggregates.
 
     `p_rs(d) = sum_{l : d_lr <= d} rho_lrs` and `d_rs = sum_l rho_lrs d_lr` are pure
     geometry; the buyer-level statistics are `sum_s mix_rs * (.)`, exact because
     `sum_l rho = 1` per (sector, buyer) so the level factor cancels.
     """
-    buyers = np.asarray(geom["downstream"]).astype(int)
-    nb = buyers.size
-    dist = np.zeros(nb)
-    near = {d: np.zeros(nb) for d in radii}
-    for s, blk in geom["by_sector"].items():
-        rho, dd = blk["rho"], blk["distance"]          # (n_cell, n_buyer)
-        w = np.asarray(mix)[int(s)]                    # (n_buyer,)
-        dist += w * (rho * dd).sum(axis=0)
-        for d in radii:
-            near[d] += w * np.where(dd <= d, rho, 0.0).sum(axis=0)
-    out = pd.DataFrame({"ze2010_downstream": buyers,
+    buyers = np.asarray(geometry["downstream"]).astype(int)
+    n_buyers = buyers.size
+    dist = np.zeros(n_buyers)
+    near = {radius: np.zeros(n_buyers) for radius in radii}
+    for s, sector_block in geometry["by_sector"].items():
+        rho, distance = sector_block["rho"], sector_block["distance"]          # (n_cell, n_buyer)
+        mix_weight = np.asarray(mix)[int(s)]                    # (n_buyer,)
+        dist += mix_weight * (rho * distance).sum(axis=0)
+        for radius in radii:
+            near[radius] += mix_weight * np.where(distance <= radius, rho, 0.0).sum(axis=0)
+    profile = pd.DataFrame({"ze2010_downstream": buyers,
                         "mean_upstream_distance": dist}).set_index("ze2010_downstream")
-    for d in radii:
-        out[f"share_within_{int(d)}km"] = near[d]
-    return out
+    for radius in radii:
+        profile[f"share_within_{int(radius)}km"] = near[radius]
+    return profile
 
 
 def amplification_decomposition(economies, regimes=None, radii=None,
@@ -452,82 +453,82 @@ def amplification_decomposition(economies, regimes=None, radii=None,
     rather than assumed away.
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
-    regs = CF_REGIMES if regimes is None else regimes
+    regimes_used = CF_REGIMES if regimes is None else regimes
     # `reporting_data` returns {regime: data_like} with the economy under "economy";
     # `economy_by_regime` returns {regime: (economy, data_like)}. Both are accepted, so a
     # caller never has to remember which entry point it came through.
-    economies = {lab: ({**v[1], "economy": v[0]} if isinstance(v, tuple) else v)
-                 for lab, v in economies.items()}
+    economies = {regime: ({**entry[1], "economy": entry[0]} if isinstance(entry, tuple) else entry)
+                 for regime, entry in economies.items()}
     if baseline not in economies:
         raise KeyError(f"baseline {baseline!r} not among {list(economies)}")
 
-    geo, mix = {}, {}
-    for lab in economies:
-        dl = economies[lab]
-        econ = dl.get("economy")
+    geometry_by_regime, mix_by_regime = {}, {}
+    for regime in economies:
+        data_like = economies[regime]
+        econ = data_like.get("economy")
         if econ is None:
-            raise KeyError(f"{lab}: no simulated economy -- `reporting_data` returns one "
+            raise KeyError(f"{regime}: no simulated economy -- `reporting_data` returns one "
                            "per regime; a plain `load_granular_data` dict does not.")
-        kw = regs.get(lab, {"alpha": econ.meta.get("alpha"),
+        kw = regimes_used.get(regime, {"alpha": econ.meta.get("alpha"),
                             "equalise_T": econ.meta.get("equalise_T", False)})
-        geo[lab] = sourcing_geometry(dl, **kw)
-        mix[lab] = econ.value["theta_rs"].mean(axis=0)          # (S, n_buyer)
+        geometry_by_regime[regime] = sourcing_geometry(data_like, **kw)
+        mix_by_regime[regime] = econ.value["theta_rs"].mean(axis=0)          # (S, n_buyer)
 
     rows = []
-    for lab, dl in economies.items():
-        econ = dl["economy"]
+    for regime, data_like in economies.items():
+        econ = data_like["economy"]
         buyers = np.asarray(econ.meta.get("value_buyers", econ.meta["buyers"])).astype(int)
-        tot = _regime_profile(dl, geo[lab], mix[lab], radii)
-        gch = _regime_profile(dl, geo[lab], mix[baseline], radii)      # mix held at base
-        mch = _regime_profile(dl, geo[baseline], mix[lab], radii)      # geometry held
-        blk = tot.copy()
-        for c in tot.columns:
-            blk[f"{c}_geography"] = gch[c]
-            blk[f"{c}_mix"] = mch[c]
-        blk["amplification"] = econ.value["D_r"].mean(axis=0)
-        D_tot = econ.value.get("D_total_r", econ.value["D_r"])
-        M_r = econ.value["M_rs"].sum(axis=1) if "M_rs" in econ.value else np.zeros_like(D_tot)
-        blk["amplification_total"] = D_tot.mean(axis=0)
-        blk["import_share"] = (M_r / np.where(D_tot > 1.0, D_tot - 1.0, np.nan)).mean(axis=0)
-        blk["region"] = _region_labels(dl).set_index("index")["ze2010_name"].reindex(buyers).to_numpy()
-        blk["regime"] = lab
-        rows.append(blk.reset_index())
-    out = pd.concat(rows, ignore_index=True)
-    out["regime"] = pd.Categorical(out["regime"], categories=list(economies), ordered=True)
-    out = out.set_index(["ze2010_downstream", "regime"]).sort_index()
-    out.attrs["radii"] = radii
-    out.attrs["baseline"] = baseline
+        total_effect = _regime_profile(data_like, geometry_by_regime[regime], mix_by_regime[regime], radii)
+        geography_only = _regime_profile(data_like, geometry_by_regime[regime], mix_by_regime[baseline], radii)      # mix held at base
+        mix_only = _regime_profile(data_like, geometry_by_regime[baseline], mix_by_regime[regime], radii)      # geometry held
+        regime_rows = total_effect.copy()
+        for column in total_effect.columns:
+            regime_rows[f"{column}_geography"] = geography_only[column]
+            regime_rows[f"{column}_mix"] = mix_only[column]
+        regime_rows["amplification"] = econ.value["D_r"].mean(axis=0)
+        D_total = econ.value.get("D_total_r", econ.value["D_r"])
+        imports_r = econ.value["M_rs"].sum(axis=1) if "M_rs" in econ.value else np.zeros_like(D_total)
+        regime_rows["amplification_total"] = D_total.mean(axis=0)
+        regime_rows["import_share"] = (imports_r / np.where(D_total > 1.0, D_total - 1.0, np.nan)).mean(axis=0)
+        regime_rows["region"] = _region_labels(data_like).set_index("index")["ze2010_name"].reindex(buyers).to_numpy()
+        regime_rows["regime"] = regime
+        rows.append(regime_rows.reset_index())
+    detail = pd.concat(rows, ignore_index=True)
+    detail["regime"] = pd.Categorical(detail["regime"], categories=list(economies), ordered=True)
+    detail = detail.set_index(["ze2010_downstream", "regime"]).sort_index()
+    detail.attrs["radii"] = radii
+    detail.attrs["baseline"] = baseline
     if verbose:
-        decomposition_report(out, radii=radii, baseline=baseline)
-    return out
+        decomposition_report(detail, radii=radii, baseline=baseline)
+    return detail
 
 
 def decomposition_report(detail, radii=None, baseline="Both forces"):
     """Print the three channels per regime, and say which statistic each one can move."""
     radii = detail.attrs.get("radii", _DEFAULT_RADII) if radii is None else tuple(radii)
-    amp = detail["amplification"].unstack("regime")
-    base_amp = amp[baseline]
+    amplification = detail["amplification"].unstack("regime")
+    base_amp = amplification[baseline]
     print(f"  [decomposition] baseline = {baseline!r}; means across shocked regions\n")
     print(f"    {'regime':<28s} {'D_r':>8s} {'dD_r':>8s} | "
           f"{'total':>8s} {'geogr.':>8s} {'mix':>8s} {'resid':>8s}   (share within "
           f"{int(radii[0])} km, deviation from baseline)")
-    col = f"share_within_{int(radii[0])}km"
-    sh = detail[col].unstack("regime")
-    shg = detail[f"{col}_geography"].unstack("regime")
-    shm = detail[f"{col}_mix"].unstack("regime")
-    for lab in amp.columns:
-        d_tot = float((sh[lab] - sh[baseline]).mean())
-        d_geo = float((shg[lab] - sh[baseline]).mean())
-        d_mix = float((shm[lab] - sh[baseline]).mean())
-        print(f"    {str(lab):<28s} {amp[lab].mean():8.4f} "
-              f"{float((amp[lab] - base_amp).mean()):+8.4f} | "
+    headline_column = f"share_within_{int(radii[0])}km"
+    share_total = detail[headline_column].unstack("regime")
+    share_geography = detail[f"{headline_column}_geography"].unstack("regime")
+    share_mix = detail[f"{headline_column}_mix"].unstack("regime")
+    for regime in amplification.columns:
+        d_tot = float((share_total[regime] - share_total[baseline]).mean())
+        d_geo = float((share_geography[regime] - share_total[baseline]).mean())
+        d_mix = float((share_mix[regime] - share_total[baseline]).mean())
+        print(f"    {str(regime):<28s} {amplification[regime].mean():8.4f} "
+              f"{float((amplification[regime] - base_amp).mean()):+8.4f} | "
               f"{d_tot:+8.4f} {d_geo:+8.4f} {d_mix:+8.4f} {d_tot - d_geo - d_mix:+8.4f}")
     if "amplification_total" in detail.columns:
-        tot = detail["amplification_total"].unstack("regime")
+        total_share = detail["amplification_total"].unstack("regime")
         print("\n    domestic D_r - 1 = (total intermediate share) x (1 - leakage to imports):")
-        for lab in amp.columns:
-            t, d = tot[lab].mean() - 1.0, amp[lab].mean() - 1.0
-            print(f"    {str(lab):<28s} {t:8.4f}  x  (1 - {1.0 - d / t:.4f})  =  {d:8.4f}")
+        for regime in amplification.columns:
+            intermediate_share, domestic_share = total_share[regime].mean() - 1.0, amplification[regime].mean() - 1.0
+            print(f"    {str(regime):<28s} {intermediate_share:8.4f}  x  (1 - {1.0 - domestic_share / intermediate_share:.4f})  =  {domestic_share:8.4f}")
     print("\n    D_r moves through the LEVEL channel alone -- the labour-against-"
           "intermediates\n    margin, which responds because equalising T raises P_r and "
           "lambda < 1 makes\n    the two complements. The counterfactuals hold every "
@@ -568,59 +569,59 @@ def supplier_count_check(data, verbose=True):
     carried one falls back to the firm count, and the verdict is then a BOUND: above
     `R_downstream` firms per variety the economy cannot be a variety economy at all.
     """
-    sup = data.get("suppliers")
-    if sup is None:
+    suppliers = data.get("suppliers")
+    if suppliers is None:
         raise FileNotFoundError(
             f"no suppliers.parquet under {data['folder']}/{data.get('step_dir', '<step>')}/.")
 
-    s_idx = _parquet_sector_index(data, sup)
-    rep = (sup["replication"].to_numpy() if "replication" in sup.columns
-           else np.zeros(len(sup), dtype=int))
-    exact = "variety" in sup.columns
-    unit = sup["variety"] if exact else sup["SIREN"]
-    frame = pd.DataFrame({"sector": s_idx, "replication": rep,
+    s_idx = _parquet_sector_index(data, suppliers)
+    replication = (suppliers["replication"].to_numpy() if "replication" in suppliers.columns
+           else np.zeros(len(suppliers), dtype=int))
+    exact = "variety" in suppliers.columns
+    unit = suppliers["variety"] if exact else suppliers["SIREN"]
+    frame = pd.DataFrame({"sector": s_idx, "replication": replication,
                           "unit": unit.to_numpy()})
-    per = (frame.drop_duplicates(["sector", "replication", "unit"])
+    units_per_sector = (frame.drop_duplicates(["sector", "replication", "unit"])
                 .groupby(["sector", "replication"]).size()
                 .groupby("sector").mean())
 
     n_hat = data.get("post_hoc_N_hat")
     if n_hat is None:
         n_hat = _n_hat_from_diagnostics(data)
-    col = "varieties_in_parquet" if exact else "firms_per_sector"
-    out = pd.DataFrame({
-        "sector": [str(c) for c in data["sector_names"]],
+    count_column = "varieties_in_parquet" if exact else "firms_per_sector"
+    table = pd.DataFrame({
+        "sector": [str(code) for code in data["sector_names"]],
         "N_hat": (np.asarray(n_hat, dtype=float) if n_hat is not None
                   else np.full(data["S"], np.nan)),
-        col: per.reindex(range(data["S"])).to_numpy(),
+        count_column: units_per_sector.reindex(range(data["S"])).to_numpy(),
     }).set_index("sector")
-    out["ratio"] = out[col] / out["N_hat"]
-    out["n_replications"] = int(pd.Series(rep).nunique())
-    out.attrs["exact"] = exact
+    table["ratio"] = table[count_column] / table["N_hat"]
+    table["n_replications"] = int(pd.Series(replication).nunique())
+    table.attrs["exact"] = exact
 
-    R_d = int(sup["ze2010_downstream"].nunique())
+    R_d = int(suppliers["ze2010_downstream"].nunique())
     tol = 1e-9 if exact else float(R_d)
-    ok = bool(out["N_hat"].notna().all()) and bool((out["ratio"] - 1.0).max() <= tol)
+    ok = bool(table["N_hat"].notna().all()) and bool((table["ratio"] - 1.0).max() <= tol)
     if verbose:
-        print(out.round(2).to_string())
-        if out["N_hat"].isna().any():
+        print(table.round(2).to_string())
+        if table["N_hat"].isna().any():
             print("  [UNKNOWN] no N_hat_s on disk (post_hoc_N_hat.npy or "
                   "granular_diagnostics.npz) — nothing to check the count against.")
         elif not exact:
             print(f"  [BOUND] no `variety` column: counting FIRMS, which a variety "
                   f"economy inflates by at most R_downstream = {R_d}. "
-                  + (f"ratio max {out['ratio'].max():.1f} <= {R_d}: consistent with a "
+                  + (f"ratio max {table['ratio'].max():.1f} <= {R_d}: consistent with a "
                      "variety economy, though not proof of one."
                      if ok else
-                     f"ratio max {out['ratio'].max():.1f} > {R_d}: this economy was "
+                     f"ratio max {table['ratio'].max():.1f} > {R_d}: this economy was "
                      "solved on the estimation DRAWS, not on N_hat_s varieties. "
                      "Re-run main.jl's post-hoc block."))
         elif ok:
-            print(f"  [OK] {out['n_replications'].iloc[0]} realisation(s), exactly "
+            print(f"  [OK] {table['n_replications'].iloc[0]} realisation(s), exactly "
                   "N_hat_s varieties per sector.")
         else:
             print("  [FAIL] the variety count in the parquet is not N_hat_s.")
-    return out
+    return table
 
 
 # --- Averaging over realisations, and what granularity costs ----------------
@@ -657,12 +658,12 @@ def replication_summaries(data, radii=None, value_col="share", diffusion=None):
           if diffusion is None else diffusion)
     if "replication" not in df.columns:
         df = df.assign(replication=0)
-    out = []
-    for b, sub in df.groupby("replication"):
-        s = amplification_summary(data, radii=radii, value_col=value_col,
-                                  diffusion=sub.drop(columns="replication"))
-        out.append(s.assign(replication=b))
-    return (pd.concat(out).set_index("replication", append=True)
+    summaries = []
+    for b, replication_frame in df.groupby("replication"):
+        summary = amplification_summary(data, radii=radii, value_col=value_col,
+                                  diffusion=replication_frame.drop(columns="replication"))
+        summaries.append(summary.assign(replication=b))
+    return (pd.concat(summaries).set_index("replication", append=True)
               .reorder_levels(["replication", "ze2010_downstream"]).sort_index())
 
 
@@ -677,17 +678,17 @@ def granular_band(data, radii=None, value_col="share", per_rep=None):
     a single shock actually reaches, which is the granular object.
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
-    per = (replication_summaries(data, radii=radii, value_col=value_col)
+    per_replication = (replication_summaries(data, radii=radii, value_col=value_col)
            if per_rep is None else per_rep)
     cols = ["amplification", "mean_upstream_distance", "supplier_cells"] + \
-           [f"share_within_{int(d)}km" for d in radii]
-    g = per.groupby(level="ze2010_downstream")
-    out = pd.DataFrame({"region": g["region"].first()})
-    for c in cols:
-        out[f"{c}"] = g[c].mean()
-        out[f"{c}_sd"] = g[c].std(ddof=1)
-    out["n_replications"] = g.size()
-    return out
+           [f"share_within_{int(radius)}km" for radius in radii]
+    by_region = per_replication.groupby(level="ze2010_downstream")
+    band = pd.DataFrame({"region": by_region["region"].first()})
+    for column in cols:
+        band[f"{column}"] = by_region[column].mean()
+        band[f"{column}_sd"] = by_region[column].std(ddof=1)
+    band["n_replications"] = by_region.size()
+    return band
 
 
 def granularity_report(data, radii=None, value_col="share", verbose=True,
@@ -700,48 +701,48 @@ def granularity_report(data, radii=None, value_col="share", verbose=True,
     spread is how much a single draw can move the answer.
 
     `continuum` is the benchmark frame, in `suppliers.parquet`'s schema -- build it with
-    `utils.continuum_data(data, xp)["suppliers"]`. Omitted, Julia's own
+    `utils.continuum_data(data, theta_plus)["suppliers"]`. Omitted, Julia's own
     `suppliers_continuum.parquet` is used if the tree carries one.
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
-    cont = continuum if continuum is not None else data.get("suppliers_continuum")
-    if cont is None:
+    continuum_frame = continuum if continuum is not None else data.get("suppliers_continuum")
+    if continuum_frame is None:
         raise FileNotFoundError(
             "no infinite-variety benchmark. Build one with `utils.continuum_data(data, "
-            "xp)` and pass its `suppliers` frame as `continuum=`, or point `data` at a "
+            "theta_plus)` and pass its `suppliers` frame as `continuum=`, or point `data` at a "
             "tree carrying Julia's own `suppliers_continuum.parquet`.")
 
-    per = replication_summaries(data, radii=radii, value_col=value_col)
-    band = granular_band(data, radii=radii, per_rep=per)
-    ref = amplification_summary(
+    per_replication = replication_summaries(data, radii=radii, value_col=value_col)
+    band = granular_band(data, radii=radii, per_rep=per_replication)
+    continuum_summary = amplification_summary(
         data, radii=radii, value_col=value_col,
-        diffusion=build_diffusion_frame(dict(data, suppliers=cont), value_col))
+        diffusion=build_diffusion_frame(dict(data, suppliers=continuum_frame), value_col))
 
     cols = ["amplification", "mean_upstream_distance", "supplier_cells"] + \
-           [f"share_within_{int(d)}km" for d in radii]
+           [f"share_within_{int(radius)}km" for radius in radii]
     rows = []
-    for c in cols:
+    for column in cols:
         # across regions: the granular economy's mean, the spread a single draw carries,
         # and the same statistic in the N_s -> infinity economy
-        rows.append({"quantity": c,
-                     "granular_mean": band[c].mean(),
-                     "sd_across_draws": band[f"{c}_sd"].mean(),
-                     "continuum": ref[c].mean()})
-    out = pd.DataFrame(rows).set_index("quantity")
-    out["granularity"] = out["granular_mean"] - out["continuum"]
-    out["granularity_rel"] = out["granularity"] / out["continuum"].replace(0, np.nan)
-    out.attrs["n_replications"] = int(per.index.get_level_values("replication").nunique())
+        rows.append({"quantity": column,
+                     "granular_mean": band[column].mean(),
+                     "sd_across_draws": band[f"{column}_sd"].mean(),
+                     "continuum": continuum_summary[column].mean()})
+    table = pd.DataFrame(rows).set_index("quantity")
+    table["granularity"] = table["granular_mean"] - table["continuum"]
+    table["granularity_rel"] = table["granularity"] / table["continuum"].replace(0, np.nan)
+    table.attrs["n_replications"] = int(per_replication.index.get_level_values("replication").nunique())
 
     if verbose:
-        n = out.attrs["n_replications"]
+        n = table.attrs["n_replications"]
         print(f"  granularity = the finite-variety economy minus its N_s -> infinity "
               f"limit ({n} realisations):")
-        print(out.round(4).to_string())
-        gap = out.loc["supplier_cells"]
-        print(f"  a shock reaches {gap['granular_mean']:.0f} origins with N_hat_s "
-              f"varieties against {gap['continuum']:.0f} in the continuum — the "
+        print(table.round(4).to_string())
+        origins_row = table.loc["supplier_cells"]
+        print(f"  a shock reaches {origins_row['granular_mean']:.0f} origins with N_hat_s "
+              f"varieties against {origins_row['continuum']:.0f} in the continuum — the "
               "extensive margin is the whole of what granularity is for.")
-    return out
+    return table
 
 
 # ============================================================================
@@ -816,7 +817,7 @@ def plot_local_share(data, radii=None, value_col="share", summary=None, radius_k
 
     s = (amplification_summary(data, radii=radii, value_col=value_col)
          if summary is None else summary)
-    missing = [c for c in cols if c not in s.columns]
+    missing = [column for column in cols if column not in s.columns]
     if missing:
         raise KeyError(f"{missing} not in the summary — pass `radii={radii}` to "
                        "amplification_summary, or let this function build it.")
@@ -828,23 +829,23 @@ def plot_local_share(data, radii=None, value_col="share", summary=None, radius_k
     y = np.arange(len(s))
     handles = []
     for i in range(len(radii) - 1, -1, -1):          # widest first, narrowest on top
-        lab = (f"within {radii[0]:g} km" if i == 0
+        legend_label = (f"within {radii[0]:g} km" if i == 0
                else f"{radii[i-1]:g}–{radii[i]:g} km")
         handles.append(ax.barh(y, s[cols[i]].to_numpy(), height=0.75, color=colors[i],
-                               alpha=1.0, label=lab, zorder=2 + (len(radii) - i)))
+                               alpha=1.0, label=legend_label, zorder=2 + (len(radii) - i)))
     ax.set_yticks(y)
     ax.set_yticklabels(s["region"].astype(str))
     set_name_axis_fontsize(ax, len(s))
     ax.set_ylim(-0.7, len(s) - 0.3)
     # no bar comes near 1, and a mostly empty panel is harder to read, not more honest:
     # the axis tracks the widest bar unless `xmax` pins it
-    top = float(s[cols[-1]].max())
-    ax.set_xlim(0, xmax if xmax is not None else max(0.1, np.ceil(top * 20) / 20 + 0.05))
+    widest_share = float(s[cols[-1]].max())
+    ax.set_xlim(0, xmax if xmax is not None else max(0.1, np.ceil(widest_share * 20) / 20 + 0.05))
     # the means ride on the x label: inside the panel they would sooner or later land on
     # a bar, and in the title they would run into the legend
     ax.set_xlabel("Share of the upstream sales a shock generates\n"
-                  + "mean  " + ",  ".join(f"{s[c].mean():.3f} within {r:g} km"
-                                          for r, c in zip(radii, cols)))
+                  + "mean  " + ",  ".join(f"{s[column].mean():.3f} within {r:g} km"
+                                          for r, column in zip(radii, cols)))
     ax.grid(alpha=0.2, axis="x")
     # the legend sits ABOVE the axes: with a bar per commuting zone there is no corner
     # inside the plot it can occupy without covering the regions it explains
@@ -896,11 +897,11 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
     ranking of places rather than as two geographies. The zones that matter are named in
     the text, where they can be given their number.
     """
-    fr = data.get("france")
+    france = data.get("france")
     # a GeoDataFrame, not merely a table of codes: the loader leaves `france` at None
     # when geopandas is absent, and a run tree assembled without the geometry can still
     # carry the names, so the geometry is what is checked for
-    if fr is None or not hasattr(fr, "geometry"):
+    if france is None or not hasattr(france, "geometry"):
         raise FileNotFoundError(
             "no commuting-zone GEOMETRY in `data['france']` (france.gpkg missing, or "
             "geopandas is not installed) — the map cannot be drawn.")
@@ -909,9 +910,9 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
     s = (amplification_summary(data, radii=(radius_km,), value_col=value_col,
                                diffusion=diffusion)
          if summary is None else summary).copy()
-    col = f"share_within_{int(radius_km)}km"
-    if col not in s.columns:
-        raise KeyError(f"{col} is not in the summary — pass `radii=({radius_km},)` to "
+    share_column = f"share_within_{int(radius_km)}km"
+    if share_column not in s.columns:
+        raise KeyError(f"{share_column} is not in the summary — pass `radii=({radius_km},)` to "
                        "amplification_summary, or let this function build it.")
 
     # the summary is indexed by the MODEL's downstream region index; the map is keyed on
@@ -919,32 +920,32 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
     code_of = _region_labels(data).set_index("index")["ze2010"]
     s["ze2010"] = _as_ze_string(code_of.reindex(s.index))
 
-    geo = fr.copy()
-    geo["ze2010"] = _as_ze_string(geo["ze2010"])
-    geo = geo.merge(s[["ze2010", col, "region"]], on="ze2010", how="left")
-    shocked = geo[geo[col].notna()]
+    zones = france.copy()
+    zones["ze2010"] = _as_ze_string(zones["ze2010"])
+    zones = zones.merge(s[["ze2010", share_column, "region"]], on="ze2010", how="left")
+    shocked = zones[zones[share_column].notna()]
     if shocked.empty:
         raise ValueError("no shocked commuting zone matched france.gpkg on `ze2010` — "
                          "the codes are formatted differently on the two sides.")
 
-    vmin, vmax = (float(shocked[col].min()), float(shocked[col].max())) if vlim is None \
+    vmin, vmax = (float(shocked[share_column].min()), float(shocked[share_column].max())) if vlim is None \
         else (float(vlim[0]), float(vlim[1]))
-    over = shocked.loc[shocked[col] > vmax, "region"]
+    over = shocked.loc[shocked[share_column] > vmax, "region"]
     if len(over):
         print(f"  [map] {len(over)} zone(s) above the pinned vmax = {vmax:g} and so "
               f"clipped: {', '.join(map(str, over))} — widen LOCAL_SHARE_MAP_VLIM.")
     norm = plt.Normalize(vmin=vmin, vmax=vmax)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.5, hf=1.0))
-    geo[geo[col].isna()].plot(facecolor=missing_color, ax=ax, edgecolor="white",
+        _, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.5, height_fraction=1.0))
+    zones[zones[share_column].isna()].plot(facecolor=missing_color, ax=ax, edgecolor="white",
                               linewidth=0.25)
-    shocked.plot(column=col, ax=ax, norm=norm, cmap=cmap, edgecolor="black",
+    shocked.plot(column=share_column, ax=ax, norm=norm, cmap=cmap, edgecolor="black",
                  linewidth=0.35)
 
-    for _, row in shocked.nlargest(n_label, col).iterrows() if n_label else ():
-        p = row.geometry.representative_point()
-        ax.annotate(str(row["region"]), (p.x, p.y), fontsize=fs(8), xytext=(6, 4),
+    for _, zone_row in shocked.nlargest(n_label, share_column).iterrows() if n_label else ():
+        label_point = zone_row.geometry.representative_point()
+        ax.annotate(str(zone_row["region"]), (label_point.x, label_point.y), fontsize=fs(8), xytext=(6, 4),
                     textcoords="offset points", color="black",
                     path_effects=[pe.withStroke(linewidth=2.0, foreground="white")])
 
@@ -954,13 +955,13 @@ def plot_local_share_map(data, radius_km=None, value_col="share", summary=None,
     if title is not None:
         ax.set_title(title, fontsize=fs(11))
     if cbar:
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cb = ax.figure.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.035,
+        scalar_mappable = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        scalar_mappable.set_array([])
+        colorbar = ax.figure.colorbar(scalar_mappable, ax=ax, orientation="horizontal", fraction=0.035,
                                 pad=0.02, aspect=35)
-        cb.set_label(f"Share of upstream sales within {radius_km:g} km", fontsize=fs(9))
-        cb.ax.tick_params(labelsize=fs(8))
-        cb.minorticks_off()
+        colorbar.set_label(f"Share of upstream sales within {radius_km:g} km", fontsize=fs(9))
+        colorbar.ax.tick_params(labelsize=fs(8))
+        colorbar.minorticks_off()
     ax.figure.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -976,18 +977,18 @@ def plot_local_share_profile(data, radii=(25, 50, 75, 100, 150, 200, 300, 500),
     interquartile band, and the sales-weighted mean. Shows whether the headline
     number is robust to the radius or sits on a steep part of the curve.
     """
-    p = (local_share_profile(data, radii=radii, value_col=value_col)
+    profile_table = (local_share_profile(data, radii=radii, value_col=value_col)
          if profile is None else profile)
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
-    ax.fill_between(p.index, p["p25"], p["p75"], color=sim_color, alpha=0.20,
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
+    ax.fill_between(profile_table.index, profile_table["p25"], profile_table["p75"], color=sim_color, alpha=0.20,
                     label="interquartile range across regions")
-    ax.plot(p.index, p["median"], marker="o", color=sim_color, label="median region")
-    ax.plot(p.index, p["weighted_mean"], marker="s", color=reference_color,
+    ax.plot(profile_table.index, profile_table["median"], marker="o", color=sim_color, label="median region")
+    ax.plot(profile_table.index, profile_table["weighted_mean"], marker="s", color=reference_color,
             linestyle="--", label="sales-weighted mean")
     ax.set_ylim(0, 1)
-    for m in mark:
-        ax.axvline(m, color="0.6", linewidth=0.9, linestyle=":")
-        ax.annotate(f"{m:g} km", (m, 0.98), fontsize=fs(8), color="0.4", ha="left",
+    for radius_mark in mark:
+        ax.axvline(radius_mark, color="0.6", linewidth=0.9, linestyle=":")
+        ax.annotate(f"{radius_mark:g} km", (radius_mark, 0.98), fontsize=fs(8), color="0.4", ha="left",
                     va="top", xytext=(3, 0), textcoords="offset points")
     ax.set_xlabel("Radius around the shocked region (km)")
     ax.set_ylabel("Share of upstream sales within the radius")
@@ -1011,17 +1012,17 @@ def plot_amplification_vs_local(data, radius_km=AMPLIFICATION_RADIUS_KM,
     """
     s = (amplification_summary(data, radii=(radius_km,), value_col=value_col)
          if summary is None else summary).copy()
-    col = f"share_within_{int(radius_km)}km"
-    flagged = set(s.nsmallest(n_label, col).index) | set(s.nlargest(n_label, "amplification").index)
+    share_column = f"share_within_{int(radius_km)}km"
+    flagged = set(s.nsmallest(n_label, share_column).index) | set(s.nlargest(n_label, "amplification").index)
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.7))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.7))
     plain = s.loc[~s.index.isin(flagged)]
     named = s.loc[s.index.isin(flagged)]
-    ax.scatter(plain["amplification"], plain[col], s=30, color=toulouse_color, alpha=0.8)
-    ax.scatter(named["amplification"], named[col], s=45, facecolors="none",
+    ax.scatter(plain["amplification"], plain[share_column], s=30, color=toulouse_color, alpha=0.8)
+    ax.scatter(named["amplification"], named[share_column], s=45, facecolors="none",
                edgecolors=toulouse_color, linewidths=1.2)
-    texts = [ax.text(r["amplification"], r[col], str(r["region"]), fontsize=fs(8))
-             for _, r in named.iterrows()]
+    texts = [ax.text(zone_row["amplification"], zone_row[share_column], str(zone_row["region"]), fontsize=fs(8))
+             for _, zone_row in named.iterrows()]
     try:                                   # nicer label placement when available
         from adjustText import adjust_text
         adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle="-", lw=0.5, color="black"))
@@ -1065,7 +1066,7 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
     regime is exactly zero by construction and is drawn as the zero rule, not as a
     series.
     """
-    det = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
+    detail_table = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
                                         frames=frames, diffusion=diffusion, verbose=False)
            if detail is None else detail)
     if kind not in ("bar", "point"):
@@ -1073,16 +1074,16 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
     if units not in ("pct", "km"):
         raise ValueError(f"units must be 'pct' or 'km', got {units!r}.")
 
-    wide = det["mean_upstream_distance"].unstack("regime")
+    wide = detail_table["mean_upstream_distance"].unstack("regime")
     # ordered by the realised local share, so the panels line up with plot_local_share
-    share_cols = [c for c in det.columns if c.startswith("share_within_")]
+    share_cols = [column for column in detail_table.columns if column.startswith("share_within_")]
     if share_cols and baseline in wide.columns:
-        order = det[sorted(share_cols)[0]].unstack("regime")[baseline].sort_values().index
+        order = detail_table[sorted(share_cols)[0]].unstack("regime")[baseline].sort_values().index
     else:
         order = wide.iloc[:, 0].sort_values().index
     labels = [r for r in regimes if r in wide.columns]
     wide = wide[labels].reindex(order)
-    names = det["region"].groupby(level="ze2010_downstream").first().reindex(wide.index)
+    names = detail_table["region"].groupby(level="ze2010_downstream").first().reindex(wide.index)
 
     base_km = None
     if units == "pct":
@@ -1090,7 +1091,7 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
             raise KeyError(f"baseline regime {baseline!r} not among {list(wide.columns)}.")
         base_km = wide[baseline].astype(float)
         wide = wide.drop(columns=[baseline]).apply(
-            lambda c: 100.0 * (c.astype(float) - base_km) / base_km)
+            lambda column: 100.0 * (column.astype(float) - base_km) / base_km)
         labels = [l for l in labels if l != baseline]
 
     # A ROW must hold a buyer's NAME as well as its marks, so the per-row height is the
@@ -1103,22 +1104,22 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
     y = np.arange(len(wide))
     if kind == "bar":
         height = 0.8 / max(len(labels), 1)
-        for k, lab in enumerate(labels):
-            off = ((len(labels) - 1) / 2 - k) * height
-            ax.barh(y + off, wide[lab].to_numpy(), height=height, alpha=1.0,
-                    color=CF_COLORS.get(lab, toulouse_color),
-                    edgecolor="white", linewidth=0.4, label=lab)
+        for k, regime in enumerate(labels):
+            offset = ((len(labels) - 1) / 2 - k) * height
+            ax.barh(y + offset, wide[regime].to_numpy(), height=height, alpha=1.0,
+                    color=CF_COLORS.get(regime, toulouse_color),
+                    edgecolor="white", linewidth=0.4, label=regime)
         lo = (min(0.0, float(np.nanmin(wide.to_numpy()))) * 1.05 if units == "pct"
               else 0.0) if xmin is None else xmin
     else:
-        for yi, (_, row) in enumerate(wide.iterrows()):
-            v = row.to_numpy(dtype=float)
-            if np.isfinite(v).any():
-                ax.plot([np.nanmin(v), np.nanmax(v)], [yi, yi], color="0.8",
+        for row_position, (_, buyer_row) in enumerate(wide.iterrows()):
+            row_values = buyer_row.to_numpy(dtype=float)
+            if np.isfinite(row_values).any():
+                ax.plot([np.nanmin(row_values), np.nanmax(row_values)], [row_position, row_position], color="0.8",
                         linewidth=1.0, zorder=1)
-        for lab in labels:
-            ax.plot(wide[lab].to_numpy(), y, linestyle="none", marker="o", markersize=5,
-                    color=CF_COLORS.get(lab, toulouse_color), label=lab, zorder=2)
+        for regime in labels:
+            ax.plot(wide[regime].to_numpy(), y, linestyle="none", marker="o", markersize=5,
+                    color=CF_COLORS.get(regime, toulouse_color), label=regime, zorder=2)
         span = float(np.nanmax(wide.to_numpy()) - np.nanmin(wide.to_numpy()))
         lo = (np.nanmin(wide.to_numpy()) - 0.05 * span) if xmin is None else xmin
     hi = (np.nanmax(wide.to_numpy()) * 1.02 if units == "km"
@@ -1142,8 +1143,8 @@ def plot_counterfactual_distance(data, regimes=CF_REGIMES, value_col="share",
     if units == "pct" and annotate_km and base_km is not None:
         # one entry per row, like the names on the left, so it takes the same cap
         margin_size = name_axis_fontsize(ax, len(wide), size_at_ref=7.5)
-        for yi, idx in enumerate(wide.index):
-            ax.annotate(f"{base_km.loc[idx]:.0f} km", xy=(1.005, yi),
+        for row_position, buyer in enumerate(wide.index):
+            ax.annotate(f"{base_km.loc[buyer]:.0f} km", xy=(1.005, row_position),
                         xycoords=("axes fraction", "data"), va="center", ha="left",
                         fontsize=margin_size, color="0.35", annotation_clip=False)
         ax.annotate(f"{baseline}\n(km)", xy=(1.005, 1.005),
@@ -1181,15 +1182,15 @@ def plot_counterfactual_profile(data, regimes=CF_REGIMES,
     frames = (counterfactual_frames(data, regimes=regimes, value_col=value_col,
                                     diffusion=base) if frames is None else frames)
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
-    curves = {lab: local_share_profile(data, radii=radii, value_col=value_col,
-                                       diffusion=f) for lab, f in frames.items()}
-    for lab, p in curves.items():
-        ax.plot(p.index, p["median"], marker="o", markersize=4,
-                color=CF_COLORS.get(lab, "0.3"), linewidth=1.6, label=lab)
-    for m in mark:
-        ax.axvline(m, color="0.6", linewidth=0.9, linestyle=":")
-        ax.annotate(f"{m:g} km", (m, 0.99), fontsize=fs(8), color="0.4", ha="left",
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
+    curves = {regime: local_share_profile(data, radii=radii, value_col=value_col,
+                                       diffusion=frame) for regime, frame in frames.items()}
+    for regime, profile in curves.items():
+        ax.plot(profile.index, profile["median"], marker="o", markersize=4,
+                color=CF_COLORS.get(regime, "0.3"), linewidth=1.6, label=regime)
+    for radius_mark in mark:
+        ax.axvline(radius_mark, color="0.6", linewidth=0.9, linestyle=":")
+        ax.annotate(f"{radius_mark:g} km", (radius_mark, 0.99), fontsize=fs(8), color="0.4", ha="left",
                     va="top", xytext=(3, 0), textcoords="offset points")
     ax.set_ylim(0, 1)
     ax.set_xlabel("Radius around the shocked region (km)")
@@ -1219,18 +1220,18 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
     is unaffected.
     """
     radii = _DEFAULT_RADII if radii is None else tuple(radii)
-    diff = build_diffusion_frame(data, value_col)
-    summ = amplification_summary(data, radii=radii, value_col=value_col, diffusion=diff)
-    prof = local_share_profile(data, value_col=value_col, diffusion=diff)
+    diffusion = build_diffusion_frame(data, value_col)
+    summary = amplification_summary(data, radii=radii, value_col=value_col, diffusion=diffusion)
+    profile = local_share_profile(data, value_col=value_col, diffusion=diffusion)
 
-    ind, mu = data["industry"], data["mu"]
-    tag = lambda name: (None if out_folder is None
-                        else f"{out_folder}/{name}_{ind}_mu{mu}.pdf")
+    industry, mu = data["industry"], data["mu"]
+    output_path = lambda name: (None if out_folder is None
+                        else f"{out_folder}/{name}_{industry}_mu{mu}.pdf")
 
     # Does the economy carry N_hat_s varieties? Everything below is built on the
     # parquet, so a wrong variety count is not a detail of the input -- it is a
     # different model, and it is checked before any of it is reported.
-    print(f"[{ind}, mu = {mu}]  variety count in suppliers.parquet:")
+    print(f"[{industry}, mu = {mu}]  variety count in suppliers.parquet:")
     try:
         # Only meaningful against a parquet: a simulated economy is drawn at N_hat_s
         # by construction, so the check is vacuous there and is skipped rather than
@@ -1241,14 +1242,14 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
     except (FileNotFoundError, KeyError, ValueError) as e:
         print(f"  variety-count check skipped: {type(e).__name__}: {e}")
 
-    print(f"[{ind}, mu = {mu}]  mean D_r = {summ['amplification'].mean():.3f} "
-          f"(one euro of demand -> {summ['upstream_sales'].mean():.3f} upstream), "
-          f"p90 = {summ['amplification'].quantile(0.9):.3f}")
-    for d in radii:
-        c = f"share_within_{int(d)}km"
-        print(f"                 share of upstream sales within {d:g} km: "
-              f"mean {summ[c].mean():.3f}, median {summ[c].median():.3f}, "
-              f"min {summ[c].min():.3f}, max {summ[c].max():.3f}")
+    print(f"[{industry}, mu = {mu}]  mean D_r = {summary['amplification'].mean():.3f} "
+          f"(one euro of demand -> {summary['upstream_sales'].mean():.3f} upstream), "
+          f"p90 = {summary['amplification'].quantile(0.9):.3f}")
+    for radius in radii:
+        column = f"share_within_{int(radius)}km"
+        print(f"                 share of upstream sales within {radius:g} km: "
+              f"mean {summary[column].mean():.3f}, median {summary[column].median():.3f}, "
+              f"min {summary[column].min():.3f}, max {summary[column].max():.3f}")
 
     # what the finite variety count costs, quantity by quantity
     try:
@@ -1256,51 +1257,51 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
     except (FileNotFoundError, KeyError, ValueError) as e:
         print(f"  granularity report skipped: {type(e).__name__}: {e}")
 
-    plot_amplification(data, summary=summ, save_to=tag("amplification"))
+    plot_amplification(data, summary=summary, save_to=output_path("amplification"))
     if show:
         plt.show()
-    plot_local_share(data, radii=radii, summary=summ, save_to=tag("local_share"))
+    plot_local_share(data, radii=radii, summary=summary, save_to=output_path("local_share"))
     if show:
         plt.show()
     try:
-        plot_local_share_map(data, radius_km=radii[0], summary=summ,
-                             save_to=tag("local_share_map"))
+        plot_local_share_map(data, radius_km=radii[0], summary=summary,
+                             save_to=output_path("local_share_map"))
         if show:
             plt.show()
         # the SAME map at the wider radius the empirical part works with. It needs its
         # own pinned scale: L_r is a CDF in d, so every value is larger at 200 km and
         # the 100 km window would clip the top of the aerospace distribution.
         if len(radii) > 1:
-            plot_local_share_map(data, radius_km=radii[-1], summary=summ,
+            plot_local_share_map(data, radius_km=radii[-1], summary=summary,
                                  vlim=LOCAL_SHARE_MAP_VLIM_WIDE,
-                                 save_to=tag(f"local_share_map{int(radii[-1])}km"))
+                                 save_to=output_path(f"local_share_map{int(radii[-1])}km"))
             if show:
                 plt.show()
     except (FileNotFoundError, KeyError, ValueError) as e:
         print(f"  local-share map skipped: {type(e).__name__}: {e}")
-    plot_local_share_profile(data, profile=prof, mark=radii,
-                             save_to=tag("local_share_profile"))
+    plot_local_share_profile(data, profile=profile, mark=radii,
+                             save_to=output_path("local_share_profile"))
     if show:
         plt.show()
-    plot_amplification_vs_local(data, radius_km=radii[0], summary=summ,
-                                save_to=tag("amplification_vs_local"))
+    plot_amplification_vs_local(data, radius_km=radii[0], summary=summary,
+                                save_to=output_path("amplification_vs_local"))
     if show:
         plt.show()
 
     if counterfactual:
         try:
             frames = counterfactual_frames(data, regimes=regimes, value_col=value_col,
-                                           diffusion=diff)
-            det = counterfactual_amplification(data, regimes=regimes, radii=radii,
+                                           diffusion=diffusion)
+            detail_table = counterfactual_amplification(data, regimes=regimes, radii=radii,
                                                value_col=value_col, frames=frames,
-                                               diffusion=diff)
+                                               diffusion=diffusion)
             plot_counterfactual_profile(data, regimes=regimes, mark=radii, frames=frames,
-                                        diffusion=diff,
-                                        save_to=tag("counterfactual_profile"))
+                                        diffusion=diffusion,
+                                        save_to=output_path("counterfactual_profile"))
             if show:
                 plt.show()
-            plot_distance_distribution(data, regimes=regimes, detail=det,
-                                       save_to=tag("counterfactual_distance"))
+            plot_distance_distribution(data, regimes=regimes, detail=detail_table,
+                                       save_to=output_path("counterfactual_distance"))
             if show:
                 plt.show()
             # Two alternative readings of the SAME reallocation, drawn beside the two
@@ -1313,47 +1314,47 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
             # figure never having been added. The block's outer handler prints one note
             # for everything after the point of failure, which is exactly the case where
             # a newly added figure looks absent rather than broken.
-            for _lab, _fn, _stem in (
+            for _figure_name, _plot_function, _stem in (
                     ("mean sourcing distance by region", plot_counterfactual_distance,
                      "counterfactual_distance_region"),
                     ("mean sourcing distance histogram", plot_distance_histogram,
                      "counterfactual_distance_hist")):
                 try:
-                    _fn(data, regimes=regimes, detail=det, save_to=tag(_stem))
+                    _plot_function(data, regimes=regimes, detail=detail_table, save_to=output_path(_stem))
                     if show:
                         plt.show()
                 except (FileNotFoundError, KeyError, ValueError) as e:
-                    print(f"  {_lab} skipped: {type(e).__name__}: {e}")
+                    print(f"  {_figure_name} skipped: {type(e).__name__}: {e}")
             print("\n  the shock with one force switched off "
                   "(D_r is the same in every regime by construction):")
             print(counterfactual_summary(data, regimes=regimes, radii=radii,
-                                         detail=det).round(3).to_string())
+                                         detail=detail_table).round(3).to_string())
             print("\n  the distribution of d_r behind that mean, and how each force "
                   "shifts it quantile by quantile:")
             print(distance_distribution_report(data, regimes=regimes,
-                                               detail=det).to_string())
+                                               detail=detail_table).to_string())
 
             # WHERE the response lands, which both the mean distance and the barycentre
             # reduce away. Own guard, for the reason given at the two figures above: a
             # newly added block that fails should say so rather than look absent.
             try:
-                inc = incidence_concentration_overlap(data, regimes=regimes,
-                                                      frames=frames, diffusion=diff)
-                incidence_summary(inc)
-                summ.attrs["incidence"] = inc
-                distance_normalisation(data, regimes=regimes, detail=det, diffusion=diff)
+                incidence = incidence_concentration_overlap(data, regimes=regimes,
+                                                      frames=frames, diffusion=diffusion)
+                incidence_summary(incidence)
+                summary.attrs["incidence"] = incidence
+                distance_normalisation(data, regimes=regimes, detail=detail_table, diffusion=diffusion)
                 # The two coordinates above are computed on `rho`, which carries no
                 # N_s, so they describe the AVERAGE network. `n_eff` is convex and
                 # `tv_common` is convex the other way, so a single draw of the
                 # finite-variety economy is strictly MORE concentrated and strictly
                 # MORE buyer-specific. Measure the gap rather than caveat it.
                 try:
-                    summ.attrs["realised_incidence"] = realised_incidence(
-                        data, expected=inc)
+                    summary.attrs["realised_incidence"] = realised_incidence(
+                        data, expected=incidence)
                 except (FileNotFoundError, KeyError, ValueError) as e:
                     print(f"  realised incidence skipped: {type(e).__name__}: {e}")
-                plot_destination_composition(data, diffusion=diff,
-                                             save_to=tag("destination_composition"))
+                plot_destination_composition(data, diffusion=diffusion,
+                                             save_to=output_path("destination_composition"))
                 if show:
                     plt.show()
             except (FileNotFoundError, KeyError, ValueError) as e:
@@ -1361,7 +1362,7 @@ def amplification_report(data, radii=None, value_col="share", out_folder=None, s
                       f"{type(e).__name__}: {e}")
         except (FileNotFoundError, KeyError, ValueError) as e:
             print(f"  counterfactual propagation skipped: {type(e).__name__}: {e}")
-    return summ, prof
+    return summary, profile
 
 
 def distance_distribution(data, regimes=CF_REGIMES, value_col="share", detail=None,
@@ -1377,10 +1378,10 @@ def distance_distribution(data, regimes=CF_REGIMES, value_col="share", detail=No
     a force can shift the whole distribution or only its tail, and the mean alone cannot
     tell the two apart.
     """
-    det = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
+    detail_table = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
                                         frames=frames, diffusion=diffusion, verbose=False)
            if detail is None else detail)
-    return det["mean_upstream_distance"].unstack("regime").dropna(how="all")
+    return detail_table["mean_upstream_distance"].unstack("regime").dropna(how="all")
 
 
 def relative_displacement(data, regimes=CF_REGIMES, value_col="share", detail=None,
@@ -1408,33 +1409,33 @@ def relative_displacement(data, regimes=CF_REGIMES, value_col="share", detail=No
     the average distance moved regardless of direction, so a figure far above
     `|mean_pct|` is a cancellation of large movements rather than an absence of them.
     """
-    det = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
+    detail_table = (counterfactual_amplification(data, regimes=regimes, value_col=value_col,
                                         frames=frames, diffusion=diffusion, verbose=False)
            if detail is None else detail)
-    d = det["mean_upstream_distance"].unstack("regime").dropna(how="all")
-    if baseline not in d.columns:
-        raise KeyError(f"no {baseline!r} column to difference against; have {list(d.columns)}")
-    pct = 100.0 * (d.div(d[baseline], axis=0) - 1.0).drop(columns=[baseline])
+    distance_by_regime = detail_table["mean_upstream_distance"].unstack("regime").dropna(how="all")
+    if baseline not in distance_by_regime.columns:
+        raise KeyError(f"no {baseline!r} column to difference against; have {list(distance_by_regime.columns)}")
+    pct_change = 100.0 * (distance_by_regime.div(distance_by_regime[baseline], axis=0) - 1.0).drop(columns=[baseline])
     # rows carry the commuting-zone NAME, not the model index: the per-buyer table exists
     # to be read buyer by buyer, and an integer index cannot be.
-    if "region" in det.columns:
-        name = det["region"].groupby(level=0).first()
-        pct.index = [name.get(i, i) for i in pct.index]
-    q = pct.quantile(list(quantiles)).T
-    q.columns = [f"p{int(100 * x)}" for x in quantiles]
-    out = q.assign(mean_pct=pct.mean(),
-                   mean_abs_pct=pct.abs().mean(),
-                   max_abs_pct=pct.abs().max(),
-                   share_further=(pct > 0).mean(),
-                   n_buyers=len(pct))
-    out.attrs["per_buyer_pct"] = pct
-    return out.round(2)
+    if "region" in detail_table.columns:
+        name = detail_table["region"].groupby(level=0).first()
+        pct_change.index = [name.get(i, i) for i in pct_change.index]
+    quantile_table = pct_change.quantile(list(quantiles)).T
+    quantile_table.columns = [f"p{int(100 * x)}" for x in quantiles]
+    table = quantile_table.assign(mean_pct=pct_change.mean(),
+                   mean_abs_pct=pct_change.abs().mean(),
+                   max_abs_pct=pct_change.abs().max(),
+                   share_further=(pct_change > 0).mean(),
+                   n_buyers=len(pct_change))
+    table.attrs["per_buyer_pct"] = pct_change
+    return table.round(2)
 
 
 def distance_distribution_report(data, regimes=CF_REGIMES, value_col="share",
                                  detail=None, frames=None, diffusion=None,
                                  quantiles=(0.1, 0.25, 0.5, 0.75, 0.9)):
-    """
+    r"""
     The numbers behind `plot_distance_distribution`: the quantiles of `d_r` across
     shocked regions under each regime, and the SHIFT of each quantile against
     `Both forces`.
@@ -1449,23 +1450,23 @@ def distance_distribution_report(data, regimes=CF_REGIMES, value_col="share",
     """
     dist = distance_distribution(data, regimes=regimes, value_col=value_col,
                                  detail=detail, frames=frames, diffusion=diffusion)
-    q = dist.quantile(list(quantiles))
-    q.index = [f"p{int(100 * x)}" for x in q.index]
-    out = q.T
-    if "Both forces" in out.index:
-        base = out.loc["Both forces"]
-        shift = out.subtract(base, axis=1)
+    quantile_table = dist.quantile(list(quantiles))
+    quantile_table.index = [f"p{int(100 * x)}" for x in quantile_table.index]
+    table = quantile_table.T
+    if "Both forces" in table.index:
+        base = table.loc["Both forces"]
+        shift = table.subtract(base, axis=1)
         shift.index = [f"{i} - Both forces" for i in shift.index]
-        out = pd.concat([out, shift.drop(index="Both forces - Both forces")])
-        d = dist.subtract(dist["Both forces"], axis=0)
-        out["n_regions"] = len(dist)
-        out["share_moved_lt_5km"] = [
-            float((d[c].abs() < 5).mean()) if c in d else np.nan
-            for c in [i.split(" - ")[0] for i in out.index]]
-        out["share_moved_away"] = [
-            float((d[c] > 0).mean()) if c in d else np.nan
-            for c in [i.split(" - ")[0] for i in out.index]]
-    return out.round(2)
+        table = pd.concat([table, shift.drop(index="Both forces - Both forces")])
+        distance_change = dist.subtract(dist["Both forces"], axis=0)
+        table["n_regions"] = len(dist)
+        table["share_moved_lt_5km"] = [
+            float((distance_change[regime].abs() < 5).mean()) if regime in distance_change else np.nan
+            for regime in [i.split(" - ")[0] for i in table.index]]
+        table["share_moved_away"] = [
+            float((distance_change[regime] > 0).mean()) if regime in distance_change else np.nan
+            for regime in [i.split(" - ")[0] for i in table.index]]
+    return table.round(2)
 
 
 def plot_distance_distribution(data, regimes=CF_REGIMES, value_col="share", detail=None,
@@ -1485,15 +1486,15 @@ def plot_distance_distribution(data, regimes=CF_REGIMES, value_col="share", deta
     """
     dist = distance_distribution(data, regimes=regimes, value_col=value_col, detail=detail,
                                  frames=frames, diffusion=diffusion)
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
-    for lab in dist.columns:
-        v = np.sort(dist[lab].dropna().to_numpy())
-        if v.size == 0:
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
+    for regime in dist.columns:
+        sorted_distance = np.sort(dist[regime].dropna().to_numpy())
+        if sorted_distance.size == 0:
             continue
-        ax.step(v, np.arange(1, v.size + 1) / v.size, where="post",
-                color=CF_COLORS.get(lab, "0.3"), linewidth=1.6, label=lab)
-        ax.plot([np.median(v)], [0.5], marker="o", markersize=5,
-                color=CF_COLORS.get(lab, "0.3"), zorder=3)
+        ax.step(sorted_distance, np.arange(1, sorted_distance.size + 1) / sorted_distance.size, where="post",
+                color=CF_COLORS.get(regime, "0.3"), linewidth=1.6, label=regime)
+        ax.plot([np.median(sorted_distance)], [0.5], marker="o", markersize=5,
+                color=CF_COLORS.get(regime, "0.3"), zorder=3)
     ax.axhline(0.5, color="0.8", linewidth=0.8, zorder=0)
     ax.set_ylim(0, 1)
     ax.set_xlabel("Mean distance travelled by the upstream euro (km)")
@@ -1548,32 +1549,32 @@ def plot_distance_histogram(data, regimes=CF_REGIMES, value_col="share", detail=
     pooled = pooled[np.isfinite(pooled)]
     edges = np.histogram_bin_edges(pooled, bins=bins)   # ONE grid for every regime
 
-    def _draw(ax, lab):
-        v = dist[lab].dropna().to_numpy(dtype=float)
-        col = CF_COLORS.get(lab, "0.3")
-        ax.hist(v, bins=edges, histtype="step", linewidth=1.6, color=col, label=lab)
-        ax.axvline(np.median(v), color=col, linewidth=1.0, alpha=0.55, linestyle=":")
+    def _draw(ax, regime):
+        distance_values = dist[regime].dropna().to_numpy(dtype=float)
+        color = CF_COLORS.get(regime, "0.3")
+        ax.hist(distance_values, bins=edges, histtype="step", linewidth=1.6, color=color, label=regime)
+        ax.axvline(np.median(distance_values), color=color, linewidth=1.0, alpha=0.55, linestyle=":")
 
     if layout == "overlay":
-        fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.8, hf=0.6))
-        for lab in labels:
-            _draw(ax, lab)
+        fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.8, height_fraction=0.6))
+        for regime in labels:
+            _draw(ax, regime)
         ax.set_xlabel("Mean distance travelled by the upstream euro (km)")
         ax.set_ylabel("Number of shocked regions")
         ax.legend(frameon=False, fontsize=fs(8))
         _despine(ax)
         axes = ax
     else:
-        fig, axs = plt.subplots(len(labels), 1, sharex=True, sharey=True,
-                                figsize=figsize or get_figsize(wf=0.8,
-                                                               hf=0.28 * len(labels)))
-        axs = np.atleast_1d(axs)
-        for ax, lab in zip(axs, labels):
-            _draw(ax, lab)
-            ax.set_ylabel(lab, fontsize=fs(8), rotation=0, ha="right", va="center")
+        fig, panel_axes = plt.subplots(len(labels), 1, sharex=True, sharey=True,
+                                figsize=figsize or get_figsize(width_fraction=0.8,
+                                                               height_fraction=0.28 * len(labels)))
+        panel_axes = np.atleast_1d(panel_axes)
+        for ax, regime in zip(panel_axes, labels):
+            _draw(ax, regime)
+            ax.set_ylabel(regime, fontsize=fs(8), rotation=0, ha="right", va="center")
             _despine(ax)
-        axs[-1].set_xlabel("Mean distance travelled by the upstream euro (km)")
-        axes = axs
+        panel_axes[-1].set_xlabel("Mean distance travelled by the upstream euro (km)")
+        axes = panel_axes
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1626,23 +1627,23 @@ def _zone_coordinates(data, crs=BARYCENTRE_CRS):
     caller decides what to do about them, since a missing zone is a missing WEIGHT and
     that is a fact about the barycentre, not about the table.
     """
-    fr = data.get("france")
-    if fr is None or not hasattr(fr, "geometry"):
+    france = data.get("france")
+    if france is None or not hasattr(france, "geometry"):
         raise FileNotFoundError(
             "no commuting-zone GEOMETRY in `data['france']` (france.gpkg missing, or "
             "geopandas is not installed) — the barycentre map cannot be drawn.")
-    geo = fr.copy()
-    geo["ze2010"] = _as_ze_string(geo["ze2010"])
-    if crs is not None and getattr(geo, "crs", None) is not None:
-        geo = geo.to_crs(crs)
-    cen = geo.geometry.centroid
-    pts = (pd.DataFrame({"ze2010": geo["ze2010"].to_numpy(),
-                         "x": np.asarray(cen.x), "y": np.asarray(cen.y)})
+    zones = france.copy()
+    zones["ze2010"] = _as_ze_string(zones["ze2010"])
+    if crs is not None and getattr(zones, "crs", None) is not None:
+        zones = zones.to_crs(crs)
+    centroids = zones.geometry.centroid
+    centroid_table = (pd.DataFrame({"ze2010": zones["ze2010"].to_numpy(),
+                         "x": np.asarray(centroids.x), "y": np.asarray(centroids.y)})
            .drop_duplicates("ze2010").set_index("ze2010"))
-    lab = _region_labels(data)
-    out = lab.join(pts, on="ze2010").set_index("index")
-    out.attrs["crs"] = crs
-    return out[["ze2010", "ze2010_name", "x", "y"]]
+    region_labels = _region_labels(data)
+    coordinates = region_labels.join(centroid_table, on="ze2010").set_index("index")
+    coordinates.attrs["crs"] = crs
+    return coordinates[["ze2010", "ze2010_name", "x", "y"]]
 
 
 def sourcing_barycentre(data, diffusion=None, value_col="share", coords=None,
@@ -1671,52 +1672,52 @@ def sourcing_barycentre(data, diffusion=None, value_col="share", coords=None,
     half the euros is visible rather than silently reported as the whole.
     """
     df = (build_diffusion_frame(data, value_col) if diffusion is None else diffusion)
-    co = _zone_coordinates(data, crs=crs) if coords is None else coords
+    coordinates = _zone_coordinates(data, crs=crs) if coords is None else coords
 
-    x = co["x"].reindex(df["ze2010"].to_numpy()).to_numpy(dtype=float)
-    y = co["y"].reindex(df["ze2010"].to_numpy()).to_numpy(dtype=float)
-    w = df["upstream_sales"].to_numpy(dtype=float)
-    ok = np.isfinite(x) & np.isfinite(y)
+    x = coordinates["x"].reindex(df["ze2010"].to_numpy()).to_numpy(dtype=float)
+    y = coordinates["y"].reindex(df["ze2010"].to_numpy()).to_numpy(dtype=float)
+    sales_weight = df["upstream_sales"].to_numpy(dtype=float)
+    placeable = np.isfinite(x) & np.isfinite(y)
 
-    g = df["ze2010_downstream"].to_numpy()
-    tot = pd.Series(w).groupby(g).sum()
-    wok = pd.Series(np.where(ok, w, 0.0))
-    den = wok.groupby(g).sum()
+    buyer = df["ze2010_downstream"].to_numpy()
+    upstream_total = pd.Series(sales_weight).groupby(buyer).sum()
+    covered_sales = pd.Series(np.where(placeable, sales_weight, 0.0))
+    covered_weight = covered_sales.groupby(buyer).sum()
     dist = df["distance"].to_numpy(dtype=float)
 
-    out = pd.DataFrame({
+    barycentres = pd.DataFrame({
         "region": df.groupby("ze2010_downstream")["shocked_name"].first(),
-        "upstream_sales": tot,
-        "weight_covered": (den / tot.replace(0, np.nan)),
-        "bary_x": pd.Series(np.where(ok, w * x, 0.0)).groupby(g).sum() / den.replace(0, np.nan),
-        "bary_y": pd.Series(np.where(ok, w * y, 0.0)).groupby(g).sum() / den.replace(0, np.nan),
-        "mean_model_distance_km": pd.Series(w * dist).groupby(g).sum() / tot.replace(0, np.nan),
+        "upstream_sales": upstream_total,
+        "weight_covered": (covered_weight / upstream_total.replace(0, np.nan)),
+        "bary_x": pd.Series(np.where(placeable, sales_weight * x, 0.0)).groupby(buyer).sum() / covered_weight.replace(0, np.nan),
+        "bary_y": pd.Series(np.where(placeable, sales_weight * y, 0.0)).groupby(buyer).sum() / covered_weight.replace(0, np.nan),
+        "mean_model_distance_km": pd.Series(sales_weight * dist).groupby(buyer).sum() / upstream_total.replace(0, np.nan),
     })
-    out.index.name = "ze2010_downstream"
-    out["origin_x"] = co["x"].reindex(out.index).to_numpy(dtype=float)
-    out["origin_y"] = co["y"].reindex(out.index).to_numpy(dtype=float)
+    barycentres.index.name = "ze2010_downstream"
+    barycentres["origin_x"] = coordinates["x"].reindex(barycentres.index).to_numpy(dtype=float)
+    barycentres["origin_y"] = coordinates["y"].reindex(barycentres.index).to_numpy(dtype=float)
     # the mean of the LENGTHS, in the same geometry the barycentre is taken in
-    ox = out["origin_x"].reindex(g).to_numpy(dtype=float)
-    oy = out["origin_y"].reindex(g).to_numpy(dtype=float)
-    leg = np.hypot(x - ox, y - oy) / 1000.0
-    out["mean_distance_km"] = (pd.Series(np.where(ok, w * leg, 0.0)).groupby(g).sum()
-                               / den.replace(0, np.nan))
-    out["dx_km"] = (out["bary_x"] - out["origin_x"]) / 1000.0
-    out["dy_km"] = (out["bary_y"] - out["origin_y"]) / 1000.0
-    out["displacement_km"] = np.hypot(out["dx_km"], out["dy_km"])
+    origin_x_pair = barycentres["origin_x"].reindex(buyer).to_numpy(dtype=float)
+    origin_y_pair = barycentres["origin_y"].reindex(buyer).to_numpy(dtype=float)
+    leg_km = np.hypot(x - origin_x_pair, y - origin_y_pair) / 1000.0
+    barycentres["mean_distance_km"] = (pd.Series(np.where(placeable, sales_weight * leg_km, 0.0)).groupby(buyer).sum()
+                               / covered_weight.replace(0, np.nan))
+    barycentres["dx_km"] = (barycentres["bary_x"] - barycentres["origin_x"]) / 1000.0
+    barycentres["dy_km"] = (barycentres["bary_y"] - barycentres["origin_y"]) / 1000.0
+    barycentres["displacement_km"] = np.hypot(barycentres["dx_km"], barycentres["dy_km"])
     # bearing of the pull, degrees clockwise from north — the direction a reader
     # would name ("north-east"), not the mathematical angle from the x axis
-    out["bearing_deg"] = (np.degrees(np.arctan2(out["dx_km"], out["dy_km"])) + 360.0) % 360.0
-    out["concentration"] = out["displacement_km"] / out["mean_distance_km"].replace(0, np.nan)
-    out.attrs["value_col"] = value_col
-    out.attrs["crs"] = crs
+    barycentres["bearing_deg"] = (np.degrees(np.arctan2(barycentres["dx_km"], barycentres["dy_km"])) + 360.0) % 360.0
+    barycentres["concentration"] = barycentres["displacement_km"] / barycentres["mean_distance_km"].replace(0, np.nan)
+    barycentres.attrs["value_col"] = value_col
+    barycentres.attrs["crs"] = crs
 
-    miss = out["weight_covered"] < 0.999
-    if verbose and miss.any():
-        print(f"  [barycentre] {int(miss.sum())} region(s) have upstream sales in zones "
+    partially_covered = barycentres["weight_covered"] < 0.999
+    if verbose and partially_covered.any():
+        print(f"  [barycentre] {int(partially_covered.sum())} region(s) have upstream sales in zones "
               f"the geometry does not cover; min covered weight "
-              f"{out['weight_covered'].min():.3f}")
-    return out
+              f"{barycentres['weight_covered'].min():.3f}")
+    return barycentres
 
 
 def barycentre_hubs(data, bary=None, n=10, radius_km=25, **kwargs):
@@ -1730,23 +1731,23 @@ def barycentre_hubs(data, bary=None, n=10, radius_km=25, **kwargs):
     should be the top row here, and if it is not, the eye was reading the arrow
     density of a dense part of the country rather than a hub.
     """
-    b = sourcing_barycentre(data, **kwargs) if bary is None else bary
-    co = _zone_coordinates(data, crs=b.attrs.get("crs", BARYCENTRE_CRS))
-    cx, cy = co["x"].to_numpy(dtype=float), co["y"].to_numpy(dtype=float)
+    barycentres = sourcing_barycentre(data, **kwargs) if bary is None else bary
+    coordinates = _zone_coordinates(data, crs=barycentres.attrs.get("crs", BARYCENTRE_CRS))
+    centroid_x, centroid_y = coordinates["x"].to_numpy(dtype=float), coordinates["y"].to_numpy(dtype=float)
     rows = []
-    for idx, r in b.dropna(subset=["bary_x"]).iterrows():
-        d = np.hypot(cx - r["bary_x"], cy - r["bary_y"]) / 1000.0
-        j = int(np.nanargmin(d))
-        rows.append({"hub_index": co.index[j], "hub": co["ze2010_name"].iloc[j],
-                     "distance_to_centroid_km": d[j], "from": r["region"],
-                     "sales": r["upstream_sales"]})
+    for buyer, barycentre_row in barycentres.dropna(subset=["bary_x"]).iterrows():
+        distance_km = np.hypot(centroid_x - barycentre_row["bary_x"], centroid_y - barycentre_row["bary_y"]) / 1000.0
+        nearest = int(np.nanargmin(distance_km))
+        rows.append({"hub_index": coordinates.index[nearest], "hub": coordinates["ze2010_name"].iloc[nearest],
+                     "distance_to_centroid_km": distance_km[nearest], "from": barycentre_row["region"],
+                     "sales": barycentre_row["upstream_sales"]})
     hits = pd.DataFrame(rows)
     hits = hits[hits["distance_to_centroid_km"] <= radius_km]
-    out = (hits.groupby(["hub_index", "hub"])
+    hubs = (hits.groupby(["hub_index", "hub"])
                .agg(n_regions=("from", "size"), sales=("sales", "sum"))
                .reset_index().set_index("hub"))
-    out["share_of_regions"] = out["n_regions"] / len(b)
-    return out.sort_values("n_regions", ascending=False).head(n)
+    hubs["share_of_regions"] = hubs["n_regions"] / len(barycentres)
+    return hubs.sort_values("n_regions", ascending=False).head(n)
 
 
 def plot_sourcing_barycentre(data, bary=None, value_col="share", diffusion=None,
@@ -1768,43 +1769,43 @@ def plot_sourcing_barycentre(data, bary=None, value_col="share", diffusion=None,
     dropped regions are the ones whose sourcing is centred on themselves, and the
     count is annotated rather than left implicit.
     """
-    b = (sourcing_barycentre(data, diffusion=diffusion, value_col=value_col,
+    barycentres = (sourcing_barycentre(data, diffusion=diffusion, value_col=value_col,
                              coords=coords, crs=crs) if bary is None else bary)
-    fr = data.get("france")
-    if fr is None or not hasattr(fr, "geometry"):
+    france = data.get("france")
+    if france is None or not hasattr(france, "geometry"):
         raise FileNotFoundError(
             "no commuting-zone GEOMETRY in `data['france']` — the map cannot be drawn.")
-    geo = fr.copy()
-    if crs is not None and getattr(geo, "crs", None) is not None:
-        geo = geo.to_crs(crs)
+    zones = france.copy()
+    if crs is not None and getattr(zones, "crs", None) is not None:
+        zones = zones.to_crs(crs)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.5, hf=1.0))
-    geo.plot(facecolor=ground_color, ax=ax, edgecolor=edge_color, linewidth=0.25)
+        _, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.5, height_fraction=1.0))
+    zones.plot(facecolor=ground_color, ax=ax, edgecolor=edge_color, linewidth=0.25)
 
-    v = b.dropna(subset=["bary_x", "origin_x"])
-    short = int((v["displacement_km"] < min_km).sum())
-    v = v[v["displacement_km"] >= min_km]
-    col = toulouse_color if color is None else color
-    ax.quiver(v["origin_x"].to_numpy(), v["origin_y"].to_numpy(),
-              (v["bary_x"] - v["origin_x"]).to_numpy(),
-              (v["bary_y"] - v["origin_y"]).to_numpy(),
-              angles="xy", scale_units="xy", scale=1.0, color=col,
+    drawn = barycentres.dropna(subset=["bary_x", "origin_x"])
+    n_short = int((drawn["displacement_km"] < min_km).sum())
+    drawn = drawn[drawn["displacement_km"] >= min_km]
+    arrow_color = toulouse_color if color is None else color
+    ax.quiver(drawn["origin_x"].to_numpy(), drawn["origin_y"].to_numpy(),
+              (drawn["bary_x"] - drawn["origin_x"]).to_numpy(),
+              (drawn["bary_y"] - drawn["origin_y"]).to_numpy(),
+              angles="xy", scale_units="xy", scale=1.0, color=arrow_color,
               width=0.0035, headwidth=4.0, headlength=5.0, headaxislength=4.2,
               zorder=3)
 
-    xmin, ymin, xmax, ymax = geo.total_bounds
-    pad = 0.02 * max(xmax - xmin, ymax - ymin)
-    ax.set_xlim(xmin - pad, xmax + pad)
-    ax.set_ylim(ymin - pad, ymax + pad)
+    xmin, ymin, xmax, ymax = zones.total_bounds
+    margin = 0.02 * max(xmax - xmin, ymax - ymin)
+    ax.set_xlim(xmin - margin, xmax + margin)
+    ax.set_ylim(ymin - margin, ymax + margin)
     ax.set_aspect("equal")
     ax.set_axis_off()
     if title is not None:
         ax.set_title(title, fontsize=fs(10))
     if annotate:
-        txt = (f"median pull {v['displacement_km'].median():.0f} km"
-               + (f"\n{short} region(s) below {min_km:g} km not drawn" if short else ""))
-        ax.text(0.02, 0.02, txt, transform=ax.transAxes, fontsize=fs(8), va="bottom",
+        annotation = (f"median pull {drawn['displacement_km'].median():.0f} km"
+               + (f"\n{n_short} region(s) below {min_km:g} km not drawn" if n_short else ""))
+        ax.text(0.02, 0.02, annotation, transform=ax.transAxes, fontsize=fs(8), va="bottom",
                 ha="left", color="0.25")
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
@@ -1842,41 +1843,41 @@ def barycentre_panel(datasets, regimes=CF_REGIMES, value_col="share",
     labels = list(regimes)
     ncol, nrow = len(datasets), len(labels)
     fig, axes = plt.subplots(nrow, ncol, squeeze=False,
-                             figsize=figsize or get_figsize(wf=1.0, hf=0.30 * nrow * 2 / max(ncol, 1)))
+                             figsize=figsize or get_figsize(width_fraction=1.0, height_fraction=0.30 * nrow * 2 / max(ncol, 1)))
 
-    out = {}
+    barycentres_by_panel = {}
     for j, (name, data) in enumerate(datasets):
         base = build_diffusion_frame(data, value_col)
         coords = _zone_coordinates(data, crs=crs)
         frames = counterfactual_frames(data, regimes=regimes, value_col=value_col,
                                        diffusion=base, verbose=verbose)
-        for i, lab in enumerate(labels):
-            b = sourcing_barycentre(data, diffusion=frames[lab], value_col=value_col,
+        for i, regime in enumerate(labels):
+            barycentres = sourcing_barycentre(data, diffusion=frames[regime], value_col=value_col,
                                     coords=coords, crs=crs)
-            out[(name, lab)] = b
+            barycentres_by_panel[(name, regime)] = barycentres
             ax = axes[i][j]
-            plot_sourcing_barycentre(data, bary=b, crs=crs, coords=coords, ax=ax,
-                                     color=CF_COLORS.get(lab, "0.3"), min_km=min_km,
+            plot_sourcing_barycentre(data, bary=barycentres, crs=crs, coords=coords, ax=ax,
+                                     color=CF_COLORS.get(regime, "0.3"), min_km=min_km,
                                      title=name if i == 0 else None)
             if save_each:
                 slug = lambda t: re.sub(r"[^a-z0-9]+", "_", str(t).lower()).strip("_")
-                single, sax = plt.subplots(figsize=get_figsize(wf=0.5, hf=1.0))
-                plot_sourcing_barycentre(data, bary=b, crs=crs, coords=coords, ax=sax,
-                                         color=CF_COLORS.get(lab, "0.3"), min_km=min_km,
-                                         title=f"{name} — {lab}",
+                single, single_ax = plt.subplots(figsize=get_figsize(width_fraction=0.5, height_fraction=1.0))
+                plot_sourcing_barycentre(data, bary=barycentres, crs=crs, coords=coords, ax=single_ax,
+                                         color=CF_COLORS.get(regime, "0.3"), min_km=min_km,
+                                         title=f"{name} — {regime}",
                                          save_to=save_each.format(industry=slug(name),
-                                                                  regime=slug(lab)))
+                                                                  regime=slug(regime)))
                 plt.close(single)
             if j == 0:
                 # the row label goes on the axes, not in a title: a title on every panel
                 # would repeat the industry name four times and the scenario name twice
-                ax.text(-0.04, 0.5, lab, transform=ax.transAxes, rotation=90,
+                ax.text(-0.04, 0.5, regime, transform=ax.transAxes, rotation=90,
                         va="center", ha="center", fontsize=fs(9))
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, bbox_inches="tight")
-    return fig, out
+    return fig, barycentres_by_panel
 
 
 # --- Do the barycentres FOLLOW their buyers? --------------------------------
@@ -1949,52 +1950,52 @@ def barycentre_shrinkage(bary, weights=None):
     agree on a common shrinkage, not how precisely the model's parameters are known.
     """
     if isinstance(bary, dict):
-        rows = {k: barycentre_shrinkage(v, weights=weights).iloc[0] for k, v in bary.items()}
-        out = pd.DataFrame(rows).T
-        out.index = (pd.MultiIndex.from_tuples(out.index)
-                     if len(out) and isinstance(next(iter(rows)), tuple) else out.index)
-        return out
+        rows = {k: barycentre_shrinkage(placed, weights=weights).iloc[0] for k, placed in bary.items()}
+        table = pd.DataFrame(rows).T
+        table.index = (pd.MultiIndex.from_tuples(table.index)
+                     if len(table) and isinstance(next(iter(rows)), tuple) else table.index)
+        return table
 
-    v = bary.dropna(subset=["bary_x", "bary_y", "origin_x", "origin_y"])
-    w = (np.ones(len(v)) if weights is None
-         else v[weights].to_numpy(dtype=float))
-    if len(v) < 3 or w.sum() <= 0:
-        raise ValueError(f"only {len(v)} placeable region(s) with positive weight — "
+    placed = bary.dropna(subset=["bary_x", "bary_y", "origin_x", "origin_y"])
+    weights_norm = (np.ones(len(placed)) if weights is None
+         else placed[weights].to_numpy(dtype=float))
+    if len(placed) < 3 or weights_norm.sum() <= 0:
+        raise ValueError(f"only {len(placed)} placeable region(s) with positive weight — "
                          "the shrinkage regression needs at least three.")
-    w = w / w.sum()
+    weights_norm = weights_norm / weights_norm.sum()
 
     def dev(col):
-        a = v[col].to_numpy(dtype=float)
-        return a - float(w @ a)
+        values = placed[col].to_numpy(dtype=float)
+        return values - float(weights_norm @ values)
 
-    dx, dy = dev("origin_x"), dev("origin_y")
-    bx, by = dev("bary_x"), dev("bary_y")
+    origin_dev_x, origin_dev_y = dev("origin_x"), dev("origin_y")
+    bary_dev_x, bary_dev_y = dev("bary_x"), dev("bary_y")
 
     # pooled: the single scalar minimising the weighted |b - lambda x|^2 over BOTH
     # coordinates at once, so it does not depend on how the map happens to be rotated
-    den = float(w @ (dx**2 + dy**2))
-    lam = float(w @ (dx * bx + dy * by)) / den if den > 0 else np.nan
-    resid = float(w @ ((bx - lam * dx) ** 2 + (by - lam * dy) ** 2))
-    tot = float(w @ (bx**2 + by**2))
+    origin_variance = float(weights_norm @ (origin_dev_x**2 + origin_dev_y**2))
+    shrinkage = float(weights_norm @ (origin_dev_x * bary_dev_x + origin_dev_y * bary_dev_y)) / origin_variance if origin_variance > 0 else np.nan
+    resid = float(weights_norm @ ((bary_dev_x - shrinkage * origin_dev_x) ** 2 + (bary_dev_y - shrinkage * origin_dev_y) ** 2))
+    bary_variance = float(weights_norm @ (bary_dev_x**2 + bary_dev_y**2))
     # cluster-robust on the region: the x and y deviations of one buyer are ONE
     # observation, so their scores are summed before being squared
-    ex, ey = bx - lam * dx, by - lam * dy
-    score = w * (dx * ex + dy * ey)
-    n = len(v)
-    se = (np.sqrt(float(score @ score) * n / (n - 1)) / den
-          if den > 0 and n > 1 else np.nan)
+    resid_x, resid_y = bary_dev_x - shrinkage * origin_dev_x, bary_dev_y - shrinkage * origin_dev_y
+    score = weights_norm * (origin_dev_x * resid_x + origin_dev_y * resid_y)
+    n = len(placed)
+    se = (np.sqrt(float(score @ score) * n / (n - 1)) / origin_variance
+          if origin_variance > 0 and n > 1 else np.nan)
     return pd.DataFrame([{
-        "slope": lam,
+        "slope": shrinkage,
         "se": se,
-        "t": lam / se if se and np.isfinite(se) and se > 0 else np.nan,
-        "ci_lo": lam - 1.96 * se, "ci_hi": lam + 1.96 * se,
-        "slope_x": float(w @ (dx * bx)) / float(w @ dx**2) if float(w @ dx**2) > 0 else np.nan,
-        "slope_y": float(w @ (dy * by)) / float(w @ dy**2) if float(w @ dy**2) > 0 else np.nan,
-        "r2": 1.0 - resid / tot if tot > 0 else np.nan,
-        "dispersion_ratio": np.sqrt(tot / den) if den > 0 else np.nan,
-        "median_pull_km": float(v["displacement_km"].median()),
-        "median_distance_km": float(v["mean_distance_km"].median()),
-        "n": int(len(v)),
+        "t": shrinkage / se if se and np.isfinite(se) and se > 0 else np.nan,
+        "ci_lo": shrinkage - 1.96 * se, "ci_hi": shrinkage + 1.96 * se,
+        "slope_x": float(weights_norm @ (origin_dev_x * bary_dev_x)) / float(weights_norm @ origin_dev_x**2) if float(weights_norm @ origin_dev_x**2) > 0 else np.nan,
+        "slope_y": float(weights_norm @ (origin_dev_y * bary_dev_y)) / float(weights_norm @ origin_dev_y**2) if float(weights_norm @ origin_dev_y**2) > 0 else np.nan,
+        "r2": 1.0 - resid / bary_variance if bary_variance > 0 else np.nan,
+        "dispersion_ratio": np.sqrt(bary_variance / origin_variance) if origin_variance > 0 else np.nan,
+        "median_pull_km": float(placed["displacement_km"].median()),
+        "median_distance_km": float(placed["mean_distance_km"].median()),
+        "n": int(len(placed)),
     }])
 
 
@@ -2006,12 +2007,12 @@ def barycentre_shrinkage_report(barys, weights=None, verbose=True):
     `barys` is `barycentre_panel`'s second return value, so the table is built on the
     SAME barycentres the figure draws rather than on a recomputation that could drift.
     """
-    out = barycentre_shrinkage(barys, weights=weights)
-    if isinstance(out.index, pd.MultiIndex):
-        out.index.names = ["industry", "regime"]
-    out = out.sort_index()
+    table = barycentre_shrinkage(barys, weights=weights)
+    if isinstance(table.index, pd.MultiIndex):
+        table.index.names = ["industry", "regime"]
+    table = table.sort_index()
     if verbose:
-        print(out.round(3).to_string())
+        print(table.round(3).to_string())
         print("  slope = how much of its own position a buyer's barycentre inherits: "
               "1 = sources around itself, 0 = one national barycentre shared by every "
               "buyer.")
@@ -2020,7 +2021,7 @@ def barycentre_shrinkage_report(barys, weights=None, verbose=True):
               "vanish under `No trade cost`, where alpha = 0.")
         print("  se/t/ci are clustered on the region: they say whether the BUYERS "
               "agree on a common shrinkage, not how precisely the parameters are known.")
-    return out
+    return table
 
 
 def barycentre_shrinkage_contrast(table, pairs=None):
@@ -2044,20 +2045,20 @@ def barycentre_shrinkage_contrast(table, pairs=None):
     if not isinstance(table.index, pd.MultiIndex):
         raise TypeError("barycentre_shrinkage_contrast needs the (industry, regime) table.")
     if pairs is None:
-        inds = list(dict.fromkeys(i for i, _ in table.index))
-        regs = list(dict.fromkeys(r for _, r in table.index))
-        base = "Both forces" if "Both forces" in regs else regs[0]
-        pairs = [((i, r), (i, base)) for i in inds for r in regs if r != base]
-        pairs += [((inds[k], base), (inds[0], base)) for k in range(1, len(inds))]
+        industries = list(dict.fromkeys(i for i, _ in table.index))
+        regimes_listed = list(dict.fromkeys(r for _, r in table.index))
+        base = "Both forces" if "Both forces" in regimes_listed else regimes_listed[0]
+        pairs = [((i, r), (i, base)) for i in industries for r in regimes_listed if r != base]
+        pairs += [((industries[k], base), (industries[0], base)) for k in range(1, len(industries))]
     rows = []
     for a, b in pairs:
         if a not in table.index or b not in table.index:
             continue
-        d = float(table.loc[a, "slope"]) - float(table.loc[b, "slope"])
+        difference = float(table.loc[a, "slope"]) - float(table.loc[b, "slope"])
         se = float(np.sqrt(float(table.loc[a, "se"]) ** 2 + float(table.loc[b, "se"]) ** 2))
         rows.append({"a": " / ".join(map(str, a)), "b": " / ".join(map(str, b)),
-                     "diff": d, "se": se, "t": d / se if se > 0 else np.nan,
-                     "ci_lo": d - 1.96 * se, "ci_hi": d + 1.96 * se})
+                     "diff": difference, "se": se, "t": difference / se if se > 0 else np.nan,
+                     "ci_lo": difference - 1.96 * se, "ci_hi": difference + 1.96 * se})
     return pd.DataFrame(rows)
 
 
@@ -2150,8 +2151,8 @@ def incidence_matrix(diffusion, R=None):
                               values="upstream_sales", aggfunc="sum", fill_value=0.0)
     if R is not None:
         W = W.reindex(columns=np.arange(1, R + 1), fill_value=0.0)
-    tot = W.sum(axis=1)
-    return W.div(tot.where(tot > 0), axis=0)
+    buyer_total = W.sum(axis=1)
+    return W.div(buyer_total.where(buyer_total > 0), axis=0)
 
 
 def _pairwise_overlap(W):
@@ -2161,15 +2162,15 @@ def _pairwise_overlap(W):
     Both are computed on every unordered pair, not on a sample: with of order twenty
     shocked regions there are a couple of hundred pairs and no reason to approximate.
     """
-    A = np.asarray(W.dropna(how="any"), dtype=float)
-    n = A.shape[0]
+    incidence = np.asarray(W.dropna(how="any"), dtype=float)
+    n = incidence.shape[0]
     if n < 2:
         return np.nan, np.nan
-    nrm = np.linalg.norm(A, axis=1)
-    C = (A @ A.T) / np.outer(np.where(nrm > 0, nrm, np.nan), np.where(nrm > 0, nrm, np.nan))
-    iu = np.triu_indices(n, k=1)
-    tv = np.array([0.5 * np.abs(A[i] - A[j]).sum() for i, j in zip(*iu)])
-    return float(np.nanmedian(C[iu])), float(np.nanmedian(tv))
+    norms = np.linalg.norm(incidence, axis=1)
+    cosine = (incidence @ incidence.T) / np.outer(np.where(norms > 0, norms, np.nan), np.where(norms > 0, norms, np.nan))
+    upper_pairs = np.triu_indices(n, k=1)
+    tv_pairs = np.array([0.5 * np.abs(incidence[i] - incidence[j]).sum() for i, j in zip(*upper_pairs)])
+    return float(np.nanmedian(cosine[upper_pairs])), float(np.nanmedian(tv_pairs))
 
 
 def incidence_stats(W, weights=None):
@@ -2184,32 +2185,32 @@ def incidence_stats(W, weights=None):
     `weights` is a vector over the rows (buyers) defining what "common" means; `None`
     weights every buyer equally.
     """
-    A = W.to_numpy(dtype=float)
+    incidence = W.to_numpy(dtype=float)
     # a buyer generating no upstream sales has an undefined incidence vector; it must
     # not drag the common vector towards zero, so it is dropped from the average rather
     # than counted as a row of zeros.
-    ok = np.isfinite(A).all(axis=1)
-    w = ok.astype(float) if weights is None else np.where(ok, np.asarray(weights, float), 0.0)
-    w = w / w.sum() if w.sum() > 0 else w
-    bar = (np.nan_to_num(A, nan=0.0) * w[:, None]).sum(axis=0)
-    nb_ = np.linalg.norm(bar)
-    srt = -np.sort(-np.nan_to_num(A, nan=0.0), axis=1)
-    own = np.array([W.loc[r, r] if r in W.columns else np.nan for r in W.index],
+    defined = np.isfinite(incidence).all(axis=1)
+    buyer_weights = defined.astype(float) if weights is None else np.where(defined, np.asarray(weights, float), 0.0)
+    buyer_weights = buyer_weights / buyer_weights.sum() if buyer_weights.sum() > 0 else buyer_weights
+    common_incidence = (np.nan_to_num(incidence, nan=0.0) * buyer_weights[:, None]).sum(axis=0)
+    common_norm = np.linalg.norm(common_incidence)
+    sorted_desc = -np.sort(-np.nan_to_num(incidence, nan=0.0), axis=1)
+    own_share = np.array([W.loc[r, r] if r in W.columns else np.nan for r in W.index],
                    dtype=float)
-    Az = np.nan_to_num(A, nan=0.0)
-    nrm = np.linalg.norm(Az, axis=1)
+    incidence_filled = np.nan_to_num(incidence, nan=0.0)
+    norms = np.linalg.norm(incidence_filled, axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
-        cos = (Az @ bar) / (nrm * (nb_ if nb_ > 0 else np.nan))
-    out = pd.DataFrame({
-        "hhi": np.nansum(A ** 2, axis=1),
-        "top1": srt[:, 0], "top2": srt[:, :2].sum(1), "top3": srt[:, :3].sum(1),
-        "own_share": own,
-        "tv_common": 0.5 * np.nansum(np.abs(A - bar), axis=1),
-        "cos_common": cos,
+        cosine = (incidence_filled @ common_incidence) / (norms * (common_norm if common_norm > 0 else np.nan))
+    stats = pd.DataFrame({
+        "hhi": np.nansum(incidence ** 2, axis=1),
+        "top1": sorted_desc[:, 0], "top2": sorted_desc[:, :2].sum(1), "top3": sorted_desc[:, :3].sum(1),
+        "own_share": own_share,
+        "tv_common": 0.5 * np.nansum(np.abs(incidence - common_incidence), axis=1),
+        "cos_common": cosine,
     }, index=W.index)
-    out[~ok] = np.nan
-    out["n_eff"] = 1.0 / out["hhi"].replace(0, np.nan)
-    return out
+    stats[~defined] = np.nan
+    stats["n_eff"] = 1.0 / stats["hhi"].replace(0, np.nan)
+    return stats
 
 
 def incidence_concentration_overlap(data, regimes=CF_REGIMES, value_col="share",
@@ -2251,16 +2252,16 @@ def incidence_concentration_overlap(data, regimes=CF_REGIMES, value_col="share",
     since a `.loc` would look up a buyer instead of failing.
     """
     base = build_diffusion_frame(data, value_col) if diffusion is None else diffusion
-    want = dict(regimes)
-    if benchmark and UNIFORM_REGIME not in want:
-        want[UNIFORM_REGIME] = dict(alpha=0.0, equalise_T=True)
-    frames = (counterfactual_frames(data, regimes=want, value_col=value_col,
+    wanted_regimes = dict(regimes)
+    if benchmark and UNIFORM_REGIME not in wanted_regimes:
+        wanted_regimes[UNIFORM_REGIME] = dict(alpha=0.0, equalise_T=True)
+    frames = (counterfactual_frames(data, regimes=wanted_regimes, value_col=value_col,
                                     diffusion=base, verbose=verbose)
               if frames is None else dict(frames))
     if benchmark and UNIFORM_REGIME not in frames:
         frames[UNIFORM_REGIME] = counterfactual_diffusion_frame(
             data, value_col=value_col, diffusion=base, verbose=verbose,
-            **want[UNIFORM_REGIME])
+            **wanted_regimes[UNIFORM_REGIME])
 
     order = [r for r in regimes if r in frames] + \
             ([UNIFORM_REGIME] if benchmark else [])
@@ -2268,35 +2269,35 @@ def incidence_concentration_overlap(data, regimes=CF_REGIMES, value_col="share",
 
     names = base.groupby("ze2010_downstream")["shocked_name"].first()
     omegas, rows = {}, []
-    for lab in order:
-        if lab not in supply:
+    for regime in order:
+        if regime not in supply:
             continue
-        W = incidence_matrix(supply[lab], R=data["R"])
-        omegas[lab] = W
-        w = None
+        W = incidence_matrix(supply[regime], R=data["R"])
+        omegas[regime] = W
+        buyer_weights = None
         if weights == "sales":
-            tot = supply[lab].groupby("ze2010_downstream")["upstream_sales"].sum()
-            w = tot.reindex(W.index).to_numpy(dtype=float)
-        st = incidence_stats(W, weights=w)
-        rows.append(st.reset_index().rename(columns={"index": "ze2010_downstream"})
-                      .assign(regime=lab,
+            sales_by_buyer = supply[regime].groupby("ze2010_downstream")["upstream_sales"].sum()
+            buyer_weights = sales_by_buyer.reindex(W.index).to_numpy(dtype=float)
+        stats = incidence_stats(W, weights=buyer_weights)
+        rows.append(stats.reset_index().rename(columns={"index": "ze2010_downstream"})
+                      .assign(regime=regime,
                               region=names.reindex(W.index).to_numpy()))
-    out = pd.concat(rows, ignore_index=True)
-    out["regime"] = pd.Categorical(out["regime"], categories=order, ordered=True)
-    out = out.set_index(["regime", "ze2010_downstream"]).sort_index()
+    table = pd.concat(rows, ignore_index=True)
+    table["regime"] = pd.Categorical(table["regime"], categories=order, ordered=True)
+    table = table.set_index(["regime", "ze2010_downstream"]).sort_index()
 
     # the geometry purge, buyer by buyer rather than through one scalar: the reference
     # is the SAME buyer under the uniform allocation, so a remote buyer is compared with
     # the dispersion that buyer's own position makes available.
     if benchmark and UNIFORM_REGIME in omegas:
-        ref = out.loc[UNIFORM_REGIME, "n_eff"]
-        out["n_eff_ratio"] = out["n_eff"] / \
-            ref.reindex(out.index.get_level_values("ze2010_downstream")).to_numpy()
+        uniform_n_eff = table.loc[UNIFORM_REGIME, "n_eff"]
+        table["n_eff_ratio"] = table["n_eff"] / \
+            uniform_n_eff.reindex(table.index.get_level_values("ze2010_downstream")).to_numpy()
     else:
-        out["n_eff_ratio"] = np.nan
-    out.attrs["omega"] = omegas
-    out.attrs["weights"] = weights
-    return out
+        table["n_eff_ratio"] = np.nan
+    table.attrs["omega"] = omegas
+    table.attrs["weights"] = weights
+    return table
 
 
 def incidence_summary(table, verbose=True):
@@ -2309,28 +2310,28 @@ def incidence_summary(table, verbose=True):
     every buyer sitting halfway between two disjoint groups, which the pairwise median
     would expose and the against-the-mean one would not.
     """
-    g = table.groupby(level="regime", observed=True)
-    out = pd.DataFrame({
-        "n_eff": g["n_eff"].median(),
-        "n_eff_ratio": g["n_eff_ratio"].median(),
-        "hhi": g["hhi"].median(),
-        "top3": g["top3"].median(),
-        "own_share": g["own_share"].median(),
-        "tv_common": g["tv_common"].median(),
-        "cos_common": g["cos_common"].median(),
+    by_regime = table.groupby(level="regime", observed=True)
+    summary = pd.DataFrame({
+        "n_eff": by_regime["n_eff"].median(),
+        "n_eff_ratio": by_regime["n_eff_ratio"].median(),
+        "hhi": by_regime["hhi"].median(),
+        "top3": by_regime["top3"].median(),
+        "own_share": by_regime["own_share"].median(),
+        "tv_common": by_regime["tv_common"].median(),
+        "cos_common": by_regime["cos_common"].median(),
     })
-    om = table.attrs.get("omega", {})
-    pc, pt = {}, {}
-    for lab, W in om.items():
-        pc[lab], pt[lab] = _pairwise_overlap(W)
-    out["pairwise_cos"] = pd.Series(pc).reindex(out.index)
-    out["pairwise_tv"] = pd.Series(pt).reindex(out.index)
+    omegas = table.attrs.get("omega", {})
+    pairwise_cos_by_regime, pairwise_tv_by_regime = {}, {}
+    for regime, W in omegas.items():
+        pairwise_cos_by_regime[regime], pairwise_tv_by_regime[regime] = _pairwise_overlap(W)
+    summary["pairwise_cos"] = pd.Series(pairwise_cos_by_regime).reindex(summary.index)
+    summary["pairwise_tv"] = pd.Series(pairwise_tv_by_regime).reindex(summary.index)
     if verbose:
         print("  the incidence vector: how concentrated, and how much is buyer-specific")
         print("  (n_eff_ratio < 1 = the forces concentrate; tv_common is the euro share "
               "that is buyer-specific, read against 0)")
-        print(out.round(3).to_string())
-    return out
+        print(summary.round(3).to_string())
+    return summary
 
 
 def distance_normalisation(data, regimes=CF_REGIMES, value_col="share", detail=None,
@@ -2348,25 +2349,25 @@ def distance_normalisation(data, regimes=CF_REGIMES, value_col="share", detail=N
     one means the two forces pull it closer than geometry alone.
     """
     base = build_diffusion_frame(data, value_col) if diffusion is None else diffusion
-    unif = counterfactual_diffusion_frame(data, alpha=0.0, equalise_T=True,
+    uniform_frame = counterfactual_diffusion_frame(data, alpha=0.0, equalise_T=True,
                                           value_col=value_col, diffusion=base,
                                           verbose=False)
-    ref = amplification_summary(data, radii=(), value_col=value_col,
-                                diffusion=unif)["mean_upstream_distance"]
-    det = (counterfactual_amplification(data, regimes=regimes, radii=_DEFAULT_RADII,
+    uniform_distance_by_buyer = amplification_summary(data, radii=(), value_col=value_col,
+                                diffusion=uniform_frame)["mean_upstream_distance"]
+    detail_table = (counterfactual_amplification(data, regimes=regimes, radii=_DEFAULT_RADII,
                                         value_col=value_col, frames=frames,
                                         diffusion=base, verbose=False)
            if detail is None else detail)
-    out = det[["region", "mean_upstream_distance"]].copy()
-    out["uniform_distance"] = ref.reindex(
-        out.index.get_level_values("ze2010_downstream")).to_numpy()
-    out["distance_ratio"] = out["mean_upstream_distance"] / out["uniform_distance"]
+    table = detail_table[["region", "mean_upstream_distance"]].copy()
+    table["uniform_distance"] = uniform_distance_by_buyer.reindex(
+        table.index.get_level_values("ze2010_downstream")).to_numpy()
+    table["distance_ratio"] = table["mean_upstream_distance"] / table["uniform_distance"]
     if verbose:
         print("  d_r normalised by the uniform-allocation distance (1 = as far as an "
               "unselective allocation would send it):")
-        print(out.groupby(level="regime", observed=True)["distance_ratio"]
+        print(table.groupby(level="regime", observed=True)["distance_ratio"]
                  .describe()[["mean", "50%", "min", "max"]].round(3).to_string())
-    return out
+    return table
 
 
 def destination_composition(data, regime="Both forces", n_hub=2, value_col="share",
@@ -2402,23 +2403,23 @@ def destination_composition(data, regime="Both forces", n_hub=2, value_col="shar
                .reindex(W.columns))
     hubs = list(W.sum(axis=0).sort_values(ascending=False).index[:n_hub])
 
-    A = W.to_numpy(dtype=float)
-    cols = {c: k for k, c in enumerate(W.columns)}
-    own = np.array([A[i, cols[r]] if r in cols else 0.0
+    incidence = W.to_numpy(dtype=float)
+    column_of_region = {region: k for k, region in enumerate(W.columns)}
+    own_share = np.array([incidence[i, column_of_region[r]] if r in column_of_region else 0.0
                     for i, r in enumerate(W.index)], dtype=float)
-    out = pd.DataFrame({"region": df.groupby("ze2010_downstream")["shocked_name"]
+    composition = pd.DataFrame({"region": df.groupby("ze2010_downstream")["shocked_name"]
                                     .first().reindex(W.index).to_numpy(),
-                        "Own zone": own}, index=W.index)
-    for h in hubs:
-        v = A[:, cols[h]].copy()
-        v[W.index.to_numpy() == h] = 0.0          # already counted as the own zone
-        out[str(names.get(h, h))] = v
-    seg = [c for c in out.columns if c != "region"]
-    out["Rest of France"] = 1.0 - out[seg].sum(axis=1)
-    out.attrs["hubs"] = hubs
-    out.attrs["hub_names"] = [str(names.get(h, h)) for h in hubs]
-    out.attrs["regime"] = regime
-    return out
+                        "Own zone": own_share}, index=W.index)
+    for hub in hubs:
+        hub_share = incidence[:, column_of_region[hub]].copy()
+        hub_share[W.index.to_numpy() == hub] = 0.0          # already counted as the own zone
+        composition[str(names.get(hub, hub))] = hub_share
+    segments = [region for region in composition.columns if region != "region"]
+    composition["Rest of France"] = 1.0 - composition[segments].sum(axis=1)
+    composition.attrs["hubs"] = hubs
+    composition.attrs["hub_names"] = [str(names.get(hub, hub)) for hub in hubs]
+    composition.attrs["regime"] = regime
+    return composition
 
 
 def plot_destination_composition(data, regime="Both forces", n_hub=2, value_col="share",
@@ -2435,39 +2436,39 @@ def plot_destination_composition(data, regime="Both forces", n_hub=2, value_col=
     because they are shares of one euro, which is the honest normalisation for a
     question about composition.
     """
-    comp = (destination_composition(data, regime=regime, n_hub=n_hub,
+    composition_table = (destination_composition(data, regime=regime, n_hub=n_hub,
                                     value_col=value_col, frames=frames,
                                     diffusion=diffusion)
             if composition is None else composition)
-    seg = [c for c in comp.columns if c != "region"]
-    order = comp[sort_by].sort_values().index if sort_by in comp.columns else comp.index
-    comp = comp.reindex(order)
+    segments = [segment for segment in composition_table.columns if segment != "region"]
+    order = composition_table[sort_by].sort_values().index if sort_by in composition_table.columns else composition_table.index
+    composition_table = composition_table.reindex(order)
 
     # own zone first, then one colour per hub, then a neutral grey for everything else:
     # the block order and the colours are FIXED, so the same segment sits at the same
     # place in every bar and in every panel of the pair.
     hub_palette = [sim_color, (0.45, 0.60, 0.45), (0.85, 0.65, 0.30), (0.55, 0.40, 0.65)]
-    n_hubs = max(0, len(seg) - 2)
+    n_hubs = max(0, len(segments) - 2)
     colours = [toulouse_color] + hub_palette[:n_hubs] + [(0.80, 0.80, 0.80)]
 
-    fig, ax = plt.subplots(figsize=figsize or (7.5, max(3.0, 0.28 * len(comp))))
-    y = np.arange(len(comp))
-    left = np.zeros(len(comp))
-    for k, c in enumerate(seg):
-        v = comp[c].to_numpy(dtype=float)
-        ax.barh(y, v, left=left, height=0.72, label=c,
+    fig, ax = plt.subplots(figsize=figsize or (7.5, max(3.0, 0.28 * len(composition_table))))
+    y = np.arange(len(composition_table))
+    left = np.zeros(len(composition_table))
+    for k, segment in enumerate(segments):
+        segment_share = composition_table[segment].to_numpy(dtype=float)
+        ax.barh(y, segment_share, left=left, height=0.72, label=segment,
                 color=colours[min(k, len(colours) - 1)],
                 edgecolor="white", linewidth=0.4)
-        left = left + v
+        left = left + segment_share
     ax.set_yticks(y)
-    ax.set_yticklabels(comp["region"].astype(str))
-    set_name_axis_fontsize(ax, len(comp))
-    ax.set_ylim(-0.6, len(comp) - 0.4)
+    ax.set_yticklabels(composition_table["region"].astype(str))
+    set_name_axis_fontsize(ax, len(composition_table))
+    ax.set_ylim(-0.6, len(composition_table) - 0.4)
     ax.set_xlim(0, 1)
     ax.set_xlabel("Share of the upstream response")
     ax.set_ylabel("Shocked commuting zone")
     ax.grid(alpha=0.2, axis="x")
-    ax.legend(frameon=False, fontsize=fs(9), ncol=min(4, len(seg)),
+    ax.legend(frameon=False, fontsize=fs(9), ncol=min(4, len(segments)),
               loc="lower left", bbox_to_anchor=(0.0, 1.005))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -2538,49 +2539,49 @@ def realised_incidence(data, value_col="share", diffusion=None, expected=None,
                .agg(upstream_sales=("upstream_sales", "sum"))
     pool_row = incidence_stats(incidence_matrix(pooled, R=data["R"]))
 
-    per = []
-    for b, sub in df.groupby("replication", sort=True):
-        st = incidence_stats(incidence_matrix(sub.drop(columns="replication"),
+    per_replication = []
+    for b, replication_frame in df.groupby("replication", sort=True):
+        stats = incidence_stats(incidence_matrix(replication_frame.drop(columns="replication"),
                                               R=data["R"]))
-        per.append(st.assign(replication=b))
-    per = pd.concat(per)
+        per_replication.append(stats.assign(replication=b))
+    per_replication = pd.concat(per_replication)
     cols = ["n_eff", "hhi", "tv_common"]
-    g = per.groupby(level=0)[cols]
-    out = g.mean().add_suffix("_realised").join(g.std().add_suffix("_sd"))
-    out = out.join(pool_row[cols].add_suffix("_pooled"))
-    out = out.join(exp_row[cols].add_suffix("_expected"))
-    out["n_eff_gap"] = out["n_eff_realised"] / out["n_eff_pooled"]
-    out["region"] = exp_row["region"] if "region" in exp_row else np.nan
+    by_buyer = per_replication.groupby(level=0)[cols]
+    table = by_buyer.mean().add_suffix("_realised").join(by_buyer.std().add_suffix("_sd"))
+    table = table.join(pool_row[cols].add_suffix("_pooled"))
+    table = table.join(exp_row[cols].add_suffix("_expected"))
+    table["n_eff_gap"] = table["n_eff_realised"] / table["n_eff_pooled"]
+    table["region"] = exp_row["region"] if "region" in exp_row else np.nan
 
     n_hat = data.get("post_hoc_N_hat")
     ceiling = float(np.asarray(n_hat).ravel().sum()) if n_hat is not None else np.nan
-    out.attrs["per_replication"] = per
-    out.attrs["variety_ceiling"] = ceiling
-    out.attrs["n_replications"] = int(per["replication"].nunique())
+    table.attrs["per_replication"] = per_replication
+    table.attrs["variety_ceiling"] = ceiling
+    table.attrs["n_replications"] = int(per_replication["replication"].nunique())
 
     if verbose:
         print(f"\n  realised vs expected incidence "
-              f"({out.attrs['n_replications']} realisations)")
+              f"({table.attrs['n_replications']} realisations)")
         print(f"    variety ceiling  sum_s N_hat_s = {ceiling:.0f} "
               f"(the most origins ONE draw can reach)")
-        for c in cols:
-            e = out[f"{c}_expected"].median()
-            p = out[f"{c}_pooled"].median()
-            r = out[f"{c}_realised"].median()
-            print(f"    {c:>10s}  closed form {e:8.3f}   pooled {p:8.3f}   "
-                  f"one draw {r:8.3f}   ratio {r / p if p else np.nan:5.2f}")
+        for stat in cols:
+            expected_median = table[f"{stat}_expected"].median()
+            pooled_median = table[f"{stat}_pooled"].median()
+            realised_median = table[f"{stat}_realised"].median()
+            print(f"    {stat:>10s}  closed form {expected_median:8.3f}   pooled {pooled_median:8.3f}   "
+                  f"one draw {realised_median:8.3f}   ratio {realised_median / pooled_median if pooled_median else np.nan:5.2f}")
         print("    Jensen: n_eff must fall and tv_common must rise; the counterfactual "
               "ratios are unaffected (granularity enters every regime identically).")
-    return out
+    return table
 
 
 def _segments_cross(p, q, r, s):
     """True when the open segments p->q and r->s properly cross (shared endpoints do not count)."""
     def side(a, b, c):
         return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-    d1, d2 = side(p, q, r), side(p, q, s)
-    d3, d4 = side(r, s, p), side(r, s, q)
-    return (d1 * d2 < 0) and (d3 * d4 < 0)
+    side_r, side_s = side(p, q, r), side(p, q, s)
+    side_p, side_q = side(r, s, p), side(r, s, q)
+    return (side_r * side_s < 0) and (side_p * side_q < 0)
 
 
 def incidence_plane_crossings(moves):
@@ -2593,7 +2594,7 @@ def incidence_plane_crossings(moves):
     exactly "few crossings". Counting is O(n^2), which is nothing at this size, and it
     replaces an eyeball judgement with a number the gate can assert on.
     """
-    segs = [((m[0], m[1]), (m[2], m[3])) for m in moves]
+    segs = [((move[0], move[1]), (move[2], move[3])) for move in moves]
     return sum(1 for i in range(len(segs)) for j in range(i + 1, len(segs))
                if _segments_cross(segs[i][0], segs[i][1], segs[j][0], segs[j][1]))
 
@@ -2633,78 +2634,78 @@ def plot_incidence_plane(tables, regimes=("Both forces", "Equal comparative adva
     if len(regimes) != 2:
         raise ValueError("plot_incidence_plane draws exactly two regimes (an origin and "
                          f"a destination); got {list(regimes)}.")
-    r0, r1 = regimes
-    cols = [toulouse_color, sim_color, (0.45, 0.60, 0.45)]
+    regime_from, regime_to = regimes
+    industry_colors = [toulouse_color, sim_color, (0.45, 0.60, 0.45)]
 
     series = []
-    for k, (lab, tab) in enumerate(tables):
-        have = set(tab.index.get_level_values("regime"))
-        for rg in (r0, r1):
-            if rg not in have:
-                raise KeyError(f"regime {rg!r} is not in the incidence table for {lab}.")
-        a = tab.xs(r0, level="regime")
-        b = tab.xs(r1, level="regime")
-        common = [i for i in a.index if i in b.index]
-        a, b = a.loc[common], b.loc[common]
-        ok = (a[["n_eff_ratio", "tv_common"]].notna().all(axis=1)
-              & b[["n_eff_ratio", "tv_common"]].notna().all(axis=1))
-        a, b = a[ok], b[ok]
-        moves = list(zip(a["n_eff_ratio"], a["tv_common"],
-                         b["n_eff_ratio"], b["tv_common"]))
-        series.append(dict(label=lab, color=cols[k % len(cols)], a=a, b=b, moves=moves))
+    for k, (industry_label, incidence_table) in enumerate(tables):
+        have = set(incidence_table.index.get_level_values("regime"))
+        for regime in (regime_from, regime_to):
+            if regime not in have:
+                raise KeyError(f"regime {regime!r} is not in the incidence table for {industry_label}.")
+        from_table = incidence_table.xs(regime_from, level="regime")
+        to_table = incidence_table.xs(regime_to, level="regime")
+        common = [i for i in from_table.index if i in to_table.index]
+        from_table, to_table = from_table.loc[common], to_table.loc[common]
+        ok = (from_table[["n_eff_ratio", "tv_common"]].notna().all(axis=1)
+              & to_table[["n_eff_ratio", "tv_common"]].notna().all(axis=1))
+        from_table, to_table = from_table[ok], to_table[ok]
+        moves = list(zip(from_table["n_eff_ratio"], from_table["tv_common"],
+                         to_table["n_eff_ratio"], to_table["tv_common"]))
+        series.append(dict(label=industry_label, color=industry_colors[k % len(industry_colors)], a=from_table, b=to_table, moves=moves))
 
     if layout == "auto":
         tangled = False
-        for s in series:
-            n = len(s["moves"])
+        for entry in series:
+            n = len(entry["moves"])
             npair = n * (n - 1) / 2
-            if npair and incidence_plane_crossings(s["moves"]) / npair > crossing_tol:
+            if npair and incidence_plane_crossings(entry["moves"]) / npair > crossing_tol:
                 tangled = True
         layout = "panels" if tangled else "single"
     elif layout not in ("single", "panels"):
         raise ValueError("layout must be 'auto', 'single' or 'panels'.")
 
-    xs = np.concatenate([np.r_[s["a"]["n_eff_ratio"].values,
-                               s["b"]["n_eff_ratio"].values] for s in series])
-    ys = np.concatenate([np.r_[s["a"]["tv_common"].values,
-                               s["b"]["tv_common"].values] for s in series])
-    pad_x = 0.05 * (np.nanmax(xs) - np.nanmin(xs) + 1e-12)
-    pad_y = 0.05 * (np.nanmax(ys) - np.nanmin(ys) + 1e-12)
-    xlim = (min(np.nanmin(xs), 1.0) - pad_x, max(np.nanmax(xs), 1.0) + pad_x)
-    ylim = (min(np.nanmin(ys), 0.0) - pad_y, np.nanmax(ys) + pad_y)
+    all_x = np.concatenate([np.r_[entry["a"]["n_eff_ratio"].values,
+                               entry["b"]["n_eff_ratio"].values] for entry in series])
+    all_y = np.concatenate([np.r_[entry["a"]["tv_common"].values,
+                               entry["b"]["tv_common"].values] for entry in series])
+    pad_x = 0.05 * (np.nanmax(all_x) - np.nanmin(all_x) + 1e-12)
+    pad_y = 0.05 * (np.nanmax(all_y) - np.nanmin(all_y) + 1e-12)
+    xlim = (min(np.nanmin(all_x), 1.0) - pad_x, max(np.nanmax(all_x), 1.0) + pad_x)
+    ylim = (min(np.nanmin(all_y), 0.0) - pad_y, np.nanmax(all_y) + pad_y)
 
     if layout == "single":
-        fig, axes = plt.subplots(figsize=figsize or get_figsize(hf=0.62))
+        fig, axes = plt.subplots(figsize=figsize or get_figsize(height_fraction=0.62))
         axes = [axes] * len(series)
-        axl = [axes[0]]
+        label_axes = [axes[0]]
     else:
-        fig, arr = plt.subplots(1, len(series), sharex=True, sharey=True,
-                                figsize=figsize or get_figsize(hf=0.52))
-        axes = list(np.atleast_1d(arr))
-        axl = axes
+        fig, panel_array = plt.subplots(1, len(series), sharex=True, sharey=True,
+                                figsize=figsize or get_figsize(height_fraction=0.52))
+        axes = list(np.atleast_1d(panel_array))
+        label_axes = axes
 
-    for s, ax in zip(series, axes):
-        c = s["color"]
-        ax.scatter(s["a"]["n_eff_ratio"], s["a"]["tv_common"], s=38, color=c,
+    for entry, ax in zip(series, axes):
+        color = entry["color"]
+        ax.scatter(entry["a"]["n_eff_ratio"], entry["a"]["tv_common"], s=38, color=color,
                    edgecolors="white", linewidths=0.5, zorder=4,
-                   label=f"{s['label']} — {r0}")
-        ax.scatter(s["b"]["n_eff_ratio"], s["b"]["tv_common"], s=38,
-                   facecolors="none", edgecolors=c, linewidths=1.1, zorder=4,
-                   label=f"{s['label']} — {r1}")
+                   label=f"{entry['label']} — {regime_from}")
+        ax.scatter(entry["b"]["n_eff_ratio"], entry["b"]["tv_common"], s=38,
+                   facecolors="none", edgecolors=color, linewidths=1.1, zorder=4,
+                   label=f"{entry['label']} — {regime_to}")
         if arrows:
-            for x0, y0, x1, y1 in s["moves"]:
+            for x0, y0, x1, y1 in entry["moves"]:
                 ax.annotate("", xy=(x1, y1), xytext=(x0, y0), zorder=3,
-                            arrowprops=dict(arrowstyle="->", color=c, lw=0.7,
+                            arrowprops=dict(arrowstyle="->", color=color, lw=0.7,
                                             alpha=0.55, shrinkA=3, shrinkB=3))
         if annotate:
-            for frame, mk in ((s["a"], "D"), (s["b"], "s")):
+            for frame, marker in ((entry["a"], "D"), (entry["b"], "s")):
                 ax.scatter([frame["n_eff_ratio"].median()], [frame["tv_common"].median()],
-                           marker=mk, s=80, color=c, edgecolors="black",
+                           marker=marker, s=80, color=color, edgecolors="black",
                            linewidths=0.9, zorder=6)
         if layout == "panels":
-            ax.set_title(s["label"], fontsize=fs(9))
+            ax.set_title(entry["label"], fontsize=fs(9))
 
-    for ax in axl:
+    for ax in label_axes:
         ax.axvline(1.0, color="0.5", lw=0.8, ls="--")
         ax.axhline(0.0, color="0.5", lw=0.8)
         ax.set_xlim(*xlim)
@@ -2712,18 +2713,18 @@ def plot_incidence_plane(tables, regimes=("Both forces", "Equal comparative adva
         ax.grid(alpha=0.2)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
-    axl[0].set_ylabel("Share of the response that is buyer-specific")
+    label_axes[0].set_ylabel("Share of the response that is buyer-specific")
     xlab = "Effective number of destinations, relative to the uniform allocation"
     if layout == "panels":
         fig.supxlabel(xlab, fontsize=fs(9))
     else:
-        axl[0].set_xlabel(xlab)
-    axl[0].legend(frameon=False, fontsize=fs(8), loc="best")
+        label_axes[0].set_xlabel(xlab)
+    label_axes[0].legend(frameon=False, fontsize=fs(8), loc="best")
     fig.tight_layout()
     if save_to:
         os.makedirs(os.path.dirname(save_to) or ".", exist_ok=True)
         fig.savefig(save_to, bbox_inches="tight")
-    return axl[0] if layout == "single" else axl
+    return label_axes[0] if layout == "single" else label_axes
 
 
 # ============================================================================
@@ -2748,16 +2749,16 @@ def read_io_table(kind, folder):
     path = Path(folder) / f"TES_{kind}.csv"
     if not path.exists():
         raise FileNotFoundError(path)
-    io = pd.read_csv(path, sep=";", header=None, index_col=0)
-    io.columns = io.index
-    io = io.reset_index()
-    first = io.columns[0]
-    io = io.melt(id_vars=first, var_name="A129_2", value_name="value")
-    io = io.rename(columns={first: "A129_1"})
-    io["value"] = io["value"].astype(str).str.replace(",", ".").astype(float)
-    io["A129_1"] = io["A129_1"].astype(str).str.strip()
-    io["A129_2"] = io["A129_2"].astype(str).str.strip()
-    return io
+    io_table = pd.read_csv(path, sep=";", header=None, index_col=0)
+    io_table.columns = io_table.index
+    io_table = io_table.reset_index()
+    first = io_table.columns[0]
+    io_table = io_table.melt(id_vars=first, var_name="A129_2", value_name="value")
+    io_table = io_table.rename(columns={first: "A129_1"})
+    io_table["value"] = io_table["value"].astype(str).str.replace(",", ".").astype(float)
+    io_table["A129_1"] = io_table["A129_1"].astype(str).str.strip()
+    io_table["A129_2"] = io_table["A129_2"].astype(str).str.strip()
+    return io_table
 
 
 def io_flow_matrix(data, kinds=("dom",), io_folder=None):
@@ -2772,23 +2773,23 @@ def io_flow_matrix(data, kinds=("dom",), io_folder=None):
     folders = ([Path(io_folder)] if io_folder is not None
                else [data["input_folder"], data["folder"], data["input_folder"].parent])
     total, used = None, None
-    for f in folders:
+    for folder_candidate in folders:
         try:
-            parts = [read_io_table(k, f) for k in kinds]
+            parts = [read_io_table(k, folder_candidate) for k in kinds]
         except FileNotFoundError:
             continue
-        used = f
-        for p in parts:
-            m = p.pivot(index="A129_1", columns="A129_2", values="value").fillna(0.0)
-            total = m if total is None else total.add(m, fill_value=0.0)
+        used = folder_candidate
+        for table_part in parts:
+            flow_block = table_part.pivot(index="A129_1", columns="A129_2", values="value").fillna(0.0)
+            total = flow_block if total is None else total.add(flow_block, fill_value=0.0)
         break
     if total is None:
         raise FileNotFoundError(
             "no TES table found. Looked for " + ", ".join(f"TES_{k}.csv" for k in kinds)
-            + " in " + ", ".join(str(f) for f in folders) +
+            + " in " + ", ".join(str(folder_candidate) for folder_candidate in folders) +
             ". Pass `io_folder=` to point at the directory that holds them.")
-    idx = sorted(set(total.index) | set(total.columns))
-    total = total.reindex(index=idx, columns=idx).fillna(0.0)
+    sectors = sorted(set(total.index) | set(total.columns))
+    total = total.reindex(index=sectors, columns=sectors).fillna(0.0)
     total.attrs["io_folder"] = str(used)
     total.attrs["kinds"] = tuple(kinds)
     return total
@@ -2802,17 +2803,17 @@ def io_technical_coefficients(X, intermediate_share):
     `intermediate_share` is a scalar applied to every sector, or a Series indexed by
     A129. A column of zeros (a sector that buys nothing in the table) stays zero.
     """
-    col_tot = X.sum(axis=0).replace(0.0, np.nan)
-    m = (pd.Series(float(intermediate_share), index=X.columns)
+    column_total = X.sum(axis=0).replace(0.0, np.nan)
+    intermediate_shares = (pd.Series(float(intermediate_share), index=X.columns)
          if np.isscalar(intermediate_share)
          else pd.Series(intermediate_share).reindex(X.columns))
-    if m.isna().any():
-        raise ValueError(f"no intermediate share for {list(m.index[m.isna()])}")
-    if (m >= 1).any():
+    if intermediate_shares.isna().any():
+        raise ValueError(f"no intermediate share for {list(intermediate_shares.index[intermediate_shares.isna()])}")
+    if (intermediate_shares >= 1).any():
         raise ValueError("an intermediate share >= 1 makes (I - A) singular: a sector "
                          "cannot spend its whole output on intermediates and still "
                          "close the cascade.")
-    return (X / col_tot).fillna(0.0) * m
+    return (X / column_total).fillna(0.0) * intermediate_shares
 
 
 def leontief_multipliers(A, max_rounds=None):
@@ -2828,14 +2829,14 @@ def leontief_multipliers(A, max_rounds=None):
     if (np.diag(L) <= 0).any() or not np.isfinite(L).all():
         raise ValueError("(I - A) is not invertible or the inverse is not positive — "
                          "check the intermediate shares.")
-    out = {"total": pd.Series(L.sum(axis=0), index=A.columns)}
+    multipliers = {"total": pd.Series(L.sum(axis=0), index=A.columns)}
     if max_rounds:
-        P, acc = np.eye(n), np.eye(n)
-        for _ in range(max_rounds):
-            P = P @ A.to_numpy()
-            acc = acc + P
-            out[f"rounds_{_ + 1}"] = pd.Series(acc.sum(axis=0), index=A.columns)
-    return pd.DataFrame(out)
+        A_power, cumulative = np.eye(n), np.eye(n)
+        for round_index in range(max_rounds):
+            A_power = A_power @ A.to_numpy()
+            cumulative = cumulative + A_power
+            multipliers[f"rounds_{round_index + 1}"] = pd.Series(cumulative.sum(axis=0), index=A.columns)
+    return pd.DataFrame(multipliers)
 
 
 def io_downstream_column(data, io_folder=None, summary=None):
@@ -2848,29 +2849,29 @@ def io_downstream_column(data, io_folder=None, summary=None):
     the simulated split of upstream sales across sectors, so the two should agree, and
     a sector where they do not is a fit problem rather than a benchmarking one.
     """
-    d = data["d"]
-    dom = io_flow_matrix(data, kinds=("dom",), io_folder=io_folder)
-    imp = io_flow_matrix(data, kinds=("imp",), io_folder=io_folder)
-    if d not in dom.columns:
-        raise KeyError(f"the downstream industry {d} is not a column of the TES table.")
-    col = pd.DataFrame({"dom": dom[d], "imp": imp[d].reindex(dom.index).fillna(0.0)})
-    col["total"] = col["dom"] + col["imp"]
-    col["modelled"] = col.index.isin(data["sector_names"])
-    col["share_of_total"] = col["total"] / col["total"].sum()
-    col["share_of_dom"] = col["dom"] / col["dom"].sum()
-    col["pi_s_io"] = np.where(col["modelled"],
-                              col["total"] / col.loc[col["modelled"], "total"].sum(), np.nan)
+    downstream_code = data["d"]
+    domestic_flows = io_flow_matrix(data, kinds=("dom",), io_folder=io_folder)
+    import_flows = io_flow_matrix(data, kinds=("imp",), io_folder=io_folder)
+    if downstream_code not in domestic_flows.columns:
+        raise KeyError(f"the downstream industry {downstream_code} is not a column of the TES table.")
+    column_table = pd.DataFrame({"dom": domestic_flows[downstream_code], "imp": import_flows[downstream_code].reindex(domestic_flows.index).fillna(0.0)})
+    column_table["total"] = column_table["dom"] + column_table["imp"]
+    column_table["modelled"] = column_table.index.isin(data["sector_names"])
+    column_table["share_of_total"] = column_table["total"] / column_table["total"].sum()
+    column_table["share_of_dom"] = column_table["dom"] / column_table["dom"].sum()
+    column_table["pi_s_io"] = np.where(column_table["modelled"],
+                              column_table["total"] / column_table.loc[column_table["modelled"], "total"].sum(), np.nan)
 
-    sup = data.get("suppliers")
-    if sup is not None:
-        by_s = sup.groupby("A129")["share"].sum()
-        by_s = by_s / by_s.sum()
+    suppliers = data.get("suppliers")
+    if suppliers is not None:
+        share_by_sector = suppliers.groupby("A129")["share"].sum()
+        share_by_sector = share_by_sector / share_by_sector.sum()
         # the parquet keys sectors by the model's 1..S index, in A129-code order
         names = list(data["sector_names"])
-        by_s.index = [names[int(i) - 1] if 1 <= int(i) <= len(names) else str(i)
-                      for i in by_s.index]
-        col["share_model"] = by_s.reindex(col.index)
-    return col.sort_values("total", ascending=False)
+        share_by_sector.index = [names[int(i) - 1] if 1 <= int(i) <= len(names) else str(i)
+                      for i in share_by_sector.index]
+        column_table["share_model"] = share_by_sector.reindex(column_table.index)
+    return column_table.sort_values("total", ascending=False)
 
 
 def io_amplification_benchmark(data, summary=None, intermediate_share=None,
@@ -2886,51 +2887,51 @@ def io_amplification_benchmark(data, summary=None, intermediate_share=None,
 
     Returns a one-row-per-support table plus the per-sector multipliers for the figure.
     """
-    d = data["d"]                                    # C29A (auto) / C30C (aero)
+    downstream_code = data["d"]                                    # C29A (auto) / C30C (aero)
     X = io_flow_matrix(data, kinds=kinds, io_folder=io_folder)
-    if d not in X.columns:
-        raise KeyError(f"the downstream industry {d} is not a column of the TES table "
+    if downstream_code not in X.columns:
+        raise KeyError(f"the downstream industry {downstream_code} is not a column of the TES table "
                        f"({len(X.columns)} sectors).")
-    m = (1.0 - float(data["agg_labor_share"])) if intermediate_share is None \
+    intermediate_share_used = (1.0 - float(data["agg_labor_share"])) if intermediate_share is None \
         else intermediate_share
-    scalar_m = np.isscalar(m)
+    scalar_m = np.isscalar(intermediate_share_used)
 
-    subset = [s for s in data["sector_names"] if s in X.columns]
-    if d not in subset:
-        subset = subset + [d]
-    missing = [s for s in data["sector_names"] if s not in X.columns]
+    subset = [summary_table for summary_table in data["sector_names"] if summary_table in X.columns]
+    if downstream_code not in subset:
+        subset = subset + [downstream_code]
+    missing = [summary_table for summary_table in data["sector_names"] if summary_table not in X.columns]
 
     rows, per_sector = [], {}
-    for label, cols in (("full", list(X.columns)), ("subset", subset)):
-        Xs = X.loc[cols, cols]
-        A = io_technical_coefficients(Xs, m)
+    for label, support_sectors in (("full", list(X.columns)), ("subset", subset)):
+        X_support = X.loc[support_sectors, support_sectors]
+        A = io_technical_coefficients(X_support, intermediate_share_used)
         mult = leontief_multipliers(A, max_rounds=2)
         per_sector[label] = mult
         rows.append({
             "support": label,
-            "n_sectors": len(cols),
-            "round1": 1.0 + float(A[d].sum()),
-            "rounds_2": float(mult.loc[d, "rounds_2"]),
-            "leontief_total": float(mult.loc[d, "total"]),
+            "n_sectors": len(support_sectors),
+            "round1": 1.0 + float(A[downstream_code].sum()),
+            "rounds_2": float(mult.loc[downstream_code, "rounds_2"]),
+            "leontief_total": float(mult.loc[downstream_code, "total"]),
         })
-    tab = pd.DataFrame(rows).set_index("support")
+    benchmark = pd.DataFrame(rows).set_index("support")
 
     # --- coverage: what fraction of the true first round the model can represent,
     # from shares alone, with no output data and no assumption
-    col = io_downstream_column(data, io_folder=io_folder, summary=summary)
-    cov_dom = float(col.loc[col["modelled"], "dom"].sum() / col["dom"].sum())
-    cov_tot = float(col.loc[col["modelled"], "total"].sum() / col["total"].sum())
-    dom_share = float(col["dom"].sum() / col["total"].sum())
+    column_table = io_downstream_column(data, io_folder=io_folder, summary=summary)
+    cov_dom = float(column_table.loc[column_table["modelled"], "dom"].sum() / column_table["dom"].sum())
+    cov_tot = float(column_table.loc[column_table["modelled"], "total"].sum() / column_table["total"].sum())
+    dom_share = float(column_table["dom"].sum() / column_table["total"].sum())
 
     # the model side: D_r - 1 IS the intermediate share of downstream unit cost
-    s = amplification_summary(data) if summary is None else summary
-    D_mean = float(s["amplification"].mean())
-    tab["model_D_r"] = D_mean
-    tab["captured_of_aggregate"] = (D_mean - 1.0) / (tab["leontief_total"] - 1.0)
-    tab["model_over_round1"] = (D_mean - 1.0) / (tab["round1"] - 1.0)
-    tab.attrs.update(intermediate_share=m, downstream=d, kinds=tuple(kinds),
+    summary_table = amplification_summary(data) if summary is None else summary
+    D_mean = float(summary_table["amplification"].mean())
+    benchmark["model_D_r"] = D_mean
+    benchmark["captured_of_aggregate"] = (D_mean - 1.0) / (benchmark["leontief_total"] - 1.0)
+    benchmark["model_over_round1"] = (D_mean - 1.0) / (benchmark["round1"] - 1.0)
+    benchmark.attrs.update(intermediate_share=intermediate_share_used, downstream=downstream_code, kinds=tuple(kinds),
                      io_folder=X.attrs["io_folder"], per_sector=per_sector,
-                     missing_sectors=missing, downstream_column=col,
+                     missing_sectors=missing, downstream_column=column_table,
                      scalar_m=scalar_m,
                      coverage_modelled_dom=cov_dom, coverage_modelled_total=cov_tot,
                      domestic_share_of_column=dom_share,
@@ -2940,9 +2941,9 @@ def io_amplification_benchmark(data, summary=None, intermediate_share=None,
                      data_intermediate_share=1.0 - float(data["agg_labor_share"]))
 
     if verbose:
-        print(f"[{data['industry']}]  downstream industry {d}, TES from "
+        print(f"[{data['industry']}]  downstream industry {downstream_code}, TES from "
               f"{X.attrs['io_folder']} ({'+'.join(kinds)}), "
-              f"intermediate share m = {m if np.isscalar(m) else 'per sector'}")
+              f"intermediate share m = {intermediate_share_used if np.isscalar(intermediate_share_used) else 'per sector'}")
         print(f"  model  : mean D_r = {D_mean:.3f}  -> the modelled domestic sectors are "
               f"{D_mean - 1:.3f} of downstream unit cost")
         print(f"  IO     : those sectors are {100 * cov_dom:.1f}% of the industry's "
@@ -2954,12 +2955,12 @@ def io_amplification_benchmark(data, summary=None, intermediate_share=None,
               f"{1 - float(data['agg_labor_share']):.3f}")
         if scalar_m:
             print("  NOTE: a COMMON intermediate share was used, so every sector's "
-                  f"Leontief total is exactly 1/(1-m) = {1 / (1 - m):.3f} and the "
+                  f"Leontief total is exactly 1/(1-m) = {1 / (1 - intermediate_share_used):.3f} and the "
                   "cascade below measures that assumption, not the network. Pass a "
                   "per-sector `intermediate_share` (value added / gross output) for an "
                   "informative comparison.")
-        for lab, r in tab.iterrows():
-            print(f"  IO {lab:<6}: round 1 = {r['round1']:.3f}, "
+        for support_label, r in benchmark.iterrows():
+            print(f"  IO {support_label:<6}: round 1 = {r['round1']:.3f}, "
                   f"two rounds = {r['rounds_2']:.3f}, Leontief total = "
                   f"{r['leontief_total']:.3f}   "
                   f"(model captures {100 * r['captured_of_aggregate']:.0f}% of the "
@@ -2967,7 +2968,7 @@ def io_amplification_benchmark(data, summary=None, intermediate_share=None,
         if missing:
             print(f"  NOTE: {len(missing)} modelled sector(s) absent from the TES "
                   f"table: {missing}")
-    return tab
+    return benchmark
 
 
 def plot_io_benchmark(data, benchmark=None, figsize=None, save_to=None, **kw):
@@ -2976,31 +2977,31 @@ def plot_io_benchmark(data, benchmark=None, figsize=None, save_to=None, **kw):
     with the downstream industry, the model's mean D_r and the first-round benchmark
     marked on it. A number is high or low relative to that distribution, not in itself.
     """
-    tab = io_amplification_benchmark(data, verbose=False, **kw) if benchmark is None \
+    benchmark_table = io_amplification_benchmark(data, verbose=False, **kw) if benchmark is None \
         else benchmark
-    mult = tab.attrs["per_sector"]["full"]["total"].sort_values()
-    d, D_mean = tab.attrs["downstream"], float(tab["model_D_r"].iloc[0])
-    if tab.attrs.get("scalar_m", False):
+    mult = benchmark_table.attrs["per_sector"]["full"]["total"].sort_values()
+    downstream_code, D_mean = benchmark_table.attrs["downstream"], float(benchmark_table["model_D_r"].iloc[0])
+    if benchmark_table.attrs.get("scalar_m", False):
         print("plot_io_benchmark: the cross-sector distribution is degenerate under a "
               "common intermediate share (every sector at 1/(1-m)). The figure still "
               "places the model, but the spread is an artefact — pass a per-sector "
               "`intermediate_share` for a real distribution.")
 
-    fig, ax = plt.subplots(figsize=figsize or get_figsize(wf=0.85, hf=0.6))
+    fig, ax = plt.subplots(figsize=figsize or get_figsize(width_fraction=0.85, height_fraction=0.6))
     ax.plot(mult.to_numpy(), np.linspace(0, 1, len(mult)), color=sim_color, lw=1.6,
             label="all A129 sectors (Leontief total)")
-    for x, c, lab in ((mult.get(d, np.nan), reference_color,
-                       f"{d} Leontief total = {mult.get(d, np.nan):.2f}"),
-                      (float(tab.loc["full", "round1"]), "0.45",
-                       f"{d} round 1 = {tab.loc['full', 'round1']:.2f}"),
+    for line_x, line_color, legend_label in ((mult.get(downstream_code, np.nan), reference_color,
+                       f"{downstream_code} Leontief total = {mult.get(downstream_code, np.nan):.2f}"),
+                      (float(benchmark_table.loc["full", "round1"]), "0.45",
+                       f"{downstream_code} round 1 = {benchmark_table.loc['full', 'round1']:.2f}"),
                       (D_mean, toulouse_color, rf"model mean $D_r$ = {D_mean:.2f}")):
-        if np.isfinite(x):
-            ax.axvline(x, color=c, linestyle="--", lw=1.3, label=lab)
-    q = float((mult <= D_mean).mean())
+        if np.isfinite(line_x):
+            ax.axvline(line_x, color=line_color, linestyle="--", lw=1.3, label=legend_label)
+    percentile_rank = float((mult <= D_mean).mean())
     ax.set_xlabel("Total output per euro of final demand")
     ax.set_ylabel("Share of sectors below")
     ax.set_title(f"{data['industry']}, " rf"$\hat\mu_{data['mu']}$"
-                 f"   model $D_r$ at the {100 * q:.0f}th percentile of sectors",
+                 f"   model $D_r$ at the {100 * percentile_rank:.0f}th percentile of sectors",
                  fontsize=fs(11))
     ax.legend(frameon=False, fontsize=fs(8), loc="lower right")
     _despine(ax)
