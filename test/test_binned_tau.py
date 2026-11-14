@@ -153,7 +153,7 @@ try:
             w = utils._buyer_weights(dK)
             assert np.isclose(row["sd_dist"], np.sqrt(np.var(x, axis=0) @ w))
     with contextlib.redirect_stdout(io.StringIO()):
-        lev = granular_lib.ca_distance_leverage(dK, n_grid=801, reg=None)
+        lev = granular_lib.ca_distance_leverage(dK, n_grid=801, regression=None)
     rel = np.max(np.abs(lev["check_identity"])) / max(np.abs(lev["delta_km"]).max(), 1e-12)
     assert rel < 1e-4, rel
     with contextlib.redirect_stdout(io.StringIO()):

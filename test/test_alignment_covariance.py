@@ -149,7 +149,7 @@ print(f"4 ok  the planted aligned sector has a negative median ({np.median(al):+
       "integrates, and the per-buyer flip the aggregate hides")
 
 # --- 5. the buyer aggregation ------------------------------------------------
-by = alignment_covariance_by_buyer(data, cov=cov)
+by = alignment_covariance_by_buyer(data, covariance=cov)
 assert len(by) == BUY and set(by.index) == set(AA)
 for name in AA:
     r = AA.index(name); z = int(DOWN[r])
@@ -163,14 +163,14 @@ assert not np.allclose(by["cov_T_d_km"], plain, rtol=1e-3)
 # no parquet -> raise rather than fall back on equal sector weights, which would report
 # a different statistic under the same name
 try:
-    alignment_covariance_by_buyer({**data, "suppliers": None}, cov=cov)
+    alignment_covariance_by_buyer({**data, "suppliers": None}, covariance=cov)
     raise AssertionError("no raise")
 except FileNotFoundError:
     pass
 # a parquet whose region index does not line up must be NAMED, not silently zero-weighted
 bad = {**data, "suppliers": sup.assign(ze2010_downstream=sup["ze2010_downstream"] + 900)}
 try:
-    alignment_covariance_by_buyer(bad, cov=cov); raise AssertionError("no raise")
+    alignment_covariance_by_buyer(bad, covariance=cov); raise AssertionError("no raise")
 except ValueError:
     pass
 print("5 ok  the buyer aggregation is the spend-weighted mean of its sectors, differs "
