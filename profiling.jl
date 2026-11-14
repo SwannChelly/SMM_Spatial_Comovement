@@ -203,12 +203,24 @@ function aggregate_shares(x::AbstractVector, P_sr::AbstractMatrix)
     return chi_L, chi_s, ell, s_rs, P_r, c_r
 end
 
-# Blocks 1–2 at x: S equations (labour share, then sector shares 2..S).
+"""
+    aggregate_residual(x, P_sr, tg) -> Vector (S): model − target for blocks 1–2
+
+The S equations that pin (χ^L, χ^s) at given prices P_sr; the profile is the root
+F(x) = 0. At x = (logit χ^L, log χ_s[2:S] − log χ_s[1]) (`aggregate_shares`):
+- `F[1] = Σ_r π_r ℓ_r − L̂`: the aggregate labour share. Costs are proportional to sales,
+  so the regional shares ℓ_r are averaged with the target sales shares π_r;
+- `F[1+k] = Õ_{k+1} − Ô_{k+1}`, k = 1..S−1: the share of sector s in total intermediate
+  spending, `Õ_s = Σ_r π_r (1−ℓ_r) s_rs / Σ_r π_r (1−ℓ_r)`, i.e. each buyer's sector split
+  s_rs weighted by its intermediate bill π_r (1−ℓ_r). Sector 1 is dropped: the shares sum
+  to one on both sides, so its equation is implied by the others.
+The labour share depends on χ^s through P_r (hence c_r), and the intermediate weights
+on χ^L, which is why the two blocks are solved jointly.
+"""
 function aggregate_residual(x::AbstractVector, P_sr::AbstractMatrix, tg)
-    # Swann : Missing comments on this function.  
     _, _, ell, s_rs, _, _ = aggregate_shares(x, P_sr)
-    wI = tg.pi .* (1 .- ell)
-    Ot = (s_rs * wI) ./ sum(wI)
+    wI = tg.pi .* (1 .- ell)                 # intermediate bill of each buyer, π_r (1−ℓ_r)
+    Ot = (s_rs * wI) ./ sum(wI)              # sector shares of total intermediate spending
     return vcat(sum(tg.pi .* ell) - tg.L, Ot[2:end] .- tg.Os[2:end])
 end
 
@@ -224,15 +236,26 @@ end
 
 """
     solve_aggregates(P_sr; x0, tg, tol=1e-12, max_iter=50) -> (x, converged, resid, iters)
-Swann : Be a bit more explicit here. What is F, what is the central-difference Jacobian ? 
-Newton with backtracking on ‖F‖², central-difference Jacobian (S × S; the residual is
-exact, so an approximate Jacobian costs speed, not precision). A singular Newton step
-falls back to a damped gradient step.
+
+Solves F(x) = 0 for x = (logit χ^L, log χ_s[2:S] − log χ_s[1]) at fixed prices P_sr,
+where F = `aggregate_residual` (S equations: labour share, sector shares 2..S, model
+minus target). The parametrisation keeps χ^L ∈ (0, 1) and χ^s on the simplex without
+constraints.
+
+Newton: x ← x − J⁻¹ F(x), with J = ∂F/∂x the S × S Jacobian. J has no closed form here
+(F runs through the CES aggregation of `aggregate_shares`), so it is approximated column
+by column by CENTRAL differences, `J[:, j] ≈ (F(x + h e_j) − F(x − h e_j)) / 2h` (error
+O(h²), h = 1e-6 · max(1, |x_j|)); this costs 2S evaluations of F per iteration, cheap at
+O(S R_d) each. F itself is exact, so an approximate J only slows convergence: the root
+is found to `tol` whatever the J error. Backtracking: the step is halved (up to 30 times)
+until ‖F‖² decreases. A singular J (or a non-finite step) falls back to a damped
+gradient step −½ J'F. Stops at max |F| < tol, or when no step improves ‖F‖².
+`converged` is max |F| < 10 tol.
 """
 function solve_aggregates(P_sr::AbstractMatrix; x0 = nothing, tg = profile_targets(),
                     tol::Float64 = 1e-12, max_iter::Int = 50)
     x = x0 === nothing ? aggregate_init(P_sr, tg) : collect(Float64, x0)
-    F = aggregate_residual(x, P_sr, tg) # Swann : What is the residual about ? 
+    F = aggregate_residual(x, P_sr, tg)      # model − target of blocks 1–2 at x (zero at the root)
     n = length(x)
     J = zeros(n, n)
     iters = 0
@@ -293,21 +316,24 @@ function profile_ge(alpha; kappa::Real,
                           max_iter::Int = 2000, tol::Float64 = 1e-9, damping::Float64 = 0.3)
     # 1) Start from T_init in the reference gauge, T[s, ref] = 1.
     tau   = build_tau(alpha)
-    T_par = Matrix{Float64}(undef, S, T_COL_DIM) # Swann : T_par n'est pas un nom explicit. 
-    T_par .= T_init
+    # T_area (S × T_COL_DIM): the Fréchet scales at the AREA level, T_a,s for every attraction
+    # area a and, in column FOREIGN_COL, the foreign scale Φ^F_s (the layout of T_par elsewhere).
+    # The cell-level T_ls = T_{a(l)s} n_ls^κ is rebuilt from it at every pass.
+    T_area = Matrix{Float64}(undef, S, T_COL_DIM)
+    T_area .= T_init
     for s in 1:S
         ref = T_REF_REGION[s]
-        (ref > 0 && T_par[s, ref] > 0) && (T_par[s, :] ./= T_par[s, ref])
+        (ref > 0 && T_area[s, ref] > 0) && (T_area[s, :] ./= T_area[s, ref])
     end
     x = x_init
     resid = Inf; iters = 0
-    T_new = similar(T_par)
+    T_area_new = similar(T_area)
     spend_w = zeros(S, R_downstream)
     for it in 1:max_iter
         iters = it
         # 2) Solve the aggregates (χ^L, χ^s) at the prices implied by the current T.
-        T_ze = gather_T_to_ze(T_par, kappa) # Swann : Ajoute la densité. 
-        PhiF = foreign_phi(T_par) # Swann : Extrait la colonne liée aux export dans T. 
+        T_ze = gather_T_to_ze(T_area, kappa)  # cell level, S × R: T_ls = T_{a(l)s} · n_ls^κ (density term)
+        PhiF = foreign_phi(T_area)            # Φ^F_s, the foreign (import) column; 0 where s does not import
         P_sr, Phi = expected_sector_prices(T_ze, tau; PhiF = PhiF)
         x = solve_aggregates(P_sr; x0 = x, tg = tg).x
         # 3) Compute the model γ with the expenditure weights pinned at the target sales shares.
@@ -317,38 +343,38 @@ function profile_ge(alpha; kappa::Real,
         end
         gamma_model = gamma_T_from_weights(T_ze, PhiF, tau, Phi, spend_w)
         # 4) Move T towards the target γ, then renormalise each sector to its reference area.
-        T_new .= T_par
+        T_area_new .= T_area
         for s in 1:S
             cols = SECTOR_T_COLS[s]
             isempty(cols) && continue
             for c in cols
                 gm = gamma_model[c, s]; ge = target[c, s]
                 ratio = (gm > 1e-300 && ge > 0) ? ge / gm : 1.0
-                T_new[s, c] = exp(log(T_par[s, c]) + damping * log(ratio))
+                T_area_new[s, c] = exp(log(T_area[s, c]) + damping * log(ratio))
             end
-            rv = T_new[s, T_REF_REGION[s]]
-            rv > 0 && (T_new[s, cols] ./= rv)
+            rv = T_area_new[s, T_REF_REGION[s]]
+            rv > 0 && (T_area_new[s, cols] ./= rv)
             for c in cols
-                target[c, s] > 0 || (T_new[s, c] = T_par[s, c])
+                target[c, s] > 0 || (T_area_new[s, c] = T_area[s, c])
             end
         end
         # 5) Stop when no T entry with a positive target moves by more than `tol` in logs.
         max_step = 0.0
         for s in 1:S, c in SECTOR_T_COLS[s]
             target[c, s] > 0 || continue
-            d = abs(log(T_new[s, c]) - log(T_par[s, c]))
+            d = abs(log(T_area_new[s, c]) - log(T_area[s, c]))
             d > max_step && (max_step = d)
         end
-        T_par .= T_new
+        T_area .= T_area_new
         resid = max_step
         resid < tol && break
     end
     # 6) Solve the aggregates at the final T, and A in closed form from the sales shares.
-    P_sr, _ = expected_sector_prices(gather_T_to_ze(T_par, kappa), tau; PhiF = foreign_phi(T_par))
+    P_sr, _ = expected_sector_prices(gather_T_to_ze(T_area, kappa), tau; PhiF = foreign_phi(T_area))
     h = solve_aggregates(P_sr; x0 = x, tg = tg)
     chi_L, chi_s, _, _, _, c_r = aggregate_shares(h.x, P_sr)
     A = profile_A(c_r, tg.pi)
-    return (T = T_par, chi_L = chi_L, chi_s = chi_s, A = A, x = h.x, iters = iters,
+    return (T = T_area, chi_L = chi_L, chi_s = chi_s, A = A, x = h.x, iters = iters,
             converged = resid < tol && h.converged && all(isfinite, A),
             resid = resid, agg_resid = h.resid)
 end
@@ -359,7 +385,13 @@ end
 const PROFILE_WARM_CACHE = Ref{Union{Nothing, Tuple{Matrix{Float64}, Vector{Float64}}}}(nothing)
 
 function profile_ge_warm(alpha; kwargs...)
-    cached = PROFILE_WARM_CACHE[] # Swann : A quoi ça sert le cache ? 
+    # Warm start. Successive objective evaluations on one worker (`profile_theta`, e.g. the
+    # PSO particles a worker scores) sit at nearby (α, κ), and the Sinkhorn fixed point converges linearly
+    # (≈ 0.98 per pass near α ≈ 1, hundreds of passes from T_rs_init). Starting from the last
+    # converged (T*, x*) cuts that count; it is a SPEED device only, since a converged result
+    # is the unique fixed point (up to the stopping tolerance, ≈ 1e-9 in logs, which is why
+    # `sens_profile` clears the cache when bit-reproducibility is required).
+    cached = PROFILE_WARM_CACHE[]
     if cached !== nothing && all(isfinite, cached[1])
         res = profile_ge(alpha; T_init = copy(cached[1]), x_init = copy(cached[2]), kwargs...)
         res.converged && (PROFILE_WARM_CACHE[] = (copy(res.T), copy(res.x)); return res)
