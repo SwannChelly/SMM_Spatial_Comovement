@@ -71,10 +71,17 @@ with one parameter $T_{as}$ per (sector, area), $n_{r's}$ the number of firms of
 
 Area-specific comparative advantage does not make regions within an area interchangeable. Each runs its own Ricardian competition for each variety, and two regions at different distances from a buyer, or with different firm densities, have different win probabilities. What it removes is unobserved technological heterogeneity within an area, which is what allows the model to explain the same variation the extensive-margin regression uses: within an area, distance identifies $\alpha$ and density identifies $\kappa$.
 
+\paragraph{Foreign suppliers.}\label{app:model-foreign-setup} The rest of the world, region $R+1$, competes for every variety of sector $s$ through one foreign champion, drawn from a Fréchet distribution of scale $\Phi^F_s$ and shape $\theta$. We observe neither foreign wages nor the location of foreign plants, so the foreign delivered cost has no wage or distance component of its own: everything that makes foreign inputs cheap or expensive for French buyers is absorbed in $\Phi^F_s$. It follows that the foreign bid for a variety is the same for every buyer,
+\begin{equation}
+p^F_{\rho s}=\big(z^F_{\rho s}\big)^{-1},\qquad \Pr\big(z^F_{\rho s}\le z\big)=e^{-\Phi^F_sz^{-\theta}},
+\label{eq:app-foreign-bid}
+\end{equation}
+and that a buyer imports the variety whenever this bid is strictly below the best French delivered cost. Imported varieties enter the buyer's price index and its spending, but we have no balance-sheet information on foreign suppliers, so they create no firm-level linkage. In a sector without imports in the input--output table, $\Phi^F_s=0$ and the model reduces to its domestic version.
+
 
 \paragraph{The network draw.}\label{app:network-draw}
 
-Because the number of varieties is finite, the network is random, unlike in \cite{EatonKortum2002}. With a continuum of varieties, the law of large numbers makes the realized network deterministic. With $N_{s}$ varieties, it does not. A realization of the network, denoted $\chi$, is one draw of the champion productivities $\{z_{r'\rho s}\}$ for every region, variety and sector. It determines, for each buyer and each variety, which region wins the variety and at which price. Two draws of $\Omega$ select different winners, and therefore different networks. We write $\mathbb{E}_{\Omega}$ for the expectation over realizations. The expectation of a realized object is its value in the expected network.
+Because the number of varieties is finite, the network is random, unlike in \cite{EatonKortum2002}. With a continuum of varieties, the law of large numbers makes the realized network deterministic. With $N_{s}$ varieties, it does not. A realization of the network, denoted $\Omega$, is one draw of the champion productivities $\{z_{r'\rho s}\}$ for every region, variety and sector. It determines, for each buyer and each variety, which region wins the variety and at which price. Two draws of $\Omega$ select different winners, and therefore different networks. We write $\mathbb{E}_{\Omega}$ for the expectation over realizations. The expectation of a realized object is its value in the expected network.
  
 We use the following convention. Probabilities, and objects evaluated at the expected price index, do not depend on $\Omega$: they are the \cite{EatonKortum2002} expressions, and we write them as usual. Sector-level objects that depend on which supplier wins each variety carry the argument $(\Omega)$. Variety-level objects, indexed by $\rho$, are realizations by nature and are not marked. Table~\ref{tab:app-draw} summarizes the classification. 
 
@@ -96,15 +103,18 @@ G_{rs}(p) =1-\prod_{r'=1}^{R+1}\left[1-G_{r'rs}(p)\right] =1-\exp\left\{-\Phi_{r
  
 where
 \begin{equation}
-\Phi_{rs} = \sum_{r'}T_{r's}(w_{r's}\tau_{r'rs})^{-\theta} = \sum_{a'}T_{a's} \sum_{r'\in\mathcal{R}_{a'}} n_{r's}^{\kappa}(w_{r's}\tau_{r'rs})^{-\theta}.
+\Phi_{rs} = \sum_{r'=1}^{R}T_{r's}(w_{r's}\tau_{r'rs})^{-\theta}+\Phi^F_s = \underbrace{\sum_{a'}T_{a's} \sum_{r'\in\mathcal{R}_{a'}} n_{r's}^{\kappa}(w_{r's}\tau_{r'rs})^{-\theta}}_{\equiv\,\Phi^{dom}_{rs}}+\Phi^F_s.
 \label{eq:app-Phi}
 \end{equation}
- 
-The probability that a downstream firm in region $r$ sources a given variety from market $(r',s)$ is therefore
+
+The probability that a downstream firm in region $r$ sources a given variety from market $(r',s)$, and the probability that it imports it, are therefore
 \begin{equation}
-p_{r'rs} = \frac{ T_{r's}(w_{r's}\tau_{r'rs})^{-\theta} }{ \Phi_{rs} }.
+p_{r'rs} = \frac{ T_{r's}(w_{r's}\tau_{r'rs})^{-\theta} }{ \Phi_{rs} },
+\qquad
+f_{rs}=\frac{\Phi^F_s}{\Phi_{rs}}=1-\sum_{r'=1}^{R}p_{r'rs}.
 \label{eq:app-share}
 \end{equation}
+Because the foreign competitor is common to all buyers, it scales every domestic probability of buyer $r$ by the same factor $1-f_{rs}$: the geography of domestic sourcing \emph{conditional on buying in France}, $p_{r'rs}/(1-f_{rs})=T_{r's}(w_{r's}\tau_{r'rs})^{-\theta}/\Phi^{dom}_{rs}$, does not depend on $\Phi^F_s$. What $\Phi^F_s$ moves is the level of the price index and the leakage of each buyer's demand abroad, which is larger for buyers far from French suppliers ($\Phi^{dom}_{rs}$ small).
  
 In the continuum, or the \cite{EatonKortum2002} model, such probability is also the sourcing share $\gamma_{r'rs} = \frac{x_{r'rs}}{x_{rs}}$ with $x_{r'rs}$ the total purchase of $r$ for goods of sector $s$ sold by the champion in $r'$ and $x_{rs}$ the total purchase of $r$ for goods of sector $s$. These are probabilities over the draw $\Omega$ and they do not depend on its realization, nor on $N_s$: each variety runs its own Ricardian competition, with the same odds. \\
 
@@ -191,10 +201,10 @@ At fixed $p_{r's}$, this moment is decreasing in $N_s$, which allows for the ide
  
 Furthermore, because iceberg trade costs do not alter the relative ranking of firms within a region, each variety generates exactly one distinct supplying firm per winning origin. If $N^{\mathrm{obs}}_{s}$ is the number of distinct upstream firms observed to supply the downstream industry, then $N_{s}$ must fall within the range defined by:
 \begin{equation}
-\frac{N^{\mathrm{obs}}_{s}}{R^{D}}\;\le\;N_{s}\;\le\;N^{\mathrm{obs}}_{s},
+\frac{N^{\mathrm{obs}}_{s}}{R^{D}q_s}\;\le\;N_{s}\;\le\;\frac{N^{\mathrm{obs}}_{s}}{q_s},
 \label{eq:app-bounds}
 \end{equation}
-where $R^{D}$ is the number of downstream buyers. The upper bound is reached when every variety is globally sourced from a single origin, while the lower bound occurs when each of the $R^{D}$ buyers sources each variety from a different origin.\footnote{We don't impose a lower bound in the estimation. Since supplier information is recorded at the SIREN level, a multi-establishment firm may generate several establishment-level observations, although not all establishments necessarily supply the downstream industry. Hence $N_s^{obs}$ may overstate the number of model-specific supplier champions and therefore the lower bound. If the true $N_s$ lies below this bound, the constraint prevents the extensive-margin moment from adjusting through, pushing $\alpha$ toward zero.} \swann{Ca c'est la théorie. Quand on fait l'estimation pour l'aéronautique on a beaucoup de secteurs pour lesquels $N_s$ touche la borne inférieure. L'estimation aimerait explorer en dessous de la borne inférieure mais nous ne l'autorisons pas. Diminuer $\alpha$ a le même effet sur $G(0)$ que de diminuer $N_s$ donc l'estimation pousse $\alpha$ vers 0. Je relaxe la borne inférieur pour avoir une meilleure estimation. Je propose dans la footnote une explication pour justifier ce choix de relaxer la lower-bound. }
+where $R^{D}$ is the number of downstream buyers and $q_s$ the probability that a variety is won by a French region for at least one buyer ($q_s=1$ without imports). Only the $N_sq_s$ varieties won in France can generate an observed supplier. The upper bound is reached when every such variety is sourced from a single French origin, while the lower bound occurs when each of the $R^{D}$ buyers sources it from a different origin. Like $p_{r's}$, $q_s$ is a probability of the expected network, evaluated on the simulated varieties before $N_s$ is chosen, so the bounds involve no circularity. Since $q_s\ge\max_r(1-f_{rs})\ge 1-f_s$, the upper bound never exceeds $N^{obs}_s/(1-f_s)$, which sets the number of simulated varieties.\footnote{We don't impose a lower bound in the estimation. Since supplier information is recorded at the SIREN level, a multi-establishment firm may generate several establishment-level observations, although not all establishments necessarily supply the downstream industry. Hence $N_s^{obs}$ may overstate the number of model-specific supplier champions and therefore the lower bound. If the true $N_s$ lies below this bound, the constraint prevents the extensive-margin moment from adjusting through, pushing $\alpha$ toward zero.} \swann{Ca c'est la théorie. Quand on fait l'estimation pour l'aéronautique on a beaucoup de secteurs pour lesquels $N_s$ touche la borne inférieure. L'estimation aimerait explorer en dessous de la borne inférieure mais nous ne l'autorisons pas. Diminuer $\alpha$ a le même effet sur $G(0)$ que de diminuer $N_s$ donc l'estimation pousse $\alpha$ vers 0. Je relaxe la borne inférieur pour avoir une meilleure estimation. Je propose dans la footnote une explication pour justifier ce choix de relaxer la lower-bound. }
 
 
 
@@ -277,23 +287,16 @@ We use six sets of theoretical moments, observed in the data using a combination
     
     \item \textbf{The extensive-margin coefficients} $\boldsymbol\beta=(\beta_{distance},\beta_{\kappa})$ of \eqref{eq:app-beta}: the cell-level cloglog \eqref{eq:app-cell-cloglog} of $\mathbf{1}\{K_{r's}>0\}$ on the distance to the anchor of the area, in logs or in the distance bins of Equation~\eqref{eq:reduced_form_micro}, and on $\ln n_{r's}$, with sector$\times$area fixed effects; groups without variation in the outcome are dropped. The regression set $\mathcal{A}$ is the cells of the active attraction areas, on both the model and the data side.
     
-    \item \textbf{Area-aggregated sourcing shares.} The share of the downstream industry's purchases of sector $s$ sourced from area $a$:
+    \item \textbf{Area-aggregated sourcing shares and import shares.} The share of the downstream industry's \emph{total} purchases of sector $s$, domestic and imported, sourced from area $a$, and the share imported:
     \begin{equation}
-    \tilde\gamma_{as}\equiv\sum_{r'\in\mathcal{R}_{a}}\frac{\sum_{r}X_{r'rs}}{\sum_{r}\sum_{r''}X_{r''rs}}
-    =\sum_{r'\in\mathcal{R}_{a}}\sum_{r}\frac{\sum_{r''}X_{r''rs}}{\sum_{r''}\sum_{r}X_{r''rs}}\,\gamma_{r'rs}.
+    \tilde\gamma_{as}\equiv\frac{\sum_{r'\in\mathcal{R}_{a}}\sum_{r}X_{r'rs}}{\sum_{r}x_{rs}}
+    =\sum_{r}\frac{x_{rs}}{\sum_{r''}x_{r''s}}\sum_{r'\in\mathcal{R}_{a}}p_{r'rs},
+    \qquad
+    \tilde f_{s}\equiv\frac{\sum_{r}X_{Frs}}{\sum_{r}x_{rs}}=\sum_{r}\frac{x_{rs}}{\sum_{r''}x_{r''s}}\,f_{rs},
     \label{eq:app-gamma-area}
     \end{equation}
-    In the data we reconstitute firm-level sales to the downstream industry using sales-share data, $x_{i(r',s)d}=\mathbf{1}(\mathrm{Sup}_{i(r',s)})\,a^{D}_{d\,i(r',s)}\,x_{i(s,r')}$, sum over all firms in the area and normalize by the sum over all firms from sector $s$. The aggregation runs over \emph{every} region of the area, including those hosting no supplier, on both the model and the data side.
+    with $X_{Frs}$ the imports of buyer $r$ from sector $s$, so that $\sum_a\tilde\gamma_{as}+\tilde f_s=1$. The import share $\hat f_s$ is one minus the domestic share of the downstream industry's purchases of sector $s$ in the input--output table. In the data we reconstitute firm-level sales to the downstream industry using sales-share data, $x_{i(r',s)d}=\mathbf{1}(\mathrm{Sup}_{i(r',s)})\,a^{D}_{d\,i(r',s)}\,x_{i(s,r')}$, sum over all firms in the area and normalize by the sum over all French firms of sector $s$; this domestic split is then scaled by $1-\hat f_s$, so that $\hat\gamma_{as}$ is a share of total purchases, as in the model. The aggregation runs over \emph{every} region of the area, including those hosting no supplier, on both the model and the data side.
 
-    \paragraph{Notes on foreign parameters.}
-    \label{app:model-foreign}
-    We do not have the data to estimate parameters relating to foreign firms. Instead we take the share of foreign inputs in sourcing as an exogenous parameter used in the simulated data, so the vector of parameters to be estimated excludes region $R+1$. Moments 1--4 and 6 do not involve $R+1$. For moment 5, with $w_{R+1,s}$ the share of foreign inputs in sector $s$'s input purchases,
-    \begin{equation}
-    \tilde\gamma_{as}=(1-w_{R+1,s})\sum_{r'\in\mathcal{R}_{a}}\sum_{r} \frac{\sum_{r''\neq R+1}X_{r''rs}}{\sum_{r''\neq R+1}\sum_{r}X_{r''rs}}\,\tilde\gamma_{r'rs}, \qquad
-    \tilde\gamma_{r'rs}=\frac{T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}}{\tilde\Phi_{rs}},
-    \end{equation}
-    with $\tilde\Phi_{rs}=\sum_{r'=1}^{R}T_{a(r')s}(w_{r's}\tau_{r'rs})^{-\theta}$. Foreign competition still enters the win probabilities through $\Phi_{rs}$ in \eqref{eq:app-Phi}; what is not estimated is foreign comparative advantage.
-    
     \item \textbf{The count moment} $\bar G_{s}(0)$ of \eqref{eq:app-count}: the share of regions inside active attraction areas that host no supplier of sector $s$.
 \end{enumerate}
 
@@ -308,12 +311,13 @@ Moment 6 is not linear in the network --- it is a product of indicators over var
 
 \paragraph{Notes on foreign parameters.}
 \label{app:model-foreign}
-We do not have the data to estimate parameters relating to foreign firms. Instead we take the share of foreign inputs in sourcing as an exogenous parameter used in the simulated data, so the vector of parameters to be estimated excludes region $R+1$. Moments 1--4 and 6 do not involve $R+1$. For moment 5, with $w_{R+1,s}$ the share of foreign inputs in sector $s$'s input purchases,
-\begin{equation}
-\tilde\gamma_{as}=(1-w_{R+1,s})\sum_{r'\in\mathcal{R}_{a}}\sum_{r} \frac{\sum_{r''\neq R+1}X_{r''rs}}{\sum_{r''\neq R+1}\sum_{r}X_{r''rs}}\,\tilde\gamma_{r'rs}, \qquad
-\tilde\gamma_{r'rs}=\frac{T_{r's}(w_{r's}\tau_{r'rs})^{-\theta}}{\tilde\Phi_{rs}},
-\end{equation}
-with $\tilde\Phi_{rs}=\sum_{r'=1}^{R}T_{r's}(w_{r's}\tau_{r'rs})^{-\theta}$. Foreign competition still enters the win probabilities through $\Phi_{rs}$ in \eqref{eq:app-Phi}; what is not estimated is foreign comparative advantage.
+We have no firm-level data on foreign suppliers, so the rest of the world is summarised, sector by sector, by the single scale $\Phi^F_s$ of Section~\ref{app:model-foreign-setup}. It is disciplined by one moment, the import share $\hat f_s$ of the input--output table, which enters the area block 5 as one more entry per importing sector. The pair $(\Phi^F_s,\hat f_s)$ is just-identified, exactly as each pair $(T_{as},\hat\gamma_{as})$, and $\Phi^F_s$ is calibrated jointly with comparative advantage (Section~\ref{app:model-estimation}, Step~1). Three properties of this treatment are worth stating.
+
+First, $\Phi^F_s$ has the same units as the area-level $T_{as}$: the per-sector normalisation $T_{a^{ref}_s s}=1$ fixes both, the reference area being the largest \emph{domestic} area, and $\Phi^F_s$ is the Fréchet scale of a French region of the reference area with one firm ($n_{r's}=1$) at unit wage and unit trade cost. Its level therefore carries no information by itself; only its ratio to $\Phi^{dom}_{rs}$ does, through $f_{rs}$.
+
+Second, imports change the moments in three places only. Block 2 is computed on total spending, domestic and imported, which is the base of the input--output technical coefficients. Block 5 is a share of total purchases, with the import share on its foreign row. And the bounds \eqref{eq:app-bounds} on $N_s$ apply to the varieties won in France. Blocks 1, 3, 4 and 6 are defined on French objects, which the foreign competitor affects only through prices and through the varieties it takes away from French regions.
+
+Third, the foreign competitor shifts every buyer's domestic probabilities proportionally, so it leaves the within-France geography of sourcing unchanged at given $T$. It is not neutral for the estimation, however: since buyers far from French suppliers import more, a common $\Phi^F_s$ makes $f_{rs}$ vary across buyers, which reweights the buyers in $\tilde\gamma_{as}$ and in the win-anywhere probabilities $p_{r's}$. In the counterfactuals we hold each buyer's import share $f_{rs}$ at its estimate, by rescaling $\Phi^F_s$ buyer by buyer with the change in $\Phi^{dom}_{rs}$, so that the counterfactual regimes move the domestic network only.
 
 \paragraph{Calibrated parameters.}
 \label{app:model-calibration}
@@ -329,50 +333,55 @@ The model's parameters are
 \begin{equation}
 \underbrace{\big\{\alpha,\;\kappa\big\}}_{\text{searched over}}
 \;\cup\;
-\underbrace{\big\{\{T_{as}\},\;\chi_{L},\;\{\chi_{s}\},\;\{A_{r}\},\;\{N_{s}\}\big\}}_{\text{calibrated within the model}},
+\underbrace{\big\{\{T_{as}\},\;\{\Phi^F_s\},\;\chi_{L},\;\{\chi_{s}\},\;\{A_{r}\},\;\{N_{s}\}\big\}}_{\text{calibrated within the model}},
 \label{eq:app-param-split}
 \end{equation}
 
-but only the first group is searched over. Comparative advantage, the downstream technology parameters $(\chi_L,\{\chi_s\},\{A_r\})$ and the variety count are calibrated within the model: given any candidate value of $\mu=(\alpha,\kappa)$, each is pinned by the model itself rather than left free. Comparative advantage is pinned by the area sourcing shares, the downstream technology parameters by the labor share, the sector shares and the regional sales shares, and the variety count by the share of empty regions. They are not fixed ahead of the estimation at some external target, and they are not searched over either --- they are recovered, inside the simulation of the economy that $\mu$ implies. This is exact rather than approximate: minimizing the criterion jointly over all parameters and minimizing it over $\mu$ with the other parameters set to their within-model values give the same estimate. Since these moments are matched exactly, the parameters searched over are identified by the extensive-margin coefficients $\boldsymbol\beta$ alone: $\beta_{distance}$ by the decline of supplier presence with distance within an area, $\beta_\kappa$ by its rise with density within an area. We describe first how an economy is simulated at a given $\mu$, then the search over $\mu$.
+but only the first group is searched over. Comparative advantage, the foreign scales, the downstream technology parameters $(\chi_L,\{\chi_s\},\{A_r\})$ and the variety count are calibrated within the model: given any candidate value of $\mu=(\alpha,\kappa)$, each is pinned by the model itself rather than left free. Comparative advantage is pinned by the area sourcing shares, the foreign scales by the import shares, the downstream technology parameters by the labor share, the sector shares and the regional sales shares, and the variety count by the share of empty regions. They are not fixed ahead of the estimation at some external target, and they are not searched over either --- they are recovered, inside the simulation of the economy that $\mu$ implies. This is exact rather than approximate: minimizing the criterion jointly over all parameters and minimizing it over $\mu$ with the other parameters set to their within-model values give the same estimate. Since these moments are matched exactly, the parameters searched over are identified by the extensive-margin coefficients $\boldsymbol\beta$ alone: $\beta_{distance}$ by the decline of supplier presence with distance within an area, $\beta_\kappa$ by its rise with density within an area. We describe first how an economy is simulated at a given $\mu$, then the search over $\mu$.
 
 \subsubsection{Simulation algorithm.} Every evaluation of the criterion is solved in the same order. Given the calibrated elasticities and a candidate parameter vector, we calibrate comparative advantage and the downstream technology, simulate the Ricardian competition to obtain the win-anywhere probabilities, calibrate the variety count, and assemble the moments:
 \begin{equation}
 \mu=\big\{\alpha,\;\kappa\big\}
-\;\longrightarrow\;\big\{\{T_{as}\},\chi_L,\{\chi_s\},\{A_r\}\big\}
+\;\longrightarrow\;\big\{\{T_{as}\},\{\Phi^F_s\},\chi_L,\{\chi_s\},\{A_r\}\big\}
 \;\longrightarrow\;\{p_{r's}\}
 \;\longrightarrow\;\{N_{s}\}
 \;\longrightarrow\;\tilde M(\mu) .
 \label{eq:app-recursion}
 \end{equation}
-The arrows run one way only. Comparative advantage is calibrated without knowing the variety count, and the variety count does not revise comparative advantage, so there is no fixed point between $T$ and $N$ to solve --- a recursion, not a simultaneous system. Bellow we explain each step of this algorithm for which the pseudo-code is given in Algorithm~\ref{alg:simulate}.
+The arrows run one way only. Comparative advantage is calibrated without knowing the variety count, and the variety count does not revise comparative advantage, so there is no fixed point between $T$ and $N$ to solve --- a recursion, not a simultaneous system. Below we explain each step of this algorithm for which the pseudo-code is given in Algorithm~\ref{alg:simulate}.
 
-\paragraph{Step 1: comparative advantage and downstream technology.}
-For a given $\mu$, we recover the area-level productivity parameters $T_{as}$ that exactly match the observed sourcing shares. Given trade costs $\tau_{r'rs}=d_{r'r}^{\alpha}$ and the density elasticity $\kappa$, this is a matrix-scaling problem which pseudo-code is in Algorithm~\ref{alg:invertT}. We solve it using the multiplicative update
-
-\begin{equation}
-T^{+}_{as} = T_{as} \left( \frac{\tilde\gamma_{as}} {\gamma_{as}(T)} \right)^{\varsigma}, \qquad \varsigma\in(0,1], \label{eq:app-sinkhorn}
-\end{equation}
-
-where $\tilde\gamma_{as}$ are the observed sourcing shares. The normalization of one reference area per sector removes the indeterminacy in the scale of $T_{as}$. The uniqueness of this inversion follows from the structure of the sourcing matrix. Holding expenditure weights fixed, the model-implied shares can be written as
+\paragraph{Step 1: comparative advantage, foreign scale and downstream technology.}
+For a given $\mu$, we recover the area-level productivity parameters $T_{as}$ and the foreign scales $\Phi^F_s$ that exactly match the observed shares of total purchases, $\hat\gamma_{as}$ for every active area and $\hat f_s$ for the rest of the world. Given trade costs $\tau_{r'rs}=d_{r'r}^{\alpha}$ and the density elasticity $\kappa$, this is a matrix-scaling problem whose pseudo-code is in Algorithm~\ref{alg:invertT}. The foreign competitor is treated as one more column of $T$: it is an ``area'' whose market access is the same for every buyer. We solve the problem using the multiplicative update
 
 \begin{equation}
-\gamma_{as} = \sum_r \omega_{rs} \frac{T_{as}B_{ar}} {\sum_{a'}T_{a's}B_{a'r}}, \qquad B_{ar} = \sum_{r'\in\mathcal R_a} n_{r's}^{\kappa}(w_{r's}\tau_{r'rs})^{-\theta}.
-\end{equation}
-
-Because trade costs are finite, every area can potentially serve every buyer, so $B$ is a strictly positive matrix; the density term only changes its entries, and a region without firm of the sector simply drops out of $B_{ar}$. The recovery of $T_{as}$ is therefore equivalent to a Sinkhorn matrix-scaling problem. The positivity of $B$ implies that the associated scaling operator is a contraction. Consequently, the fixed point exists and is unique up to a sector-specific multiplicative normalization. The reference-area normalization removes this remaining degree of freedom, implying that there is a unique vector of comparative advantages consistent with the observed sourcing shares.
-
-The expenditure weights $\omega_{rs}$ depend on prices and sales, hence on $T$ and on the downstream technology parameters, which are calibrated in the same loop. Given $T$, the expected price indices $p_{rs}$ of \eqref{eq:app-pindex} do not depend on $(\chi_L,\{\chi_s\},\{A_r\})$, and these parameters are just-identified by moments 1--3. Writing $s_{rs}=\chi_sp_{rs}^{1-\nu}/\sum_k\chi_kp_{rk}^{1-\nu}$ for the sector split of intermediate spending and $\ell_r=\chi_L(w_r/c_r)^{1-\lambda}$ for the labor cost share, $\chi_L$ and $\{\chi_s\}$ solve
-\begin{equation}
-\sum_r\hat\pi_r\ell_r=\tilde\chi_L,
+T^{+}_{as} = T_{as} \left( \frac{\hat\gamma_{as}} {\gamma_{as}(T,\Phi^F)} \right)^{\varsigma},
 \qquad
-\frac{\sum_r\hat\pi_r(1-\ell_r)s_{rs}}{\sum_r\hat\pi_r(1-\ell_r)}=\tilde\chi_s,
+\Phi^{F+}_{s} = \Phi^F_{s} \left( \frac{\hat f_{s}} {f_{s}(T,\Phi^F)} \right)^{\varsigma},
+\qquad \varsigma\in(0,1], \label{eq:app-sinkhorn}
+\end{equation}
+
+followed by the division of the whole row of sector $s$, foreign scale included, by $T^{+}_{a^{ref}_s s}$. The normalization of one domestic reference area per sector removes the indeterminacy in the common scale of $(T_{\cdot s},\Phi^F_s)$; an import share cannot serve as the reference, since $\Phi^F_s$ is measured against domestic productivity. The uniqueness of this inversion follows from the structure of the sourcing matrix. Holding expenditure weights fixed, the model-implied shares can be written as
+
+\begin{equation}
+\gamma_{as} = \sum_r \omega_{rs} \frac{T_{as}B_{ar}} {\sum_{a'}T_{a's}B_{a'r}+\Phi^F_s}, \qquad
+f_{s} = \sum_r \omega_{rs} \frac{\Phi^F_s} {\sum_{a'}T_{a's}B_{a'r}+\Phi^F_s}, \qquad
+B_{ar} = \sum_{r'\in\mathcal R_a} n_{r's}^{\kappa}(w_{r's}\tau_{r'rs})^{-\theta},
+\end{equation}
+
+with $\sum_r\omega_{rs}=1$. The foreign column of the kernel is $B_{Fr}=1$ for every buyer. Because trade costs are finite, every area can potentially serve every buyer, so the augmented kernel $[B\,;\,\mathbf 1']$ is a strictly positive matrix; the density term only changes its entries, and a region without firm of the sector simply drops out of $B_{ar}$. The recovery of $(T_{\cdot s},\Phi^F_s)$ is therefore a Sinkhorn matrix-scaling problem, whose fixed point exists and is unique up to the sector-specific multiplicative normalization. The reference-area normalization removes this remaining degree of freedom, implying that there is a unique vector of comparative advantages and foreign scales consistent with the observed shares.
+
+The expenditure weights $\omega_{rs}$ depend on prices and sales, hence on $(T,\Phi^F)$ and on the downstream technology parameters, which are calibrated in the same loop. Given $(T,\Phi^F)$, the expected price indices $p_{rs}$ of \eqref{eq:app-pindex}, which include the foreign competitor through $\Phi_{rs}$, do not depend on $(\chi_L,\{\chi_s\},\{A_r\})$, and these parameters are just-identified by moments 1--3. Writing $s_{rs}=\chi_sp_{rs}^{1-\nu}/\sum_k\chi_kp_{rk}^{1-\nu}$ for the sector split of intermediate spending and $\ell_r=\chi_L(w_r/c_r)^{1-\lambda}$ for the labor cost share, $\chi_L$ and $\{\chi_s\}$ solve
+\begin{equation}
+\sum_r\hat\pi_r\ell_r=\hat\chi_L,
+\qquad
+\frac{\sum_r\hat\pi_r(1-\ell_r)s_{rs}}{\sum_r\hat\pi_r(1-\ell_r)}=\hat\chi_s,
 \label{eq:app-tech}
 \end{equation}
-jointly, by Newton's method, since the weights $\hat\pi_r(1-\ell_r)$ move with $\{\chi_s\}$ through $p_r$. Downstream productivity then follows in closed form from sales, $\pi_r\propto\delta_r(c_r/A_r)^{\varepsilon}$, that is $A_r\propto c_r(\hat\pi_r/\delta_r)^{-1/\varepsilon}$ with $A_1=1$. Because sales are held at their observed shares $\hat\pi_r$, the expenditure weights are $\omega_{rs}=\hat\pi_r(1-\ell_r)s_{rs}$ and do not involve $A_r$. Each iteration of \eqref{eq:app-sinkhorn} therefore computes the price indices at the current $T$, solves \eqref{eq:app-tech} at these prices, updates the weights and then $T$. This introduces a feedback from $T$ into expenditure shares, so the full algorithm is a fixed-point iteration. We use damping in \eqref{eq:app-sinkhorn} and stop when both sourcing shares and comparative-advantage parameters converge. Holding sales at their target also removes the demand loop through which, with fixed downstream technology, a higher $T$ lowers input prices, raises sales and sends demand back to the same area. At the estimated parameters, the inversion converges rapidly from dispersed starting values and recovers the calibrated productivity parameters to numerical precision. A candidate $\mu$ for which it does not converge is rejected rather than evaluated. \swann{Le paramètre de damping est fixé à 0.5. Au départ j'avais mis 0.9 mais quand on a une élasticité de la demande forte comme dans l'aéronautique, la convergence du point fixe n'était pas possible car il y avait beaucoup d'oscillation autour du point fixe.}
+jointly, by Newton's method, since the weights $\hat\pi_r(1-\ell_r)$ move with $\{\chi_s\}$ through $p_r$. Downstream productivity then follows in closed form from sales, $\pi_r\propto\delta_r(c_r/A_r)^{\varepsilon}$, that is $A_r\propto c_r(\hat\pi_r/\delta_r)^{-1/\varepsilon}$ with $A_1=1$. Because sales are held at their observed shares $\hat\pi_r$, the expenditure weights are $\omega_{rs}=\hat\pi_r(1-\ell_r)s_{rs}$ and do not involve $A_r$. The aggregate shares are solved at these \emph{total} price indices, and block 2 is a share of total spending, so imports enter the calibration of $\{\chi_s\}$ exactly as they enter the input--output coefficients. Each iteration of \eqref{eq:app-sinkhorn} therefore computes the price indices at the current $(T,\Phi^F)$, solves \eqref{eq:app-tech} at these prices, updates the weights and then $(T,\Phi^F)$. This introduces a feedback from $(T,\Phi^F)$ into expenditure shares, so the full algorithm is a fixed-point iteration. We use damping in \eqref{eq:app-sinkhorn} and stop when no comparative-advantage parameter or foreign scale moves by more than $10^{-9}$ in logs and the aggregate shares are solved. The starting value of $\Phi^F_s$ follows from the domestic starting value of $T$: with a common $\tilde\Phi_s=\sum_r\hat\pi_r\Phi^{dom}_{rs}$, the import share is $\Phi^F_s/(\tilde\Phi_s+\Phi^F_s)$, so $\Phi^{F(0)}_s=\hat f_s\tilde\Phi_s/(1-\hat f_s)$. Holding sales at their target also removes the demand loop through which, with fixed downstream technology, a higher $T$ lowers input prices, raises sales and sends demand back to the same area. At the estimated parameters, the inversion converges rapidly from dispersed starting values and recovers the calibrated productivity parameters to numerical precision. A candidate $\mu$ for which it does not converge is rejected rather than evaluated. \swann{Le paramètre de damping est fixé à 0.5. Au départ j'avais mis 0.9 mais quand on a une élasticité de la demande forte comme dans l'aéronautique, la convergence du point fixe n'était pas possible car il y avait beaucoup d'oscillation autour du point fixe.}
 
 \paragraph{Step 2: Win probabilities.}
 For each sector, we simulate $m$ varieties and draw one Fréchet champion for each (region, variety) pair \footnote{The uniform draws entering the inverse-CDF transformation $\varphi_{r'\rho s}=T_{r's}^{1/\theta}(-\log u_{r'\rho s})^{-1/\theta}$ are generated using scrambled Sobol sequences rather than independent pseudo-random draws. Scrambled Sobol sequences are low-discrepancy sequences commonly used for variance reduction, improving the convergence rate of simulation-based estimators and reducing simulation noise. We construct one low-dimensional sequence per sector, with regions as dimensions and varieties as points. This preserves the efficiency of low-discrepancy sampling while avoiding the deterioration of its properties in very high dimensions. Since Ricardian competition compares productivity draws only within sectors, using the same construction across sectors does not affect the allocation of winners. We use independent pseudo-random draws when simulating the fake worlds used for the weighting matrix and for inference, where independence across replications is required.
-\swann{Si ce n'est pas clair il ne faut pas hésiter à me demander. C'est un point important que je souhaite avoir dans le papier.}}. Running the Ricardian competition described in \eqref{eq:app-champion} yields the number of simulated varieties won by each region, $k_{r's}$, and the corresponding win-anywhere probability $p_{r's}=k_{r's}/m$.
+\swann{Si ce n'est pas clair il ne faut pas hésiter à me demander. C'est un point important que je souhaite avoir dans le papier.}}. In each importing sector, we also draw one foreign bid per variety from \eqref{eq:app-foreign-bid}, common to every buyer. Running the Ricardian competition described in \eqref{eq:app-champion}, in which a buyer imports the variety when the foreign bid is below the best French delivered cost, yields the number of simulated varieties won by each region, $k_{r's}$, the corresponding win-anywhere probability $p_{r's}=k_{r's}/m$, and the share $q_s$ of varieties won in France for at least one buyer, which enters the bounds \eqref{eq:app-bounds}.
 
 The simulation size $m$ is only a Monte Carlo device and does not correspond to the model-implied number of varieties $N_s$. This distinction is important because winning a variety depends only on relative production costs: $$ \frac{w_{r's}\tau_{r'rs}}{z_{r'\rho s}} < \min_{r''\neq r'} \frac{w_{r''s}\tau_{r''rs}}{z_{r''\rho s}} . $$ Hence $p_{r's}$ is determined by comparative advantage, density, wages, trade costs and the productivity distribution, but not by the number of varieties, prices or downstream expenditure. It is an object of the expected network, and the number of simulated varieties can therefore be chosen independently of the equilibrium value of $N_s$, provided it is large enough to estimate $p_{r's}$ precisely.
 
@@ -395,7 +404,7 @@ The variety count is then obtained by matching the simulated and empirical count
 \end{equation}
 Since $\tilde G_s(n)$ is decreasing in $n$, this minimization is a monotone integer search and does not require re-simulating the Ricardian competition for alternative values of $N_s$. The pseudo-algorithm for this step is Algorithm~\ref{alg:countN}.
 
-\paragraph{Step 4: the moments.} All six blocks of Section~\ref{app:model-moments} are computed from the single Ricardian solve of step 2: the value blocks 1--3 and 5 from the realized trade flows, block 6 from \eqref{eq:app-Gclosed} evaluated at $\widehat N_{s}$, and block 4 as follows. The model counterpart of the observed coefficients is $\mathbb{E}_\Omega[\boldsymbol\beta(\mu,\Omega)]$: the data are one realization of a network with $N_s$ varieties, not the expected network. We estimate it by Monte Carlo at almost no cost. Once the Ricardian competition is solved on the $m$ simulated varieties, it is as if the network had been simulated once with $m\gg N_s$ varieties. We draw $J=100$ networks among them, network $j$ being the first $\widehat N_s$ entries of a fixed random permutation of the $m$ varieties of each sector; on each, the outcome $\mathbf{1}\{K_{r's}>0\}$ is whether region $r'$ wins one of these varieties for at least one buyer, and the cloglog \eqref{eq:app-cell-cloglog} is run exactly as on the data. Block 4 is the average of the $J$ coefficient vectors,
+\paragraph{Step 4: the moments.} All six blocks of Section~\ref{app:model-moments} are computed from the single Ricardian solve of step 2: the value blocks 1--3 and 5 from the realized trade flows, imports included in block 2 and on the foreign row of block 5, block 6 from \eqref{eq:app-Gclosed} evaluated at $\widehat N_{s}$, and block 4 as follows. The model counterpart of the observed coefficients is $\mathbb{E}_\Omega[\boldsymbol\beta(\mu,\Omega)]$: the data are one realization of a network with $N_s$ varieties, not the expected network. We estimate it by Monte Carlo at almost no cost. Once the Ricardian competition is solved on the $m$ simulated varieties, it is as if the network had been simulated once with $m\gg N_s$ varieties. We draw $J=100$ networks among them, network $j$ being the first $\widehat N_s$ entries of a fixed random permutation of the $m$ varieties of each sector; on each, the outcome $\mathbf{1}\{K_{r's}>0\}$ is whether region $r'$ wins one of these varieties for at least one buyer, and the cloglog \eqref{eq:app-cell-cloglog} is run exactly as on the data. Block 4 is the average of the $J$ coefficient vectors,
 \begin{equation}
 \bar{\boldsymbol\beta}(\mu)=\frac{1}{J}\sum_{j=1}^{J}\hat{\boldsymbol\beta}^{(j)}(\mu),
 \label{eq:app-beta-mc}
@@ -442,11 +451,11 @@ A bootstrap on firms would measure the granular noise poorly: it can remove supp
 \end{equation}
 where $h(\mu,\gamma,G)$ is the expected $\boldsymbol\beta$ when the other parameters are calibrated on $(\gamma,G)$. The optimal weighting is $W=\Sigma_u^{-1}$, with $\Sigma_u=\operatorname{Var}(u)+\operatorname{Var}(\boldsymbol\beta_{sim})$, which differs from the variance of $\boldsymbol\beta_{gran}$ because part of the granular noise in $\boldsymbol\beta$ is absorbed by the recalibration.
 
-We estimate $\Sigma_u$ without computing any derivative. At $\hat\mu_1$, we draw $B_1=1{,}000$ fake worlds: one network $\chi_b$ with $\widehat N_s$ varieties per sector, drawn with independent pseudo-random numbers. On each, we compute the data moments exactly as on the data --- one cloglog fit $\boldsymbol\beta_b$, the empty-region shares $G_b$, the area sourcing shares $\gamma_b$, the labor share, the sector shares and the sales shares --- recalibrate $T$, the downstream technology parameters and $N$ on them, and simulate $\boldsymbol\beta_{sim,b}$ at $\hat\mu_1$ with a simulator $U_b$ proper to the world. The residual
+We estimate $\Sigma_u$ without computing any derivative. At $\hat\mu_1$, we draw $B_1=1{,}000$ fake worlds: one network $\Omega_b$ with $\widehat N_s$ varieties per sector, drawn with independent pseudo-random numbers. On each, we compute the data moments exactly as on the data --- one cloglog fit $\boldsymbol\beta_b$, the empty-region shares $G_b$, the area sourcing shares $\gamma_b$, the labor share, the sector shares and the sales shares --- recalibrate $T$, the downstream technology parameters and $N$ on them, and simulate $\boldsymbol\beta_{sim,b}$ at $\hat\mu_1$ with a simulator $U_b$ proper to the world. The residual
 \begin{equation}
 e_b=\boldsymbol\beta_b-\bar{\boldsymbol\beta}\big(\hat\mu_1;\,T_b,\chi_{L,b},\chi_{s,b},A_b,N_b,U_b\big)
 \end{equation}
-is to first order $u_b-\boldsymbol\beta_{sim,b}$, so $\hat\Sigma_u=\widehat{\operatorname{Cov}}(e_1,\dots,e_{B_1})$. The world's simulator must have its own seed: if it reused the draws of $\chi_b$, it would reproduce the fake data exactly and the dispersion would vanish; if it were common to all worlds, the simulation noise would be omitted. Worlds in which the cloglog cannot be estimated, or in which a reference area wins nothing, are excluded and counted. $W$ is a square matrix of the dimension of $\boldsymbol\beta$. When $\boldsymbol\beta$ has as many entries as $\mu$ (one distance coefficient), the system is exactly identified and $W$ affects the inference only; it moves the point estimate when distance is binned.
+is to first order $u_b-\boldsymbol\beta_{sim,b}$, so $\hat\Sigma_u=\widehat{\operatorname{Cov}}(e_1,\dots,e_{B_1})$. The world's simulator must have its own seed: if it reused the draws of $\Omega_b$, it would reproduce the fake data exactly and the dispersion would vanish; if it were common to all worlds, the simulation noise would be omitted. Worlds in which the cloglog cannot be estimated, or in which a reference area wins nothing, are excluded and counted. $W$ is a square matrix of the dimension of $\boldsymbol\beta$. When $\boldsymbol\beta$ has as many entries as $\mu$ (one distance coefficient), the system is exactly identified and $W$ affects the inference only; it moves the point estimate when distance is binned.
 
 \paragraph{Standard errors.} \label{app:model-standard_errors} \swann{Je décris les différents estimateurs des intervalles de confiance. }
 We compute the uncertainty of the estimator by parametric bootstrap: the model is resampled, not the firms, so a fake world can host a supplier in a region that has none in the data. At $\hat\mu_2$ we draw $B_2=500$ fake worlds as above and re-run the whole estimation in each, with $W$ fixed: for each candidate $\mu$, $T$, the downstream technology parameters and $N$ are calibrated on the world's own moments, $\boldsymbol\beta$ is simulated on the world's simulator, and the criterion is minimized by Nelder--Mead starting from $\hat\mu_2$, holding the simulator fixed within the world. Each world yields an estimate $(\mu_b,T_b,\chi_{L,b},\chi_{s,b},A_b,N_b)$, and the counterfactuals of the paper are recomputed at it.
@@ -461,21 +470,26 @@ Two limits are worth stating. The worlds are drawn at $\hat\mu_2$ rather than at
 \subsection{Pseudo-code}
 \label{app:pseudocode}
 
+\providecommand{\var}[1]{\mathit{#1}}
+\makeatletter
+\providecommand{\LineComment}[1]{\Statex \hskip\ALG@thistlm \(\triangleright\) \textit{#1}}
+\makeatother
+
 This section states the estimator in explicit form, in the version that the code implements. Only the trade-cost elasticity and the density elasticity are searched over,
 $$
 \mu=(\alpha,\kappa),
 $$
-with $\alpha=(\alpha_1,\dots,\alpha_K)$ when trade costs are binned. Every other parameter is calibrated within the model at each evaluation of the criterion: the area-level comparative advantages $\{T_{as}\}$ and the downstream technology parameters $(\chi_L,\{\chi_s\},\{A_r\})$ jointly by a general-equilibrium Sinkhorn inversion, and the variety counts $\{N_s\}$ by a monotone integer search. Algorithm~\ref{alg:simulate} evaluates the model at a candidate $\mu$; it calls Algorithm~\ref{alg:invertT} (the joint calibration of comparative advantage and downstream technology), Algorithm~\ref{alg:countN} (the variety count) and Algorithm~\ref{alg:cellbeta} (the extensive-margin coefficients). Algorithm~\ref{alg:smm} is the estimator; it calls the swarm (Algorithm~\ref{alg:pso}), the weighting matrix from fake worlds (Algorithm~\ref{alg:W}) and the parametric bootstrap (Algorithm~\ref{alg:boot}).
+with $\alpha=(\alpha_1,\dots,\alpha_K)$ when trade costs are binned. Every other parameter is calibrated within the model at each evaluation of the criterion: the area-level comparative advantages $\{T_{as}\}$, the foreign scales $\{\Phi^F_s\}$ and the downstream technology parameters $(\chi_L,\{\chi_s\},\{A_r\})$ jointly by a general-equilibrium Sinkhorn inversion, and the variety counts $\{N_s\}$ by a monotone integer search. Algorithm~\ref{alg:simulate} evaluates the model at a candidate $\mu$; it calls Algorithm~\ref{alg:invertT} (the joint calibration of comparative advantage, foreign scales and downstream technology), Algorithm~\ref{alg:ricardian} (the Ricardian competition with the foreign competitor), Algorithm~\ref{alg:countN} (the variety count) and Algorithm~\ref{alg:cellbeta} (the extensive-margin coefficients). Algorithm~\ref{alg:smm} is the estimator; it calls the swarm (Algorithm~\ref{alg:pso}), the weighting matrix from fake worlds (Algorithm~\ref{alg:W}) and the parametric bootstrap (Algorithm~\ref{alg:boot}).
 
-Throughout, $r'$ is an upstream region (commuting zone), $s$ a sector, $\rho$ a variety; $a(r')$ is the attraction area of $r'$ and $\mathcal{R}_a$ the regions of area $a$; $\mathcal{R}_D$ is the set of downstream buyers; $\mathcal{R}^+_s$ the regions inside the active attraction areas of sector $s$, and $\mathcal{A}\subseteq\{(r',s): r'\in\mathcal{R}^+_s\}$ the cells entering the extensive-margin regression. Comparative advantage of a cell is
+\paragraph{Notation.} The pseudo-code keeps the notation of the paper for every economic object and gives explicit names, in italics, to the objects that only exist inside an algorithm (for instance $\var{market\_access}_{ar}$ or $\var{largest\_log\_step}$). Each comment is a sentence that states the economic content of the step. Throughout, $r'$ is an upstream region (commuting zone), $s$ a sector, $\rho$ a variety; $a(r')$ is the attraction area of $r'$ and $\mathcal{R}_a$ the regions of area $a$; $\mathcal{R}_D$ is the set of downstream buyers; $\mathcal{R}^+_s$ the regions inside the active attraction areas of sector $s$, $\mathcal{A}^+_s$ those areas, $a^{ref}_s$ the largest of them (the reference area), $\mathcal{S}^F$ the sectors with imports in the input--output table, and $\mathcal{A}\subseteq\{(r',s): r'\in\mathcal{R}^+_s\}$ the cells entering the extensive-margin regression. Comparative advantage of a cell is
 $$
 T_{r's}=T_{a(r')s}\,n_{r's}^{\kappa},
 $$
-with $n_{r's}$ the observed number of firms of sector $s$ in $r'$. Trade costs are $\tau_{r'r}=d_{r'r}^{\alpha}$; with $K$ distance bins, $\log\tau_{r'r}$ is continuous and piecewise linear in $\log d_{r'r}$, with slope $\alpha_k$ on the $k$-th segment between bin centres and $\alpha_1\le\dots\le\alpha_K$, so that equal slopes return the power law. The vector of extensive-margin coefficients is
+with $n_{r's}$ the observed number of firms of sector $s$ in $r'$, and the rest of the world competes in sector $s\in\mathcal{S}^F$ through the scale $\Phi^F_s$, with no wage or trade cost of its own. Trade costs are $\tau_{r'r}=d_{r'r}^{\alpha}$; with $K$ distance bins, $\log\tau_{r'r}$ is continuous and piecewise linear in $\log d_{r'r}$, with slope $\alpha_k$ on the $k$-th segment between bin centres and $\alpha_1\le\dots\le\alpha_K$, so that equal slopes return the power law. The vector of extensive-margin coefficients is
 $$
 \boldsymbol\beta=(\beta_{distance},\ \beta_\kappa),
 $$
-the cell-level cloglog of $\mathbf{1}\{K_{r's}>0\}$ on $\log d_{r'a(r')}$ (or the distance bins) and $\log n_{r's}$, with sector $\times$ area fixed effects and the groups without variation dropped. On the data side the targets are $\widehat{\boldsymbol\beta}$, the area sourcing shares $\tilde\gamma_{as}$ (normalised to sum to one per sector), the empty-cell shares $\widehat G_s(0)$ with the bounds $[N^{lo}_s,N^{hi}_s]$, the labour share $\tilde\chi_L$, the sector shares $\tilde\chi_s$ and the downstream sales shares $\hat\pi_r$. The calibrated objects
+the cell-level cloglog of $\mathbf{1}\{K_{r's}>0\}$ on $\log d_{r'a(r')}$ (or the distance bins) and $\log n_{r's}$, with sector $\times$ area fixed effects and the groups without variation dropped. Data targets carry a hat: $\widehat{\boldsymbol\beta}$; the shares of each sector's \emph{total} purchases, $\hat\gamma_{as}$ for every active area and the import share $\hat f_s$ (so that $\sum_{a}\hat\gamma_{as}+\hat f_s=1$); the empty-cell shares $\widehat G_s(0)$ and the observed supplier counts $N^{obs}_s$; the labour share $\hat\chi_L$, the sector shares $\hat\chi_s$ (on total spending, domestic and imported) and the downstream sales shares $\hat\pi_r$. The calibrated objects
 $$
   \bigl\{\theta,\ \varepsilon,\ \lambda,\ \nu,\ \{\nu_s\},\
   \{w_{r's}\},\ \{\delta_r\},\ \{d_{r'r}\},\ \{n_{r's}\}\bigr\}
@@ -488,128 +502,181 @@ are fixed once and for all and suppressed from the argument lists. $m$ is the nu
 \begin{algorithm}[H]
 \caption{Simulation of the economy at a candidate $\mu=(\alpha,\kappa)$ (one criterion evaluation)}
 \label{alg:simulate}
+\small
 \begin{algorithmic}[1]
-\Require candidate $\mu=(\alpha,\kappa)$; targets $\tilde\gamma_{as}$, $(\tilde\chi_L,\{\tilde\chi_s\},\{\hat\pi_r\})$, $\widehat G_s(0)$ and $[N^{lo}_s,N^{hi}_s]$; a fixed array of scrambled Sobol draws $u_{r'\rho s}\in(0,1)$, $\rho=1,\dots,m$; a fixed set of permutations $\{\sigma^s_j\}_{j\le J}$ of $\{1,\dots,m\}$
-\Ensure simulated moments $\widetilde{M}(\mu)$, the calibrated $\{T_{as}\},\chi_L,\{\chi_s\},\{A_r\}$ and $\{\widehat N_s\}$; or \textsc{reject}
+\Require candidate $\mu=(\alpha,\kappa)$; targets $\hat\gamma_{as}$, $\hat f_s$, $(\hat\chi_L,\{\hat\chi_s\},\{\hat\pi_r\})$, $\widehat G_s(0)$ and $N^{obs}_s$; a fixed array of scrambled Sobol draws $u_{r'\rho s}\in(0,1)$ for the French regions and $u^F_{\rho s}\in(0,1)$ for the foreign competitor, $\rho=1,\dots,m$; a fixed set of permutations $\{\sigma^s_j\}_{j\le J}$ of $\{1,\dots,m\}$
+\Ensure simulated moments $\widetilde{M}(\mu)$, the calibrated $\{T_{as}\},\{\Phi^F_s\},\chi_L,\{\chi_s\},\{A_r\}$ and $\{\widehat N_s\}$; or \textsc{reject}
 \vspace{2pt}
-\State Trade costs: $\tau_{r'r}\gets d_{r'r}^{\,\alpha}$ (piecewise in $\log d$ when binned)
+\LineComment{Trade costs rise with distance at elasticity $\alpha$, segment by segment when distance is binned.}
+\State $\tau_{r'r}\gets d_{r'r}^{\,\alpha}$
 \vspace{2pt}
-\State \textbf{Step 1 (comparative advantage and downstream technology).}
-\State \quad $\bigl(\{T_{as}\},\chi_L,\{\chi_s\},\{A_r\}\bigr)\gets\Call{CalibrateT}{\alpha,\kappa;\ \tilde\gamma,\tilde\chi_L,\tilde\chi_s,\hat\pi}$
-  \Comment{Algorithm~\ref{alg:invertT}}
-\State \textbf{if} the calibration has not converged \textbf{then return} \textsc{reject}
-  \Comment{never scored at a $T$ the model does not imply}
+\State \textbf{Step 1 (comparative advantage, foreign scale and downstream technology).}
+\LineComment{The joint calibration of $(T,\Phi^F,\chi_L,\chi_s,A)$ is detailed in Algorithm~\ref{alg:invertT}.}
+\State \quad $\bigl(\{T_{as}\},\{\Phi^F_s\},\chi_L,\{\chi_s\},\{A_r\},\var{converged}\bigr)\gets\Call{ProfileComparativeAdvantage}{\alpha,\kappa;\ \hat\gamma,\hat f,\hat\chi_L,\hat\chi_s,\hat\pi}$
+\LineComment{A candidate is never scored at a comparative advantage that the model does not imply.}
+\State \textbf{if not} $\var{converged}$ \textbf{then return} \textsc{reject}
+\LineComment{Each region inherits the productivity of its area, scaled up by its density of firms.}
 \State $T_{r's}\gets T_{a(r')s}\,n_{r's}^{\kappa}$
 \vspace{2pt}
-\State \textbf{Step 2 (Ricardian competition).}
-\For{$s=1,\dots,S$ \textbf{and} $\rho=1,\dots,m$}
-    \For{$r'\in\mathcal{R}^+_s$}
-        \State $z_{r'\rho s}\gets T_{r's}^{1/\theta}\bigl(-\log(1-u_{r'\rho s})\bigr)^{-1/\theta}$
-          \Comment{Fr\'echet inverse c.d.f.}
-    \EndFor
-    \For{$r\in\mathcal{R}_D$}
-        \State $r^\star(\rho,s,r)\gets\arg\min_{r'}\; w_{r's}\tau_{r'r}/z_{r'\rho s}$,\quad
-          $p_{\rho s r}\gets w_{r^\star s}\tau_{r^\star r}/z_{r^\star\rho s}$
-    \EndFor
-\EndFor
-\State $\iota_{r'\rho s}\gets\mathbf{1}\{r'=r^\star(\rho,s,r)\ \text{for some }r\in\mathcal{R}_D\}$,\quad
-  $k_{r's}\gets\sum_\rho\iota_{r'\rho s}$,\quad $p_{r's}\gets k_{r's}/m$
-  \Comment{win-anywhere counts}
+\State \textbf{Step 2 (Ricardian competition, with the foreign competitor).}
+\LineComment{Every variety is won, for every buyer, by the cheapest French region or by the foreign competitor (Algorithm~\ref{alg:ricardian}).}
+\State \quad $\bigl(\{\var{winner}_{\rho sr}\},\{p_{\rho sr}\},\{\var{win\_indicator}_{r'\rho s}\},\{k_{r's}\},\{q_s\}\bigr)\gets\Call{RicardianCompetition}{\{T_{r's}\},\{\Phi^F_s\},\tau;\ u,u^F}$
 \vspace{2pt}
 \State \textbf{Realised prices, sales and flows.} For every $r\in\mathcal{R}_D$:
+\LineComment{Imported varieties enter the price index like any other variety.}
 \State \quad $P_{rs}\gets\bigl[\tfrac1m\sum_{\rho}p_{\rho s r}^{\,1-\nu_s}\bigr]^{1/(1-\nu_s)}$,\quad
   $P_r\gets\bigl[\sum_s\chi_s P_{rs}^{1-\nu}\bigr]^{1/(1-\nu)}$
 \State \quad $c_r\gets\bigl[\chi_L w_r^{1-\lambda}+(1-\chi_L)P_r^{1-\lambda}\bigr]^{1/(1-\lambda)}$,\quad
-  $\tilde c_r\gets c_r/A_r$
-\State \quad $y_r\gets \tilde c_r^{\,\varepsilon}\,\delta_r\big/\sum_{r''}\tilde c_{r''}^{\,\varepsilon}\delta_{r''}$,\quad
-  $\pi_r\gets y_r$
-\State \quad $X_{r'rs}\gets$ expenditure of $r$ on the varieties won by $r'$,
+  $\var{effective\_cost}_r\gets c_r/A_r$
+\LineComment{A region's sales share falls with its effective unit cost, with elasticity $\varepsilon<0$.}
+\State \quad $\pi_r\gets \var{effective\_cost}_r^{\,\varepsilon}\,\delta_r\big/\sum_{r''}\var{effective\_cost}_{r''}^{\,\varepsilon}\delta_{r''}$
+\State \quad $X_{r'rs}\gets$ spending of $r$ on the varieties won by $r'$, and $X_{Frs}\gets$ its spending on imported varieties,
   from~(\ref{eq:input_flows})
 \vspace{2pt}
 \State \textbf{Step 3 (variety count).}
-\State \quad $\{\widehat{N}_s\}\gets\Call{CalibrateN}{\{k_{r's}\},m;\ \widehat{G}_s(0),[N^{lo}_s,N^{hi}_s]}$
-  \Comment{Algorithm~\ref{alg:countN}}
+\LineComment{The number of varieties is set to match the share of empty regions (Algorithm~\ref{alg:countN}).}
+\State \quad $\{\widehat{N}_s\}\gets\Call{CalibrateVarietyCount}{\{k_{r's}\},\{q_s\},m;\ \widehat{G}_s(0),N^{obs}_s}$
 \vspace{2pt}
 \State \textbf{Step 4 (moments).}
-\State \quad (1)--(3) $\widetilde\chi_L$, $\widetilde\chi_s$, $\pi_r$ on the realised prices
-  \Comment{reported; not in the criterion}
-\State \quad (4) $\bar{\boldsymbol\beta}\gets\Call{CellBeta}{\{\iota_{r'\rho s}\},\{\widehat N_s\},\{\sigma^s_j\}}$
-  \Comment{Algorithm~\ref{alg:cellbeta}}
-\State \quad (5) $\widetilde{\gamma}_{as}\gets\sum_{r'\in\mathcal{R}_a}\sum_r X_{r'rs}\big/\sum_{r''}\sum_r X_{r''rs}$
+\LineComment{They are reported but left out of the criterion.}
+\State \quad (1)--(3) $\widetilde\chi_L$, $\widetilde\chi_s$ (on total spending), $\pi_r$, all at the realised prices
+\LineComment{The extensive-margin coefficients are averaged over $J$ simulated networks (Algorithm~\ref{alg:cellbeta}).}
+\State \quad (4) $\bar{\boldsymbol\beta}\gets\Call{ExtensiveMarginCoefficients}{\{\var{win\_indicator}_{r'\rho s}\},\{\widehat N_s\},\{\sigma^s_j\}}$
+\State \quad (5) $\widetilde{\gamma}_{as}\gets\sum_{r'\in\mathcal{R}_a}\sum_r X_{r'rs}\big/\var{total\_purchases}_s$,\quad
+  $\widetilde f_s\gets\sum_r X_{Frs}\big/\var{total\_purchases}_s$,\quad with $\var{total\_purchases}_s=\sum_r\bigl(\sum_{r''}X_{r''rs}+X_{Frs}\bigr)$
+\LineComment{The count moment is evaluated at the calibrated number of varieties.}
 \State \quad (6) $\widetilde{G}_s(\widehat{N}_s)$
-  \Comment{count moment at the calibrated $\widehat{N}_s$}
 \State \Return $\widetilde{M}(\mu)$
 \end{algorithmic}
 \end{algorithm}
 
-Four features of Algorithm~\ref{alg:simulate} are worth emphasizing. First, the arrows run one way, $(\alpha,\kappa)\to(T,\chi_L,\chi_s,A)\to\{p_{r's}\}\to\{N_s\}\to\boldsymbol\beta$: the calibration of comparative advantage does not use the variety count, and the variety count does not revise it, so Steps~1--3 form a recursion rather than a simultaneous system. Second, the calibration of Step~1 runs on the \emph{expected} sector price indices $P_{sr}=\Gamma_s\Phi_{sr}^{-1/\theta}$, while the moments of Step~4 use the \emph{realised} indices of the $m$ simulated varieties. At the calibrated values, the simulated blocks 1--3 therefore differ from their targets only by the Monte Carlo error of the realised indices, which the search must not chase: they leave the criterion. The same holds for $\tilde\gamma_{as}$, matched in expectation by the calibration, and for $\widetilde G_s(0)$, matched up to the integer step by the bisection; the moments that carry information on $\mu$ are $\boldsymbol\beta$. Third, $m$ is a Monte Carlo device unrelated to $\widehat{N}_s$: the winner of a variety depends only on relative delivered costs, so $p_{r's}$ is a continuum object estimated at any $m$ large enough (the code sets $m=\max(100,\max_s N^{hi}_s)$, which also bounds every candidate $N_s$). Fourth, the draws $u$ and the permutations $\sigma^s_j$ are held fixed across every evaluation (common random numbers), which makes the criterion a deterministic function of $\mu$ that a swarm can descend; $u$ is one low-dimensional scrambled Sobol net per sector, with regions as dimensions and varieties as points. Fake worlds (Algorithms~\ref{alg:W} and~\ref{alg:boot}) are drawn with independent pseudo-random numbers instead.
-
 % ---------------------------------------------------------------------
-%  Algorithm 2 -- joint calibration of T and the downstream technology
+%  Algorithm 1b -- Ricardian competition
 % ---------------------------------------------------------------------
 \begin{algorithm}[H]
-\caption{\textsc{CalibrateT}: comparative advantage and downstream technology by matrix scaling with general-equilibrium expenditure weights}
-\label{alg:invertT}
+\caption{\textsc{RicardianCompetition}: the winner of every variety for every buyer, with the foreign competitor}
+\label{alg:ricardian}
+\small
 \begin{algorithmic}[1]
-\Require $(\alpha,\kappa)$; targets $\tilde\gamma_{as}$ and $(\tilde\chi_L,\{\tilde\chi_s\},\{\hat\pi_r\})$;
-  damping $\varsigma=0.3$; tolerance $\epsilon_T=10^{-9}$; at most $600$ passes; starting values $T^{(0)}_{as}$
-\Ensure $\{T_{as}\},\chi_L,\{\chi_s\},\{A_r\}$ reproducing $\tilde\gamma_{as}$, $\tilde\chi_L$, $\tilde\chi_s$ and $\hat\pi_r$ in expectation
-\State $T\gets T^{(0)}$; normalise $T_{as}\gets T_{as}/T_{a_s^{\text{ref}}s}$ for each $s$
-\For{$t=1,2,\dots$ \textbf{until} convergence}
-    \State $B_{ar}\gets\sum_{r'\in\mathcal{R}_a}n_{r's}^{\kappa}(w_{r's}\tau_{r'r})^{-\theta}$,\quad
-      $\Phi_{sr}\gets\sum_{a'}T_{a's}B_{a'r}$,\quad
-      $P_{sr}\gets\Gamma_s\,\Phi_{sr}^{-1/\theta}$
-      \Comment{expected price indices}
-    \State \textbf{Downstream technology at these prices.} Solve for $(\chi_L,\{\chi_s\})$, $\sum_s\chi_s=1$, by Newton on $(\operatorname{logit}\chi_L,\log\chi_s/\chi_1)$:
-    \State \quad $s_{rs}=\dfrac{\chi_s P_{sr}^{1-\nu}}{\sum_k\chi_kP_{kr}^{1-\nu}}$,\quad
-      $c_r=\bigl[\chi_L w_r^{1-\lambda}+(1-\chi_L)P_r^{1-\lambda}\bigr]^{\frac1{1-\lambda}}$,\quad
-      $\ell_r=\chi_L\Bigl(\dfrac{w_r}{c_r}\Bigr)^{1-\lambda}$
-    \State \quad $\sum_r\hat\pi_r\ell_r=\tilde\chi_L$,\qquad
-      $\dfrac{\sum_r\hat\pi_r(1-\ell_r)s_{rs}}{\sum_r\hat\pi_r(1-\ell_r)}=\tilde\chi_s,\ s=2,\dots,S$
-      \Comment{blocks 1--2}
-    \State $\omega_{rs}\gets\hat\pi_r(1-\ell_r)s_{rs}$
-      \Comment{sales pinned at $\hat\pi_r$: $A_r$ does not enter}
-    \State $\gamma_{as}(T)\gets\dfrac{\sum_r\omega_{rs}\,T_{as}B_{ar}/\Phi_{sr}}{\sum_r\omega_{rs}}$
-    \State $T^{+}_{as}\gets T_{as}\bigl(\tilde\gamma_{as}/\gamma_{as}(T)\bigr)^{\varsigma}$ if $\tilde\gamma_{as}>0$, else $T^{+}_{as}\gets T_{as}$
-    \State $T^{+}_{as}\gets T^{+}_{as}/T^{+}_{a^{\text{ref}}_s s}$ for each $s$
-    \State $\text{resid}\gets\max_{a,s:\ \tilde\gamma_{as}>0}\bigl|\log T^{+}_{as}-\log T_{as}\bigr|$;\quad $T\gets T^{+}$
-    \State \textbf{if} $\text{resid}<\epsilon_T$ \textbf{then break}
+\Require cell productivities $T_{r's}$; foreign scales $\Phi^F_s$; trade costs $\tau_{r'r}$; the fixed draws $u_{r'\rho s}$ and $u^F_{\rho s}$, $\rho=1,\dots,m$
+\Ensure the winner and the price of every (variety, buyer) pair, the win indicators $\var{win\_indicator}_{r'\rho s}$, the win counts $k_{r's}$ and the shares $q_s$ of varieties won in France
+\For{$s=1,\dots,S$ \textbf{and} $\rho=1,\dots,m$}
+    \For{$r'\in\mathcal{R}^+_s$}
+        \LineComment{The best French firm of each region is a Fr\'echet draw, by the inverse c.d.f.}
+        \State $z_{r'\rho s}\gets T_{r's}^{1/\theta}\bigl(-\log(1-u_{r'\rho s})\bigr)^{-1/\theta}$
+    \EndFor
+    \LineComment{The foreign bid has no distance component, so it is the same for every buyer.}
+    \State $\var{foreign\_bid}_{\rho s}\gets\bigl(-\log(1-u^F_{\rho s})/\Phi^F_s\bigr)^{1/\theta}$ if $s\in\mathcal{S}^F$, else $+\infty$
+    \For{$r\in\mathcal{R}_D$}
+        \State $\var{best\_domestic\_cost}\gets\min_{r'} w_{r's}\tau_{r'r}/z_{r'\rho s}$,\quad
+          $\var{best\_domestic\_origin}\gets\arg\min_{r'} w_{r's}\tau_{r'r}/z_{r'\rho s}$
+        \If{$\var{foreign\_bid}_{\rho s}<\var{best\_domestic\_cost}$}
+            \LineComment{The buyer imports the variety, which creates no domestic linkage.}
+            \State $\var{winner}_{\rho sr}\gets F$,\quad $p_{\rho sr}\gets\var{foreign\_bid}_{\rho s}$
+        \Else
+            \State $\var{winner}_{\rho sr}\gets\var{best\_domestic\_origin}$,\quad $p_{\rho sr}\gets\var{best\_domestic\_cost}$
+        \EndIf
+    \EndFor
 \EndFor
-\State re-solve \eqref{eq:app-tech} at the final $T$;\quad $A_r\gets c_r\,(\hat\pi_r/\delta_r)^{-1/\varepsilon}$, normalised to $A_1=1$
-  \Comment{block 3, closed form}
-\State \Return $(T,\chi_L,\{\chi_s\},\{A_r\})$, converged iff both the $T$ loop and the solution of \eqref{eq:app-tech} converged
+\LineComment{A region supplies a variety as soon as it wins it for one buyer.}
+\State $\var{win\_indicator}_{r'\rho s}\gets\mathbf{1}\{\var{winner}_{\rho sr}=r'\ \text{for some }r\in\mathcal{R}_D\}$,\quad
+  $k_{r's}\gets\sum_\rho\var{win\_indicator}_{r'\rho s}$,\quad $p_{r's}\gets k_{r's}/m$
+\LineComment{This is the share of varieties won in France, which bounds the variety count.}
+\State $q_s\gets\frac1m\sum_\rho\mathbf{1}\{\var{winner}_{\rho sr}\neq F\ \text{for some }r\}$
+\State \Return $\{\var{winner}_{\rho sr}\},\{p_{\rho sr}\},\{\var{win\_indicator}_{r'\rho s}\},\{k_{r's}\},\{q_s\}$
 \end{algorithmic}
 \end{algorithm}
 
-With the downstream technology held fixed, the multiplicative update is a Sinkhorn scaling of the strictly positive matrix $B$ --- the density term $n_{r's}^{\kappa}$ only changes the kernel --- hence a contraction with a fixed point unique up to the sector-specific scale removed by the reference-area normalisation. Given $T$, the downstream technology parameters are just-identified by blocks 1--3 through the expected price indices, which do not depend on them; $(\chi_L,\chi_s)$ are solved jointly because the input-share weights $\hat\pi_r(1-\ell_r)$ move with $\chi_s$ through $P_r$, and $A_r$ follows in closed form since sales are $\pi_r\propto\delta_r(c_r/A_r)^{\varepsilon}$. Pinning sales at their target removes the demand loop through which, with fixed downstream technology, raising $T$ lowers input prices, raises sales and sends demand back to the same area. A zero-target column (an area active in the data that wins nothing, which only happens in a fake world) is held fixed relative to the reference and left out of the residual. Each worker keeps the last converged $(T,\chi_L,\chi_s)$ as the next starting value; since the fixed point is unique, a converged result does not depend on it, and a failed warm start is retried from $T^{(0)}$. A particle for which the calibration does not converge is rejected rather than evaluated. The starting value $T^{(0)}$ is the closed-form inversion of $\tilde\gamma$ at the priors $(\alpha_0,\kappa_0)$ with expenditure proxied by $\hat\pi_r$. \swann{Je n'ai pas réussi à montrer que quand on ajoute le GE feedback on obtient une application contractante (je ne suis pas sûr que ça soit possible d'ailleurs).}
+
+Four features of Algorithm~\ref{alg:simulate} are worth emphasizing. First, the arrows run one way, $(\alpha,\kappa)\to(T,\Phi^F,\chi_L,\chi_s,A)\to\{p_{r's},q_s\}\to\{N_s\}\to\boldsymbol\beta$: the calibration of comparative advantage does not use the variety count, and the variety count does not revise it, so Steps~1--3 form a recursion rather than a simultaneous system. Second, the calibration of Step~1 runs on the \emph{expected} sector price indices $P_{sr}=\Gamma_s\Phi_{sr}^{-1/\theta}$, foreign competitor included, while the moments of Step~4 use the \emph{realised} indices of the $m$ simulated varieties. At the calibrated values, the simulated blocks 1--3 therefore differ from their targets only by the Monte Carlo error of the realised indices, which the search must not chase: they leave the criterion. The same holds for $\tilde\gamma_{as}$ and $\tilde f_s$, matched in expectation by the calibration, and for $\widetilde G_s(0)$, matched up to the integer step by the bisection; the moments that carry information on $\mu$ are $\boldsymbol\beta$. Third, $m$ is a Monte Carlo device unrelated to $\widehat{N}_s$: the winner of a variety depends only on relative delivered costs, so $p_{r's}$ and $q_s$ are continuum objects estimated at any $m$ large enough. The code sets $m=\max\bigl(100,\max_s\lceil N^{obs}_s/(1-\hat f_s)\rceil\bigr)$, capped at $2{,}000$, which also bounds every candidate $N_s$. Fourth, the draws $u$, $u^F$ and the permutations $\sigma^s_j$ are held fixed across every evaluation (common random numbers), which makes the criterion a deterministic function of $\mu$ that a swarm can descend; $u$ is one low-dimensional scrambled Sobol net per sector, with regions as dimensions and varieties as points, and $u^F_{\cdot s}$ is one more dimension of the same net, so adding the foreign competitor leaves the domestic draws unchanged. Fake worlds (Algorithms~\ref{alg:W} and~\ref{alg:boot}) are drawn with independent pseudo-random numbers instead.
+
+% ---------------------------------------------------------------------
+%  Algorithm 2 -- joint calibration of T, Phi^F and the downstream technology
+% ---------------------------------------------------------------------
+\begin{algorithm}[H]
+\caption{\textsc{ProfileComparativeAdvantage}: comparative advantage, foreign scale and downstream technology by matrix scaling with general-equilibrium expenditure weights}
+\label{alg:invertT}
+\small
+\begin{algorithmic}[1]
+\Require $(\alpha,\kappa)$; targets $\hat\gamma_{as}$, $\hat f_s$ and $(\hat\chi_L,\{\hat\chi_s\},\{\hat\pi_r\})$;
+  damping $\varsigma=0.3$; tolerance $\epsilon_T=10^{-9}$; at most $2\,000$ passes; starting values $T^{(0)}_{as}$ and $\Phi^{F(0)}_s$
+\Ensure $\{T_{as}\},\{\Phi^F_s\},\chi_L,\{\chi_s\},\{A_r\}$ reproducing $\hat\gamma_{as}$, $\hat f_s$, $\hat\chi_L$, $\hat\chi_s$ and $\hat\pi_r$ in expectation, and a convergence flag
+\LineComment{Productivities are only identified relative to the domestic reference area of each sector.}
+\State $(T,\Phi^F)\gets(T^{(0)},\Phi^{F(0)})$; then, for each $s$, divide $T_{\cdot s}$ and $\Phi^F_s$ by $T_{a^{ref}_s s}$
+\For{$\var{pass}=1,\dots,2\,000$}
+    \LineComment{An area reaches a buyer more easily when its regions are dense, cheap and close.}
+    \State $\var{market\_access}_{ar}\gets\sum_{r'\in\mathcal{R}_a}n_{r's}^{\kappa}(w_{r's}\tau_{r'r})^{-\theta}$
+    \LineComment{The expected price index includes the foreign competitor, common to every buyer.}
+    \State $\Phi^{dom}_{sr}\gets\sum_{a}T_{as}\,\var{market\_access}_{ar}$,\quad
+      $\Phi_{sr}\gets\Phi^{dom}_{sr}+\Phi^F_s$,\quad
+      $P_{sr}\gets\Gamma_s\,\Phi_{sr}^{-1/\theta}$
+    \State \textbf{Downstream technology at these prices.} Solve for $(\chi_L,\{\chi_s\})$, $\sum_s\chi_s=1$, by Newton's method on $(\operatorname{logit}\chi_L,\log\chi_s/\chi_1)$, started from the previous pass:
+    \State \quad $s_{rs}=\dfrac{\chi_s P_{sr}^{1-\nu}}{\sum_k\chi_kP_{kr}^{1-\nu}}$,\quad
+      $c_r=\bigl[\chi_L w_r^{1-\lambda}+(1-\chi_L)P_r^{1-\lambda}\bigr]^{\frac1{1-\lambda}}$,\quad
+      $\ell_r=\chi_L\Bigl(\dfrac{w_r}{c_r}\Bigr)^{1-\lambda}$
+    \LineComment{Blocks 1 and 2 are matched at the total price indices, so imports count in the sector shares.}
+    \State \quad $\sum_r\hat\pi_r\ell_r=\hat\chi_L$,\qquad
+      $\dfrac{\sum_r\hat\pi_r(1-\ell_r)s_{rs}}{\sum_r\hat\pi_r(1-\ell_r)}=\hat\chi_s,\ s=2,\dots,S$
+    \LineComment{Sales are held at their observed shares, so downstream productivity does not enter the weights.}
+    \State $\omega_{rs}\gets\hat\pi_r(1-\ell_r)s_{rs}$
+    \LineComment{Both are shares of the sector's total purchases, so they sum to one across areas and imports.}
+    \State $\gamma^{model}_{as}\gets\dfrac{\sum_r\omega_{rs}\,T_{as}\,\var{market\_access}_{ar}/\Phi_{sr}}{\sum_r\omega_{rs}}$,\quad
+      $f^{model}_{s}\gets\dfrac{\sum_r\omega_{rs}\,\Phi^F_s/\Phi_{sr}}{\sum_r\omega_{rs}}$
+    \LineComment{An area that the model under-supplies relative to the data becomes more productive.}
+    \State $T^{+}_{as}\gets T_{as}\bigl(\hat\gamma_{as}/\gamma^{model}_{as}\bigr)^{\varsigma}$ if $\hat\gamma_{as}>0$, else $T^{+}_{as}\gets T_{as}$
+    \LineComment{The foreign competitor follows the same rule, on the import share.}
+    \State $\Phi^{F+}_{s}\gets \Phi^{F}_{s}\bigl(\hat f_{s}/f^{model}_{s}\bigr)^{\varsigma}$ for $s\in\mathcal{S}^F$
+    \LineComment{The renormalisation moves every column of the sector, the foreign one included.}
+    \State divide $T^{+}_{\cdot s}$ and $\Phi^{F+}_s$ by $T^{+}_{a^{ref}_s s}$ for each $s$
+    \State $\var{largest\_log\_step}\gets\max\bigl(\max_{a,s:\ \hat\gamma_{as}>0}|\log T^{+}_{as}-\log T_{as}|,\ \max_{s\in\mathcal{S}^F}|\log \Phi^{F+}_{s}-\log \Phi^F_{s}|\bigr)$
+    \State $(T,\Phi^F)\gets(T^{+},\Phi^{F+})$
+    \LineComment{The iteration stops when no productivity moves by more than $10^{-9}$ in logs.}
+    \State \textbf{if} $\var{largest\_log\_step}<\epsilon_T$ \textbf{then break}
+\EndFor
+\LineComment{Downstream productivity follows in closed form from the sales shares (block 3).}
+\State re-solve \eqref{eq:app-tech} at the final $(T,\Phi^F)$;\quad $A_r\gets c_r\,(\hat\pi_r/\delta_r)^{-1/\varepsilon}$, normalised to $A_1=1$
+\State $\var{converged}\gets$ ($\var{largest\_log\_step}<\epsilon_T$) \textbf{and} (the solution of \eqref{eq:app-tech} converged) \textbf{and} (every $A_r$ is finite)
+\State \Return $(T,\Phi^F,\chi_L,\{\chi_s\},\{A_r\},\var{converged})$
+\end{algorithmic}
+\end{algorithm}
+
+With the downstream technology held fixed, the multiplicative update is a Sinkhorn scaling of the strictly positive kernel $[\var{market\_access}\,;\,\mathbf 1']$, in which the foreign competitor is a column whose market access equals one in every buyer --- the density term $n_{r's}^{\kappa}$ only changes the domestic entries --- hence a fixed point unique up to the sector-specific scale removed by the reference-area normalisation. Two choices follow from the units of $\Phi^F_s$. The reference is always a domestic area, since $\Phi^F_s$ is measured against domestic productivity; and the renormalisation divides $\Phi^F_s$ by the same factor as the areas, so the import share is invariant to it. Given $(T,\Phi^F)$, the downstream technology parameters are just-identified by blocks 1--3 through the expected price indices, which do not depend on them; $(\chi_L,\chi_s)$ are solved jointly because the input-share weights $\hat\pi_r(1-\ell_r)$ move with $\chi_s$ through $P_r$, and $A_r$ follows in closed form since sales are $\pi_r\propto\delta_r(c_r/A_r)^{\varepsilon}$. Pinning sales at their target removes the demand loop through which, with fixed downstream technology, raising $T$ lowers input prices, raises sales and sends demand back to the same area. A zero-target column (an area active in the data that wins nothing, which only happens in a fake world) is held fixed relative to the reference and left out of the stopping rule. The starting value $T^{(0)}$ is the closed-form inversion of the domestic shares at the priors $(\alpha_0,\kappa_0)$ with expenditure proxied by $\hat\pi_r$, and $\Phi^{F(0)}_s=\hat f_s\,\tilde\Phi_s/(1-\hat f_s)$ with $\tilde\Phi_s=\sum_r\hat\pi_r\Phi^{dom}_{sr}$ at that start, the import share of a sector whose buyers all faced the same domestic index. Each worker keeps the last converged $(T,\Phi^F,\chi_L,\chi_s)$ as the next starting value; since the fixed point is unique, a converged result does not depend on it, and a failed warm start is retried from $(T^{(0)},\Phi^{F(0)})$. A particle for which the calibration does not converge is rejected rather than evaluated. \swann{Je n'ai pas réussi à montrer que quand on ajoute le GE feedback on obtient une application contractante (je ne suis pas sûr que ça soit possible d'ailleurs).}
 
 % ---------------------------------------------------------------------
 %  Algorithm 3 -- variety count
 % ---------------------------------------------------------------------
 \begin{algorithm}[H]
-\caption{\textsc{CalibrateN}: variety count by monotone integer search}
+\caption{\textsc{CalibrateVarietyCount}: variety count by monotone integer search}
 \label{alg:countN}
+\small
 \begin{algorithmic}[1]
-\Require win counts $k_{r's}$ from $m$ simulated varieties; targets
-  $\widehat{G}_s(0)$ (the data, or a fake world's own empty-cell shares); bounds $[N^{lo}_s,N^{hi}_s]$
-\Ensure $\{\widehat{N}_s\}$
+\Require win counts $k_{r's}$ and shares of varieties won in France $q_s$ from $m$ simulated varieties; targets
+  $\widehat{G}_s(0)$ (the data, or a fake world's own empty-cell shares); observed supplier counts $N^{obs}_s$
+\Ensure $\{\widehat{N}_s\}$, and for each sector whether a bound binds
 \For{$s=1,\dots,S$}
+    \LineComment{Only the varieties won in France can produce an observed supplier.}
+    \State $N^{hi}_s\gets\min\bigl(\lceil N^{obs}_s/q_s\rceil,\ \lceil N^{obs}_s/(1-\hat f_s)\rceil,\ m\bigr)$
+    \LineComment{Each variety won in France has at most one supplier per buyer.}
+    \State $N^{lo}_s\gets\min\bigl(\max(\lceil N^{obs}_s/R^D\rceil,\ \lceil N^{obs}_s/(R^Dq_s)\rceil),\ N^{hi}_s\bigr)$
+    \LineComment{This is an unbiased estimator of $\frac{1}{|\mathcal{R}^+_s|}\sum_{r'}(1-p_{r's})^{n}$.}
     \State define
       $\widetilde{G}_s(n)\gets\dfrac{1}{|\mathcal{R}^+_s|}\displaystyle\sum_{r'\in\mathcal{R}^+_s}
       \binom{m-k_{r's}}{n}\Big/\binom{m}{n}$
-      \Comment{unbiased for $\frac{1}{|\mathcal{R}^+_s|}\sum_{r'}(1-p_{r's})^{n}$}
     \If{$\widetilde{G}_s(N^{lo}_s)\le\widehat{G}_s(0)$}
+        \LineComment{Even the smallest admissible count leaves too few empty regions; the lower bound binds.}
         \State $\widehat{N}_s\gets N^{lo}_s$
     \ElsIf{$\widetilde{G}_s(N^{hi}_s)\ge\widehat{G}_s(0)$}
+        \LineComment{Even the largest admissible count leaves too many empty regions; the upper bound binds.}
         \State $\widehat{N}_s\gets N^{hi}_s$
     \Else
-        \State $(\underline{n},\overline{n})\gets(N^{lo}_s,N^{hi}_s)$
-        \While{$\overline{n}-\underline{n}>1$}
-            \State $n\gets\lfloor(\underline{n}+\overline{n})/2\rfloor$
-            \State \textbf{if} $\widetilde{G}_s(n)>\widehat{G}_s(0)$ \textbf{then}
-              $\underline{n}\gets n$ \textbf{else} $\overline{n}\gets n$
+        \State $(\var{count\_low},\var{count\_high})\gets(N^{lo}_s,N^{hi}_s)$
+        \While{$\var{count\_high}-\var{count\_low}>1$}
+            \State $\var{count\_mid}\gets\lfloor(\var{count\_low}+\var{count\_high})/2\rfloor$
+            \LineComment{More varieties leave fewer regions without a buyer.}
+            \State \textbf{if} $\widetilde{G}_s(\var{count\_mid})>\widehat{G}_s(0)$ \textbf{then}
+              $\var{count\_low}\gets \var{count\_mid}$ \textbf{else} $\var{count\_high}\gets \var{count\_mid}$
         \EndWhile
-        \State $\widehat{N}_s\gets\arg\min_{n\in\{\underline{n},\overline{n}\}}
+        \State $\widehat{N}_s\gets\arg\min_{n\in\{\var{count\_low},\var{count\_high}\}}
           \bigl|\widetilde{G}_s(n)-\widehat{G}_s(0)\bigr|$
     \EndIf
 \EndFor
@@ -617,123 +684,134 @@ With the downstream technology held fixed, the multiplicative update is a Sinkho
 \end{algorithmic}
 \end{algorithm}
 
-Because $\widetilde{G}_s$ is decreasing in $n$ and is evaluated in closed form from the win counts of Step~2, the search costs $O(\log(N^{hi}_s-N^{lo}_s))$ evaluations and never re-simulates the Ricardian competition. The count is an integer at every evaluation: it is never relaxed to the real line and never rounded. A bound that binds is recorded and reported rather than silently absorbed.
+Because $\widetilde{G}_s$ is decreasing in $n$ and is evaluated in closed form from the win counts of Step~2, the search costs $O(\log(N^{hi}_s-N^{lo}_s))$ evaluations and never re-simulates the Ricardian competition. The bounds use $q_s$ from the same draws, which does not depend on $N_s$, so they introduce no circularity; without imports $q_s=1$ and they reduce to $[\lceil N^{obs}_s/R^D\rceil,N^{obs}_s]$. The count is an integer at every evaluation: it is never relaxed to the real line and never rounded. A bound that binds is recorded and reported rather than silently absorbed.
 
 % ---------------------------------------------------------------------
 %  Algorithm 4 -- block 4
 % ---------------------------------------------------------------------
 \begin{algorithm}[H]
-\caption{\textsc{CellBeta}: the extensive-margin coefficients, averaged over $J$ networks}
+\caption{\textsc{ExtensiveMarginCoefficients}: the extensive-margin coefficients, averaged over $J$ networks}
 \label{alg:cellbeta}
+\small
 \begin{algorithmic}[1]
-\Require win indicators $\iota_{r'\rho s}$ of Step~2; variety counts $\{\widehat N_s\}$; permutations $\sigma^s_j$ of $\{1,\dots,m\}$, $j=1,\dots,J$
+\Require win indicators $\var{win\_indicator}_{r'\rho s}$ of Step~2; variety counts $\{\widehat N_s\}$; permutations $\sigma^s_j$ of $\{1,\dots,m\}$, $j=1,\dots,J$
 \Ensure $\bar{\boldsymbol\beta}$, an estimate of $\mathbb{E}_\Omega[\boldsymbol\beta(\mu,\Omega)]$, and the number of failed fits
 \For{$j=1,\dots,J$}
-    \State network $j$: the varieties $\sigma^s_j(1),\dots,\sigma^s_j(\widehat N_s)$ of each sector
-      \Comment{nested in $N$}
-    \State $y^{(j)}_{r's}\gets\max_{t\le\widehat N_s}\iota_{r'\sigma^s_j(t)s}$ for $(r',s)\in\mathcal{A}$
-      \Comment{$\mathbf{1}\{K_{r's}>0\}$ in network $j$}
-    \State $\hat{\boldsymbol\beta}^{(j)}\gets$ cloglog of $y^{(j)}$ on $\log d_{r'a(r')}$ (or the bins) and $\log n_{r's}$, sector$\times$area fixed effects, groups without variation dropped
-      \Comment{the data regression}
+    \LineComment{Networks are nested in $N$: one more variety adds a variety, it does not redraw the network.}
+    \State network $j$ is made of the varieties $\sigma^s_j(1),\dots,\sigma^s_j(\widehat N_s)$ of each sector
+    \LineComment{A region hosts a supplier in network $j$ if it wins one of its varieties for some buyer.}
+    \State $\var{supplier\_present}^{(j)}_{r's}\gets\max_{t\le\widehat N_s}\var{win\_indicator}_{r'\sigma^s_j(t)s}$ for $(r',s)\in\mathcal{A}$
+    \LineComment{This is the regression run on the data, unchanged.}
+    \State $\hat{\boldsymbol\beta}^{(j)}\gets$ cloglog of $\var{supplier\_present}^{(j)}$ on $\log d_{r'a(r')}$ (or the bins) and $\log n_{r's}$, with sector$\times$area fixed effects and the groups without variation dropped
 \EndFor
-\State $\bar{\boldsymbol\beta}\gets$ mean of the $\hat{\boldsymbol\beta}^{(j)}$ over the converged fits; non-converged or quasi-separated fits are excluded and counted
+\LineComment{Fits that fail to converge or are quasi-separated are excluded and counted.}
+\State $\bar{\boldsymbol\beta}\gets$ mean of the $\hat{\boldsymbol\beta}^{(j)}$ over the converged fits
 \State \Return $\bar{\boldsymbol\beta}$
 \end{algorithmic}
 \end{algorithm}
 
-Each network has exactly $\widehat N_s$ varieties per sector, as the data do, and $\boldsymbol\beta$ is computed on it exactly as on the data; averaging the statistic over networks, rather than computing the statistic of the average network, is what targets $\mathbb{E}_\Omega[\boldsymbol\beta(\mu,\Omega)]$ when the observed $\widehat{\boldsymbol\beta}$ is a single realisation. Drawing the $J$ networks among the $m$ winners already found costs no further Ricardian solve.
+Each network has exactly $\widehat N_s$ varieties per sector, as the data do, and $\boldsymbol\beta$ is computed on it exactly as on the data; averaging the statistic over networks, rather than computing the statistic of the average network, is what targets $\mathbb{E}_\Omega[\boldsymbol\beta(\mu,\Omega)]$ when the observed $\widehat{\boldsymbol\beta}$ is a single realisation. Imported varieties are part of each network but make no French region a supplier, so the foreign competitor enters $\boldsymbol\beta$ through the varieties it takes away from distant regions. Drawing the $J$ networks among the $m$ winners already found costs no further Ricardian solve.
 
 % ---------------------------------------------------------------------
 %  Algorithm 5 -- PSO
 % ---------------------------------------------------------------------
 \begin{algorithm}[H]
-\caption{\textsc{Pso}: particle swarm minimisation of $\mathcal{Q}$ over a box}
+\caption{\textsc{ParticleSwarm}: particle swarm minimisation of $\mathcal{Q}$ over a box}
 \label{alg:pso}
+\small
 \begin{algorithmic}[1]
-\Require objective $\mathcal{Q}$; box $[\ell,u]\subset\mathbb{R}^{d}$; swarm size
+\Require objective $\mathcal{Q}$; box $[\var{lower},\var{upper}]\subset\mathbb{R}^{d}$; swarm size
   $P$; iterations $I$; warm start $x_0$; inertia range
-  $[\underline{w},\overline{w}]=[0.4,0.9]$; cognitive $c_1=1.5$; social $c_2=2.5$
+  $[\underline{w},\overline{w}]=[0.4,0.9]$; cognitive weight $c_1=1.5$; social weight $c_2=2.5$
 \Ensure $x^\star=\arg\min \mathcal{Q}$ over the visited points
-\State draw $x_1,\dots,x_{P-1}$ from a scrambled Sobol net on $[\ell,u]$;\;
-  $x_P\gets\Pi_{[\ell,u]}(x_0)$
-\State $v_i\gets 0.1\,(u-\ell)\odot\xi_i$, $\xi_i\sim\mathcal N(0,I)$; \; $b_i\gets x_i$, $f_i\gets\mathcal{Q}(x_i)$ evaluated in
-  parallel; \; $g\gets\arg\min_i f_i$
+\LineComment{The incumbent is always a particle, so a stage never ends worse than it started.}
+\State draw $x_1,\dots,x_{P-1}$ from a scrambled Sobol net on $[\var{lower},\var{upper}]$;\;
+  $x_P\gets\Pi_{[\var{lower},\var{upper}]}(x_0)$
+\State $\var{velocity}_i\gets 0.1\,(\var{upper}-\var{lower})\odot\xi_i$, $\xi_i\sim\mathcal N(0,I)$; \; $\var{own\_best}_i\gets x_i$, $f_i\gets\mathcal{Q}(x_i)$ evaluated in
+  parallel; \; $\var{swarm\_best}\gets\arg\min_i f_i$
 \For{$t=1,\dots,I$}
+    \LineComment{The inertia declines, so the swarm explores first and exploits later.}
     \State $w\gets\overline{w}-(\overline{w}-\underline{w})\,t/I$
     \For{$i=1,\dots,P$ \textbf{in parallel}}
-        \State draw $r_1,r_2\sim U[0,1]^d$
-        \State $v_i\gets w\,v_i+c_1 r_1\odot(b_i-x_i)+c_2 r_2\odot(g-x_i)$
-        \Comment{$\odot$: element-wise multiplication}
-        \State $v_i\gets\Pi_{[-\bar v,\bar v]}(v_i)$, \; $\bar v=0.1\,(u-\ell)$
-        \State $x_i\gets x_i+v_i$; reflect $x_i$ back into $[\ell,u]$, halving the
+        \State draw $\var{noise}_1,\var{noise}_2\sim U[0,1]^d$
+        \LineComment{The symbol $\odot$ denotes element-wise multiplication.}
+        \State $\var{velocity}_i\gets w\,\var{velocity}_i+c_1\, \var{noise}_1\odot(\var{own\_best}_i-x_i)+c_2\, \var{noise}_2\odot(\var{swarm\_best}-x_i)$
+        \State $\var{velocity}_i\gets\Pi_{[-\bar v,\bar v]}(\var{velocity}_i)$, \; $\bar v=0.1\,(\var{upper}-\var{lower})$
+        \State $x_i\gets x_i+\var{velocity}_i$; reflect $x_i$ back into the box, halving the
           reflected velocity
+        \LineComment{Each evaluation is one call to Algorithm~\ref{alg:simulate}, worth $+\infty$ on \textsc{reject}.}
         \State $f\gets\mathcal{Q}(x_i)$
-          \Comment{one call to Algorithm~\ref{alg:simulate}; $+\infty$ on \textsc{reject}}
-        \State \textbf{if} $f<\mathcal{Q}(b_i)$ \textbf{then} $b_i\gets x_i$;\;
-          \textbf{if} $f<\mathcal{Q}(g)$ \textbf{then} $g\gets x_i$
+        \State \textbf{if} $f<\mathcal{Q}(\var{own\_best}_i)$ \textbf{then} $\var{own\_best}_i\gets x_i$;\;
+          \textbf{if} $f<\mathcal{Q}(\var{swarm\_best})$ \textbf{then} $\var{swarm\_best}\gets x_i$
     \EndFor
-    \State \textbf{if} $t>30$ and $t\equiv 0 \pmod{25}$: redraw uniformly on $[\ell,u]$ every particle with $\mathcal{Q}(x_i)>1.5\,\mathcal{Q}(g)$
+    \LineComment{Particles stuck far from the best point are restarted.}
+    \State \textbf{if} $t>30$ and $t\equiv 0 \pmod{25}$: redraw uniformly in the box every particle with $\mathcal{Q}(x_i)>1.5\,\mathcal{Q}(\var{swarm\_best})$
 \EndFor
-\State \Return $g$
+\State \Return $\var{swarm\_best}$
 \end{algorithmic}
 \end{algorithm}
 
-When trade costs are binned, $\mathcal{Q}$ reads the block $(\alpha_1,\dots,\alpha_K)$ \emph{sorted}, and the box bounds of that block are sorted too, so every evaluated point satisfies $\alpha_1\le\dots\le\alpha_K$ and stays in the box. The warm start is always one of the particles, so a stage never ends worse than its incumbent.
+When trade costs are binned, $\mathcal{Q}$ reads the block $(\alpha_1,\dots,\alpha_K)$ \emph{sorted}, and the box bounds of that block are sorted too, so every evaluated point satisfies $\alpha_1\le\dots\le\alpha_K$ and stays in the box.
 
 % ---------------------------------------------------------------------
 %  Algorithm 6 -- weighting matrix from fake worlds
 % ---------------------------------------------------------------------
 \begin{algorithm}[H]
-\caption{\textsc{WorldW}: the weighting matrix from fake worlds}
+\caption{\textsc{WorldWeightMatrix}: the weighting matrix from fake worlds}
 \label{alg:W}
+\small
 \begin{algorithmic}[1]
-\Require $\hat\mu_1=(\hat\alpha_1,\hat\kappa_1)$ and its calibrated parameters $(\widehat T,\widehat\chi_L,\widehat\chi_s,\widehat A,\widehat N)$; number of worlds $B_1=1\,000$
+\Require $\hat\mu_1=(\hat\alpha_1,\hat\kappa_1)$ and its calibrated parameters $(\widehat T,\widehat\Phi^F,\widehat\chi_L,\widehat\chi_s,\widehat A,\widehat N)$; number of worlds $B_1=1\,000$
 \Ensure $W$, on $\boldsymbol\beta$ only
 \For{$b=1,\dots,B_1$ \textbf{in parallel}}
-    \State draw a network $\chi_b$ at $(\hat\mu_1,\widehat T,\widehat\chi_L,\widehat\chi_s,\widehat A)$ with $\widehat N_s$ varieties per sector, i.i.d.\ draws (seed $b$)
-    \State on $\chi_b$, as on the data: $\boldsymbol\beta_b$ (\emph{one} cloglog fit), $G_b$, $\gamma_b$, $\tilde\chi_{L,b}$, $\tilde\chi_{s,b}$, $\pi_b$
-    \State \textbf{skip} the world if the fit of $\boldsymbol\beta_b$ fails or a reference area wins nothing \Comment{counted}
-    \State $(T_b,\chi_{L,b},\chi_{s,b},A_b)\gets\Call{CalibrateT}{\hat\alpha_1,\hat\kappa_1;\ \gamma_b,\tilde\chi_{L,b},\tilde\chi_{s,b},\pi_b}$
-      \Comment{an area with $\gamma_{b,as}=0$ gets $T_{as}=0$}
-    \State simulator $U_b$: Sobol draws at $m$ randomised by a seed proper to the world, and its own permutations $\sigma^s_j$
-    \State run Steps~2--4 of Algorithm~\ref{alg:simulate} on $U_b$ at $(\hat\mu_1,T_b,\chi_{L,b},\chi_{s,b},A_b)$, with $N_b\gets\Call{CalibrateN}{\cdot\,;G_b}$: $\boldsymbol\beta_{sim,b}$
+    \LineComment{This is one realisation of the economy, as nature drew the data.}
+    \State draw a network $\Omega_b$ at $(\hat\mu_1,\widehat T,\widehat\Phi^F,\widehat\chi_L,\widehat\chi_s,\widehat A)$ with $\widehat N_s$ varieties per sector and i.i.d.\ draws (seed $b$)
+    \State on $\Omega_b$, as on the data: $\boldsymbol\beta_b$ (\emph{one} cloglog fit), $G_b$, $\gamma_b$ with its import shares $f_b$, $\hat\chi_{L,b}$, $\hat\chi_{s,b}$ (on total spending), $\pi_b$
+    \LineComment{Skipped worlds are counted and reported.}
+    \State \textbf{skip} the world if the fit of $\boldsymbol\beta_b$ fails or a reference area wins nothing
+    \LineComment{The foreign scale is re-calibrated on the world's own import share, and an area with $\gamma_{b,as}=0$ gets $T_{as}=0$.}
+    \State $(T_b,\Phi^F_b,\chi_{L,b},\chi_{s,b},A_b)\gets\Call{ProfileComparativeAdvantage}{\hat\alpha_1,\hat\kappa_1;\ \gamma_b,f_b,\hat\chi_{L,b},\hat\chi_{s,b},\pi_b}$
+    \State $\var{world\_simulator}_b\gets$ Sobol draws at $m$ randomised by a seed proper to the world, and its own permutations $\sigma^s_j$
+    \State run Steps~2--4 of Algorithm~\ref{alg:simulate} with $\var{world\_simulator}_b$ at $(\hat\mu_1,T_b,\Phi^F_b,\chi_{L,b},\chi_{s,b},A_b)$, with $N_b\gets\Call{CalibrateVarietyCount}{\cdot\,;G_b}$, which gives $\boldsymbol\beta_{sim,b}$
+    \LineComment{The residual combines the granular noise of the world and the simulation noise.}
     \State $e_b\gets\boldsymbol\beta_b-\boldsymbol\beta_{sim,b}$
 \EndFor
 \State $\hat\Sigma_u\gets\widehat{\mathrm{Cov}}(e_1,\dots,e_{B_1})$,\quad $W\gets\hat\Sigma_u^{-1}$
+\LineComment{A mean residual away from zero measures the bias of the simulator against a finite world.}
 \State report $\bar e$ and its $t$-statistic
-  \Comment{the bias of the continuum simulator against a finite world}
 \end{algorithmic}
 \end{algorithm}
 
-No derivative is computed: to first order $e_b$ is the composite noise $u_b-\boldsymbol\beta_{sim,MC,b}$, so $\widehat{\mathrm{Cov}}(e_b)$ estimates $\Sigma_u$, including the part of the granular noise in $\boldsymbol\beta$ absorbed by the recalibration of $T$, the downstream technology parameters and $N$ on the same network. The world's simulator must have its own seed: if it reused the draws of $\chi_b$, it would reproduce the fake data exactly at $\hat\mu_1$ and the dispersion would vanish; if it were common to all worlds, the simulation noise would be omitted. When $\boldsymbol\beta$ has as many entries as $\mu$ (one distance coefficient), the system is exactly identified and $W$ moves the inference, not the point estimate.
+No derivative is computed: to first order $e_b$ is the composite noise $u_b-\boldsymbol\beta_{sim,MC,b}$, so $\widehat{\mathrm{Cov}}(e_b)$ estimates $\Sigma_u$, including the part of the granular noise in $\boldsymbol\beta$ absorbed by the recalibration of $T$, $\Phi^F$, the downstream technology parameters and $N$ on the same network. The import share of a world is the realised share of its few varieties, so $\Phi^F_b$ is noisy, and that noise reaches $\boldsymbol\beta_{sim,b}$ through the varieties the foreign competitor takes. The world's simulator must have its own seed: if it reused the draws of $\Omega_b$, it would reproduce the fake data exactly at $\hat\mu_1$ and the dispersion would vanish; if it were common to all worlds, the simulation noise would be omitted. When $\boldsymbol\beta$ has as many entries as $\mu$ (one distance coefficient), the system is exactly identified and $W$ moves the inference, not the point estimate.
 
 % ---------------------------------------------------------------------
 %  Algorithm 7 -- parametric bootstrap
 % ---------------------------------------------------------------------
 \begin{algorithm}[H]
-\caption{\textsc{WorldBoot}: inference by parametric bootstrap}
+\caption{\textsc{WorldBootstrap}: inference by parametric bootstrap}
 \label{alg:boot}
+\small
 \begin{algorithmic}[1]
-\Require an estimate $\hat\mu=(\hat\alpha,\hat\kappa)$ and its calibrated parameters $(\widehat T,\widehat\chi_L,\widehat\chi_s,\widehat A,\widehat N)$; a weighting matrix $W$, fixed; number of worlds $B_2=500$
-\Ensure standard deviations, 95\% intervals and biases of $\alpha,\kappa,N,T,\chi_L,\chi_s,A$ and of the counterfactuals
+\Require an estimate $\hat\mu=(\hat\alpha,\hat\kappa)$ and its calibrated parameters $(\widehat T,\widehat\Phi^F,\widehat\chi_L,\widehat\chi_s,\widehat A,\widehat N)$; a weighting matrix $W$, fixed; number of worlds $B_2=500$
+\Ensure standard deviations, 95\% intervals and biases of $\alpha,\kappa,N,T,\Phi^F,\chi_L,\chi_s,A$ and of the counterfactuals
 \For{$b=1,\dots,B_2$ \textbf{in parallel}}
-    \State draw $\chi_b$ and compute $(\boldsymbol\beta_b,G_b,\gamma_b,\tilde\chi_{L,b},\tilde\chi_{s,b},\pi_b)$ as in Algorithm~\ref{alg:W}; simulator $U_b$ of its own
+    \State draw $\Omega_b$ and compute $(\boldsymbol\beta_b,G_b,\gamma_b,f_b,\hat\chi_{L,b},\hat\chi_{s,b},\pi_b)$ as in Algorithm~\ref{alg:W}, with a simulator $\var{world\_simulator}_b$ of its own
     \State define, for $\mu=(\alpha,\kappa)$ in the box ($\alpha$ read sorted):
-    \State \quad $(T,\chi_L,\chi_s,A)\gets\Call{CalibrateT}{\alpha,\kappa;\ \gamma_b,\tilde\chi_{L,b},\tilde\chi_{s,b},\pi_b}$
-      \Comment{warm-started within the world}
-    \State \quad $\boldsymbol\beta_{sim}(\mu)\gets$ Steps~2--4 of Algorithm~\ref{alg:simulate} on $U_b$, with $N\gets\Call{CalibrateN}{\cdot\,;G_b}$
+    \LineComment{The calibration is warm-started within the world.}
+    \State \quad $(T,\Phi^F,\chi_L,\chi_s,A)\gets\Call{ProfileComparativeAdvantage}{\alpha,\kappa;\ \gamma_b,f_b,\hat\chi_{L,b},\hat\chi_{s,b},\pi_b}$
+    \State \quad $\boldsymbol\beta_{sim}(\mu)\gets$ Steps~2--4 of Algorithm~\ref{alg:simulate} with $\var{world\_simulator}_b$, and $N\gets\Call{CalibrateVarietyCount}{\cdot\,;G_b}$
     \State \quad $\mathcal{Q}_b(\mu)\gets\bigl(\boldsymbol\beta_b-\boldsymbol\beta_{sim}(\mu)\bigr)'W\bigl(\boldsymbol\beta_b-\boldsymbol\beta_{sim}(\mu)\bigr)$, $+\infty$ outside the box or on \textsc{reject}
+    \LineComment{The simulator is held fixed within the world, so the criterion is deterministic.}
     \State $\mu_b\gets\arg\min_\mu\mathcal{Q}_b(\mu)$ by Nelder--Mead started at $\hat\mu$
-      \Comment{common random numbers within the world}
-    \State $(T_b,\chi_{L,b},\chi_{s,b},A_b,N_b)\gets$ the calibrated parameters and the count at $\mu_b$
-    \State recompute the counterfactuals at $(\mu_b,T_b,\chi_{L,b},\chi_{s,b},A_b)$
-      \Comment{closed form: estimate, equal $T$, $\tau\equiv1$}
+    \State $(T_b,\Phi^F_b,\chi_{L,b},\chi_{s,b},A_b,N_b)\gets$ the calibrated parameters and the count at $\mu_b$
+    \LineComment{In every regime each buyer's import share is held at its value in the world.}
+    \State recompute the counterfactuals at $(\mu_b,T_b,\Phi^F_b,\chi_{L,b},\chi_{s,b},A_b)$
 \EndFor
-\State for every parameter and result: sd across worlds, $[q_{2.5},q_{97.5}]$, bias $=$ mean $-$ estimate
+\State for every parameter and result: standard deviation across worlds, $[q_{2.5},q_{97.5}]$, and bias $=$ mean $-$ estimate
 \end{algorithmic}
 \end{algorithm}
 
-This is a parametric bootstrap: the model is resampled, not the firms, so a fake world can host a supplier in a region that has none in the data. The whole chain is re-run in each world, including the calibration of $T$ and of the downstream technology on the world's own targets, so the sampling noise of every calibrated object enters the draws. The worlds are drawn i.i.d.\ rather than from the Sobol design of the estimation, whose stratification would understate the variance. An area active in the data that wins nothing in a world gets $T=0$ and is reported as an empty share rather than as a log of zero; a world whose reference area is empty cannot be normalised and is excluded. If the bias is of the order of the standard deviation, the bias-corrected interval $[2\hat\mu-q_{97.5},\,2\hat\mu-q_{2.5}]$ should be used instead of the quantiles.
+This is a parametric bootstrap: the model is resampled, not the firms, so a fake world can host a supplier in a region that has none in the data. The whole chain is re-run in each world, including the calibration of $T$, $\Phi^F$ and of the downstream technology on the world's own targets, so the sampling noise of every calibrated object enters the draws. The worlds are drawn i.i.d.\ rather than from the Sobol design of the estimation, whose stratification would understate the variance. An area active in the data that wins nothing in a world gets $T=0$ and is reported as an empty share rather than as a log of zero; a world whose reference area is empty cannot be normalised and is excluded. The counterfactuals (equal $T$, $\tau\equiv1$) rescale the foreign scale buyer by buyer, $\Phi^F_{rs}=\Phi^F_s\,\Phi^{dom}_{rs}(\text{regime})/\Phi^{dom}_{rs}(\text{estimate})$, so that every $f_{rs}$ is held at its estimate and the regimes move the domestic network only. If the bias is of the order of the standard deviation, the bias-corrected interval $[2\hat\mu-q_{97.5},\,2\hat\mu-q_{2.5}]$ should be used instead of the quantiles.
 
 % ---------------------------------------------------------------------
 %  Algorithm 8 -- estimation
@@ -741,35 +819,40 @@ This is a parametric bootstrap: the model is resampled, not the firms, so a fake
 \begin{algorithm}[H]
 \caption{SMM estimation of $\mu=(\alpha,\kappa)$}
 \label{alg:smm}
+\small
 \begin{algorithmic}[1]
-\Require targets $\widehat{\boldsymbol\beta}$, $\tilde\gamma_{as}$, $\widehat{G}_s(0)$, $(\tilde\chi_L,\{\tilde\chi_s\},\{\hat\pi_r\})$; number of refinement loops $L=20$; swarm size $P=98$; iterations $I_0=200$ (initial fit) and $I=50$ (refinement)
+\Require targets $\widehat{\boldsymbol\beta}$, $\hat\gamma_{as}$, $\hat f_s$, $\widehat{G}_s(0)$, $(\hat\chi_L,\{\hat\chi_s\},\{\hat\pi_r\})$; number of refinement loops $L=20$; swarm size $P=98$; iterations $I_0=200$ (initial fit) and $I=50$ (refinement)
 \Ensure $\widehat{\mu}_1$, $\widehat{\mu}_2$, their calibrated parameters, and their bootstrap distributions
 \vspace{2pt}
-\State \textbf{Starting values.} $\alpha_0=-\hat\beta_{distance}/\theta$ from the continuous-distance specification (with bins: the slopes of $\log\tau_b=-\hat\beta_b/\theta$ between bin centres, as a running maximum); $\kappa_0=\hat\beta_\kappa$; $T^{(0)}$ the closed-form inversion of $\tilde\gamma$ at $(\alpha_0,\kappa_0)$. Box: $\alpha\in[0.1\,\alpha_0,\ \min(10\,\alpha_0,1.5)]$, $\kappa\in[-1,3]$.
+\State \textbf{Starting values.} $\alpha_0=-\hat\beta_{distance}/\theta$ from the continuous-distance specification (with bins: the slopes of $\log\tau_b=-\hat\beta_b/\theta$ between bin centres, as a running maximum); $\kappa_0=\hat\beta_\kappa$; $(T^{(0)},\Phi^{F(0)})$ the closed-form inversion of $(\hat\gamma,\hat f)$ at $(\alpha_0,\kappa_0)$. Box: $\alpha\in[0.1\,\alpha_0,\ \min(10\,\alpha_0,1.5)]$, $\kappa\in[-1,3]$.
 \vspace{3pt}
+\LineComment{Blocks 1--3 are matched by the calibration and left out of the loss.}
 \State \textbf{Step 1: first fit under equal weights.} Let
   $\mathcal{Q}_I(\mu)=\bigl\|\widetilde{M}_{4,5,6}(\mu)-\widehat{M}_{4,5,6}\bigr\|^2$, each evaluation running Algorithm~\ref{alg:simulate}
-  \Comment{blocks 1--3 out of the loss}
-\State \quad $\mu\gets\Call{Pso}{\mathcal{Q}_I,\text{box},P,I_0,\mu_0}$
-\For{$\text{loop}=1,\dots,L$}
-    \State $\mu\gets\Call{Pso}{\mathcal{Q}_I,\mathcal{B}_{\text{loop}}(\mu),P,I,\mu}$ \Comment{$\mathcal{B}_{\text{loop}}(\mu)$: box of radius $\varrho_{\text{loop}}$ around $\mu$, within the box above}
-    \State \textbf{break if} $\text{loop}>2$ and $\max_k|\Delta\mu_k|/|\mu_k|<10^{-6}$
+\State \quad $\mu\gets\Call{ParticleSwarm}{\mathcal{Q}_I,\var{whole\_box},P,I_0,\mu_0}$
+\For{$\var{loop}=1,\dots,L$}
+    \LineComment{The search box narrows around the incumbent as the loops proceed.}
+    \State $\var{tightness}\gets 0.3+0.6\,(\var{loop}-1)/(L-1)$
+    \State $\var{local\_box}\gets\bigl\{\alpha\in[\alpha\cdot\var{tightness},\ \alpha/\var{tightness}],\ \kappa\pm(1-\var{tightness})\cdot 2\bigr\}\cap\var{whole\_box}$
+    \State $\mu\gets\Call{ParticleSwarm}{\mathcal{Q}_I,\var{local\_box},P,I,\mu}$
+    \LineComment{The loops stop once the incumbent no longer moves.}
+    \State \textbf{break if} $\var{loop}>2$ and $\max_k|\Delta\mu_k|/|\mu_k|<10^{-6}$
 \EndFor
-\State $\widehat{\mu}_1\gets\mu$ and its calibrated parameters $(\widehat T,\widehat\chi_L,\widehat\chi_s,\widehat A,\widehat N)$
+\State $\widehat{\mu}_1\gets\mu$ and its calibrated parameters $(\widehat T,\widehat\Phi^F,\widehat\chi_L,\widehat\chi_s,\widehat A,\widehat N)$
 \vspace{3pt}
-\State \textbf{Step 2: the weighting matrix.} $W\gets\Call{WorldW}{\widehat\mu_1}$ \Comment{Algorithm~\ref{alg:W}}
-\State \quad inference on $\widehat\mu_1$: $\Call{WorldBoot}{\widehat\mu_1,\ I}$ \Comment{Algorithm~\ref{alg:boot}, Step~1's weighting}
+\State \textbf{Step 2: the weighting matrix.} $W\gets\Call{WorldWeightMatrix}{\widehat\mu_1}$ \Comment{See Algorithm~\ref{alg:W}.}
+\State \quad inference on $\widehat\mu_1$: $\Call{WorldBootstrap}{\widehat\mu_1,\ I}$ \Comment{See Algorithm~\ref{alg:boot}, with the equal weights of Step~1.}
 \vspace{3pt}
 \State \textbf{Step 3: the efficient fit.} Let
   $\mathcal{Q}_W(\mu)=\bigl(\bar{\boldsymbol\beta}(\mu)-\widehat{\boldsymbol\beta}\bigr)'W
-  \bigl(\bar{\boldsymbol\beta}(\mu)-\widehat{\boldsymbol\beta}\bigr)$; run the swarm from $\widehat\mu_1$ and the refinement loops of Step~1, yielding $\widehat{\mu}_2$ and its calibrated parameters
+  \bigl(\bar{\boldsymbol\beta}(\mu)-\widehat{\boldsymbol\beta}\bigr)$; run the swarm in a box of tightness $0.5$ around $\widehat\mu_1$ and the refinement loops of Step~1, yielding $\widehat{\mu}_2$ and its calibrated parameters
 \vspace{3pt}
-\State \textbf{Step 4: inference.} $\Call{WorldBoot}{\widehat\mu_2,\ W}$ \Comment{Algorithm~\ref{alg:boot}}
+\State \textbf{Step 4: inference.} $\Call{WorldBootstrap}{\widehat\mu_2,\ W}$ \Comment{See Algorithm~\ref{alg:boot}.}
 \State \Return $\widehat{\mu}_1$, $\widehat{\mu}_2$, their calibrated parameters and bootstrap distributions
 \end{algorithmic}
 \end{algorithm}
 
-Two implementation notes. First, the calibration within the model divides the work: $\{T_{as}\}$, $\chi_L$, $\{\chi_s\}$ and $\{A_r\}$ are pinned exactly by $\tilde\gamma$ and blocks 1--3, and $\{N_s\}$ by $\widehat G_s(0)$, so the swarm searches a space of dimension $K+1$ (two with a power-law trade cost) and $\mu$ is identified by $\boldsymbol\beta$ alone: $\beta_{distance}$ by the decline of supplier presence with distance within an area, $\beta_\kappa$ by its rise with density within an area. This is why the criterion of Step~3 runs on $\boldsymbol\beta$ only, and why the weighting matrix is $(N_{REG}+1)\times(N_{REG}+1)$. Second, the refinement loops of Step~1 re-run the swarm on $\mu$ warm-started at the incumbent, in a box whose size is annealed across loops; since the incumbent is always a particle, the criterion is monotone across loops by construction.
+Two implementation notes. First, the calibration within the model divides the work: $\{T_{as}\}$, $\{\Phi^F_s\}$, $\chi_L$, $\{\chi_s\}$ and $\{A_r\}$ are pinned exactly by $(\hat\gamma,\hat f)$ and blocks 1--3, and $\{N_s\}$ by $\widehat G_s(0)$, so the swarm searches a space of dimension $K+1$ (two with a power-law trade cost) and $\mu$ is identified by $\boldsymbol\beta$ alone: $\beta_{distance}$ by the decline of supplier presence with distance within an area, $\beta_\kappa$ by its rise with density within an area. This is why the criterion of Step~3 runs on $\boldsymbol\beta$ only, and why the weighting matrix is $(N_{REG}+1)\times(N_{REG}+1)$. Second, the refinement loops of Step~1 re-run the swarm on $\mu$ warm-started at the incumbent, in a box whose width shrinks across loops; since the incumbent is always a particle, the criterion is monotone across loops by construction.
 
 
 \subsection{Model calibration}
