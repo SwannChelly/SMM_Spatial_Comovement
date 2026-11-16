@@ -132,6 +132,12 @@ def _build_industry(ROOT, industry, sectors):
     reg_coef_emp = np.array([-0.35, -0.62, -0.81, -1.05, 0.48])
     np.save(f"{BASE}/beta_d_{N_REG}.npy", reg_coef_emp[:N_REG])
     np.save(f"{BASE}/beta_kappa_{N_REG}.npy", reg_coef_emp[N_REG:])
+    # data covariance of block 4 (cluster-robust in the data notebook); first industry
+    # only, so the second exercises the no-file path. Deterministic: RNG is not consumed.
+    reg_coef_se = np.array([0.08, 0.10, 0.12, 0.15, 0.05])
+    reg_coef_cov = 0.3 * np.outer(reg_coef_se, reg_coef_se) + 0.7 * np.diag(reg_coef_se ** 2)
+    if industry == "test":
+        np.save(f"{BASE}/beta_cov_{N_REG}.npy", reg_coef_cov)
 
     # ---- G_K.csv --------------------------------------------------------------
     # As the data pipeline writes it (`t_G`): G = Pr(K_ls == K), the pmf, and G_cs
@@ -751,6 +757,26 @@ def run_checks(ns, ROOT, exp):
           len(ax4.get_xticks()) == nd and len(seg) == nd
           and close(sorted([seg[-1][0][1], seg[-1][1][1]]),
                     [wt["band_lo"].iloc[nd - 1], wt["band_hi"].iloc[nd - 1]], 1e-9))
+    # the data point's sampling interval, from beta_cov_<n_coef>.npy
+    cov4 = np.load(os.path.join(ROOT, "baseline_test", f"beta_cov_{nd}.npy"))
+    se4 = np.sqrt(np.diag(cov4))
+    emp4 = np.array(exp["reg_coef"])
+    check("beta_cov loaded as reg_coef_cov, block-4 sized",
+          d2["reg_coef_cov"] is not None and close(d2["reg_coef_cov"], cov4))
+    check("block-4 table: data interval = beta_hat -/+ 1.96 se",
+          close(wt["data_se"].values, se4)
+          and close(wt["data_lo"].values, emp4 - 1.959963984540054 * se4, 1e-12)
+          and close(wt["data_hi"].values, emp4 + 1.959963984540054 * se4, 1e-12))
+    emps = [c for c in ax4.containers if c.get_label().startswith("Empirical")]
+    seg_e = emps[0][2][0].get_segments() if emps and emps[0][2] else []
+    check("plot_reg_coef: the empirical point carries its CI on each distance bin",
+          len(seg_e) == nd and close(sorted([seg_e[-1][0][1], seg_e[-1][1][1]]),
+                                     [wt["data_lo"].iloc[nd - 1], wt["data_hi"].iloc[nd - 1]], 1e-9)
+          and "CI" in emps[0].get_label())
+    d_second = ns["load_granular_data"]("test2", mu=2, base=ROOT)
+    check("no beta_cov file: no data interval, empirical point without bar",
+          d_second["reg_coef_cov"] is None and ns["data_reg_coef_interval"](d_second) is None
+          and "data_lo" not in ns["reg_coef_world_table"](d_second))
 
     # block 4 as average marginal effects in pp (Fig. 4, Panel A's reading)
     smp = ns["reg_cell_sample"](d2)
@@ -772,6 +798,15 @@ def run_checks(ns, ROOT, exp):
           "transformed band end points)",
           close(at["band_lo"].values, np.quantile(dr, 0.025, axis=0))
           and close(at["band_hi"].values, np.quantile(dr, 0.975, axis=0)))
+    beta_draws = np.random.default_rng(0).multivariate_normal(emp4, cov4, size=1000)
+    data_draws = np.array([100 * np.append(*ns["extensive_ame"](smp, b, nd)) for b in beta_draws])
+    check("AME data interval = quantiles of the AME of beta ~ N(beta_hat, V_data)",
+          at.attrs["n_data_draws"] == 1000
+          and close(at["data_lo"].values, np.quantile(data_draws, 0.025, axis=0))
+          and close(at["data_hi"].values, np.quantile(data_draws, 0.975, axis=0)))
+    check("AME data interval: degenerate at the reference bin, covers the point elsewhere",
+          (nd == 1 or (at["data_lo"].iloc[0] == 0 and at["data_hi"].iloc[0] == 0))
+          and bool(((at["data_lo"] <= at["data"]) & (at["data"] <= at["data_hi"])).all()))
     z0, _ = ns["extensive_ame"](smp, np.r_[np.zeros(nd), 0.4], nd)
     check("AME: zero distance coefficients give zero distance effects", np.abs(z0).max() == 0)
     try:

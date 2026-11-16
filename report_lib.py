@@ -11,6 +11,7 @@ import os
 import re
 import math
 from pathlib import Path
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -451,7 +452,8 @@ def plot_pi_r(data, ax=None, save_to=None):
 
 def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, z_critical=1.96,
                      ylabel="", xlabel="", title=None, rotate=0,
-                     band_emp=None, band_sim=None, sim_label="Simulated", legend=True):
+                     band_emp=None, band_sim=None, sim_label="Simulated", legend=True,
+                     emp_label="Empirical"):
     """
     Empirical (left) against simulated (right) at each tick, with +/- ci*SE bars.
 
@@ -496,7 +498,7 @@ def _paired_errorbar(ax, labels, emp, sim, se_emp=None, se_sim=None, z_critical=
     _series(x - off, emp, se_emp, band_emp,
             fmt="o", color=toulouse_color, capsize=3, markersize=7,
             markeredgecolor="black", markeredgewidth=0.5, linestyle="none",
-            label="Empirical")
+            label=emp_label)
     _series(x + off, sim, se_sim, band_sim,
             fmt="D", color=sim_color, capsize=3, markersize=6,
             markeredgecolor="black", markeredgewidth=0.5, linestyle="none",
@@ -544,6 +546,35 @@ def _sim_block4(data):
     return np.asarray(data["simulated_moments_dict"]["reg_coef"], float)
 
 
+def _ci_label(base, has_interval, what):
+    """Legend entry, e.g. 'Empirical (95% CI)', with the percent sign escaped under usetex."""
+    if not has_interval:
+        return base
+    return f"{base} (95\\% {what})" if mpl.rcParams.get("text.usetex") else f"{base} (95% {what})"
+
+
+def data_reg_coef_interval(data, quantiles=WORLD_Q):
+    """
+    Sampling interval of the DATA block 4, [beta_d ; beta_kappa]: beta_hat -/+ z se, se
+    from `beta_cov_<n_coef>.npy` (the data notebook's cluster-robust covariance, clustered
+    by ZE). `z` is the normal quantile at `quantiles[1]` (1.96 for the 95% interval).
+    Returns (se, lo, hi), each of length n_coef + 1, or None when the file is absent.
+
+    It measures the precision of the reduced-form estimator on the observed cells (cells
+    as draws, correlated within a ZE). The fake-world band of the simulated point
+    measures the dispersion of the same estimator across economies drawn from the model.
+    The two are not the same experiment, and the overlap of two 95% intervals is not a 5%
+    test: the test of fit remains the data point against the fake-world band.
+    """
+    cov = data.get("reg_coef_cov")
+    if cov is None:
+        return None
+    emp_coef = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)
+    se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    z = NormalDist().inv_cdf(quantiles[1])
+    return se, emp_coef - z * se, emp_coef + z * se
+
+
 def reg_coef_world_table(data, quantiles=WORLD_Q):
     """
     Block 4 = [beta_d ; beta_kappa]: data, simulated, and the fake-world 95% band.
@@ -581,6 +612,9 @@ def reg_coef_world_table(data, quantiles=WORLD_Q):
         "z": (emp_coef - sim_coef - mu_e) / sd_e,
     }, index=pd.Index(labels, name="moment"))
     df["inside_band"] = (df["data"] >= df["band_lo"]) & (df["data"] <= df["band_hi"])
+    data_interval = data_reg_coef_interval(data, quantiles=quantiles)
+    if data_interval is not None:
+        df["data_se"], df["data_lo"], df["data_hi"] = data_interval
     W = data.get("W_world")
     residual = emp_coef - sim_coef
     J = float(residual @ W @ residual) if W is not None and W.shape == (emp_coef.size, emp_coef.size) else np.nan
@@ -650,26 +684,26 @@ def plot_reg_coef(data, ax=None, save_to=None, quantiles=WORLD_Q):
 
     beta_kappa (ln n_ls) is not drawn: it is on another scale and identifies another
     parameter, and is reported with its fake-world sd in Panel C of
-    `generate_combined_table`. The data point carries no bar: the Julia code reads no
-    data covariance, and the band already contains the sampling noise of one finite
-    network.
+    `generate_combined_table`. When `beta_cov_<n_coef>.npy` is in the input folder, the
+    data point carries its 95% sampling interval (`data_reg_coef_interval`); otherwise
+    no bar. The Julia estimator does not use that covariance (W comes from the worlds).
     """
     n_distance = data["n_coef"]
     emp_coef = np.asarray(data["empirical_moments_dict"]["reg_coef"], float)[:n_distance]
     sim_coef = _sim_block4(data)[:n_distance]
     world_table = reg_coef_world_table(data, quantiles=quantiles)
     band = None if world_table is None else (world_table["band_lo"].values[:n_distance], world_table["band_hi"].values[:n_distance])
-    sim_label = "Simulated" + ("" if band is None
-                               else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
-                               else " (95% band)")
+    data_interval = data_reg_coef_interval(data, quantiles=quantiles)
+    band_emp = None if data_interval is None else (data_interval[1][:n_distance], data_interval[2][:n_distance])
     if ax is None:
         fig, ax = plt.subplots(figsize=get_figsize(height_fraction=0.62))
     else:
         fig = ax.figure
-    _paired_errorbar(ax, reg_bin_labels(n_distance), emp_coef, sim_coef, band_sim=band,
+    _paired_errorbar(ax, reg_bin_labels(n_distance), emp_coef, sim_coef, band_emp=band_emp, band_sim=band,
                      ylabel="Cell cloglog coefficient on distance",
                      xlabel="Distance bin (km)" if n_distance > 1 else "",
-                     sim_label=sim_label, legend=False)
+                     sim_label=_ci_label("Simulated", band is not None, "band"),
+                     emp_label=_ci_label("Empirical", band_emp is not None, "CI"), legend=False)
     # legend above the axes: inside, it sits on the bands of the far bins
     ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2)
     fig.tight_layout()
@@ -821,16 +855,22 @@ def extensive_ame(sample, beta, n_coef):
     return ame_distance, ame_kappa
 
 
-def extensive_ame_table(data, quantiles=WORLD_Q, sample=None):
+def extensive_ame_table(data, quantiles=WORLD_Q, sample=None, n_data_draws=1000, seed=0):
     """
     Block 4 as average marginal effects in PERCENTAGE POINTS, data against simulated,
     with the fake-world band: the AME of each world's `beta_sim + e_b` (a_g re-solved
     world by world), then its quantiles -- the band of `reg_coef_world_table` pushed
     through the non-linear map draw by draw, not its end points.
 
+    When the data covariance of beta is loaded (`reg_coef_cov`), the data AME gets its
+    interval the same way: `n_data_draws` draws beta ~ N(beta_hat, V_cluster), the AME of
+    each (a_g re-solved), then its quantiles (`data_lo`, `data_hi`). It is the delta
+    method done by simulation, so it inherits the normal approximation of beta_hat; the
+    a_g are calibrated on the data y and are not resampled.
+
     Rows: the reference bin (0 by construction) and the distance bins, then ln n_ls.
     `.attrs`: the data's supply rate in the reference bin, the sample size, the number
-    of groups and worlds.
+    of groups, worlds and data draws.
     """
     sample_cells = reg_cell_sample(data) if sample is None else sample
     n_distance = int(data["n_coef"])
@@ -855,9 +895,18 @@ def extensive_ame_table(data, quantiles=WORLD_Q, sample=None):
         df["inside_band"] = (df["data"] >= df["band_lo"]) & (df["data"] <= df["band_hi"])
         if n_distance > 1:
             df.iloc[0, df.columns.get_loc("inside_band")] = True
+    reg_coef_cov = data.get("reg_coef_cov")
+    n_data_used = 0
+    if reg_coef_cov is not None and n_data_draws > 0:
+        beta_draws = np.random.default_rng(seed).multivariate_normal(emp_beta, reg_coef_cov, size=n_data_draws)
+        data_draws = np.array([100 * np.append(*extensive_ame(sample_cells, beta_draw, n_distance)) for beta_draw in beta_draws])
+        df["data_lo"] = np.quantile(data_draws, quantiles[0], axis=0)
+        df["data_hi"] = np.quantile(data_draws, quantiles[1], axis=0)
+        n_data_used = n_data_draws
     reference_rate = (sample_cells.loc[sample_cells["bin"] == 0, "y"].mean() if n_distance > 1 else np.nan)
     df.attrs.update(ref_rate=float(reference_rate), n_cells=len(sample_cells),
-                    n_groups=int(sample_cells["group"].nunique()), n_worlds=n_worlds, q=quantiles)
+                    n_groups=int(sample_cells["group"].nunique()), n_worlds=n_worlds,
+                    n_data_draws=n_data_used, q=quantiles)
     return df
 
 
@@ -872,7 +921,8 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, quantiles=
     Block 4 as Fig. 4, Panel A reads it: the effect of each distance bin on the
     probability that a cell hosts a supplier, in percentage points RELATIVE TO the
     reference bin, which stays on the axis at zero (dashed line). Empirical (red) against
-    simulated (blue) with the 95% fake-world band. The default is the distance panel
+    simulated (blue) with the 95% fake-world band; the empirical point carries its 95%
+    sampling interval when the data covariance is loaded. The default is the distance panel
     alone, as in the paper's Fig. 5; `density=True` adds a narrow panel with the AME of
     ln n_ls (pp per unit of ln n). The reference-bin supply rate of the
     data is in `table.attrs["ref_rate"]` and belongs in the caption.
@@ -882,9 +932,10 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, quantiles=
     labels = list(ame_table.index)
     has_band = "band_lo" in ame_table
     band = (ame_table["band_lo"].to_numpy(), ame_table["band_hi"].to_numpy()) if has_band else None
-    sim_label = "Simulated" + ("" if not has_band
-                               else rf" (95\% band)" if mpl.rcParams.get("text.usetex")
-                               else " (95% band)")
+    has_data_interval = "data_lo" in ame_table
+    band_emp = (ame_table["data_lo"].to_numpy(), ame_table["data_hi"].to_numpy()) if has_data_interval else None
+    sim_label = _ci_label("Simulated", has_band, "band")
+    emp_label = _ci_label("Empirical", has_data_interval, "CI")
     n_distance_ticks = n_distance + (1 if n_distance > 1 else 0)
     if density:
         fig, panel_axes = plt.subplots(1, 2, figsize=get_figsize(height_fraction=0.62),
@@ -898,6 +949,8 @@ def plot_extensive_ame(data, table=None, density=False, save_to=None, quantiles=
         _paired_errorbar(panel_ax, labels[panel_slice], ame_table["data"].to_numpy()[panel_slice],
                          ame_table["simulated"].to_numpy()[panel_slice],
                          band_sim=None if band is None else (band[0][panel_slice], band[1][panel_slice]),
+                         band_emp=None if band_emp is None else (band_emp[0][panel_slice], band_emp[1][panel_slice]),
+                         emp_label=emp_label,
                          ylabel=("Supply probability\ndifference (in pp)" if k == 0
                                  else "pp per unit of ln n"),
                          xlabel=("Distance" if n_distance > 1 else "") if k == 0 else "Density",
