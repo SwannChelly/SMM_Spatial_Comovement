@@ -685,7 +685,17 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         raise ValueError(f"beta_d_{n_coef}.npy has {beta_d.size} entries (expected {n_coef}) "
                          f"and beta_kappa_{n_coef}.npy {beta_kappa.size} (expected 1)")
     reg_coef = np.concatenate([beta_d, beta_kappa])
-    reg_coef_labels = (["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
+    # Sampling covariance of the DATA estimate of block 4 (cluster-robust by ZE, from the
+    # data notebook's statsmodels fit), same order. Optional: Julia never reads it, it
+    # only gives the empirical point its interval in the figures.
+    reg_coef_cov_path = input_folder / f"beta_cov_{n_coef}.npy"
+    reg_coef_cov = None
+    if reg_coef_cov_path.exists():
+        reg_coef_cov = np.load(reg_coef_cov_path).astype(float)
+        if reg_coef_cov.shape != (reg_coef.size, reg_coef.size):
+            raise ValueError(f"{reg_coef_cov_path.name} is {reg_coef_cov.shape}, "
+                             f"expected {(reg_coef.size, reg_coef.size)} ([beta_d ; beta_kappa])")
+    reg_coef_labels =(["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
                        if n_coef == 5 else
                        ["]50,100]", "]100,150]", "]150,200]", ">200"] if n_coef == 4
                        else ["ln d"]) + ["ln n"]
@@ -1162,7 +1172,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # scalars / targets
         "epsilon": epsilon, "agg_labor_share": agg_labor_share,
         "agg_industry_share": agg_industry_share, "emp_pi_r": emp_pi_r,
-        "reg_coef": reg_coef, "reg_coef_labels": reg_coef_labels,
+        "reg_coef": reg_coef, "reg_coef_labels": reg_coef_labels, "reg_coef_cov": reg_coef_cov,
         "beta_d": beta_d, "beta_kappa": float(beta_kappa[0]), "log_n_ls": log_n_ls,
         "G_target": G_target, "N_supplier_s": N_supplier_s,
         # the WHOLE empirical count curve, Pr(K_ls <= K) by (sector, K); only the
