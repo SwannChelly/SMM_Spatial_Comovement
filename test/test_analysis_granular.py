@@ -877,6 +877,14 @@ def run_checks(ns, ROOT, exp):
           and all(f"{v:.4f}" in tex for v in exp["reg_coef"]))
     check("Panel C carries the fake-world sd under each simulated coefficient, beta_kappa included",
           all(f"({v:.4f})" in tex for v in wt["world_sd_e"].values))
+    panel_C = tex.split("Panel C:")[1].split("Panel D:")[0]
+    ci_rows = [line.split("&") for line in panel_C.splitlines() if "[" in line and line.strip().endswith(r"\\")]
+    check("Panel C: the empirical 95% CI in brackets under Emp. of the industry with "
+          "beta_cov, an empty cell for the one without, and its note",
+          len(ci_rows) == exp["n_coef"] + 1
+          and all(row[1].strip() == f"{{[{lo:.4f}, {hi:.4f}]}}" and row[3].strip() == "{}"
+                  for row, lo, hi in zip(ci_rows, wt["data_lo"], wt["data_hi"]))
+          and "clustered by commuting zone" in tex)
     ptex = ns["generate_parameter_table"](
         [{"industry": "test", "display_name": "Synthetic A"},
          {"industry": "test2", "display_name": "Synthetic B"}],
