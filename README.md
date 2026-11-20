@@ -124,7 +124,7 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 
 | Option | Values | Default | Meaning |
 |--------|--------|---------|---------|
-| `<industry>` | `aero`, `auto`, `car`, `both` | — | economy (`both` runs aero then auto) |
+| `<industry>` | `aero`, `auto`, `car`, `both` | — | economy (`both` runs auto, then aero once auto has finished, in one background chain; one `logs.log` per industry) |
 | `--n_coef` | `1`, `4` | `4` | block-4 specification and file suffix: `1` = ln d; `4` = three distance categories, ]0,50], ]50,100], >100 km, against the downstream ZE of the area |
 | `--n_tau` | `1` or `n_coef` | `n_coef` | trade costs (`1` = τ = d^α; `n_coef` = one distance elasticity per segment between the category knots, 3 α's, increasing, nesting d^α) |
 | `--n_rho_inf` | integer | `10000` | unused (inference now from fake worlds, at the estimation's `N_rho`); kept so old calls parse |
