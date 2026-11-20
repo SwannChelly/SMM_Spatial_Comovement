@@ -238,7 +238,9 @@ end
     build_tau(alpha) -> τ (R × R_downstream)
 
 `τ = max(d,1)^α` with one α. With `N_TAU = K` bins, `ln τ` is continuous and piecewise
-linear in `ln d`, with knots at the bin centres `TAU_LOG_KNOTS = ln d̄_0 … ln d̄_K`:
+linear in `ln d`, with knots `TAU_LOG_KNOTS = ln d̄_0 … ln d̄_K` at the mean ln d of the
+regression's distance categories (d̄_0: the downstream ZE of the area; then ]0,50],
+]50,100], >100 km; load_parameters.jl):
 `α_k` is the distance elasticity of the trade cost on `[d̄_{k-1}, d̄_k]`, `ln τ(d̄_0) = 0`,
 and the end segments extend below `d̄_0` (slope α_1) and above `d̄_K` (slope α_K). With
 every `α_k = α`, `τ = (d/d̄_0)^α`, i.e. `d^α` up to a factor common to all origins of a

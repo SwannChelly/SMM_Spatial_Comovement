@@ -651,9 +651,17 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                                 "(_nlo1) / profile_head (_profhead) to the flags the run was "
                                 "launched with; a tree without _kappa is pre-kappa and not readable.")
 
-    n_coef = int(np.load(folder / "n_reg_coef.npy")) # Number of regression coefficients. 
-    n_tau_path = folder / "n_tau.npy" 
-    n_tau = int(np.load(n_tau_path)) if n_tau_path.exists() else n_coef  # Number of coefficients parametrizing the trade costs.  
+    # n_reg_coef.npy holds the block-4 SPECIFICATION, which also names the input files
+    # (beta_d_<coef_spec>.npy): 1 = ln d, 4 = the distance categories against the downstream
+    # ZE of the area. `n_coef` is the number of DISTANCE coefficients (1 or 3), Julia's N_REG.
+    coef_spec = int(np.load(folder / "n_reg_coef.npy"))
+    if coef_spec not in N_DISTANCE_COEF:
+        raise ValueError(f"n_reg_coef.npy = {coef_spec}: the block-4 specification must be 1 or 4.")
+    n_coef = N_DISTANCE_COEF[coef_spec]
+    n_tau_path = folder / "n_tau.npy"
+    n_tau = int(np.load(n_tau_path)) if n_tau_path.exists() else n_coef  # number of alpha's (Julia's N_TAU)
+    if n_tau not in (1, n_coef):
+        raise ValueError(f"n_tau.npy = {n_tau}: the number of alpha's must be 1 or {n_coef}.")
 
     # ---------------------------------------------------------------- targets
     coefs = pd.read_csv(input_folder / "stats.csv")
@@ -679,26 +687,23 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
     # Block 4 = [beta_d (n_coef) ; beta_kappa (1)]: the CELL-level cloglog of has_sup on
     # the distance regressor(s) and ln n_ls, sector x AA fixed effect -- the same files
     # load_parameters.jl reads, in the same order.
-    beta_d = np.load(input_folder / f"beta_d_{n_coef}.npy").astype(float).ravel()
-    beta_kappa = np.load(input_folder / f"beta_kappa_{n_coef}.npy").astype(float).ravel()
+    beta_d = np.load(input_folder / f"beta_d_{coef_spec}.npy").astype(float).ravel()
+    beta_kappa = np.load(input_folder / f"beta_kappa_{coef_spec}.npy").astype(float).ravel()
     if beta_d.size != n_coef or beta_kappa.size != 1:
-        raise ValueError(f"beta_d_{n_coef}.npy has {beta_d.size} entries (expected {n_coef}) "
-                         f"and beta_kappa_{n_coef}.npy {beta_kappa.size} (expected 1)")
+        raise ValueError(f"beta_d_{coef_spec}.npy has {beta_d.size} entries (expected {n_coef}) "
+                         f"and beta_kappa_{coef_spec}.npy {beta_kappa.size} (expected 1)")
     reg_coef = np.concatenate([beta_d, beta_kappa])
     # Sampling covariance of the DATA estimate of block 4 (cluster-robust by ZE, from the
     # data notebook's statsmodels fit), same order. Optional: Julia never reads it, it
     # only gives the empirical point its interval in the figures.
-    reg_coef_cov_path = input_folder / f"beta_cov_{n_coef}.npy"
+    reg_coef_cov_path = input_folder / f"beta_cov_{coef_spec}.npy"
     reg_coef_cov = None
     if reg_coef_cov_path.exists():
         reg_coef_cov = np.load(reg_coef_cov_path).astype(float)
         if reg_coef_cov.shape != (reg_coef.size, reg_coef.size):
             raise ValueError(f"{reg_coef_cov_path.name} is {reg_coef_cov.shape}, "
                              f"expected {(reg_coef.size, reg_coef.size)} ([beta_d ; beta_kappa])")
-    reg_coef_labels =(["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"]
-                       if n_coef == 5 else
-                       ["]50,100]", "]100,150]", "]150,200]", ">200"] if n_coef == 4
-                       else ["ln d"]) + ["ln n"]
+    reg_coef_labels = (list(DISTANCE_CATEGORY_LABELS) if coef_spec == 4 else ["ln d"]) + ["ln n"]
 
     # ------------------------------------------------- attraction-area mapping
     AA_link = np.load(input_folder / "attraction_area_linkages.npy")   # (R, R_downstream)
@@ -1160,7 +1165,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         "post_hoc_u": post_hoc_u, "post_hoc_good_sr": post_hoc_good_sr,
         "post_hoc_u_foreign": post_hoc_u_foreign,
         # dimensions
-        "S": S, "R": R, "n_AA": n_AA, "n_coef": n_coef, "n_tau": n_tau,
+        "S": S, "R": R, "n_AA": n_AA, "n_coef": n_coef, "coef_spec": coef_spec, "n_tau": n_tau,
         "sector_names": sector_names, "sector_codes": sector_codes, "aa_names": aa_names,
         # structure
         "aa_of_ze": aa_of_ze, "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK,
@@ -1366,7 +1371,7 @@ def _downstream_ze_index(data):
 #
 #   N_TAU = 1   ln tau = alpha * ln d                          (the power law d^alpha)
 #   N_TAU = K   ln tau continuous and piecewise linear in ln d, slope alpha_k between the
-#               knots ln dbar_{k-1}, ln dbar_k (the bin centres), ln tau(dbar_0) = 0,
+#               knots ln dbar_{k-1}, ln dbar_k (mean ln d of the distance categories), ln tau(dbar_0) = 0,
 #               end segments extended at alpha_1 and alpha_K.
 #
 # Equal alpha_k give alpha*(ln d - ln dbar_0), i.e. d^alpha up to a factor common to a
@@ -1374,34 +1379,105 @@ def _downstream_ze_index(data):
 # is broadcast to every segment: `alpha=0` is therefore tau == 1 under any
 # parametrisation, which is what the `No trade cost` regime means.
 
-# Bin edges of the extensive-margin regression, by n_coef (load_parameters.jl).
-TAU_BIN_EDGES = {4: (0.0, 50.0, 100.0, 150.0, 200.0),
-                 5: (0.0, 20.0, 50.0, 100.0, 150.0, 200.0)}
+# Distance categories of the extensive-margin regression with bins (block-4 specification
+# 4, load_parameters.jl): the reference is a cell in the downstream ZE of its attraction
+# area, whatever its internal distance; the other cells are binned by the distance to the
+# nearest downstream region, ]0,50], ]50,100] and >100 km (closed on the right).
+DISTANCE_EDGES_KM = (50.0, 100.0)
+DISTANCE_CATEGORY_LABELS = ("]0,50]", "]50,100]", ">100")
+# Number of distance coefficients by block-4 specification (the file suffix).
+N_DISTANCE_COEF = {1: 1, 4: len(DISTANCE_CATEGORY_LABELS)}
+
+
+def distance_category(distance, is_area_downstream_ze):
+    """Category of each ZE (0 = the downstream ZE of its area, then 1, 2, 3 by distance),
+    as `distance_category` in load_parameters.jl. Both arguments are (R,) arrays."""
+    category = 1 + sum((np.asarray(distance) > edge).astype(int) for edge in DISTANCE_EDGES_KM)
+    return np.where(np.asarray(is_area_downstream_ze, bool), 0, category)
+
+
+def reg_cell_sample(data, drop_constant_groups=True):
+    """
+    The regression set A of block 4, rebuilt as `load_parameters.jl` SECTION 10 builds
+    `REG_CELL_*`: simulated cells (CELL_MASK) with a has_sup entry in cells_ls.csv and
+    d > 0, d the distance to the nearest downstream region, the distance category of the
+    cell (`distance_category`: 0 = the downstream ZE of its area, the reference) or ln d
+    when n_coef = 1, ln n_ls, and the sector x attraction-area group.
+
+    With `drop_constant_groups`, groups without variation in the data y are dropped (the
+    cloglog drops them; their fixed effect would be infinite): the data estimation sample.
+    Returns a DataFrame, one row per cell (columns s, ze, group, y, dist, bin, log_d, log_n).
+    """
+    input_folder = data["input_folder"]
+    S, R = data["S"], data["R"]
+    CELL_MASK = np.asarray(data["CELL_MASK"], bool)
+    cells_df = pd.read_csv(input_folder / "cells_ls.csv")
+    filter_df = pd.read_csv(input_folder / "filter_N_upstream.csv")
+    sector_keys = sorted(filter_df["A129"].astype(str).unique())
+    ze_keys = sorted(filter_df["ze2010"].map(_ze_key).unique())
+    if len(sector_keys) != S or len(ze_keys) != R:
+        raise ValueError("filter_N_upstream.csv does not match the run's S x R.")
+    sector_index_of = {k: i for i, k in enumerate(sector_keys)}
+    ze_index_of = {k: i for i, k in enumerate(ze_keys)}
+    y = np.full((S, R), np.nan)
+    log_n = np.zeros((S, R))
+    sector_index = cells_df["A129"].astype(str).map(sector_index_of)
+    ze_index = cells_df["ze2010"].map(_ze_key).map(ze_index_of)
+    ok = sector_index.notna() & ze_index.notna()
+    sector_index, ze_index = sector_index[ok].astype(int).to_numpy(), ze_index[ok].astype(int).to_numpy()
+    keep = CELL_MASK[sector_index, ze_index]
+    sector_index, ze_index = sector_index[keep], ze_index[keep]
+    y[sector_index, ze_index] = cells_df.loc[ok, "has_sup"].to_numpy(float)[keep]
+    log_n[sector_index, ze_index] = np.log(cells_df.loc[ok, "n_ls"].to_numpy(float)[keep])
+
+    distances = np.load(input_folder / "distances.npy")[:R, :R]
+    downstream_ze = _downstream_ze_index(data) - 1                                        # (R_d,) 0-based
+    distance_to_downstream = distances[:, downstream_ze]                                  # (R, R_d)
+    distance = distance_to_downstream.min(axis=1)
+    nearest_area = distance_to_downstream.argmin(axis=1)
+    area_of_ze = np.asarray(data["aa_of_ze"]).astype(int)
+    if not np.array_equal(nearest_area, area_of_ze):
+        # load_parameters.jl asserts it: the group is (sector, nearest downstream region)
+        raise ValueError(f"{int((nearest_area != area_of_ze).sum())} ZE whose nearest downstream "
+                         "region is not their attraction area.")
+    # The reference: the ZE is the downstream ZE of its own attraction area.
+    category = distance_category(distance, downstream_ze[area_of_ze] == np.arange(R))
+    cell_sector, cell_ze = np.nonzero(CELL_MASK)          # order does not matter: groups are labels
+    in_sample = (distance[cell_ze] > 0) & np.isfinite(y[cell_sector, cell_ze])
+    cell_sector, cell_ze = cell_sector[in_sample], cell_ze[in_sample]
+    sample = pd.DataFrame({"s": cell_sector, "ze": cell_ze, "group": cell_sector * (area_of_ze.max() + 1) + area_of_ze[cell_ze],
+                           "y": y[cell_sector, cell_ze], "dist": distance[cell_ze], "bin": category[cell_ze],
+                           "log_d": np.log(distance[cell_ze]), "log_n": log_n[cell_sector, cell_ze]})
+    if drop_constant_groups:
+        group_mean_y = sample.groupby("group")["y"].transform("mean")
+        sample = sample[(group_mean_y > 0) & (group_mean_y < 1)].reset_index(drop=True)
+    sample["group"] = pd.factorize(sample["group"])[0]
+    return sample
 
 
 def tau_log_knots(data):
     """
-    `TAU_LOG_KNOTS` exactly as `load_parameters.jl` builds it: the log of the bin CENTRES,
-    the last bin closed at the largest distance from any region to its nearest
-    downstream region. `None` for the power law (N_TAU = 1). Cached on `data`.
+    `TAU_LOG_KNOTS` exactly as `load_parameters.jl` builds it: knot c is the mean ln d of
+    the cells of distance category c (0 = the downstream ZE of the area, then ]0,50],
+    ]50,100], >100 km) in the data estimation sample of block 4 (`reg_cell_sample`), so
+    exp(knot) is the geometric mean distance. `None` for the power law (N_TAU = 1).
+    Cached on `data`.
     """
     n_tau = int(data["n_tau"])
     if n_tau == 1:
         return None
     if data.get("_tau_log_knots") is not None:
         return data["_tau_log_knots"]
-    n_coef = int(data["n_coef"])
-    if n_tau != n_coef or n_coef not in TAU_BIN_EDGES:
-        raise ValueError(f"n_tau must be 1 or n_coef (4 or 5); got n_tau = {n_tau}, "
-                         f"n_coef = {n_coef}.")
-    distances = np.load(data["input_folder"] / "distances.npy")
-    downstream = _downstream_ze_index(data)
-    d_max = float(np.nanmax(np.nanmin(distances[:, downstream - 1], axis=1)))
-    edges = np.array(TAU_BIN_EDGES[n_coef] + (d_max,))
-    if d_max <= edges[-2]:
-        raise ValueError(f"no region lies beyond {edges[-2]:g} km of its nearest downstream "
-                         f"region (max {d_max:.1f}): the last bin is empty, as Julia refuses.")
-    knots = np.log(0.5 * (edges[:-1] + edges[1:]))
+    if n_tau != int(data["n_coef"]):
+        raise ValueError(f"n_tau must be 1 or n_coef ({data['n_coef']}); got n_tau = {n_tau}.")
+    sample = reg_cell_sample(data)
+    mean_log_distance = sample.groupby("bin")["log_d"].mean()
+    if list(mean_log_distance.index) != list(range(n_tau + 1)):
+        raise ValueError(f"distance categories {list(mean_log_distance.index)} in the estimation sample: "
+                         f"every category 0..{n_tau} needs a cell, as Julia requires.")
+    knots = mean_log_distance.to_numpy(float)
+    if not np.all(np.diff(knots) > 0):
+        raise ValueError(f"the knots of the binned tau are not increasing: {np.round(np.exp(knots), 1)} km.")
     try:
         data["_tau_log_knots"] = knots
     except TypeError:

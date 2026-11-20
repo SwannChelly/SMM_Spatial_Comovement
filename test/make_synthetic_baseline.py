@@ -83,7 +83,8 @@ def build(out, S=3, R=60, R_D=6, seed=7):
                    "has_sup": int(sup[s, r])} for s in range(S) for r in range(R) if cells[s, r]]
                  ).to_csv(f"{out}/cells_ls.csv", index=False)
 
-    for n, bd in ((1, [-0.5]), (4, [-0.3, -0.6, -0.9, -1.2])):
+    # n_coef = 4: three categories (]0,50], ]50,100], >100 km) against the downstream ZE.
+    for n, bd in ((1, [-0.5]), (4, [-0.6, -0.9, -1.2])):
         np.save(f"{out}/beta_d_{n}.npy", np.array(bd))
         np.save(f"{out}/beta_kappa_{n}.npy", np.array([0.4]))
     return out

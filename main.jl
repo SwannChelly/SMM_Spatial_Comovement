@@ -49,8 +49,10 @@ n_coef          = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 4
 n_tau           = length(ARGS) >= 3 && !isempty(strip(ARGS[3])) ? parse(Int, ARGS[3]) : n_coef
 n_rho_inference = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 10_000   # unused since the fake-world inference
 relax_n_lo      = length(ARGS) >= 5 ? lowercase(strip(ARGS[5])) in ("true", "1", "yes") : true
-n_coef in (1, 4, 5) || error("n_coef must be 1, 4 or 5, got $n_coef")
-n_tau in (1, n_coef) || error("n_tau must be 1 (τ = d^α) or n_coef (one α per distance bin), got $n_tau")
+# n_coef names the block-4 specification and its input files: 1 = ln d, 4 = the distance
+# categories against the downstream ZE (3 coefficients). n_tau = n_coef: one α per segment.
+n_coef in (1, 4) || error("n_coef must be 1 or 4, got $n_coef")
+n_tau in (1, n_coef) || error("n_tau must be 1 (τ = d^α) or n_coef (one α per distance segment), got $n_tau")
 n_rho_inference >= 1 || error("n_rho_inf must be ≥ 1")
 println("Industry: $industry | n_coef: $n_coef | n_tau: $n_tau | n_rho_inf: $n_rho_inference | relax_n_lo: $relax_n_lo")
 
@@ -73,7 +75,7 @@ mkpath(output_folder)
 
 include("load_parameters.jl")
 NPZ.npzwrite(joinpath(output_folder, "n_reg_coef.npy"), n_coef)
-NPZ.npzwrite(joinpath(output_folder, "n_tau.npy"), n_tau)
+NPZ.npzwrite(joinpath(output_folder, "n_tau.npy"), N_TAU)   # the number of α's (3 with bins)
 
 step1_dir = joinpath(output_folder, "step1")
 step3_dir = joinpath(output_folder, "step3")

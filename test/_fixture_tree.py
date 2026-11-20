@@ -13,11 +13,24 @@ import pandas as pd
 KAPPA = 0.3          # the density elasticity planted in theta_hat (after alpha)
 
 
-def build(seed=11, alpha=(0.4,)):
-    """`alpha` is the trade-cost block: one entry (the power law) or n_coef = 4 segment
-    elasticities (binned tau); it is the only thing that sets N_TAU."""
+# Distance of each non-downstream ZE (4..7) to the downstream ZE of its area under
+# `category_geometry`: categories ]0,50], ]50,100], >100, ]0,50]; downstream ZE at 12 km.
+CATEGORY_DISTANCE = {4: 30.0, 5: 70.0, 6: 160.0, 7: 40.0}
+INTERNAL_DISTANCE = 12.0
+
+
+def build(seed=11, alpha=(0.4,), category_geometry=False):
+    """`alpha` is the trade-cost block: one entry (the power law) or 3 segment elasticities
+    (binned tau, block-4 specification 4); it is the only thing that sets N_TAU.
+
+    `category_geometry` gives every distance category of block 4 a cell of the estimation
+    sample (needed by the knots of binned tau): all 8 ZE are simulated cells, ZE 4..7 are
+    controls at CATEGORY_DISTANCE of their area's downstream ZE, the downstream ZE are at
+    INTERNAL_DISTANCE of themselves and every other pair at least 250 km apart. The RNG
+    stream, the T layout and the observed suppliers are those of the default tree."""
     alpha = tuple(float(a) for a in alpha)
-    S, R, R_D, n_coef = 3, 8, 4, 4
+    S, R, R_D, coef_spec = 3, 8, 4, 4
+    n_distance_coef = 3                      # ]0,50], ]50,100], >100 against the downstream ZE
     rng = np.random.default_rng(seed)
     TMP = tempfile.mkdtemp(prefix="parts_gate_")
     inp = os.path.join(TMP, "baseline_test")
@@ -31,7 +44,6 @@ def build(seed=11, alpha=(0.4,)):
         AA[r, r % R_D] = 1
     emp_gamma = np.zeros((S, R)); emp_gamma[:, :6] = rng.uniform(0.05, 0.5, (S, 6))
     emp_gamma[:, 4:6] = 0.0     # columns 4-5: control cells (filter == 1, no observed supplier)
-    np.save(f"{inp}/filter_N_upstream.npy", filt)
     np.save(f"{inp}/attraction_area_linkages.npy", AA)
     np.save(f"{inp}/emp_gamma_ls.npy", emp_gamma)
     np.save(f"{inp}/input_share.npy", rng.dirichlet(np.ones(S)))
@@ -39,11 +51,19 @@ def build(seed=11, alpha=(0.4,)):
     np.save(f"{inp}/N_downstream_per_region.npy",
             np.array([3, 4, 2, 5] + [0] * (R - R_D), dtype=float))
     # block 4 = [beta_d ; beta_kappa] (the draw is kept so the RNG stream is unchanged)
-    np.save(f"{inp}/beta_d_{n_coef}.npy", rng.normal(0, 1, n_coef))
-    np.save(f"{inp}/beta_kappa_{n_coef}.npy", np.array([0.4]))
+    # four draws, as when the specification had four bins, so the stream is unchanged
+    np.save(f"{inp}/beta_d_{coef_spec}.npy", rng.normal(0, 1, 4)[:n_distance_coef])
+    np.save(f"{inp}/beta_kappa_{coef_spec}.npy", np.array([0.4]))
     _D = np.abs(rng.normal(300, 80, (R, R))) + 10.0
     _D = (_D + _D.T) / 2
+    if category_geometry:
+        _D = np.maximum(_D, 250.0)
+        np.fill_diagonal(_D, INTERNAL_DISTANCE)
+        for r, distance in CATEGORY_DISTANCE.items():
+            _D[r, r % R_D] = _D[r % R_D, r] = distance
+        filt[:, :] = 1
     np.save(f"{inp}/distances.npy", _D)            # read by `sourcing_geometry`
+    np.save(f"{inp}/filter_N_upstream.npy", filt)
     np.save(f"{inp}/regional_wages.npy", np.ones(R))  # read by the loader's geography part
     pd.DataFrame({"stats": ["epsilon", "labor_share", "reg_coef_cloglog_1"],
                   "value": [-16.0, 0.3, 0.23]}).to_csv(
@@ -62,9 +82,9 @@ def build(seed=11, alpha=(0.4,)):
     # cells_ls.csv: n_ls on every simulated cell (T_ls = T_a n_ls^kappa), no RNG draw
     pd.DataFrame([{"A129": "ABC"[s], "ze2010": 1000 + r, "n_ls": 1 + (s + r) % 5,
                    "has_sup": int(emp_gamma[s, r] > 0)}
-                  for s in range(S) for r in range(6)]).to_csv(f"{inp}/cells_ls.csv",
+                  for s in range(S) for r in range(R if category_geometry else 6)]).to_csv(f"{inp}/cells_ls.csv",
                                                                index=False)
-    np.save(f"{run}/n_reg_coef.npy", np.array(n_coef))
+    np.save(f"{run}/n_reg_coef.npy", np.array(coef_spec))
     np.save(f"{run}/n_tau.npy", np.array(len(alpha)))
 
     n_T = 0

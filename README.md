@@ -116,7 +116,7 @@ worlds simulated by the model.
 From the directory containing the repository and the `baseline_<industry>/` folders:
 
 ```bash
-./SMM_Spatial_Comovement/run.sh aero                                   # n_coef=4, n_tau=1
+./SMM_Spatial_Comovement/run.sh aero                                   # n_coef=4, n_tau=4 (one α per segment)
 ./SMM_Spatial_Comovement/run.sh aero --n_coef=1 --n_rho_inf=20000
 ./SMM_Spatial_Comovement/run.sh aero --relax_n_lo=true                 # diagnostic
 ./SMM_Spatial_Comovement/run.sh both
@@ -125,8 +125,8 @@ From the directory containing the repository and the `baseline_<industry>/` fold
 | Option | Values | Default | Meaning |
 |--------|--------|---------|---------|
 | `<industry>` | `aero`, `auto`, `car`, `both` | — | economy (`both` runs aero then auto) |
-| `--n_coef` | `1`, `4`, `5` | `4` | distance coefficients of the cell cloglog (`1` = ln d, else bins) |
-| `--n_tau` | `1` or `n_coef` | `1` | trade-cost parameters (`1` = τ = d^α; else one distance elasticity per segment between bin centres, nesting d^α) |
+| `--n_coef` | `1`, `4` | `4` | block-4 specification and file suffix: `1` = ln d; `4` = three distance categories, ]0,50], ]50,100], >100 km, against the downstream ZE of the area |
+| `--n_tau` | `1` or `n_coef` | `n_coef` | trade costs (`1` = τ = d^α; `n_coef` = one distance elasticity per segment between the category knots, 3 α's, increasing, nesting d^α) |
 | `--n_rho_inf` | integer | `10000` | unused (inference now from fake worlds, at the estimation's `N_rho`); kept so old calls parse |
 | `--relax_n_lo` | `true`, `false` | `false` | DIAGNOSTIC: N_LO forced to 1 (drops the model's bound) |
 

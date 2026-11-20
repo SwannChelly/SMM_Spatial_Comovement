@@ -24,7 +24,7 @@ from utils import (
     EMPIRICAL_MEAN_LOG_D, NU_S_DEFAULT, THETA_DEFAULT,
     _despine, _downstream_ze_index, _read_named_value, _ze_key, fs, get_figsize,
     load_granular_data, pct, reference_color, set_name_axis_fontsize, sim_color,
-    toulouse_color, unpack_estimated_T, log_tau, tau_elasticity, tau_log_knots,
+    toulouse_color, unpack_estimated_T, log_tau, tau_elasticity, tau_log_knots, reg_cell_sample,
     sourcing_geometry,
 )
 
@@ -541,10 +541,9 @@ def _legend_below_xaxis(ax, pad=0.02, ncol=2, size_at_ref=11):
 
 
 def reg_bin_labels(n_coef, with_kappa=False):
-    """Tick labels of block 4: the distance coefficients, then (optionally) ln n."""
-    labels_by_n_coef = {1: [r"$\ln d$"],
-         4: [r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"],
-         5: [r"$]20,50]$", r"$]50,100]$", r"$]100,150]$", r"$]150,200]$", r"$>200$"]}
+    """Tick labels of block 4: the distance coefficients (`n_coef` of them: ln d, or the
+    three categories against the downstream ZE of the area), then (optionally) ln n."""
+    labels_by_n_coef = {1: [r"$\ln d$"], 3: [r"$]0,50]$", r"$]50,100]$", r"$>100$"]}
     labels = labels_by_n_coef.get(n_coef, [rf"$\beta_{{{i + 1}}}$" for i in range(n_coef)])
     return labels + ([r"$\ln n_{ls}$"] if with_kappa else [])
 
@@ -759,63 +758,6 @@ def _cloglog_f(eta):
     return exp_eta * np.exp(-exp_eta)
 
 
-def reg_cell_sample(data):
-    """
-    The regression set A of block 4, rebuilt as `load_parameters.jl` SECTION 10 builds
-    `REG_CELL_*`: simulated cells (CELL_MASK) with a has_sup entry in cells_ls.csv and
-    d > 0, d the distance to the nearest downstream region, the distance bin of that
-    distance (edges 50/100/150/200 km, or 20/50/... with five bins; 0 = reference) or
-    ln d when n_coef = 1, ln n_ls, and the sector x attraction-area group.
-
-    Groups without variation in the data y are dropped (`cell_cloglog_beta` drops them;
-    their fixed effect would be infinite). Returns a DataFrame, one row per cell.
-    """
-    input_folder = data["input_folder"]
-    S, R, n_coef = data["S"], data["R"], int(data["n_coef"])
-    CELL_MASK = np.asarray(data["CELL_MASK"], bool)
-    cells_df = pd.read_csv(input_folder / "cells_ls.csv")
-    filter_df = pd.read_csv(input_folder / "filter_N_upstream.csv")
-    sector_keys = sorted(filter_df["A129"].astype(str).unique())
-    ze_keys = sorted(filter_df["ze2010"].map(_ze_key).unique())
-    if len(sector_keys) != S or len(ze_keys) != R:
-        raise ValueError("filter_N_upstream.csv does not match the run's S x R.")
-    sector_index_of = {k: i for i, k in enumerate(sector_keys)}
-    ze_index_of = {k: i for i, k in enumerate(ze_keys)}
-    y = np.full((S, R), np.nan)
-    log_n = np.zeros((S, R))
-    sector_index = cells_df["A129"].astype(str).map(sector_index_of)
-    ze_index = cells_df["ze2010"].map(_ze_key).map(ze_index_of)
-    ok = sector_index.notna() & ze_index.notna()
-    sector_index, ze_index = sector_index[ok].astype(int).to_numpy(), ze_index[ok].astype(int).to_numpy()
-    keep = CELL_MASK[sector_index, ze_index]
-    sector_index, ze_index = sector_index[keep], ze_index[keep]
-    y[sector_index, ze_index] = cells_df.loc[ok, "has_sup"].to_numpy(float)[keep]
-    log_n[sector_index, ze_index] = np.log(cells_df.loc[ok, "n_ls"].to_numpy(float)[keep])
-
-    distances = np.load(input_folder / "distances.npy")[:R, :R]
-    distance_to_downstream = distances[:, _downstream_ze_index(data) - 1]                  # (R, R_d)
-    distance = distance_to_downstream.min(axis=1)
-    edges = {5: (20, 50, 100, 150, 200), 4: (50, 100, 150, 200)}.get(n_coef, ())
-    distance_bin = np.zeros(R, int)
-    for edge in edges:
-        distance_bin += distance > edge
-    area_of_ze = np.asarray(data["aa_of_ze"]).astype(int)
-    if not np.array_equal(distance_to_downstream.argmin(axis=1), area_of_ze):
-        # load_parameters.jl asserts it: the group is (sector, nearest downstream region)
-        raise ValueError(f"{int((distance_to_downstream.argmin(axis=1) != area_of_ze).sum())} ZE whose nearest downstream "
-                         "region is not their attraction area.")
-    cell_sector, cell_ze = np.nonzero(CELL_MASK)          # order does not matter: groups are labels
-    in_sample = (distance[cell_ze] > 0) & np.isfinite(y[cell_sector, cell_ze])
-    cell_sector, cell_ze = cell_sector[in_sample], cell_ze[in_sample]
-    sample = pd.DataFrame({"s": cell_sector, "ze": cell_ze, "group": cell_sector * (area_of_ze.max() + 1) + area_of_ze[cell_ze],
-                        "y": y[cell_sector, cell_ze], "dist": distance[cell_ze], "bin": distance_bin[cell_ze],
-                        "log_d": np.log(distance[cell_ze]), "log_n": log_n[cell_sector, cell_ze]})
-    group_mean_y = sample.groupby("group")["y"].transform("mean")
-    sample = sample[(group_mean_y > 0) & (group_mean_y < 1)].reset_index(drop=True)
-    sample["group"] = pd.factorize(sample["group"])[0]
-    return sample
-
-
 def _index_no_fe(sample, beta, n_coef, drop_distance=False):
     """x_i' beta without the fixed effect; `drop_distance` sets every distance term to 0."""
     beta = np.asarray(beta, float)
@@ -923,7 +865,7 @@ def extensive_ame_table(data, quantiles=WORLD_Q, sample=None, n_data_draws=1000,
 
 def _ame_labels(n_coef):
     dist = reg_bin_labels(n_coef)
-    reference_label = {4: [r"$]0,50]$"], 5: [r"$]0,20]$"]}.get(n_coef, [r"ref."])
+    reference_label = [r"Downstream ZE"] if n_coef > 1 else []
     return (dist if n_coef == 1 else reference_label + dist) + [r"$\ln n_{ls}$"]
 
 

@@ -4,12 +4,13 @@
 off `sourcing_geometry` instead of writing `alpha * log d`. This gate checks the port
 against a line-by-line transcription of the Julia loop, the knots against
 `load_parameters.jl`'s formula, and then the properties every consumer relies on, on a
-real (fixture) run tree with N_TAU = 4:
+real (fixture) run tree with N_TAU = 3 (block-4 specification 4):
 
-  1. `log_tau` == the Julia loop, for K = 1, 4, 5, below the first knot and beyond the last;
+  1. `log_tau` == the Julia loop, for K = 1, 3, 4, below the first knot and beyond the last;
   2. continuity, and d log tau / d log d == `tau_elasticity` (the segment's alpha_k);
   3. homogeneity of degree one in the alpha vector; alpha = 0 (scalar) is tau == 1;
-  4. `tau_log_knots` == log of the bin centres, the last closed at max_l min_r d_lr;
+  4. `tau_log_knots` == mean ln d of each distance category (0 = the downstream ZE of the
+     area) over the data estimation sample of block 4;
   5. equal alpha_k reproduce the power law's geometry and the SAME realised winners;
   6. `No trade cost` sets every segment to zero, in the geometry and in the economy;
   7. the closed-form identities still close under binned tau (variance split, distance
@@ -52,9 +53,9 @@ def julia_build_tau(alpha, ld, x):
 
 
 # --- 1-3. the map itself --------------------------------------------------------------
-for K, edges in ((1, None), (4, utils.TAU_BIN_EDGES[4]), (5, utils.TAU_BIN_EDGES[5])):
+for K, knots_km in ((1, None), (3, (14.0, 33.0, 75.0, 210.0)), (4, (25.0, 75.0, 125.0, 175.0, 310.0))):
     a = np.sort(rng.uniform(0.1, 1.2, K))
-    x = None if K == 1 else np.log(0.5 * (np.r_[edges, 420.0][:-1] + np.r_[edges, 420.0][1:]))
+    x = None if K == 1 else np.log(np.array(knots_km))
     ld = np.log(rng.uniform(0.5, 900.0, 400))                     # below x_0 and beyond x_K
     want = np.array([julia_build_tau(a, v, x) for v in ld])
     got = utils.log_tau(a, ld, x)
@@ -69,30 +70,35 @@ for K, edges in ((1, None), (4, utils.TAU_BIN_EDGES[4]), (5, utils.TAU_BIN_EDGES
             assert abs(utils.log_tau(a, xk + 1e-12, x) - utils.log_tau(a, xk - 1e-12, x)) < 1e-9
     assert np.allclose(utils.log_tau(2.5 * a, ld, x), 2.5 * got)  # homogeneous of degree 1
     assert np.allclose(utils.log_tau(np.zeros(K), ld, x), 0.0)
-print("1-3 ok  log_tau is the Julia loop (K = 1, 4, 5), continuous, slope alpha_k, "
+print("1-3 ok  log_tau is the Julia loop (K = 1, 3, 4), continuous, slope alpha_k, "
       "homogeneous of degree one, and zero at alpha = 0")
 
 # --- the run tree: the same fixture under the power law and binned ---------------------
 A1 = 0.4
-ALPHAS = (0.2, 0.3, 0.5, 0.8)
+ALPHAS = (0.2, 0.3, 0.5)
 trees = []
 try:
-    T1, KW1 = build(alpha=(A1,)); trees.append(T1)
-    TK, KWK = build(alpha=ALPHAS); trees.append(TK)
-    TE, KWE = build(alpha=(A1,) * 4); trees.append(TE)       # binned, all segments equal
+    T1, KW1 = build(alpha=(A1,), category_geometry=True); trees.append(T1)
+    TK, KWK = build(alpha=ALPHAS, category_geometry=True); trees.append(TK)
+    TE, KWE = build(alpha=(A1,) * 3, category_geometry=True); trees.append(TE)   # binned, all segments equal
     load = lambda kw: utils.load_granular_data("test", mu=2, parts=("core", "geography"), **kw)
     d1, dK, dE = load(KW1), load(KWK), load(KWE)
-    assert (d1["n_tau"], dK["n_tau"], dE["n_tau"]) == (1, 4, 4)
+    assert (d1["n_tau"], dK["n_tau"], dE["n_tau"]) == (1, 3, 3)
+    assert (dK["n_coef"], dK["coef_spec"]) == (3, 4)
 
     # --- 4. knots ------------------------------------------------------------------
-    D = np.load(dK["input_folder"] / "distances.npy")
-    down = utils._downstream_ze_index(dK)
-    d_max = D[:, down - 1].min(axis=1).max()
-    e = np.r_[utils.TAU_BIN_EDGES[4], d_max]
-    assert np.allclose(utils.tau_log_knots(dK), np.log(0.5 * (e[:-1] + e[1:])))
+    # Every group of the fixture keeps its downstream ZE (supplier) and one control at
+    # CATEGORY_DISTANCE, so each category's knot is the mean ln d of its ZE.
+    from _fixture_tree import CATEGORY_DISTANCE, INTERNAL_DISTANCE
+    sample = utils.reg_cell_sample(dK)
+    assert sorted(sample["bin"].unique()) == [0, 1, 2, 3]
+    assert (sample.loc[sample["ze"] < 4, "bin"] == 0).all()
+    want_knots = np.log([INTERNAL_DISTANCE, np.sqrt(CATEGORY_DISTANCE[4] * CATEGORY_DISTANCE[7]),
+                         CATEGORY_DISTANCE[5], CATEGORY_DISTANCE[6]])
+    assert np.allclose(utils.tau_log_knots(dK), want_knots)
     assert utils.tau_log_knots(d1) is None
-    print(f"4 ok  knots = bin centres {np.round(np.exp(utils.tau_log_knots(dK)), 1).tolist()} km, "
-          f"the last bin closed at max_l min_r d = {d_max:.1f} km")
+    print(f"4 ok  knots = geometric mean distance by category "
+          f"{np.round(np.exp(utils.tau_log_knots(dK)), 1).tolist()} km (downstream ZE first)")
 
     # --- 5. equal alpha_k == the power law ------------------------------------------
     g1, gE = utils.sourcing_geometry(d1), utils.sourcing_geometry(dE)
@@ -128,15 +134,15 @@ try:
     # --- 6. No trade cost --------------------------------------------------------------
     kw = utils.CF_REGIMES["No trade cost"]
     g0 = utils.sourcing_geometry(dK, **kw)
-    assert np.array_equal(g0["alpha"], np.zeros(4))
+    assert np.array_equal(g0["alpha"], np.zeros(3))
     for blk in g0["by_sector"].values():
         assert np.allclose(blk["log_tau"], 0.0) and np.allclose(blk["elasticity"], 0.0)
     with contextlib.redirect_stdout(io.StringIO()):
         regs = utils.reporting_data("test", mu=2, n_rep=4, **KWK)
     assert set(regs) == set(utils.CF_REGIMES)
-    assert np.array_equal(regs["No trade cost"]["economy"].meta["alpha"], np.zeros(4))
+    assert np.array_equal(regs["No trade cost"]["economy"].meta["alpha"], np.zeros(3))
     assert np.array_equal(regs["Both forces"]["economy"].meta["alpha"], np.array(ALPHAS))
-    print("6 ok  `No trade cost` sets all four alpha_k to zero (geometry and economy); "
+    print("6 ok  `No trade cost` sets all three alpha_k to zero (geometry and economy); "
           "every regime builds on the binned tree")
 
     # --- 7. identities under binned tau ---------------------------------------------
@@ -165,12 +171,12 @@ try:
 
     # --- 8. the structural moment's pair elasticity -----------------------------------
     import pandas as pd
-    ld = np.log(np.array([10.0, 60.0, 100.0, 150.0, 300.0]))   # segments split at 75/125/175
+    ld = np.log(np.array([10.0, 20.0, 50.0, 300.0]))   # knots 12 / 34.6 / 70 / 160 km
     panel = pd.DataFrame({"log_distance": ld})
     assert np.allclose(report_lib._pair_tau_elasticity(dK, panel), (ALPHAS[0],) + ALPHAS)
     assert np.allclose(report_lib._pair_tau_elasticity(d1, panel), A1)
     print("8 ok  the structural derivative uses alpha_k at the pair's own distance "
-          f"({[ALPHAS[0]] + list(ALPHAS)} at 10/60/100/150/300 km), alpha under the power law")
+          f"({[ALPHAS[0]] + list(ALPHAS)} at 10/20/50/300 km), alpha under the power law")
 finally:
     for t in trees:
         shutil.rmtree(t, ignore_errors=True)

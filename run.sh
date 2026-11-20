@@ -5,7 +5,7 @@
 # directory of the repository, next to baseline_<industry>/.
 #
 #   ./run.sh aero
-#   ./run.sh aero --n_coef=4 --n_tau=1 --n_rho_inf=10000
+#   ./run.sh aero --n_coef=4 --n_tau=1        # power law τ = d^α instead of one α per segment
 #   ./run.sh aero --relax_n_lo=true          # diagnostic: N_LO forced to 1
 #   ./run.sh both
 #
@@ -16,8 +16,9 @@ set -e
 if [ -z "$1" ]; then
     echo "Usage: $0 <industry> [--n_coef=N] [--n_tau=N] [--n_rho_inf=N] [--relax_n_lo=true|false]"
     echo "  industry    : aero, auto, car, both"
-    echo "  --n_coef    : distance coefficients of the cell cloglog: 1 (ln d), 4 or 5 bins (default 4)"
-    echo "  --n_tau     : trade-cost parameters: 1 (τ = d^α) or n_coef (one α per bin) (default 1)"
+    echo "  --n_coef    : block-4 specification: 1 (ln d) or 4 (categories ]0,50], ]50,100], >100 km against the
+                downstream ZE of the area: 3 coefficients; files beta_d_4.npy, ...) (default 4)"
+    echo "  --n_tau     : trade costs: 1 (τ = d^α) or n_coef (one α per distance segment, the main spec) (default n_coef)"
     echo "  --n_rho_inf : UNUSED since inference moved to fake worlds (kept so old calls still parse)"
     echo "  --relax_n_lo: DIAGNOSTIC — force the variety-count lower bound N_LO to 1 instead of"
     echo "                ceil(N_supplier_s / R_downstream); outputs → ..._nlo1_pso/ (default false)"
@@ -25,7 +26,7 @@ if [ -z "$1" ]; then
 fi
 
 INDUSTRY="$1"; shift
-N_COEF="4"; N_TAU="1"; N_RHO_INF="10000"; RELAX_N_LO="false"
+N_COEF="4"; N_TAU=""; N_RHO_INF="10000"; RELAX_N_LO="false"
 for arg in "$@"; do
     case "$arg" in
         --n_coef=*)     N_COEF="${arg#--n_coef=}" ;;
@@ -36,7 +37,8 @@ for arg in "$@"; do
     esac
 done
 
-case "$N_COEF" in 1|4|5) ;; *) echo "Error: --n_coef must be 1, 4 or 5 (got $N_COEF)"; exit 1 ;; esac
+case "$N_COEF" in 1|4) ;; *) echo "Error: --n_coef must be 1 or 4 (got $N_COEF)"; exit 1 ;; esac
+[ -z "$N_TAU" ] && N_TAU="$N_COEF"
 if [ "$N_TAU" != "1" ] && [ "$N_TAU" != "$N_COEF" ]; then
     echo "Error: --n_tau must be 1 or equal to --n_coef (got $N_TAU)"; exit 1
 fi

@@ -99,21 +99,29 @@ distances_downstream_local      = distances_local[:, downstream_regions_local]
 closest_plant_dist_local        = vec(minimum(distances_downstream_local, dims=2))
 closest_downstream_region_local = vec(getindex.(argmin(distances_downstream_local, dims=2), 2))
 
-"""
-    distance_bin(d, n_bins) -> bin index (0 = the base category)
+# A ZE is the downstream ZE of its own attraction area when its nearest downstream region
+# is itself. A downstream ZE closer to another downstream ZE than to itself belongs to
+# that other area and is binned by distance, as in the data notebook.
+is_area_downstream_ze_local = [downstream_regions_local[closest_downstream_region_local[l]] == l for l in 1:R_full]
 
-Distance bins of the extensive-margin regression (base category: d ≤ 50 km, or
-d ≤ 20 km with five bins). With one coefficient the regressor is ln d and every
-distance falls in bin 0.
 """
-function distance_bin(d, n_bins)
-    edges = n_bins == 5 ? (20, 50, 100, 150, 200) : n_bins == 4 ? (50, 100, 150, 200) : ()
-    bin = 0
-    for edge in edges
-        d > edge && (bin += 1)
+    distance_category(distance, is_area_downstream_ze) -> category (0 = the reference)
+
+Distance categories of the extensive-margin regression with bins (`n_coef = 4`): 0 for a
+cell in the downstream ZE of its attraction area (the reference, whatever its internal
+distance), then 1 = ]0, 50] km, 2 = ]50, 100] km, 3 = > 100 km for the other cells, by the
+distance to the nearest downstream region. The bins are DISTANCE_EDGES_KM, closed on the right.
+"""
+const DISTANCE_EDGES_KM = (50.0, 100.0)
+function distance_category(distance, is_area_downstream_ze)
+    is_area_downstream_ze && return 0
+    category = 1
+    for edge in DISTANCE_EDGES_KM
+        distance > edge && (category += 1)
     end
-    return bin
+    return category
 end
+_n_distance_categories = length(DISTANCE_EDGES_KM) + 1     # non-reference categories
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 4 — COUNT MOMENT TARGET Ḡ_s(0) AND VARIETY-COUNT BOUNDS (G_K.csv)
@@ -337,9 +345,14 @@ emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r      = $(emp_pi_r_local)
 
+# n_coef names the specification and the files (`beta_d_<n_coef>.npy`): 1 = ln d, 4 = the
+# distance categories against the downstream ZE, i.e. 3 distance coefficients (N_REG).
+n_distance_coef = n_coef == 1 ? 1 : _n_distance_categories
 _beta_d_target = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_d_$(n_coef).npy"))))
 _beta_kappa_target = vec(Float64.(NPZ.npzread(joinpath(input_folder, "beta_kappa_$(n_coef).npy"))))
-length(_beta_d_target) == n_coef || error("beta_d_$(n_coef).npy has $(length(_beta_d_target)) entries, expected $n_coef")
+length(_beta_d_target) == n_distance_coef ||
+    error("beta_d_$(n_coef).npy has $(length(_beta_d_target)) entries, expected $n_distance_coef " *
+          "(n_coef = 4: ]0,50], ]50,100], >100 km against the downstream ZE)")
 length(_beta_kappa_target) == 1      || error("beta_kappa_$(n_coef).npy has $(length(_beta_kappa_target)) entries, expected 1")
 reg_coef_local = vcat(_beta_d_target, _beta_kappa_target)
 # κ prior: the ln n coefficient of the continuous-distance specification.
@@ -348,11 +361,11 @@ kappa_prior_local = clamp(Float64(vec(NPZ.npzread(isfile(_beta_kappa_1_path) ? _
                           joinpath(input_folder, "beta_kappa_$(n_coef).npy")))[1]), -0.9, 2.9)
 n_reg = length(reg_coef_local)                # N_REG + 1
 @everywhere const reg_coef    = $reg_coef_local
-@everywhere const N_REG       = $(n_coef)      # number of DISTANCE coefficients
-@everywhere const N_TAU       = $(n_tau)       # number of trade-cost parameters
+n_tau_params = n_tau == 1 ? 1 : n_distance_coef     # one α per distance segment
+@everywhere const N_REG       = $(n_distance_coef) # number of DISTANCE coefficients
+@everywhere const N_TAU       = $(n_tau_params)    # number of trade-cost parameters
 @everywhere const KAPPA_PRIOR = $(kappa_prior_local)
-_dist_labels = n_coef == 5 ? ["]20,50]", "]50,100]", "]100,150]", "]150,200]", ">200"] :
-               n_coef == 4 ? ["]50,100]", "]100,150]", "]150,200]", ">200"] : ["ln d"]
+_dist_labels = n_coef == 4 ? ["]0,50]", "]50,100]", ">100"] : ["ln d"]
 @everywhere const REG_COEF_LABELS = $(vcat(_dist_labels, "ln n"))
 println(" block 4 target: β_d = $(round.(_beta_d_target, digits=4)), β_κ = $(round(_beta_kappa_target[1], digits=4)) ; " *
         "priors α₀ = $(round(P_alpha, digits=4)), κ₀ = $(round(kappa_prior_local, digits=4))")
@@ -406,7 +419,7 @@ u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, :sobol
 # 9 — GEOGRAPHY BROADCASTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-distance_bin_local = [distance_bin(distances_downstream_local[i, j], n_coef) for i in 1:R_full, j in 1:R_down_]
+distance_category_local = [distance_category(closest_plant_dist_local[l], is_area_downstream_ze_local[l]) for l in 1:R_full]
 LOG_DIST_DOWNSTREAM_local = log.(max.(distances_downstream_local, 1.0))
 @everywhere const DOWNSTREAM_REGIONS        = $(downstream_regions_local)
 @everywhere const CLOSEST_PLANT_DIST        = $(closest_plant_dist_local)
@@ -458,8 +471,9 @@ reg_cell_fe_local = Int[]
 reg_cell_y_local  = Float64[]
 _regressor_rows = Vector{Vector{Float64}}()
 _fe_group_id  = Dict{Tuple{Int,Int},Int}()
-# Each cell's regressors: the distance to its nearest downstream plant (ln d, or the bin
-# dummies with the base bin left out) and ln n_ls, which identifies κ.
+# Each cell's regressors: the distance to its nearest downstream plant (ln d, or the
+# category dummies with the downstream ZE of the area as reference) and ln n_ls, which
+# identifies κ.
 for g in 1:n_good_local
     s = GOOD_S_local[g]; l = GOOD_R_local[g]
     distance = closest_plant_dist_local[l]
@@ -468,8 +482,8 @@ for g in 1:n_good_local
     if n_coef == 1
         regressors[1] = log(distance)
     else
-        bin = distance_bin_local[l, closest_downstream_region_local[l]]
-        (bin > 0 && bin <= n_coef) && (regressors[bin] = 1.0)
+        category = distance_category_local[l]
+        category > 0 && (regressors[category] = 1.0)
     end
     regressors[end] = log_n_ls_local[s, l]
     push!(reg_cell_g_local, g); push!(_regressor_rows, regressors); push!(reg_cell_y_local, _has_supplier_data[s, l])
@@ -494,6 +508,16 @@ let (beta_data, ok) = cell_cloglog_beta(reg_cell_y_local)
     gap = maximum(abs.(beta_data .- reg_coef_local))
     (ok && gap < 1e-3) || @warn "the Julia cell cloglog does not reproduce beta_d/beta_kappa " *
         "(max gap $(round(gap, sigdigits=3)), converged = $ok): check the regression set."
+end
+# The reference holds at most one cell per sector × AA group. When nearly all of them
+# supply, a simulated network where every kept reference cell supplies is quasi-separated
+# and its fit fails (counted in reg_fail; such a fake world is excluded).
+if n_coef != 1
+    _cell_categories = distance_category_local[GOOD_R_local[reg_cell_g_local]]
+    _reference_cells = _cell_categories .== 0
+    @printf(" distance categories in 𝒜 (reference = downstream ZE of the area, ]0,50], ]50,100], >100): %s ; data supply rate of the reference cells %.3f\n",
+            string([count(==(c), _cell_categories) for c in 0:N_REG]),
+            any(_reference_cells) ? sum(reg_cell_y_local[_reference_cells]) / count(_reference_cells) : NaN)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -567,39 +591,55 @@ function invert_T_from_gamma(alpha0::Real, kappa0::Real; max_iter::Int=1000,
     end
     return T
 end
-# ── Binned trade costs: one distance elasticity per segment between bin centres ──
-# The bins are the regression's (base 0–50 km, or 0–20 km with five bins); the last is
-# closed at the largest distance to the nearest downstream region (the regression's
-# distance). Centres d̄_0 … d̄_K are the knots of build_tau. Starting values from the
-# data: ln τ_0 = 0, ln τ_b = −β_b/θ, α_k = Δ ln τ / Δ ln d̄ between successive centres;
-# a slope below the previous segment's takes the previous value (α_k increasing), the
-# first segment's floor being the scalar prior α₀ = −β_d/θ when its slope is non-positive.
+# ── Binned trade costs: one distance elasticity per segment between category knots ──
+# The categories are the regression's: the downstream ZE of the area (reference), then
+# ]0,50], ]50,100] and >100 km. The reference is not a distance interval, so each knot
+# d̄_c is the geometric mean of the distance to the nearest downstream region over the
+# cells of category c in the data estimation sample (𝒜 without the sector × AA groups
+# where the data y does not vary, as the cloglog drops them): ln d̄_c = mean ln d. The
+# knots d̄_0 < … < d̄_K are those of build_tau. Starting values from the data:
+# ln τ(d̄_0) = 0, ln τ(d̄_c) = −β_c/θ, slopes Δ ln τ / Δ ln d̄ between successive knots.
+# The first two segments start at the same α, the slope from ]0,50] to ]50,100] (as if
+# the reference still pooled the downstream ZE with ]0,50]); the scalar prior
+# α₀ = −β_d/θ replaces it when it is non-positive. α_k is increasing (ln τ convex in
+# ln d), so the later starting values are a running maximum.
 _tau_log_knots  = Float64[]
 _alpha_bin_init = Float64[]
+_tau_knot_counts = Int[]
 if n_tau > 1
     n_tau == n_coef || error("n_tau must be 1 or n_coef ($n_coef), got $n_tau")
-    _edges = n_coef == 5 ? [0.0, 20, 50, 100, 150, 200] : [0.0, 50, 100, 150, 200]
-    _max_distance  = maximum(closest_plant_dist_local)
-    _max_distance > _edges[end] || error("no cell lies beyond $(_edges[end]) km (max distance to the " *
-                                 "nearest downstream region $_max_distance): the last bin is empty.")
-    _all_edges = vcat(_edges, _max_distance)
-    _bin_centres  = 0.5 .* (_all_edges[1:end-1] .+ _all_edges[2:end])
-    _tau_log_knots = log.(_bin_centres)
-    _log_tau_at_centres = vcat(0.0, -_beta_d_target ./ theta)
-    _segment_slope  = diff(_log_tau_at_centres) ./ diff(_tau_log_knots)
-    # α_k must be increasing (ln τ convex in ln d): a slope below the previous segment's
-    # takes the previous value, so the starting values are a running maximum.
-    let prev = P_alpha
-        for (k, s_k) in enumerate(_segment_slope)
-            prev = k == 1 ? (s_k > 0 ? s_k : prev) : max(s_k, prev)
-            push!(_alpha_bin_init, prev)
+    let n_supplying = zeros(REG_CELL_N_FE), n_cells = zeros(REG_CELL_N_FE)
+        for (i, group) in enumerate(reg_cell_fe_local)
+            n_supplying[group] += reg_cell_y_local[i]; n_cells[group] += 1
+        end
+        group_has_both = (n_supplying .> 0) .& (n_supplying .< n_cells)
+        estimation_cells = findall(i -> group_has_both[reg_cell_fe_local[i]], eachindex(reg_cell_g_local))
+        cell_zones = GOOD_R_local[reg_cell_g_local[estimation_cells]]
+        for c in 0:N_TAU
+            zones_in_category = cell_zones[distance_category_local[cell_zones] .== c]
+            isempty(zones_in_category) && error("distance category $c has no cell in the estimation sample: " *
+                                                "its knot of the binned τ is not defined.")
+            push!(_tau_knot_counts, length(zones_in_category))
+            push!(_tau_log_knots, sum(log.(closest_plant_dist_local[zones_in_category])) / length(zones_in_category))
         end
     end
-    println(" binned τ: knots d̄ = $(round.(_bin_centres, digits=1)) km (d_max = $(round(_max_distance, digits=1)))")
-    for k in 1:n_tau
-        @printf("   segment %3.0f → %5.0f km: Δln τ = %7.4f  slope %7.4f  α_k init %6.4f%s\n",
-                _bin_centres[k], _bin_centres[k + 1], _log_tau_at_centres[k + 1] - _log_tau_at_centres[k], _segment_slope[k], _alpha_bin_init[k],
-                _alpha_bin_init[k] == _segment_slope[k] ? "" : "  (floor)")
+    all(diff(_tau_log_knots) .> 0) || error("the knots of the binned τ are not increasing: " *
+        "d̄ = $(round.(exp.(_tau_log_knots), digits=1)) km (reference = downstream ZE of the area first).")
+    _log_tau_at_knots = vcat(0.0, -_beta_d_target ./ theta)
+    _segment_slope  = diff(_log_tau_at_knots) ./ diff(_tau_log_knots)
+    let previous = _segment_slope[2] > 0 ? _segment_slope[2] : P_alpha
+        push!(_alpha_bin_init, previous, previous)
+        for k in 3:N_TAU
+            previous = max(_segment_slope[k], previous)
+            push!(_alpha_bin_init, previous)
+        end
+    end
+    _knot_km = exp.(_tau_log_knots)
+    println(" binned τ: knots d̄ = $(round.(_knot_km, digits=1)) km (geometric means; cells $(_tau_knot_counts))")
+    for k in 1:N_TAU
+        @printf("   segment %5.1f → %5.1f km: Δln τ = %7.4f  slope %7.4f  α_k init %6.4f%s\n",
+                _knot_km[k], _knot_km[k + 1], _log_tau_at_knots[k + 1] - _log_tau_at_knots[k], _segment_slope[k], _alpha_bin_init[k],
+                _alpha_bin_init[k] == _segment_slope[k] ? "" : k == 1 ? "  (set to segment 2)" : "  (floor)")
     end
     any(_alpha_bin_init .> 1.5) && @warn "an α_k starting value exceeds ALPHA_MAX = 1.5; the search box caps it"
 end
@@ -616,7 +656,7 @@ end
 # Search box: α in [BOUND_LO, min(BOUND_HI, ALPHA_MAX/α₀)] × α₀, anchored on the scalar prior
 # (N_TAU == 1) or the per-segment starting values (bins) — so every α_k > 0; κ in
 # [KAPPA_LO, KAPPA_HI].
-@everywhere const TAU_PRIOR = $(n_tau == 1 ? [P_alpha] : _alpha_bin_init)
+@everywhere const TAU_PRIOR = $(N_TAU == 1 ? [P_alpha] : _alpha_bin_init)
 @everywhere const BOUND_LO  = 0.1
 @everywhere const BOUND_HI  = 10
 @everywhere const ALPHA_MAX = 1.5
@@ -632,7 +672,7 @@ _tcol_names   = vcat(["AA" * _ze_names[downstream_regions_local[a]] for a in 1:n
 _moment_labels = String["labor"]
 for s in 2:S_;            push!(_moment_labels, "chi_s[$(_sector_names[s])]"); end
 for j in 2:n_pi;          push!(_moment_labels, "pi_r[$(_ze_names[downstream_regions_local[j]])]"); end
-for b in 1:n_reg;         push!(_moment_labels, b <= n_coef ? "beta_d[$(REG_COEF_LABELS[b])]" : "beta_kappa"); end
+for b in 1:n_reg;         push!(_moment_labels, b <= N_REG ? "beta_d[$(REG_COEF_LABELS[b])]" : "beta_kappa"); end
 for s in 1:S_, c in 1:n_Tcol_local
     moment_mask_local[off_gamma + (s - 1) * n_Tcol_local + c] &&
         push!(_moment_labels, c == foreign_col_local ? "f_foreign[$(_sector_names[s])]" :
@@ -647,7 +687,7 @@ for s in 1:S_;            push!(_moment_labels, "G0[$(_sector_names[s])]"); end
 # areas dropped) — the T block the inference reports.
 _param_labels = vcat(["chi_L"], ["chi_s[$s]" for s in _sector_names],
                      ["A[$(_ze_names[r])]" for r in downstream_regions_local],
-                     [n_tau == 1 ? "alpha" : "alpha_$b" for b in 1:n_tau], ["kappa"],
+                     [N_TAU == 1 ? "alpha" : "alpha_$b" for b in 1:N_TAU], ["kappa"],
                      [((p - 1) % n_Tcol_local + 1 == foreign_col_local ?
                        "PhiF[$(_sector_names[(p - 1) ÷ n_Tcol_local + 1])]" :
                        "T[$(_sector_names[(p - 1) ÷ n_Tcol_local + 1])-$(_tcol_names[(p - 1) % n_Tcol_local + 1])]")

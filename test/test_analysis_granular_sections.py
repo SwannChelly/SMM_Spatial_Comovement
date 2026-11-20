@@ -1009,9 +1009,11 @@ def gate_comparative_advantage():
     # to alpha, ln tau = alpha (ln d - ln dbar_0): the shift is common to a buyer's
     # origins, so rho must be the power law's EXACTLY; and alpha = 0 (scalar, broadcast
     # to every segment) must remove distance altogether, as under the power law.
-    K = 4
-    binned = dict(data, n_tau=K, n_coef=K, best_params=np.insert(
-        best_params, 1 + S + n_AA + 1, [ALPHA] * (K - 1)))
+    # The knots (mean ln d of each distance category) are given: this tree has no
+    # cells_ls.csv to rebuild the regression sample from.
+    K = 3
+    binned = dict(data, n_tau=K, n_coef=K, _tau_log_knots=np.log([12.0, 35.0, 75.0, 200.0]),
+                  best_params=np.insert(best_params, 1 + S + n_AA + 1, [ALPHA] * (K - 1)))
     g1, gK = NS["sourcing_geometry"](data), NS["sourcing_geometry"](binned)
     assert gK["alpha"].size == K and gK["knots"].size == K + 1
     for s_ in g1["by_sector"]:

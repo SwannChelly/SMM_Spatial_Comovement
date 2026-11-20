@@ -29,7 +29,8 @@ RNG = np.random.default_rng(20260805)
 
 
 S, R, R_D = 4, 12, 3          # sectors, ZE, downstream regions (= n_AA)
-N_REG = 4
+N_REG = 3          # distance coefficients: ]0,50], ]50,100], >100 against the downstream ZE
+COEF_SPEC = 4      # block-4 specification, the suffix of the input files
 N_STAGES = 3
 
 
@@ -117,10 +118,10 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{BASE}/N_downstream_per_region.npy", N_downstream)
     np.save(f"{BASE}/attraction_area_linkages.npy", AA_link)
     # distances: the nearest downstream region of every ZE is its attraction area (as
-    # load_parameters.jl asserts), at distances spread over the five bins; a downstream
-    # ZE is at 0 from itself and leaves the regression set (d > 0). Own stream, so RNG
+    # load_parameters.jl asserts), at distances spread over the distance categories; a
+    # downstream ZE is at 8 km from itself, the reference category. Own stream, so RNG
     # is not consumed.
-    _near = np.array([0, 12, 60, 110, 160, 0, 30, 260, 75, 0, 40, 180], float)
+    _near = np.array([8, 12, 60, 110, 160, 8, 30, 260, 75, 8, 40, 180], float)
     _D = 400.0 + np.random.default_rng(5).uniform(0, 100, (R, R))
     _D = (_D + _D.T) / 2
     np.fill_diagonal(_D, 0.0)
@@ -129,15 +130,15 @@ def _build_industry(ROOT, industry, sectors):
         _D[_l, _j] = _D[_j, _l] = _near[_l]
     np.save(f"{BASE}/distances.npy", _D)
     # block 4 = [beta_d (N_REG) ; beta_kappa (1)], two files as the data notebook writes
-    reg_coef_emp = np.array([-0.35, -0.62, -0.81, -1.05, 0.48])
-    np.save(f"{BASE}/beta_d_{N_REG}.npy", reg_coef_emp[:N_REG])
-    np.save(f"{BASE}/beta_kappa_{N_REG}.npy", reg_coef_emp[N_REG:])
+    reg_coef_emp = np.array([-0.35, -0.62, -0.81, 0.48])
+    np.save(f"{BASE}/beta_d_{COEF_SPEC}.npy", reg_coef_emp[:N_REG])
+    np.save(f"{BASE}/beta_kappa_{COEF_SPEC}.npy", reg_coef_emp[N_REG:])
     # data covariance of block 4 (cluster-robust in the data notebook); first industry
     # only, so the second exercises the no-file path. Deterministic: RNG is not consumed.
-    reg_coef_se = np.array([0.08, 0.10, 0.12, 0.15, 0.05])
+    reg_coef_se = np.array([0.08, 0.10, 0.12, 0.05])
     reg_coef_cov = 0.3 * np.outer(reg_coef_se, reg_coef_se) + 0.7 * np.diag(reg_coef_se ** 2)
     if industry == "test":
-        np.save(f"{BASE}/beta_cov_{N_REG}.npy", reg_coef_cov)
+        np.save(f"{BASE}/beta_cov_{COEF_SPEC}.npy", reg_coef_cov)
 
     # ---- G_K.csv --------------------------------------------------------------
     # As the data pipeline writes it (`t_G`): G = Pr(K_ls == K), the pmf, and G_cs
@@ -243,7 +244,7 @@ def _build_industry(ROOT, industry, sectors):
     for st in PAR:
         np.save(f"{RUN}/{st}/best_parameters_list.npy", PAR[st])
 
-    np.save(f"{RUN}/n_reg_coef.npy", np.array(N_REG))
+    np.save(f"{RUN}/n_reg_coef.npy", np.array(COEF_SPEC))
     np.save(f"{RUN}/n_tau.npy", np.array(1))
 
     gam_free = T_ACTIVE.copy()                              # areas + foreign, minus references
@@ -745,9 +746,8 @@ def run_checks(ns, ROOT, exp):
         except Exception as e:
             check(f"{fn} -> pdf", False, f"{type(e).__name__}: {e}")
 
-    check("reg bin labels for n_coef=4 drop the base bin",
-          ns["reg_bin_labels"](4) == ns["reg_bin_labels"](5)[1:])
-    check("reg bin labels for n_coef=5 keep all", len(ns["reg_bin_labels"](5)) == 5)
+    check("reg bin labels: three categories against the downstream ZE",
+          ns["reg_bin_labels"](3) == [r"$]0,50]$", r"$]50,100]$", r"$>100$"])
     check("with_kappa appends ln n", ns["reg_bin_labels"](1, with_kappa=True)[-1] == r"$\ln n_{ls}$")
     ax4 = ns["plot_reg_coef"](d2)
     nd = d2["n_coef"]
@@ -758,7 +758,7 @@ def run_checks(ns, ROOT, exp):
           and close(sorted([seg[-1][0][1], seg[-1][1][1]]),
                     [wt["band_lo"].iloc[nd - 1], wt["band_hi"].iloc[nd - 1]], 1e-9))
     # the data point's sampling interval, from beta_cov_<n_coef>.npy
-    cov4 = np.load(os.path.join(ROOT, "baseline_test", f"beta_cov_{nd}.npy"))
+    cov4 = np.load(os.path.join(ROOT, "baseline_test", f"beta_cov_{COEF_SPEC}.npy"))
     se4 = np.sqrt(np.diag(cov4))
     emp4 = np.array(exp["reg_coef"])
     check("beta_cov loaded as reg_coef_cov, block-4 sized",
@@ -940,8 +940,7 @@ def run_checks(ns, ROOT, exp):
           and sum(d2["moment_block_sizes"]) == exp["n_mom_kept"])
     check("block-4 labels as MOMENT_LABELS writes them",
           [l for l in d2["moment_labels"] if l.startswith("beta")] ==
-          ["beta_d[]50,100]]", "beta_d[]100,150]]", "beta_d[]150,200]]", "beta_d[>200]",
-           "beta_kappa"])
+          ["beta_d[]0,50]]", "beta_d[]50,100]]", "beta_d[>100]", "beta_kappa"])
     d0 = ns["load_granular_data"]("test", mu=2, base=ROOT, parts=("core", "moments"))
     check("parameter blocks: chi_L, chi_s-1, A-1, [alpha ; kappa], T free",
           list(d0["param_block_sizes"]) ==
