@@ -47,7 +47,9 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     of has_sup on the distance regressor(s) and on ln n_ls. Under each simulated
     coefficient, in parentheses, its fake-world standard deviation (sd of
     e = beta_world - beta_sim across the Step-2 worlds, `reg_coef_world_table`) when
-    Step 2 has run. beta_kappa is reported here only (`plot_reg_coef` draws beta_d).
+    Step 2 has run. Under each EMPIRICAL coefficient, in brackets, its 95% sampling
+    interval (cluster-robust by ZE, `data_reg_coef_interval`) when `beta_cov_<n>.npy`
+    is in the input folder. beta_kappa is reported here only (`plot_reg_coef` draws beta_d).
     Panel D: the import share of each upstream sector, f_s = 1 - domestic_share, the
     foreign row of the sourcing-share block. It is a PROFILED moment: Phi^F_s is set so
     the closed-form share equals the target exactly, so the simulated share differs from
@@ -130,7 +132,7 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     # --- Panel C: block 4 -----------------------------------------------------
     # Rows are keyed on the coefficient LABEL (bins or ln d, then ln n), so two industries
     # estimated with the same n_coef line up; a label absent from one industry is `---`.
-    all_coef_labels, coef_values, coef_sds = [], {}, {}
+    all_coef_labels, coef_values, coef_sds, coef_cis = [], {}, {}, {}
     for industry_config in industries_config:
         industry_data = all_data[industry_config["industry"]]
         coef_labels = reg_bin_labels(industry_data["n_coef"], with_kappa=True)
@@ -143,6 +145,9 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
         coef_values[industry_config["industry"]] = {l: (float(e), float(m)) for l, e, m in zip(coef_labels, emp_coef, sim_coef)}
         coef_sds[industry_config["industry"]] = ({} if world_table is None else
                                 dict(zip(coef_labels, world_table["world_sd_e"].values)))
+        data_interval = data_reg_coef_interval(industry_data)
+        coef_cis[industry_config["industry"]] = ({} if data_interval is None else
+                                                 dict(zip(coef_labels, zip(data_interval[1], data_interval[2]))))
     # ln n last, whatever the order the industries listed the bins in
     all_coef_labels = [l for l in all_coef_labels if "n_{ls}" not in l] + [l for l in all_coef_labels if "n_{ls}" in l]
 
@@ -174,7 +179,7 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
     latex += (f"\\multicolumn{{{1 + 2 * n_ind}}}{{l}}{{\\textbf{{Panel C: Extensive Margin "
             f"(cell cloglog)}}}} \\\\\n")
     latex += "\\midrule\n"
-    any_sd = False
+    any_sd = any_ci = False
     for l in all_coef_labels:
         name = (r"Density, $\beta_\kappa$ on " + l if "n_{ls}" in l
                 else r"Distance, $\beta_d$ " + l)
@@ -184,8 +189,12 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
             row += ["---", "---"] if value is None else list(value)
             sd = coef_sds[industry_config["industry"]].get(l)
             ok = sd is not None and np.isfinite(sd)
-            sd_cells += ["{}", f"{{({sd:.4f})}}" if ok else "{}"]
+            ci = coef_cis[industry_config["industry"]].get(l)
+            ok_ci = ci is not None and np.isfinite(ci).all()
+            sd_cells += [f"{{[{ci[0]:.4f}, {ci[1]:.4f}]}}" if ok_ci else "{}",
+                         f"{{({sd:.4f})}}" if ok else "{}"]
             any_sd |= ok
+            any_ci |= ok_ci
         latex += str(row[0]) + " & " + " & ".join(fmt(value) for value in row[1:]) + " \\\\\n"
         if any(x not in ("", "{}") for x in sd_cells):
             latex += " & ".join(sd_cells) + " \\\\\n"
@@ -208,6 +217,8 @@ def generate_combined_table(industries_config, output_file="moments_comparison_c
             r"supplier indicator on distance and on the log number of establishments $n_{ls}$, "
             r"with a sector $\times$ attraction-area fixed effect; the model counterpart is "
             r"averaged over 100 networks of $\hat N_s$ varieties."
+            + (r" In brackets under Emp.: the 95\% confidence interval of the empirical "
+               r"coefficient, standard errors clustered by commuting zone." if any_ci else "")
             + (r" In parentheses: the standard deviation of the coefficient in a single "
                r"finite economy drawn from the model, i.e. of the simulated residual "
                r"$\beta_{world}-\beta_{sim}$ across the Step~2 simulations." if any_sd else "")
