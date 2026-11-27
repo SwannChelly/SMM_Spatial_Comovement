@@ -65,7 +65,8 @@ sens_drawset(k::Int; seed::Int = SENS_SEED) =
 The masked moment vector at `theta` on draw set `ds`; N̂_s re-calibrated unless pinned.
 """
 function sens_moments(theta::AbstractVector, draw_set; N_fixed::Union{Nothing, Vector{Int}} = nothing)
-    network = solve_network(theta; u_draws = draw_set.u, sample_weights = draw_set.w)
+    network = solve_network(theta; u_draws = draw_set.u, sample_weights = draw_set.w,
+                            frechet = get(draw_set, :frechet, nothing))
     moments = compute_moments(network, theta; N_fixed = N_fixed, perms = draw_set.perms)
     return moments_to_vec(moments), moments.N_hat
 end
@@ -243,7 +244,8 @@ function _profile_task(theta, column, grid, k::Int, N_base::Vector{Int}, seed::I
     converged = falses(length(grid))
     if column.kind === :N
         # one Ricardian solve per draw set: the network does not depend on N_s
-        network = solve_network(theta; u_draws = draw_set.u, sample_weights = draw_set.w)
+        network = solve_network(theta; u_draws = draw_set.u, sample_weights = draw_set.w,
+                                frechet = get(draw_set, :frechet, nothing))
         for (i, N_value) in enumerate(grid)
             N_pinned = copy(N_base); N_pinned[column.index] = Int(N_value)
             moments = compute_moments(network, theta; N_fixed = N_pinned, perms = draw_set.perms)

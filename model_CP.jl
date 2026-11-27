@@ -462,8 +462,114 @@ end
 ##################### Network solution ###################
 
 """
+    frechet_draws(u_draws) -> Vector{Matrix{Float64}} (S; each n_cells_s × N_rho)
+
+The parameter-free part of the cells' productivity draws, `(−log(1−u))^{−1/θ}`, per
+sector and laid out (cell position in `SECTOR_GOOD_INDICES[s]` × variety). A cell's draw
+is `z = T_ls^{1/θ}` times it. Computing it once per draw set saves one log and one power
+per (variety, cell) at every `solve_network` call on the same draws.
+"""
+function frechet_draws(u_draws::AbstractMatrix{Float64})
+    N_rho_eff = size(u_draws, 1)
+    powers = [Matrix{Float64}(undef, length(SECTOR_GOOD_INDICES[s]), N_rho_eff) for s in 1:S]
+    for s in 1:S, (position, g) in enumerate(SECTOR_GOOD_INDICES[s])
+        @inbounds for rho in 1:N_rho_eff
+            powers[s][position, rho] = (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
+        end
+    end
+    return powers
+end
+
+"""
+    ricardian_selection(z_inv_by_sector, tau, p_F, psi) -> (winners, prices), each (N_rho × S × R_d)
+
+For every variety ρ, sector s and buyer r, the cell that delivers at the lowest cost
+p = w_l τ_lr / z (`winners`, the cell index g; −1 when the foreign bid ψ_r^{−1/θ} p^F_ρs is
+strictly lower; 0 in a sector without cells) and the price paid (`prices`). Ties keep the
+first minimiser and a NaN price wins outright (as `argmin`). `z_inv_by_sector[s]` is
+(cell position × variety), `tau` (R × R_d), `p_F` (N_rho × S, Inf where s does not import),
+`psi` (R_d).
+
+The buyers are the innermost loop, so one variety's cells are compared for all buyers at
+once (vectorised); each buyer still sees the cells in the same order and the same products
+(z^{−1} τ) w, so the winners and prices are those of a buyer-by-buyer search. A variety
+whose comparison meets a NaN is redone buyer by buyer with the NaN rule.
+"""
+function ricardian_selection(z_inv_by_sector::Vector{Matrix{Float64}}, tau::AbstractMatrix{Float64},
+                             p_F::Matrix{Float64}, psi::AbstractVector)
+    N_rho_eff = size(p_F, 1)
+    winners = zeros(Int, N_rho_eff, S, R_downstream)
+    prices  = zeros(Float64, N_rho_eff, S, R_downstream)
+    best_price = Vector{Float64}(undef, R_downstream); best_position = Vector{Int}(undef, R_downstream)
+    # The buyer's access to foreign suppliers shifts the common foreign bid by ψ_r^{−1/θ}:
+    # the same foreign draw, a buyer-specific delivered cost.
+    foreign_access_factor = [psi[dr]^(-1 / theta) for dr in 1:R_downstream]
+    for s in 1:S
+        sector_cells = SECTOR_GOOD_INDICES[s]
+        isempty(sector_cells) && continue
+        n_sector_cells = length(sector_cells)
+        tau_by_cell = Matrix{Float64}(undef, R_downstream, n_sector_cells)   # τ_{l(position), r}
+        for (position, l) in enumerate(SECTOR_GOOD_REGIONS[s]), dr in 1:R_downstream
+            tau_by_cell[dr, position] = tau[l, dr]
+        end
+        cell_wages = W_RS_FLAT[sector_cells]
+        z_inv_s = z_inv_by_sector[s]
+        @inbounds for rho in 1:N_rho_eff
+            # Lowest domestic cost for every buyer at once.
+            z_inv = z_inv_s[1, rho]; wage = cell_wages[1]
+            nan_seen = false
+            @simd for dr in 1:R_downstream
+                price = z_inv * tau_by_cell[dr, 1] * wage
+                nan_seen |= isnan(price)
+                best_price[dr] = price; best_position[dr] = 1
+            end
+            for position in 2:n_sector_cells
+                z_inv = z_inv_s[position, rho]; wage = cell_wages[position]
+                @simd for dr in 1:R_downstream
+                    price = z_inv * tau_by_cell[dr, position] * wage
+                    nan_seen |= isnan(price)
+                    better = price < best_price[dr]
+                    best_price[dr]    = ifelse(better, price, best_price[dr])
+                    best_position[dr] = ifelse(better, position, best_position[dr])
+                end
+            end
+            if nan_seen
+                # Buyer by buyer with the NaN rule: the first NaN price wins.
+                for dr in 1:R_downstream
+                    best = z_inv_s[1, rho] * tau_by_cell[dr, 1] * cell_wages[1]; best_at = 1
+                    if !isnan(best)
+                        for position in 2:n_sector_cells
+                            price = z_inv_s[position, rho] * tau_by_cell[dr, position] * cell_wages[position]
+                            if isnan(price)
+                                best = price; best_at = position; break
+                            elseif price < best
+                                best = price; best_at = position
+                            end
+                        end
+                    end
+                    best_price[dr] = best; best_position[dr] = best_at
+                end
+            end
+            # Foreign bid strictly below the best domestic cell (a NaN domestic price keeps
+            # winning): the variety is imported (winner = −1).
+            for dr in 1:R_downstream
+                foreign_price = p_F[rho, s] * foreign_access_factor[dr]
+                if foreign_price < best_price[dr]
+                    winners[rho, s, dr] = -1
+                    prices[rho, s, dr]  = foreign_price
+                else
+                    winners[rho, s, dr] = sector_cells[best_position[dr]]
+                    prices[rho, s, dr]  = best_price[dr]
+                end
+            end
+        end
+    end
+    return winners, prices
+end
+
+"""
     solve_network(params; u_draws, sample_weights, precomputed_tau=nothing,
-                  return_firm_level=false) -> NamedTuple
+                  return_firm_level=false, frechet=nothing) -> NamedTuple
 
 Ricardian selection (lowest-cost cell wins each variety for each buyer), nested CES
 price indices, downstream sales and trade flows, on the passed draws (`N_rho_eff` =
@@ -477,6 +583,8 @@ A-adjusted unit cost and sales, zero outside the downstream zones), `linkages_fl
 (N_rho_eff × n_good, true where the cell supplies the variety to some buyer) and the
 weights. `return_firm_level` adds the per-(variety, buyer) expenditure shares (COO
 vectors), the productivity matrix `z_flat`, the markup `mu` and the price index `P`.
+`frechet` is `frechet_draws(u_draws)` when the caller reuses the same draws (computed
+here otherwise; `FRECHET_U_DRAWS` is used for the estimation draws `U_DRAWS`).
 
 The foreign competitor of sector s bids `p^F_ρs = (−log(1 − u^F_ρs)/Φ^F_s)^{1/θ}` for
 variety ρ (`u_draws[:, n_good + s]`, one draw per variety common to every buyer), and
@@ -488,7 +596,8 @@ margin, the win counts and the firm-level rows are French only.
 function solve_network(params; u_draws::Matrix{Float64},
                        sample_weights::AbstractMatrix{Float64},
                        precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
-                       return_firm_level::Bool=false)
+                       return_firm_level::Bool=false,
+                       frechet::Union{Nothing, Vector{Matrix{Float64}}}=nothing)
     chi_L, chi_s, A_r, alpha, T_vec, PhiF, psi = unpack_params(params)
     tau = precomputed_tau === nothing ? build_tau(alpha) : precomputed_tau
     T_ls = reshape(T_vec, S, R)
@@ -510,29 +619,38 @@ function solve_network(params; u_draws::Matrix{Float64},
     X_F_by_r   = zeros(S, R_downstream)
     X_dom_by_r = zeros(S, R_downstream)
 
-    # 2) Each cell's productivity draw for each variety, z = T^{1/θ} (−log(1−u))^{−1/θ},
-    #    built one column at a time; only 1/z enters the cost comparison.
-    z_inv_flat = Matrix{Float64}(undef, N_rho_eff, n_good)
+    # 2) Each cell's productivity draw for each variety, z = T^{1/θ} (−log(1−u))^{−1/θ};
+    #    only 1/z enters the cost comparison. Stored per sector as (cell position × variety),
+    #    so that the search for the lowest cost below reads a variety's cells contiguously.
+    #    The draw part (−log(1−u))^{−1/θ} does not depend on θ's parameters: `frechet`
+    #    (`frechet_draws(u_draws)`) passes it precomputed when the same draws are reused.
+    draw_powers = frechet !== nothing ? frechet :
+                  u_draws === U_DRAWS   ? FRECHET_U_DRAWS : frechet_draws(u_draws)
+    @assert length(draw_powers) == S && all(size(draw_powers[s]) == (length(SECTOR_GOOD_INDICES[s]), N_rho_eff) for s in 1:S) "frechet does not match u_draws"
+    z_inv_by_sector = [Matrix{Float64}(undef, length(SECTOR_GOOD_INDICES[s]), N_rho_eff) for s in 1:S]
     z_flat     = return_firm_level ? Matrix{Float64}(undef, N_rho_eff, n_good) : nothing
-    z_column = Vector{Float64}(undef, N_rho_eff)
-    for g in 1:n_good
-        T_root = max(T_ls[GOOD_S[g], GOOD_R[g]], eps(Float64))^(1/theta)
-        for rho in 1:N_rho_eff
-            z_column[rho] = T_root * (-log(1.0 - u_draws[rho, g]))^(-1.0/theta)
+    for s in 1:S
+        sector_cells = SECTOR_GOOD_INDICES[s]
+        z_inv_s = z_inv_by_sector[s]; powers_s = draw_powers[s]
+        for (position, g) in enumerate(sector_cells)
+            T_root = max(T_ls[GOOD_S[g], GOOD_R[g]], eps(Float64))^(1/theta)
+            @inbounds for rho in 1:N_rho_eff
+                z = T_root * powers_s[position, rho]
+                z_inv_s[position, rho] = z^(-1)
+                return_firm_level && (z_flat[rho, g] = z)
+            end
         end
-        @views z_inv_flat[:, g] .= z_column .^ (-1)
-        return_firm_level && (@views z_flat[:, g] .= z_column)
     end
 
     X_shares_by_r   = zeros(n_good, R_downstream)
     c_tilde_r       = zeros(R_downstream)
     linkages_flat   = falses(N_rho_eff, n_good)
-    p_rho_s         = zeros(N_rho_eff, S)
-    winner_good_idx = zeros(Int, N_rho_eff, S)
     w_rho_s         = Matrix{Float64}(undef, N_rho_eff, S)
     ces_buf         = Matrix{Float64}(undef, N_rho_eff, S)
-    tau_c::Matrix{Float64}   = tau
-    z_inv_c::Matrix{Float64} = z_inv_flat
+
+    # 3) Ricardian selection, for every (variety, sector, buyer): the winning cell (−1 when
+    #    imported, 0 in a sector without cells) and its delivered price.
+    winners_all, prices_all = ricardian_selection(z_inv_by_sector, tau, p_F, psi)
 
     if return_firm_level
         firm_exp_rho = Int[]; firm_exp_s = Int[]; firm_exp_g = Int[]; firm_exp_r = Int[]
@@ -541,44 +659,8 @@ function solve_network(params; u_draws::Matrix{Float64},
 
     for dr in 1:R_downstream
         region = DOWNSTREAM_REGIONS[dr]
-        # The buyer's access to foreign suppliers shifts the common foreign bid by ψ_r^{−1/θ}:
-        # the same foreign draw, a buyer-specific delivered cost.
-        foreign_access_factor = psi[dr]^(-1 / theta)
-
-        # 3) Ricardian selection: for each variety the buyer picks the lowest delivered cost
-        #    p = w τ / z among the sector's cells; ties keep the first minimiser and a NaN
-        #    wins outright (as `argmin`).
-        for s in 1:S
-            sector_cells = SECTOR_GOOD_INDICES[s]
-            isempty(sector_cells) && continue
-            tau_to_buyer::Vector{Float64} = tau_c[SECTOR_GOOD_REGIONS[s], dr]
-            cell_wages::Vector{Float64}   = W_RS_FLAT[sector_cells]
-            n_sector_cells = length(sector_cells)
-            @inbounds for rho in 1:N_rho_eff
-                best_price = z_inv_c[rho, sector_cells[1]] * tau_to_buyer[1] * cell_wages[1]
-                best_position = 1
-                if !isnan(best_price)
-                    for position in 2:n_sector_cells
-                        price = z_inv_c[rho, sector_cells[position]] * tau_to_buyer[position] * cell_wages[position]
-                        if isnan(price)
-                            best_price = price; best_position = position; break
-                        elseif price < best_price
-                            best_price = price; best_position = position
-                        end
-                    end
-                end
-                # Foreign bid strictly below the best domestic cell (a NaN domestic price
-                # keeps winning, as above): the variety is imported (winner = −1).
-                foreign_price = p_F[rho, s] * foreign_access_factor
-                if foreign_price < best_price
-                    winner_good_idx[rho, s] = -1
-                    p_rho_s[rho, s] = foreign_price
-                else
-                    winner_good_idx[rho, s] = sector_cells[best_position]
-                    p_rho_s[rho, s] = best_price
-                end
-            end
-        end
+        winner_good_idx = view(winners_all, :, :, dr)
+        p_rho_s         = view(prices_all, :, :, dr)
 
         # 4) Nested CES price indices at the realised prices:
         #    P_sr = [Σ_ρ w_ρ p_ρ^{1−ν_s}]^{1/(1−ν_s)}, P_r = [Σ_s χ^s P_sr^{1−ν}]^{1/(1−ν)},
@@ -727,6 +809,9 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
     z_demeaned = Vector{Float64}(undef, n); X_demeaned = Matrix{Float64}(undef, n, k)
     X_beta = Vector{Float64}(undef, n);    eta_new = Vector{Float64}(undef, n)
     group_weight = Vector{Float64}(undef, length(group_rows))
+    # Buffers of the weighted least squares, reused across iterations.
+    W_X_demeaned = Matrix{Float64}(undef, n, k); W_z_demeaned = Vector{Float64}(undef, n)
+    XtWX = Matrix{Float64}(undef, k, k);         XtWz = Vector{Float64}(undef, k)
 
     beta = zeros(k)
     iterations = 0
@@ -734,8 +819,9 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
         iterations += 1
         # 1) Working response and IRLS weights at the current linear index.
         @inbounds for i in 1:n
-            mu_i         = clamp(1 - exp(-exp(eta[i])), 1e-12, 1 - 1e-12)
-            dmu_deta     = exp(eta[i]) * (1 - mu_i)
+            exp_eta      = exp(eta[i])
+            mu_i         = clamp(1 - exp(-exp_eta), 1e-12, 1 - 1e-12)
+            dmu_deta     = exp_eta * (1 - mu_i)
             z_working[i] = eta[i] + (yf[i] - mu_i) / dmu_deta
             W[i]         = wf[i] * (dmu_deta^2) / (mu_i * (1 - mu_i))
             z_demeaned[i] = z_working[i]
@@ -757,8 +843,11 @@ function _cloglog_irls(y::AbstractVector{<:Real}, X::AbstractMatrix{<:Real},
             end
         end
         # 3) Weighted least squares on the demeaned data, then the fixed effects back.
-        W_X_demeaned = W .* X_demeaned
-        beta_new = (X_demeaned' * W_X_demeaned) \ (X_demeaned' * (W .* z_demeaned))
+        W_X_demeaned .= W .* X_demeaned
+        W_z_demeaned .= W .* z_demeaned
+        mul!(XtWX, X_demeaned', W_X_demeaned)
+        mul!(XtWz, X_demeaned', W_z_demeaned)
+        beta_new = XtWX \ XtWz
         mul!(X_beta, Xf, beta_new)
         @inbounds for i in 1:n
             eta_new[i] = X_beta[i]

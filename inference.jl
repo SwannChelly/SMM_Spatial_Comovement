@@ -191,15 +191,17 @@ function world_theta(ref, alpha, kappa, world_profile)
 end
 
 """
-    world_simulator(seed) -> (u, w, perms)
+    world_simulator(seed) -> (u, w, perms, frechet)
 
 The simulator of one world: `N_rho` Sobol draws (the estimation's m and design)
-randomised by the world's seed, and the world's own block-4 network permutations.
+randomised by the world's seed, the world's own block-4 network permutations, and the
+parameter-free part of the Fréchet draws (`frechet_draws(u)`), computed once because the
+local search solves the network on the same draws at every evaluation.
 """
 function world_simulator(seed::Integer)
     rng = MersenneTwister(seed)
     u, w = generate_draws(N_rho, n_good, :sobol; randomise = true, rng = rng)
-    return (u = u, w = w, perms = draw_cell_perms(N_rho, rng))
+    return (u = u, w = w, perms = draw_cell_perms(N_rho, rng), frechet = frechet_draws(u))
 end
 
 """
@@ -210,7 +212,8 @@ the world's empty-cell shares `G_target`, then the cell cloglog averaged over th
 simulator's networks.
 """
 function simulate_beta(params::AbstractVector, G_target::AbstractVector, sim)
-    network = solve_network(params; u_draws = sim.u, sample_weights = sim.w)
+    network = solve_network(params; u_draws = sim.u, sample_weights = sim.w,
+                           frechet = get(sim, :frechet, nothing))
     linkages = network.linkages_flat
     n_draws = size(linkages, 1)
     N_hat, _ = concentrate_N_s(vec(sum(linkages; dims = 1)), n_draws; target = G_target,
