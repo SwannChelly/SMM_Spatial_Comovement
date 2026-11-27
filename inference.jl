@@ -34,9 +34,9 @@
 # with the areas' T: the sampling noise of the import share enters the draws of T and
 # Φ^F. The buyers' access ψ_r is treated the same way: each buyer's realised import share
 # in the world plays the customs share, and the profile re-solves ψ on it. Those shares
-# come from the same flows as the sectors' import shares, so the factor c that rescales
-# them in the profile is ≈ 1 (it differs from one by the Monte-Carlo gap between the
-# realised and the expected weights) and is reported. The counterfactuals hold each
+# come from the same flows as the sectors' import shares, so the logit shift b of the
+# profile is ≈ 0 (it differs from zero by the Monte-Carlo gap between the realised and the
+# expected weights) and is reported. The counterfactuals hold each
 # buyer's import share at the world's estimate.
 
 # ── Areas that come out empty ────────────────────────────────────────────────
@@ -153,12 +153,12 @@ end
 
 """
     profile_world(ref, alpha, kappa, world; T_init, psi_init, aggregate_coordinates_init)
-        -> (T, psi, A, chi_L, chi_s, aggregate_coordinates, converged, import_scale)
+        -> (T, psi, A, chi_L, chi_s, aggregate_coordinates, converged, import_logit_shift)
 
 Profile T, ψ and the aggregates at (α, κ) on a world's own moments: γ (`world.gamma`),
 blocks 1–3 (`world.labor_share`, `world.sector_shares`, `world.sales_shares`) and the
 buyers' import shares (`world.buyer_import_share`, in the place of the customs shares),
-i.e. the estimator applied to the fake data. `import_scale` is the factor c of the profile. An area that wins nothing in the world starts at
+i.e. the estimator applied to the fake data. `import_logit_shift` is the shift b of the profile. An area that wins nothing in the world starts at
 `EMPTY_T` and stays there. `aggregate_coordinates_init` warm-starts the Newton solve of
 (χ^L, χ^s) (`solve_aggregates`).
 """
@@ -176,7 +176,7 @@ function profile_world(ref, alpha, kappa, world;
                                                sales_shares = world.sales_shares))
     return (T = profile.T, psi = profile.psi, A = profile.A, chi_L = profile.chi_L, chi_s = profile.chi_s,
             aggregate_coordinates = profile.aggregate_coordinates, converged = profile.converged,
-            import_scale = profile.import_scale)
+            import_logit_shift = profile.import_logit_shift)
 end
 
 """
@@ -246,7 +246,7 @@ function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
         all(isfinite, beta_sim) || return (ok = false, reason = :sim_fit)
         return (ok = true, reason = :none, e = world.beta .- beta_sim, beta_world = world.beta,
                 beta_sim = beta_sim, N = N_world, n_fail = n_fail_sim, G = world.G,
-                import_scale = world_profile.import_scale)
+                import_logit_shift = world_profile.import_logit_shift)
     catch err
         return _failure(err)
     end
@@ -285,7 +285,7 @@ function world_weight_matrix(theta_hat::Vector{Float64}; B::Int = 1000, dest::Ab
                  Dict("e" => residuals, "beta_world" => rows_of(r -> r.beta_world),
                       "beta_sim" => rows_of(r -> r.beta_sim), "N_hat_world" => rows_of(r -> r.N),
                       "G_world" => rows_of(r -> r.G),
-                      "import_scale_world" => [r.import_scale for r in usable],
+                      "import_logit_shift_world" => [r.import_logit_shift for r in usable],
                       "N_hat" => N_hat, "e_data" => e_data))
 
     labels = MOMENT_LABELS[collect(BLOCK_RANGES[4])]
@@ -313,9 +313,9 @@ function world_weight_matrix(theta_hat::Vector{Float64}; B::Int = 1000, dest::Ab
             end
             n_block4 == N_TAU + 1 && println(out, "\n  Block 4 has $n_block4 entries for $n_block4 parameters (α, κ): exactly " *
                                            "identified, so W does not move the point estimate.")
-            import_scales = [r.import_scale for r in usable]
-            @printf(out, "\n  factor c of the buyers' import-share targets (≈ 1 in a fake world): mean %.4f, min %.4f, max %.4f\n",
-                    mean(import_scales), minimum(import_scales), maximum(import_scales))
+            logit_shifts = [r.import_logit_shift for r in usable]
+            @printf(out, "\n  logit shift b of the buyers' import-share targets (≈ 0 in a fake world): mean %.4f, min %.4f, max %.4f\n",
+                    mean(logit_shifts), minimum(logit_shifts), maximum(logit_shifts))
             println(out, "\n  A mean residual far from zero (|t| ≫ 2) means the continuum simulator does not\n" *
                          "  reproduce, on average, the β of a finite world at the same parameters: the\n" *
                          "  estimator is biased there, and Step 4's bias column measures what it does to θ̂.")
@@ -340,7 +340,7 @@ end
 
 """
     estimate_world(world, ref, W, sim; max_iter)
-        -> (ok, alpha, kappa, T, A, chi_L, chi_s, psi, import_scale, N, loss, iterations, theta_vec)
+        -> (ok, alpha, kappa, T, A, chi_L, chi_s, psi, import_logit_shift, N, loss, iterations, theta_vec)
 
 The estimator applied to one fake world. For each candidate (α, κ): T re-inverted on the
 world's γ and blocks 1–3 (T and the aggregates profiled), N calibrated on its G, β simulated on the world's
@@ -384,7 +384,7 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
     _, N, _ = simulate_beta(theta_vec, world.G, sim)
     return (ok = world_profile.converged && min_loss < WORLD_PENALTY, alpha = alpha, kappa = kappa, T = world_profile.T,
             A = world_profile.A, chi_L = world_profile.chi_L, chi_s = world_profile.chi_s, psi = world_profile.psi,
-            import_scale = world_profile.import_scale, N = N, loss = min_loss,
+            import_logit_shift = world_profile.import_logit_shift, N = N, loss = min_loss,
             iterations = Optim.iterations(optimum), theta_vec = theta_vec)
 end
 
@@ -541,7 +541,7 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
                  Dict("params" => param_draws, "estimate" => estimate_row,
                       "disp_logT" => dispersion_draws, "counterfactuals" => counterfactual_draws, "counterfactuals_est" => cf_est,
                       "loss" => [r.estimate.loss for r in usable],
-                      "import_scale" => [r.estimate.import_scale for r in usable], "iters" => [r.estimate.iterations for r in usable],
+                      "import_logit_shift" => [r.estimate.import_logit_shift for r in usable], "iters" => [r.estimate.iterations for r in usable],
                       "thetas" => permutedims(reduce(hcat, (r.estimate.theta_vec for r in usable)))))
     write(joinpath(dest, "world_inference_labels.txt"), join(labels, "\n") * "\n")
 
@@ -568,9 +568,9 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
             end
             println(out, "  sd = dispersion across worlds; CI = 2.5/97.5% quantiles; bias = mean − estimate.")
             other_columns = setdiff(eachindex(labels), T_columns)
-            import_scales = [r.estimate.import_scale for r in usable]
-            @printf(out, "  factor c of the buyers' import-share targets (≈ 1 in a fake world): mean %.4f, min %.4f, max %.4f\n",
-                    mean(import_scales), minimum(import_scales), maximum(import_scales))
+            logit_shifts = [r.estimate.import_logit_shift for r in usable]
+            @printf(out, "  logit shift b of the buyers' import-share targets (≈ 0 in a fake world): mean %.4f, min %.4f, max %.4f\n",
+                    mean(logit_shifts), minimum(logit_shifts), maximum(logit_shifts))
             print_block(out, "α, κ, N_s, A, χ^L, χ^s, ψ", labels[other_columns], param_draws[:, other_columns], estimate_row[other_columns])
             print_block(out, "T (levels, per-sector reference = 1)", labels[T_columns], param_draws[:, T_columns], estimate_row[T_columns])
             print_block(out, "log T", labels[T_columns], log.(param_draws[:, T_columns]), log.(estimate_row[T_columns]))

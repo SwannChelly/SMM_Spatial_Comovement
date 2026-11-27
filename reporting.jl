@@ -128,7 +128,7 @@ function generate_report(folder::String, params::Vector{Float64}; variable::Stri
             @printf(io, "%-10s Empirical: %8.3f | Simulated: %8.3f | Φ^F_s %10.4g\n", SECTOR_NAMES[s],
                     FOREIGN_SHARE[s], simulated[5][FOREIGN_COL, s], foreign_phi(unpack_T_area(params))[s])
         end
-        println(io, "\n>> Buyers' import shares (ψ_r profiled with T on the rescaled customs shares; not in the criterion):")
+        println(io, "\n>> Buyers' import shares (ψ_r profiled with T on the logit-shifted customs shares; not in the criterion):")
         print(io, buyer_import_table(params; simulated_share = granular === nothing ? nothing : granular.buyer_import_share))
         println(io, "\n>> Block 4 — cell-level cloglog:")
         for (i, lab) in enumerate(REG_COEF_LABELS)
@@ -253,10 +253,10 @@ function report_granular(theta::Vector{Float64}, folder::String; industry::Strin
                  "reg_coef_model" => Float64.(granular.reg_coef), "reg_coef_sd_reps" => Float64.(granular.reg_sd),
                  "reg_coef_expected" => Float64.(granular.beta_expected),
                  "reg_fail" => [Float64(granular.reg_fail)], "EK" => Float64.(granular.EK),
-                 "customs_share" => collect(CUSTOMS_SHARE), "import_share_target_initial" => collect(INITIAL_IMPORT_TARGET),
+                 "customs_share" => collect(CUSTOMS_SHARE),
                  "import_share_target" => import_fit.target, "import_share_fit" => import_fit.model,
                  "import_share_fit_simulated" => Float64.(granular.buyer_import_share),
-                 "import_scale" => [import_fit.scale], "psi" => import_fit.psi,
+                 "import_logit_shift" => [import_fit.logit_shift], "psi" => import_fit.psi,
                  "amplification_r" => import_fit.amplification))
         return granular
     catch e
@@ -268,25 +268,26 @@ end
 """
     buyer_import_table(params; simulated_share = nothing) -> String
 
-One row per buyer ZE: the customs import share IS_customs, the initial target of the data
-notebook, the target c · IS_customs at the model's weights, the model's import share in
-closed form (and on the estimation draws when `simulated_share` is given), ψ_r and the
-closed-form amplification coefficient D_r (sales of domestic suppliers per euro of final
-demand, the buyer's own euro included); the factor c on the last line.
+One row per buyer ZE: the raw customs import share IS_customs, the target
+Λ(logit IS_customs + b) at the model's weights, the model's import share in closed form (and
+on the estimation draws when `simulated_share` is given), ψ_r and the closed-form
+amplification coefficient D_r (sales of domestic suppliers per euro of final demand, the
+buyer's own euro included); the logit shift b and its multiplicative equivalent on the odds,
+e^b, on the last line.
 """
 function buyer_import_table(params::AbstractVector; simulated_share = nothing)
     fit = buyer_import_fit(params)
     io = IOBuffer()
-    @printf(io, "  %-10s %10s %10s %10s %10s %10s %10s %8s\n", "buyer ZE", "IS_customs", "IS_init",
+    @printf(io, "  %-10s %10s %10s %10s %10s %10s %8s\n", "buyer ZE", "IS_customs",
             "IS_target", "f_r model", "f_r sim", "ψ_r", "D_r")
     for dr in 1:R_downstream
-        @printf(io, "  %-10s %10.4f %10.4f %10.4f %10.4f %10s %10.4g %8.4f%s\n", BUYER_NAMES[dr],
-                CUSTOMS_SHARE[dr], INITIAL_IMPORT_TARGET[dr], fit.target[dr], fit.model[dr],
+        @printf(io, "  %-10s %10.4f %10.4f %10.4f %10s %10.4g %8.4f%s\n", BUYER_NAMES[dr],
+                CUSTOMS_SHARE[dr], fit.target[dr], fit.model[dr],
                 simulated_share === nothing ? "-" : @sprintf("%.4f", simulated_share[dr]),
                 fit.psi[dr], fit.amplification[dr], dr == PSI_REF_BUYER ? "  (ψ reference)" : "")
     end
-    @printf(io, "  factor c = %.4f (IS_target = c · IS_customs); max |f_r − IS_target| = %.2e\n",
-            fit.scale, maximum(abs.(fit.model .- fit.target)))
+    @printf(io, "  logit shift b = %.4f (IS_target = Λ(logit IS_customs + b); odds × %.4f); max |f_r − IS_target| = %.2e\n",
+            fit.logit_shift, exp(fit.logit_shift), maximum(abs.(fit.model .- fit.target)))
     return String(take!(io))
 end
 

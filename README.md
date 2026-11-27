@@ -106,10 +106,9 @@ with `stats.csv` (`epsilon`, `labor_share`), `distances.npy`, `filter_N_upstream
 `w_rs.npy`, `regional_wages.npy`, `N_downstream_per_region.npy`, `input_share.npy`,
 `domestic_share.npy`, `emp_gamma_ls.npy`, `X_dr.csv`, `attraction_area_linkages.npy`,
 `G_K.csv`, `cells_ls.csv`, `beta_d_<n>.npy`, `beta_kappa_<n>.npy` (and `beta_d_1.npy`,
-the α prior), `import_share_customs_per_region.npy` (raw customs import share of each downstream
-zone, imports over raw-material purchases, zero elsewhere; only its relative variation is
-used, so it may exceed one) and `import_share_per_region.npy` (its initial rescaled target, read
-for the report). No data covariance is needed: Steps 2–4 draw their uncertainty from fake
+the α prior) and `import_share_customs_per_region.npy` (raw customs import share of each
+downstream zone, imports over raw-material purchases, strictly inside (0, 1) on the downstream
+zones and zero elsewhere; the model reads only these raw shares and sets their level itself). No data covariance is needed: Steps 2–4 draw their uncertainty from fake
 worlds simulated by the model.
 
 ---
@@ -153,9 +152,14 @@ least one buyer), and the draw count is sized by `N^obs_s / (1 − f̂_s)` (capp
 `ψ_r Φ^F_s` (its delivered price is `ψ_r^{−1/θ}` times the common foreign bid, from the same
 draws), so `Φ_rs = Φ^dom_rs + ψ_r Φ^F_s` and `f_rs = ψ_r Φ^F_s / Φ_rs`. ψ (R_d, last block of
 the parameter vector, ψ = 1 for the buyer with the largest sales share) is profiled with
-T and Φ^F on each buyer's import share: the customs shares rescaled at every Sinkhorn pass
-by `c = Σ_s X_s f̂_s / Σ_r X_r IS_r^customs`, so the buyers' imports add up to the sectors'
-imports and only the relative customs shares are used. It is matched exactly, like γ, and
+T and Φ^F on each buyer's import share. The targets are `Λ(logit IS_r^customs + b)`, Λ the
+logistic function, with one shift b of the log-odds re-solved at every Sinkhorn pass so that
+the buyers' imports add up to the sectors' imports, `Σ_r X_r IS_r^target = Σ_s X_s f̂_s`
+(X_r = π̂_r(1 − ℓ_r), the model's weights). Only the odds ratios of the customs shares are used;
+the targets always lie in (0, 1) (≈ `e^b · IS_r` for small shares, a rescaling of the domestic
+share near one). ψ is updated on the odds, `ψ_r ← ψ_r (odds(target)/odds(f_r))^0.3`. Targets the
+buyers' and sectors' import shares cannot satisfy jointly (a large buyer asked to import almost
+all its purchases while a sector imports little) make the profile fail. It is matched exactly, like γ, and
 is not in the criterion (the per-buyer fit is in `report.txt` and `granular_diagnostics`).
 ψ does not move a buyer's domestic geography conditional on buying in France; it moves the
 amplification `D_r = 1 + (1 − ℓ_r) Σ_s s_rs (1 − f_rs)`, the sales of French suppliers per

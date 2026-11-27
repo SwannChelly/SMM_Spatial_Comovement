@@ -88,15 +88,13 @@ def build(out, S=3, R=60, R_D=6, seed=7):
         np.save(f"{out}/beta_d_{n}.npy", np.array(bd))
         np.save(f"{out}/beta_kappa_{n}.npy", np.array([0.4]))
 
-    # Customs import shares of the downstream zones (zero elsewhere), from their own stream
-    # so every draw above is unchanged. Only their relative variation is used by the model;
-    # the initial target rescales them to the sales-weighted mean of the sector shares.
+    # Raw customs import shares of the downstream zones (zero elsewhere), from their own
+    # stream so every draw above is unchanged. The model reads only these raw shares and sets
+    # their level itself (a common shift of their log-odds).
     rng_customs = np.random.default_rng([seed, 2])
     customs = np.zeros(R)
     customs[down] = rng_customs.uniform(0.05, 0.6, R_D)
     np.save(f"{out}/import_share_customs_per_region.npy", customs)
-    mean_import_share = float((1 - domestic).mean())
-    np.save(f"{out}/import_share_per_region.npy", customs * mean_import_share / customs[down].mean())
     return out
 
 

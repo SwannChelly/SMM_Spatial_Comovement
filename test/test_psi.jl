@@ -1,6 +1,6 @@
 ##### test_psi.jl #####
-# Gate for the buyers' access to foreign suppliers ψ_r (profiled with T on the customs
-# import shares). STANDALONE + PRINT-ONLY. Run from the directory holding the baseline:
+# Gate for the buyers' access to foreign suppliers ψ_r (profiled with T on the raw customs
+# import shares, their log-odds shifted by one common b). STANDALONE + PRINT-ONLY. Run from the directory holding the baseline:
 #
 #     python3 SMM_Spatial_Comovement/test/make_synthetic_baseline.py ./baseline_syn
 #     julia SMM_Spatial_Comovement/test/test_psi.jl syn [n_coef]
@@ -11,14 +11,18 @@
 #       the parameter vector, its reference is the buyer with the largest sales share.
 #   (2) EXACTNESS at the data: at the profile, max_r |f_r − IS_r^target| and
 #       max_s |f̃_s − f̂_s| are below 1e-7, the adding-up Σ_r X_r IS_r^target = Σ_s X_s f̂_s
-#       holds at every pass, ψ_ref = 1; the per-buyer table.
+#       holds at every pass, the targets keep the odds ratios of the customs shares
+#       (logit IS_r^target − logit IS_r^customs = b for every r), ψ_ref = 1; the per-buyer table.
 #   (3) INVARIANCE: at given T, changing ψ leaves the domestic geography conditional on
 #       buying in France, p_{l r s} / (1 − f_rs), unchanged (closed form), and every variety
 #       bought in France under both ψ goes to the same cell (simulated, common draws).
 #   (4) GAUGE: rescaling ψ by k and Φ^F by 1/k leaves the model unchanged.
 #   (5) TEST DEVICE: with PSI_CALIBRATED[] = false the profile holds ψ ≡ 1.
-#   (6) INFEASIBLE targets (a rescaled customs share ≥ 1) make the profile fail.
-#   (7) FAKE WORLDS: the factor c of the world's targets is ≈ 1.
+#   (6) LARGE SHARES: with customs shares for which the multiplicative rule c · IS_r would
+#       exceed one (a small buyer at 0.95), the logit targets stay in (0, 1) and the profile
+#       converges; targets that the buyers' and sectors' import shares cannot jointly satisfy
+#       (the largest buyer at 0.97 of its purchases) are rejected, not accepted at ψ = ∞.
+#   (7) FAKE WORLDS: the logit shift b of the world's targets is ≈ 0.
 
 using Distributed
 @everywhere using Random, NPZ, DataFrames, CSV, Distributions, Statistics, QuasiMonteCarlo,
@@ -67,11 +71,14 @@ sector_error = maximum(abs.(gamma_closed_form[FOREIGN_COL, imp] .- FOREIGN_SHARE
 gamma_error  = maximum(abs.(gamma_closed_form[T_ACTIVE'] .- EMP_GAMMA_T[T_ACTIVE']))
 @printf("  converged=%s iters=%d | max|f_r − IS_target| = %.1e  max|f̃_s − f̂_s| = %.1e  max|γ − γ̂| = %.1e\n",
         profile.converged, profile.iterations, buyer_error, sector_error, gamma_error)
-@printf("  c = %.5f, largest relative adding-up gap over the passes = %.1e, ψ in [%.3f, %.3f]\n",
-        profile.import_scale, profile.max_adding_up_gap, minimum(profile.psi), maximum(profile.psi))
+@printf("  b = %.5f, largest relative adding-up gap over the passes = %.1e, ψ in [%.3f, %.3f]\n",
+        profile.import_logit_shift, profile.max_adding_up_gap, minimum(profile.psi), maximum(profile.psi))
+log_odds(p) = log.(p ./ (1 .- p))
+odds_gap = maximum(abs.(log_odds(fit.target) .- log_odds(CUSTOMS_SHARE) .- fit.logit_shift))
 check("profile converges", profile.converged)
 check("buyers', sectors' import shares and γ on target (1e-7)", max(buyer_error, sector_error, gamma_error) < 1e-7)
 check("adding-up Σ_r X_r IS_target = Σ_s X_s f̂_s at every pass (1e-12)", profile.max_adding_up_gap < 1e-12)
+check("targets keep the customs odds ratios: logit target − logit customs = b (1e-12)", odds_gap < 1e-12)
 check("ψ_ref = 1", psi[PSI_REF_BUYER] == 1.0)
 check("ψ moves (the customs shares are not those of ψ ≡ 1)", maximum(abs.(log.(psi))) > 1e-3)
 println("\n  Per-buyer table ($industry):")
@@ -124,14 +131,27 @@ profile_fixed = profile_ge(alpha0; kappa = kappa0)
 PSI_CALIBRATED[] = true
 check("ψ ≡ 1 and the profile converges", profile_fixed.converged && all(profile_fixed.psi .== 1))
 
-# ── (6) Infeasible targets ──────────────────────────────────────────────────
-println("\n(6) A rescaled customs share ≥ 1")
-customs_extreme = copy(CUSTOMS_SHARE); customs_extreme[1] *= 1e4
-profile_infeasible = profile_ge(alpha0; kappa = kappa0, customs_share = customs_extreme)
-check("the profile is rejected", !profile_infeasible.converged)
+# ── (6) Large shares ────────────────────────────────────────────────────────
+println("\n(6) Customs shares for which the multiplicative rule would exceed one")
+customs_large = 0.3 .* CUSTOMS_SHARE; customs_large[argmin(emp_pi_r)] = 0.95
+profile_large = profile_ge(alpha0; kappa = kappa0, customs_share = customs_large)
+fit_large = buyer_import_fit(profile_theta(x0).theta_vec; customs_share = customs_large)
+total_imports = sum(fit_large.purchases .* fit_large.target)
+multiplicative_max = total_imports / sum(fit_large.purchases .* customs_large) * maximum(customs_large)
+@printf("  multiplicative c · max IS = %.3f ; logit b = %.3f, targets in [%.3f, %.3f], max|f_r − target| = %.1e\n",
+        multiplicative_max, profile_large.import_logit_shift, minimum(profile_large.import_share_target),
+        maximum(profile_large.import_share_target), maximum(abs.(profile_large.buyer_import_share .- profile_large.import_share_target)))
+check("the multiplicative rule would exceed one here", multiplicative_max > 1)
+check("the logit targets stay in (0, 1) and the profile converges",
+      profile_large.converged && all(0 .< profile_large.import_share_target .< 1))
+customs_joint = 0.3 .* CUSTOMS_SHARE; customs_joint[argmax(emp_pi_r)] = 0.97
+profile_joint = profile_ge(alpha0; kappa = kappa0, customs_share = customs_joint)
+@printf("  largest buyer at 0.97: converged %s, max ψ %.2e, max|f_r − target| %.1e\n", profile_joint.converged,
+        maximum(profile_joint.psi), maximum(abs.(profile_joint.buyer_import_share .- profile_joint.import_share_target)))
+check("jointly infeasible targets are rejected", !profile_joint.converged)
 
 # ── (7) Fake worlds ─────────────────────────────────────────────────────────
-println("\n(7) Fake worlds: the factor c of the world's buyer targets")
+println("\n(7) Fake worlds: the logit shift b of the world's buyer targets")
 ref = world_reference(theta_vec)
 N_hat = granular_report(theta_vec).N_hat
 scales = Float64[]
@@ -140,10 +160,10 @@ for b in 1:6
     (world.ref_empty || !all(>(0), world.buyer_import_share)) && continue
     world_profile = profile_world(ref, ref.alpha, ref.kappa, world)
     world_profile.converged || continue
-    push!(scales, world_profile.import_scale)
-    @printf("  world %d: c = %.4f, ψ_b/ψ̂ in [%.3f, %.3f]\n", b, world_profile.import_scale,
+    push!(scales, world_profile.import_logit_shift)
+    @printf("  world %d: b = %.4f, ψ_b/ψ̂ in [%.3f, %.3f]\n", b, world_profile.import_logit_shift,
             minimum(world_profile.psi ./ ref.psi), maximum(world_profile.psi ./ ref.psi))
 end
-check("c within 10% of one in every usable world", !isempty(scales) && all(abs.(scales .- 1) .< 0.1))
+check("|b| < 0.1 in every usable world", !isempty(scales) && all(abs.(scales) .< 0.1))
 
 println("\n", pass ? "GATE: PASS" : "GATE: FAIL")

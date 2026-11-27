@@ -15,8 +15,9 @@
 #
 # Buyers' access to foreign suppliers: buyer r sees the foreign competitor at scale
 # ψ_r Φ^F_s, so Φ_rs = Φ^dom_rs + ψ_r Φ^F_s and f_rs = ψ_r Φ^F_s / Φ_rs. ψ_r is profiled
-# with (T, Φ^F) on each buyer's import share, the customs shares IS_r^customs rescaled at
-# every pass so that the buyers' imports add up to the sectors' imports (`profile_ge`).
+# with (T, Φ^F) on each buyer's import share: the RAW customs shares IS_r^customs, their
+# log-odds shifted by one common b at every pass so that the buyers' imports add up to the
+# sectors' imports (`buyer_import_targets`, `profile_ge`).
 # ψ and Φ^F enter only as a product: ψ = 1 for the buyer with the largest sales share.
 #
 # Notation. Variables keep the paper's symbols in roman letters, with their indices as
@@ -382,19 +383,67 @@ end
 
 
 """
+    logistic(z) -> 1 / (1 + e^{−z}), evaluated without overflow for large |z|
+"""
+logistic(z::Real) = z >= 0 ? 1 / (1 + exp(-z)) : exp(z) / (1 + exp(z))
+
+"""
+    import_logit_shift(log_odds, purchases_r, total_imports; tol = 1e-14, max_iter = 200)
+        -> (shift, converged)
+
+The common shift b of the buyers' log-odds that solves the adding-up
+`g(b) = Σ_r X_r Λ(log_odds_r + b) − M = 0`, with Λ the logistic function, X_r = `purchases_r`
+and M = `total_imports`. g is strictly increasing (g′ = Σ_r X_r Λ_r (1 − Λ_r) > 0) and runs
+from −M to Σ_r X_r − M, so the root exists and is unique whenever 0 < M < Σ_r X_r, i.e. for
+any aggregate import share in (0, 1). Newton steps, kept inside a bracket and replaced by a
+bisection when they leave it; `converged = false` only if no bracket is found.
+"""
+function import_logit_shift(log_odds::AbstractVector, purchases_r::AbstractVector, total_imports::Real;
+                            tol::Float64 = 1e-14, max_iter::Int = 200)
+    adding_up_residual(shift) = sum(purchases_r[dr] * logistic(log_odds[dr] + shift) for dr in eachindex(log_odds)) - total_imports
+    # 1) Bracket the root: g(lower) ≤ 0 ≤ g(upper).
+    lower, upper = -1.0, 1.0
+    while adding_up_residual(lower) > 0 && lower > -1e3; lower *= 2; end
+    while adding_up_residual(upper) < 0 && upper < 1e3; upper *= 2; end
+    (adding_up_residual(lower) <= 0 <= adding_up_residual(upper)) || return (shift = NaN, converged = false)
+    # 2) Newton from b = 0 (the shift is zero when the shares already add up), safeguarded.
+    shift = clamp(0.0, lower, upper)
+    for _ in 1:max_iter
+        residual = adding_up_residual(shift)
+        abs(residual) <= tol * total_imports && return (shift = shift, converged = true)
+        residual < 0 ? (lower = shift) : (upper = shift)
+        slope = sum(purchases_r[dr] * logistic(log_odds[dr] + shift) * (1 - logistic(log_odds[dr] + shift))
+                    for dr in eachindex(log_odds))
+        shift_new = shift - residual / slope
+        (isfinite(shift_new) && lower < shift_new < upper) || (shift_new = (lower + upper) / 2)
+        shift = shift_new
+        upper - lower < 1e-15 && break
+    end
+    return (shift = shift, converged = true)
+end
+
+"""
     buyer_import_targets(omega_sr, PhiF_sr, Phi, import_share_s, customs_share)
-        -> (model (R_d), target (R_d), scale, adding_up_gap, feasible)
+        -> (model (R_d), target (R_d), logit_shift, purchases (R_d), adding_up_gap, feasible)
 
 The buyers' import shares in the model and their targets at the expenditure weights
 `omega_sr` (S × R_d, total spending of buyer r on sector s, imports included). With
 X_r = Σ_s ω_sr, X_s = Σ_r ω_sr and f_sr = ψ_r Φ^F_s / Φ_sr:
 
   * `model[r]  = Σ_s ω_sr f_sr / X_r`, buyer r's import share;
-  * `target[r] = c · IS_r^customs`, with `c = Σ_s X_s f̂_s / Σ_r X_r IS_r^customs` (`scale`):
-    only the relative customs shares are used, and their level is set so that the buyers'
-    imports add up to the sectors' imports at the current weights;
-  * `adding_up_gap` = |Σ_r X_r target_r − Σ_s X_s f̂_s| relative to the latter (0 up to rounding);
-  * `feasible` = every target below one (otherwise no ψ can reach it).
+  * `target[r] = Λ(logit IS_r^customs + b)`, b = `logit_shift` (`import_logit_shift`): one
+    common shift of the log-odds of the RAW customs shares, set so that the buyers' imports
+    add up to the sectors' imports at the current weights, Σ_r X_r target_r = Σ_s X_s f̂_s.
+    The customs data enter through their odds ratios only, odds(target_r)/odds(target_r') =
+    odds(IS_r)/odds(IS_r'); for small shares the rule is ≈ the multiplicative c · IS_r
+    (c = e^b), near one it rescales the domestic share 1 − IS_r, and every target stays in
+    (0, 1). In the model odds(f_r) is proportional to ψ_r (exactly with one importing sector),
+    so b acts as a common factor e^b on the buyers' access;
+  * `purchases` = X_r, the weights of the adding-up;
+  * `adding_up_gap` = |Σ_r X_r target_r − Σ_s X_s f̂_s| relative to the latter (0 up to the
+    root's tolerance);
+  * `feasible` = the shift was found (always, for shares in (0, 1) and an aggregate import
+    share in (0, 1)).
 """
 function buyer_import_targets(omega_sr::AbstractMatrix, PhiF_sr::AbstractMatrix, Phi::AbstractMatrix,
                               import_share_s::AbstractVector, customs_share::AbstractVector)
@@ -407,11 +456,12 @@ function buyer_import_targets(omega_sr::AbstractMatrix, PhiF_sr::AbstractMatrix,
     end
     model = [purchases_r[dr] > 0 ? imports_r[dr] / purchases_r[dr] : 0.0 for dr in 1:R_downstream]
     sector_imports = sum(purchases_s .* import_share_s)
-    scale  = sector_imports / sum(purchases_r .* customs_share)
-    target = scale .* customs_share
+    log_odds = log.(customs_share ./ (1 .- customs_share))
+    root = import_logit_shift(log_odds, purchases_r, sector_imports)
+    target = logistic.(log_odds .+ root.shift)
     adding_up_gap = abs(sum(purchases_r .* target) - sector_imports) / max(sector_imports, eps())
-    return (model = model, target = target, scale = scale, adding_up_gap = adding_up_gap,
-            feasible = all(target .< 1))
+    return (model = model, target = target, logit_shift = root.shift, purchases = purchases_r, adding_up_gap = adding_up_gap,
+            feasible = root.converged && all(isfinite, target))
 end
 
 """
@@ -420,29 +470,33 @@ end
                aggregate_coordinates_init=nothing, max_iter=2000, tol=1e-9, damping=0.3)
         -> (T, psi, chi_L, chi_s, A, aggregate_coordinates, iterations, converged,
             max_log_step_T, max_log_step_psi, max_residual_aggregates, buyer_import_share,
-            import_share_target, import_scale, max_adding_up_gap)
+            import_share_target, import_logit_shift, max_adding_up_gap)
 
 Joint profile of T, ψ and the aggregates at (α, κ), by a damped Sinkhorn iteration on T and ψ.
 Each pass: P_sr from the current (T, ψ) → (χ^L, χ^s) solved at those prices (warm-started from
 the previous pass) → ω_sr = π_r (1−ℓ_r) s_rs → closed-form γ and buyer import shares f_r →
 the multiplicative updates
 `T⁺[s,a] = T[s,a] (γ_target[a,s] / γ_model[a,s])^damping`, renormalised to `T[s,ref] = 1`, and
-`ψ⁺_r = ψ_r (IS_r^target / f_r)^damping` (`buyer_import_targets`), renormalised to ψ_ref = 1
+`ψ⁺_r = ψ_r (odds(IS_r^target) / odds(f_r))^damping`, odds(p) = p/(1 − p) (`buyer_import_targets`),
+renormalised to ψ_ref = 1
 with Φ^F_s multiplied by the same ψ_ref, so the products ψ_r Φ^F_s and every f_rs are unchanged.
 `gamma_target` is T_COL_DIM × S (areas then the foreign row, per sector); only its
 per-sector profile matters (the reference gauge absorbs the scale). A ZERO-target column
 (a fake world in which an area active in the data wins nothing) is held fixed relative to
-the reference and left out of the stopping rule. `customs_share` (R_d) are the buyers'
-customs import shares, of which only the relative variation is used; a pass at which a
-rescaled target reaches one stops the profile as not converged. A is computed once at the end.
+the reference and left out of the stopping rule. `customs_share` (R_d) are the buyers' RAW
+customs import shares, in (0, 1), of which only the odds ratios are used: the targets are
+Λ(logit IS_r^customs + b), b re-solved at every pass (`buyer_import_targets`), so they are
+always in (0, 1); a pass at which b cannot be solved stops the profile as not converged.
+A is computed once at the end.
 `PSI_CALIBRATED[] = false` holds ψ at `psi_init` (a test device: the model without ψ).
 
 Returns `T` (S × T_COL_DIM, area level with Φ^F_s in FOREIGN_COL), `psi` (R_d), the
 aggregates, the final aggregate coordinates, the number of Sinkhorn passes, the largest
 |Δ log T| and |Δ log ψ| of the last pass, `max_residual_aggregates` (max |F| of the final
-aggregate solve), the buyers' model import shares, their targets and the factor c at the
-final point, and the largest relative adding-up gap over the passes. `converged` requires
-the T and ψ iteration and the final aggregates solve to converge, with feasible targets.
+aggregate solve), the buyers' model import shares, their targets and the logit shift b at
+the final point, and the largest relative adding-up gap over the passes. `converged` requires
+the T and ψ iteration and the final aggregates solve to converge, b to be solved and every
+buyer's import share to sit on its target (`buyer_imports_fitted`).
 """
 function profile_ge(alpha; kappa::Real,
                           gamma_target::AbstractMatrix = EMP_GAMMA_T_TILDE,
@@ -506,9 +560,9 @@ function profile_ge(alpha; kappa::Real,
             end
         end
         # 5) Move ψ towards the buyers' import-share targets: a buyer that imports less in
-        #    the model than its (rescaled) customs share gets a better access to foreign
-        #    suppliers, and conversely. The targets are rescaled at the current weights, so
-        #    the buyers' imports and the sectors' imports have the same total.
+        #    the model than its (logit-shifted) customs share gets a better access to foreign
+        #    suppliers, and conversely. The shift is set at the current weights, so the
+        #    buyers' imports and the sectors' imports have the same total.
         pass_max_log_step_psi = 0.0
         if calibrate_psi
             buyer_imports = buyer_import_targets(omega_sr, PhiF_sr, Phi, import_share_s, customs_share)
@@ -517,9 +571,14 @@ function profile_ge(alpha; kappa::Real,
                 feasible = false
                 break
             end
+            # The update moves the ODDS of the buyer's import share: odds(f_r) is proportional
+            # to ψ_r (exactly with one importing sector), so its elasticity is one at any level,
+            # whereas a share ratio would stall as f_r nears one (d log f_r / d log ψ_r = 1 − f_r).
             for dr in 1:R_downstream
-                ratio = buyer_imports.model[dr] > 1e-300 ? buyer_imports.target[dr] / buyer_imports.model[dr] : 1.0
-                psi_new[dr] = exp(log(psi[dr]) + damping * log(ratio))
+                model_share, target_share = buyer_imports.model[dr], buyer_imports.target[dr]
+                odds_ratio = 0 < model_share < 1 ?
+                             (target_share / (1 - target_share)) / (model_share / (1 - model_share)) : 1.0
+                psi_new[dr] = exp(log(psi[dr]) + damping * log(odds_ratio))
             end
             rescale_psi_gauge!(T_area_new, psi_new)
             for dr in 1:R_downstream
@@ -552,12 +611,26 @@ function profile_ge(alpha; kappa::Real,
     return (T = T_area, psi = psi, chi_L = chi_L, chi_s = chi_s, A = A,
             aggregate_coordinates = aggregate_solution.aggregate_coordinates, iterations = iterations,
             converged = feasible && max(max_log_step, max_log_step_psi) < tol &&
-                        aggregate_solution.converged && all(isfinite, A) && all(isfinite, psi),
+                        aggregate_solution.converged && all(isfinite, A) && all(isfinite, psi) &&
+                        (!calibrate_psi || buyer_imports_fitted(buyer_imports)),
             max_log_step_T = max_log_step, max_log_step_psi = max_log_step_psi,
             max_residual_aggregates = aggregate_solution.max_residual,
             buyer_import_share = buyer_imports.model, import_share_target = buyer_imports.target,
-            import_scale = buyer_imports.scale, max_adding_up_gap = max_adding_up_gap)
+            import_logit_shift = buyer_imports.logit_shift, max_adding_up_gap = max_adding_up_gap)
 end
+
+"""
+    buyer_imports_fitted(buyer_imports; tol = 1e-6) -> Bool
+
+True when every buyer's model import share is finite and on its target (`buyer_import_targets`).
+The logit targets are always in (0, 1), but the buyers' and the sectors' import shares must
+also hold together: buyer r cannot import more of sector s than ω_rs, and the sector's
+imports are X_s f̂_s. When the targets violate this joint constraint (a large buyer asked to
+import almost all its purchases while a sector imports little), ψ_r diverges with Φ^F_s → 0
+and the step rule alone can stop on a non-finite or off-target point: this check rejects it.
+"""
+buyer_imports_fitted(buyer_imports; tol::Float64 = 1e-6) =
+    all(isfinite, buyer_imports.model) && maximum(abs.(buyer_imports.model .- buyer_imports.target)) < tol
 
 """
     rescale_psi_gauge!(T_area, psi) -> nothing
@@ -636,10 +709,10 @@ end
 
 """
     buyer_import_fit(theta_vec; customs_share = CUSTOMS_SHARE)
-        -> (model, target, scale, psi, amplification)  (each R_d but `scale`)
+        -> (model, target, logit_shift, purchases, psi, amplification)  (each R_d but `logit_shift`)
 
 The buyers' import shares in closed form at a level vector (expected prices, the spending
-weights of the full price solve), their targets c · IS_r^customs and the factor c
+weights of the full price solve), their targets Λ(logit IS_r^customs + b) and the shift b
 (`buyer_import_targets`), ψ (ψ_ref = 1) and the closed-form amplification coefficient
 `D_r = 1 + (1 − ℓ_r) Σ_s s_rs (1 − f_rs)`: the sales of DOMESTIC suppliers generated by one
 euro of final demand for buyer r (imports leak abroad), on top of the buyer's own euro.
@@ -657,7 +730,7 @@ function buyer_import_fit(theta_vec::AbstractVector; customs_share::AbstractVect
     fit = buyer_import_targets(omega_sr, PhiF_sr, prices.Phi, import_share_s, customs_share)
     f_sr = [PhiF_sr[s, dr] > 0 ? PhiF_sr[s, dr] / prices.Phi[s, dr] : 0.0 for s in 1:S, dr in 1:R_downstream]
     amplification = 1 .+ intermediate_share_r .* vec(sum(s_rs .* (1 .- f_sr); dims = 1))
-    return (model = fit.model, target = fit.target, scale = fit.scale, psi = collect(psi),
+    return (model = fit.model, target = fit.target, logit_shift = fit.logit_shift, purchases = fit.purchases, psi = collect(psi),
             amplification = amplification)
 end
 

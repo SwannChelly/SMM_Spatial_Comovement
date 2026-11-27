@@ -683,7 +683,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         X_dr["ze2010"] = _as_ze_string(X_dr["ze2010"])
     emp_pi_r = X_dr["X_dr"].values[N_downstream != 0].astype(float)
     emp_pi_r = emp_pi_r / emp_pi_r.sum()
-    # The buyers' customs import shares (the targets of psi_r, up to the factor c of the
+    # The buyers' raw customs import shares (the targets of psi_r, up to the logit shift of the
     # profile) and the data notebook's initial targets, both on the downstream zones.
     customs_path, initial_target_path = (input_folder / "import_share_customs_per_region.npy",
                                          input_folder / "import_share_per_region.npy")

@@ -91,8 +91,8 @@ round_trip = profile_ge(alpha0; kappa = kappa0, gamma_target = gamma0, targets =
 T_error = maximum(abs.(log.(round_trip.T[act]) .- log.(T0[act])))
 PhiF_error = maximum(abs.(log.(round_trip.T[imp, F]) .- log.(T0[imp, F])))
 psi_error = maximum(abs.(log.(round_trip.psi) .- log.(psi0)))
-@printf("  iters=%d converged=%s  max|Δlog T| = %.1e  max|Δlog Φ^F| = %.1e  max|Δlog ψ| = %.1e  c = %.6f\n",
-        round_trip.iterations, round_trip.converged, T_error, PhiF_error, psi_error, round_trip.import_scale)
+@printf("  iters=%d converged=%s  max|Δlog T| = %.1e  max|Δlog Φ^F| = %.1e  max|Δlog ψ| = %.1e  b = %.2e\n",
+        round_trip.iterations, round_trip.converged, T_error, PhiF_error, psi_error, round_trip.import_logit_shift)
 A_error = maximum(abs.(log.(round_trip.A) .- log.(A0))); e_chi = max(abs(round_trip.chi_L - chi_L0), maximum(abs.(round_trip.chi_s .- chi_s0)))
 @printf("  max|Δlog A| = %.1e  max|Δχ| = %.1e\n", A_error, e_chi)
 check("round-trip recovers T, Φ^F, ψ, χ and A to 1e-7", round_trip.converged && max(T_error, PhiF_error, psi_error, A_error, e_chi) < 1e-7)
@@ -182,8 +182,8 @@ model_world = (gamma = gamma_T_analytical(ref.chi_L, ref.chi_s, ref.A, ref.T, re
 model_world_profile = profile_world(ref, ref.alpha, ref.kappa, model_world)
 max_deviation_model = max(maximum(abs.(log.(model_world_profile.T[act]) .- log.(ref.T[act]))), maximum(abs.(log.(model_world_profile.A) .- log.(ref.A))),
                           maximum(abs.(log.(model_world_profile.psi) .- log.(ref.psi))))
-@printf("  world = closed-form model: converged=%s  max deviation (log T, log Φ^F, log A, log ψ) = %.1e  c = %.6f\n",
-        model_world_profile.converged, max_deviation_model, model_world_profile.import_scale)
+@printf("  world = closed-form model: converged=%s  max deviation (log T, log Φ^F, log A, log ψ) = %.1e  b = %.2e\n",
+        model_world_profile.converged, max_deviation_model, model_world_profile.import_logit_shift)
 check("a world equal to the model returns (T̂, Φ̂^F, ψ̂, Â) to 1e-6", model_world_profile.converged && max_deviation_model < 1e-6)
 for b in 1:3
     world = draw_world(theta_vec, granular.N_hat, 51_000_000 + b)
@@ -191,8 +191,8 @@ for b in 1:3
     @printf("  world %d: Σγ − 1 = %.1e  f_b = %s  profile %s\n", b,
             maximum(abs.(vec(sum(world.gamma; dims = 1)) .- 1)), string(round.(world.gamma[F, :], digits = 3)),
             c === nothing ? "skipped (empty reference)" :
-            @sprintf("converged=%s, Φ^F/Φ̂^F = %s, c = %.4f", c.converged,
-                     string(round.(c.T[imp, F] ./ ref.T[imp, F], digits = 3)), c.import_scale))
+            @sprintf("converged=%s, Φ^F/Φ̂^F = %s, b = %.4f", c.converged,
+                     string(round.(c.T[imp, F] ./ ref.T[imp, F], digits = 3)), c.import_logit_shift))
     check("world $b: γ sums to one", maximum(abs.(vec(sum(world.gamma; dims = 1)) .- 1)) < 1e-12)
 end
 
