@@ -38,6 +38,7 @@ PKGS=(
     xfrac setspace
     doublestroke     # dsfont
     makecell natbib
+    economic         # aer.bst (and other economics-journal BibTeX styles)
     siunits          # SIunits.sty (TeX Live name is lowercase; tlmgr is case-sensitive)
     algorithms       # algorithm
     algorithmicx     # algpseudocode
@@ -60,7 +61,7 @@ fi
 
 echo
 echo "Verifying binaries..."
-for bin in pdflatex latex latexmk chktex dvipng gs; do
+for bin in pdflatex latex latexmk bibtex chktex dvipng gs; do
     command -v "$bin" >/dev/null && echo "  OK: $bin" || echo "  MISSING: $bin"
 done
 
@@ -71,10 +72,14 @@ if [[ $# -ge 1 ]]; then
     echo
     echo "Test-compiling $tex..."
     for _ in {1..15}; do
-        if (cd "$dir" && pdflatex -interaction=nonstopmode -halt-on-error "$base.tex" >/dev/null 2>&1); then
+        # latexmk (not bare pdflatex) so the BibTeX pass runs and missing .bst files surface;
+        # -g forces a full rerun after each install
+        if out=$(cd "$dir" && latexmk -pdf -g -interaction=nonstopmode -halt-on-error "$base.tex" 2>&1); then
             echo "  OK: compiles"; break
         fi
+        # missing .sty/.cls/... (from the .log), else missing .bst (from latexmk's report)
         missing=$(grep -oP "File \`\K[^']+(?=' not found)" "$dir/$base.log" | head -1 || true)
+        [[ -n "$missing" ]] || missing=$(grep -A1 'Bst file not found' <<<"$out" | tail -n1 | tr -d '[:space:]' || true)
         if [[ -z "$missing" ]]; then
             echo "  Build fails for a non-package reason: see $dir/$base.log"; break
         fi
