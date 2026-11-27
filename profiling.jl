@@ -485,8 +485,89 @@ function buyer_import_targets(omega_sr::AbstractMatrix, PhiF_sr::AbstractMatrix,
     root = import_logit_shift(log_odds, purchases_r, sector_imports)
     target = logistic.(log_odds .+ root.shift)
     adding_up_gap = abs(sum(purchases_r .* target) - sector_imports) / max(sector_imports, eps())
+    # Bounds on a buyer's import share that hold whatever ψ and Φ^F: at most its purchases
+    # from importing sectors (ceiling); at least what of each sector's imports the other
+    # buyers cannot absorb even if they imported all their purchases of it (floor).
+    importing = [import_share_s[s] > 0 for s in 1:S]
+    ceiling = [purchases_r[dr] > 0 ? sum(omega_sr[s, dr] for s in 1:S if importing[s]; init = 0.0) / purchases_r[dr] : 0.0
+               for dr in 1:R_downstream]
+    floor_share = [purchases_r[dr] > 0 ?
+                   sum(max(0.0, purchases_s[s] * import_share_s[s] - (purchases_s[s] - omega_sr[s, dr])) for s in 1:S) / purchases_r[dr] : 0.0
+                   for dr in 1:R_downstream]
     return (model = model, target = target, logit_shift = root.shift, purchases = purchases_r, adding_up_gap = adding_up_gap,
+            ceiling = ceiling, floor = floor_share,
             feasible = root.converged && all(isfinite, target))
+end
+
+"""
+    solve_foreign_block(omega_sr, Phi_dom, PhiF_init, psi_init, import_share_s, target_r;
+                        tol = 1e-12, max_iter = 1000) -> (PhiF (S), psi (R_d), converged, iterations)
+
+The foreign scales Φ^F_s and the buyers' access ψ_r that give, at the spending `omega_sr`
+(S × R_d) and the domestic indices `Phi_dom` (S × R_d) held fixed, EXACTLY the sectors' import
+shares `import_share_s` and the buyers' targets `target_r`:
+
+  Σ_r ω_sr f_sr = X_s f̂_s  (each importing s),   Σ_s ω_sr f_sr = X_r IS_r^target  (each r),
+
+with f_sr = Λ(log ψ_r + log Φ^F_s − log Φ^dom_sr), Λ the logistic. This is a matrix-scaling
+(iterative proportional fitting) problem on the odds: each sweep solves every sector's
+Φ^F_s given ψ, then every buyer's ψ_r given Φ^F, each a one-dimensional monotone root
+(`import_logit_shift`), and stops when every sector margin holds to `tol` (the buyer margins
+hold exactly after their own step). A solution exists, and the sweeps converge to it, when the
+two margins are jointly feasible; otherwise ψ_r or Φ^F_s run off and `converged = false`.
+Sectors with a zero target keep their Φ^F (held, as `profile_ge` holds zero-target columns).
+ψ is returned with ψ_ref = 1 (`PSI_REF_BUYER`), Φ^F absorbing ψ_ref.
+"""
+function solve_foreign_block(omega_sr::AbstractMatrix, Phi_dom::AbstractMatrix, PhiF_init::AbstractVector,
+                             psi_init::AbstractVector, import_share_s::AbstractVector, target_r::AbstractVector;
+                             tol::Float64 = 1e-12, max_iter::Int = 1000)
+    log_PhiF = [PhiF_init[s] > 0 ? log(PhiF_init[s]) : -Inf for s in 1:S]
+    log_psi  = log.(collect(Float64, psi_init))
+    log_Phi_dom = log.(max.(Phi_dom, 1e-300))
+    solved_sectors = [s for s in 1:S if import_share_s[s] > 0 && PhiF_init[s] > 0]
+    sector_imports = [sum(view(omega_sr, s, :)) * import_share_s[s] for s in 1:S]
+    buyer_imports  = [sum(view(omega_sr, :, dr)) * target_r[dr] for dr in 1:R_downstream]
+    importing_sectors = [s for s in 1:S if PhiF_init[s] > 0]
+    log_odds_sector = zeros(R_downstream); log_odds_buyer = zeros(length(importing_sectors))
+    iterations = 0
+    for it in 1:max_iter
+        iterations = it
+        # 1) Each sector's foreign scale, given the buyers' access: its imports from all buyers.
+        for s in solved_sectors
+            for dr in 1:R_downstream
+                log_odds_sector[dr] = log_psi[dr] + log_PhiF[s] - log_Phi_dom[s, dr]
+            end
+            root = import_logit_shift(log_odds_sector, view(omega_sr, s, :), sector_imports[s])
+            root.converged || return (PhiF = exp.(log_PhiF), psi = exp.(log_psi), converged = false, iterations = it)
+            log_PhiF[s] += root.shift
+        end
+        # 2) Each buyer's access, given the foreign scales: its imports from all sectors.
+        for dr in 1:R_downstream
+            for (k, s) in enumerate(importing_sectors)
+                log_odds_buyer[k] = log_psi[dr] + log_PhiF[s] - log_Phi_dom[s, dr]
+            end
+            root = import_logit_shift(log_odds_buyer, [omega_sr[s, dr] for s in importing_sectors], buyer_imports[dr])
+            root.converged || return (PhiF = exp.(log_PhiF), psi = exp.(log_psi), converged = false, iterations = it)
+            log_psi[dr] += root.shift
+        end
+        # 3) Stop when the sector margins still hold after the buyers' step.
+        worst = 0.0
+        for s in solved_sectors
+            imports_s = sum(omega_sr[s, dr] * logistic(log_psi[dr] + log_PhiF[s] - log_Phi_dom[s, dr]) for dr in 1:R_downstream)
+            worst = max(worst, abs(imports_s - sector_imports[s]) / sector_imports[s])
+        end
+        all(isfinite, log_psi) && all(s -> isfinite(log_PhiF[s]), solved_sectors) ||
+            return (PhiF = exp.(log_PhiF), psi = exp.(log_psi), converged = false, iterations = it)
+        worst < tol && break
+    end
+    # 4) The gauge: ψ_ref = 1, Φ^F absorbing it.
+    log_psi_reference = log_psi[PSI_REF_BUYER]
+    log_psi .-= log_psi_reference
+    for s in importing_sectors
+        log_PhiF[s] += log_psi_reference
+    end
+    PhiF = [PhiF_init[s] > 0 ? exp(log_PhiF[s]) : 0.0 for s in 1:S]
+    return (PhiF = PhiF, psi = exp.(log_psi), converged = iterations < max_iter, iterations = iterations)
 end
 
 """
@@ -501,17 +582,19 @@ Joint profile of T, ψ and the aggregates at (α, κ), by a damped Sinkhorn iter
 Each pass: P_sr from the current (T, ψ) → (χ^L, χ^s) solved at those prices (warm-started from
 the previous pass) → ω_sr = π_r (1−ℓ_r) s_rs → closed-form γ and buyer import shares f_r →
 the multiplicative updates
-`T⁺[s,a] = T[s,a] (γ_target[a,s] / γ_model[a,s])^damping`, renormalised to `T[s,ref] = 1`, and
-`ψ⁺_r = ψ_r (odds(IS_r^target) / odds(f_r))^damping`, odds(p) = p/(1 − p) (`buyer_import_targets`),
-renormalised to ψ_ref = 1
-with Φ^F_s multiplied by the same ψ_ref, so the products ψ_r Φ^F_s and every f_rs are unchanged.
+`T⁺[s,a] = T[s,a] (γ_target[a,s] / γ_model[a,s])^damping` on the domestic areas, renormalised to
+`T[s,ref] = 1`; the foreign block (Φ^F_s, ψ_r) is then solved exactly at this pass's prices and
+spending on the sectors' import shares and the buyers' targets (`solve_foreign_block`), with
+ψ_ref = 1 (Φ^F absorbing ψ_ref, so the products ψ_r Φ^F_s and every f_rs are unchanged). Without
+ψ (`PSI_CALIBRATED[] = false`) Φ^F_s takes the damped ratio update of the areas.
 `gamma_target` is T_COL_DIM × S (areas then the foreign row, per sector); only its
 per-sector profile matters (the reference gauge absorbs the scale). A ZERO-target column
 (a fake world in which an area active in the data wins nothing) is held fixed relative to
 the reference and left out of the stopping rule. `customs_share` (R_d) are the buyers' RAW
 customs import shares, in (0, 1), of which only the odds ratios are used: the targets are
 Λ(logit IS_r^customs + b), b re-solved at every pass (`buyer_import_targets`), so they are
-always in (0, 1); a pass at which b cannot be solved stops the profile as not converged.
+always in (0, 1); a pass at which b or the foreign block cannot be solved (targets that the
+buyers' and the sectors' import shares cannot satisfy jointly) stops the profile as not converged.
 A is computed once at the end.
 `PSI_CALIBRATED[] = false` holds ψ at `psi_init` (a test device: the model without ψ).
 
@@ -551,7 +634,7 @@ function profile_ge(alpha; kappa::Real,
     max_log_step = Inf; max_log_step_psi = 0.0; iterations = 0
     max_adding_up_gap = 0.0; feasible = true
     T_area_new = similar(T_area)
-    psi_new = similar(psi)
+    row_scale = ones(S)
     omega_sr = zeros(S, R_downstream)
     for it in 1:max_iter
         iterations = it
@@ -581,37 +664,39 @@ function profile_ge(alpha; kappa::Real,
             end
             reference_value = T_area_new[s, T_REF_REGION[s]]
             reference_value > 0 && (T_area_new[s, sector_columns] ./= reference_value)
+            row_scale[s] = reference_value > 0 ? reference_value : 1.0
             for a in sector_columns
                 gamma_target[a, s] > 0 || (T_area_new[s, a] = T_area[s, a])
             end
         end
-        # 5) Move ψ towards the buyers' import-share targets: a buyer that imports less in
-        #    the model than its (logit-shifted) customs share gets a better access to foreign
-        #    suppliers, and conversely. The shift is set at the current weights, so the
-        #    buyers' imports and the sectors' imports have the same total.
+        # 5) The foreign block: given the domestic prices and the spending of this pass, the
+        #    foreign scales Φ^F_s and the buyers' access ψ_r are solved EXACTLY on the sectors'
+        #    import shares and the buyers' targets (`solve_foreign_block`), as the aggregates
+        #    are solved exactly at every pass. A damped joint update was unstable when sectors
+        #    import much: Φ^F moved on share ratios (elasticity 1 − f_s, small when f_s is
+        #    large) while ψ ran ahead on the odds. The targets keep the odds ratios of the raw
+        #    customs shares, shifted so that buyers' and sectors' imports add up.
         pass_max_log_step_psi = 0.0
         if calibrate_psi
             buyer_imports = buyer_import_targets(omega_sr, PhiF_sr, Phi, import_share_s, customs_share)
             max_adding_up_gap = max(max_adding_up_gap, buyer_imports.adding_up_gap)
-            if !buyer_imports.feasible
+            foreign_block = buyer_imports.feasible ?
+                solve_foreign_block(omega_sr, Phi .- PhiF_sr, foreign_phi(T_area), psi, import_share_s, buyer_imports.target) :
+                (converged = false,)
+            if !foreign_block.converged
                 feasible = false
                 break
             end
-            # The update moves the ODDS of the buyer's import share: odds(f_r) is proportional
-            # to ψ_r (exactly with one importing sector), so its elasticity is one at any level,
-            # whereas a share ratio would stall as f_r nears one (d log f_r / d log ψ_r = 1 − f_r).
-            for dr in 1:R_downstream
-                model_share, target_share = buyer_imports.model[dr], buyer_imports.target[dr]
-                odds_ratio = 0 < model_share < 1 ?
-                             (target_share / (1 - target_share)) / (model_share / (1 - model_share)) : 1.0
-                psi_new[dr] = exp(log(psi[dr]) + damping * log(odds_ratio))
+            # The domestic update above rescaled each sector's row by its reference area; the
+            # foreign scale, solved against the domestic indices before that rescaling, follows.
+            for s in 1:S
+                FOREIGN_ACTIVE[s] && (T_area_new[s, FOREIGN_COL] = foreign_block.PhiF[s] / row_scale[s])
             end
-            rescale_psi_gauge!(T_area_new, psi_new)
             for dr in 1:R_downstream
-                log_step = abs(log(psi_new[dr]) - log(psi[dr]))
+                log_step = abs(log(foreign_block.psi[dr]) - log(psi[dr]))
                 log_step > pass_max_log_step_psi && (pass_max_log_step_psi = log_step)
             end
-            psi .= psi_new
+            psi .= foreign_block.psi
         end
         # 6) Stop when no T entry with a positive target and no ψ_r moves by more than `tol` in logs.
         pass_max_log_step = 0.0
