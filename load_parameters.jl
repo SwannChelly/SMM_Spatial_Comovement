@@ -59,7 +59,7 @@ R_down_    = count(!=(0), N_downstream_per_region_local)
 @everywhere const agg_industry_share  = $(agg_industry_share_local)
 @everywhere const agg_labor_share     = $(_require_stat(stats_df, "labor_share"))
 @everywhere const domestic_share      = $(domestic_share_local)
-@everywhere regional_wages            = $(regional_wages_local)
+@everywhere const regional_wages      = $(regional_wages_local)
 @everywhere const distances           = $(distances_local)
 @everywhere const N_downstream_per_region = $(N_downstream_per_region_local)
 @everywhere const epsilon             = $(_require_stat(stats_df, "epsilon"))
@@ -449,6 +449,9 @@ end
 u_draws_local, sample_weights_local = generate_draws(N_rho, n_good_local, :sobol)
 @everywhere const U_DRAWS        = $u_draws_local
 @everywhere const SAMPLE_WEIGHTS = $sample_weights_local
+# The parameter-free part of the cells' Fréchet draws on U_DRAWS, computed once per process
+# (`frechet_draws`): `solve_network` reads it whenever it is called on U_DRAWS.
+@everywhere const FRECHET_U_DRAWS = frechet_draws(U_DRAWS)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 9 — GEOGRAPHY BROADCASTS

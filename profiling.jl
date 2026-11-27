@@ -39,23 +39,44 @@ using LinearAlgebra
 using Printf
 
 """
-    compute_Phi(T_ls, tau; PhiF = nothing) -> Φ (S × R_downstream),
+    cell_cost_power(tau) -> Matrix (R_downstream × n_good)
+
+`(w_l τ_lr)^{−θ}` for every cell g (origin l = `GOOD_R[g]`, wage `W_RS_FLAT[g]`) and buyer r:
+the cost term of the EK index, which depends on τ (hence α) only. `profile_ge` computes it
+once per call instead of twice per Sinkhorn pass (same values: the same expression).
+"""
+function cell_cost_power(tau::AbstractMatrix{FT}) where {FT}
+    cost_power = Matrix{FT}(undef, R_downstream, n_good)
+    @inbounds for g in 1:n_good
+        l = GOOD_R[g]; w_cell = W_RS_FLAT[g]
+        for dr in 1:R_downstream
+            cost_power[dr, g] = (w_cell * tau[l, dr])^(-theta)
+        end
+    end
+    return cost_power
+end
+
+"""
+    compute_Phi(T_ls, tau; PhiF = nothing, cost_power = nothing) -> Φ (S × R_downstream),
     Φ_{s,r} = Σ_l T_ls (w_l τ_lr)^{−θ} + ψ_r Φ^F_s
 
 `T_ls` (S × R) is the cell-level Fréchet scale and `tau` (R × R_downstream) the iceberg cost
 from origin cell to buyer. `PhiF` is a vector (S), a foreign scale common to every buyer,
 or a matrix (S × R_downstream), the foreign scale as each buyer sees it: ψ_r Φ^F_s at the
 estimate (`foreign_scale_by_buyer`), rescaled in the counterfactuals of `incidence_stats`,
-which hold each buyer's import share at its estimate.
+which hold each buyer's import share at its estimate. `cost_power` is
+`cell_cost_power(tau)` when the caller has it (computed here otherwise).
 """
-function compute_Phi(T_ls::AbstractMatrix{FT}, tau::AbstractMatrix{FT}; PhiF = nothing) where {FT}
+function compute_Phi(T_ls::AbstractMatrix{FT}, tau::AbstractMatrix{FT}; PhiF = nothing,
+                     cost_power::Union{Nothing, AbstractMatrix} = nothing) where {FT}
+    cost_power === nothing && (cost_power = cell_cost_power(tau))
     Phi = zeros(FT, S, R_downstream)
     # Each active cell adds its cost-adjusted productivity to every buyer's sector index.
-    for g in 1:n_good
+    @inbounds for g in 1:n_good
         s = GOOD_S[g]; l = GOOD_R[g]
-        T_cell = T_ls[s, l]; w_cell = W_RS_FLAT[g]
+        T_cell = T_ls[s, l]
         for dr in 1:R_downstream
-            Phi[s, dr] += T_cell * (w_cell * tau[l, dr])^(-theta)
+            Phi[s, dr] += T_cell * cost_power[dr, g]
         end
     end
     # The foreign competitor enters every buyer's index of an importing sector.
@@ -138,24 +159,27 @@ function gamma_T_analytical(chi_L::Real, chi_s, A, T_area::AbstractMatrix, kappa
 end
 
 """
-    gamma_T_from_weights(T_ls, PhiF_sr, tau, Phi, omega_sr) -> γ (T_COL_DIM × S)
+    gamma_T_from_weights(T_ls, PhiF_sr, tau, Phi, omega_sr; cost_power = nothing) -> γ (T_COL_DIM × S)
 
 The flows `X_ls = Σ_r T_ls (w τ)^{−θ}/Φ_sr ω_sr` (R × S) and `X_F = Σ_r ψ_r Φ^F_s/Φ_sr ω_sr` (S),
 with the sector expenditure `omega_sr` (S × R_d) and the foreign scale by buyer
 `PhiF_sr = ψ_r Φ^F_s` (S × R_d, `foreign_scale_by_buyer`) supplied, as shares of total
 purchases. Each origin's flow is the buyer's spending times its EK probability of winning.
+`cost_power` as in `compute_Phi`.
 """
 function gamma_T_from_weights(T_ls::AbstractMatrix, PhiF::AbstractMatrix, tau::AbstractMatrix,
-                              Phi::AbstractMatrix, omega_sr::AbstractMatrix)
+                              Phi::AbstractMatrix, omega_sr::AbstractMatrix;
+                              cost_power::Union{Nothing, AbstractMatrix} = nothing)
+    cost_power === nothing && (cost_power = cell_cost_power(tau))
     FT = promote_type(eltype(T_ls), eltype(omega_sr))
     # 1) Domestic flows: each cell sells to a buyer in proportion to its share of Φ_sr.
     X_ls = zeros(FT, R, S)
     @inbounds for g in 1:n_good
         s = GOOD_S[g]; l = GOOD_R[g]
-        T_cell = T_ls[s, l]; w_cell = W_RS_FLAT[g]
+        T_cell = T_ls[s, l]
         for dr in 1:R_downstream
             Phi[s, dr] < 1e-300 && continue
-            X_ls[l, s] += T_cell * (w_cell * tau[l, dr])^(-theta) / Phi[s, dr] * omega_sr[s, dr]
+            X_ls[l, s] += T_cell * cost_power[dr, g] / Phi[s, dr] * omega_sr[s, dr]
         end
     end
     # 2) Imports: the foreign competitor's share of Φ_sr, buyer by buyer.
@@ -216,12 +240,13 @@ end
 # Sinkhorn pass and the T map stays a map of T alone.
 
 """
-    expected_sector_prices(T_ls, tau; PhiF = nothing) -> (P_sr (S × R_d), Φ (S × R_d))
+    expected_sector_prices(T_ls, tau; PhiF = nothing, cost_power = nothing) -> (P_sr (S × R_d), Φ (S × R_d))
 
 The expected EK sector price indices `P_sr = Γ_s Φ_sr^{−1/θ}`, which depend on T and τ only.
 """
-function expected_sector_prices(T_ls::AbstractMatrix, tau::AbstractMatrix; PhiF = nothing)
-    Phi  = compute_Phi(T_ls, tau; PhiF = PhiF)
+function expected_sector_prices(T_ls::AbstractMatrix, tau::AbstractMatrix; PhiF = nothing,
+                                cost_power::Union{Nothing, AbstractMatrix} = nothing)
+    Phi  = compute_Phi(T_ls, tau; PhiF = PhiF, cost_power = cost_power)
     P_sr = similar(Phi)
     @inbounds for s in 1:S, dr in 1:R_downstream
         P_sr[s, dr] = GAMMA_FACTOR[s] * Phi[s, dr]^(-1/theta)
@@ -508,6 +533,7 @@ function profile_ge(alpha; kappa::Real,
                           max_iter::Int = 2000, tol::Float64 = 1e-9, damping::Float64 = 0.3)
     # 1) Start from T_init in the reference gauge, T[s, ref] = 1, and ψ_ref = 1.
     tau   = build_tau(alpha)
+    cost_power = cell_cost_power(tau)   # (w τ)^{−θ}, fixed across the passes
     # T_area (S × T_COL_DIM): the Fréchet scales at the AREA level, T_a,s for every attraction
     # area a and, in column FOREIGN_COL, the foreign scale Φ^F_s.
     # The cell-level T_ls = T_{a(l)s} n_ls^κ is rebuilt from it at every pass.
@@ -532,7 +558,7 @@ function profile_ge(alpha; kappa::Real,
         # 2) Solve the aggregates (χ^L, χ^s) at the prices implied by the current (T, ψ).
         T_ls = gather_T_to_ze(T_area, kappa)  # cell level, S × R: T_ls = T_{a(l)s} · n_ls^κ (density term)
         PhiF_sr = foreign_scale_by_buyer(foreign_phi(T_area), psi)   # ψ_r Φ^F_s; 0 where s does not import
-        P_sr, Phi = expected_sector_prices(T_ls, tau; PhiF = PhiF_sr)
+        P_sr, Phi = expected_sector_prices(T_ls, tau; PhiF = PhiF_sr, cost_power = cost_power)
         coordinates = solve_aggregates(P_sr; aggregate_coordinates_init = coordinates,
                                        targets = targets).aggregate_coordinates
         # 3) Compute the model γ with the expenditure weights pinned at the target sales shares.
@@ -540,7 +566,7 @@ function profile_ge(alpha; kappa::Real,
         @inbounds for dr in 1:R_downstream, s in 1:S
             omega_sr[s, dr] = targets.sales_shares[dr] * (1 - ell_r[dr]) * s_rs[s, dr]
         end
-        gamma_model = gamma_T_from_weights(T_ls, PhiF_sr, tau, Phi, omega_sr)
+        gamma_model = gamma_T_from_weights(T_ls, PhiF_sr, tau, Phi, omega_sr; cost_power = cost_power)
         # 4) Move T towards the target γ: an area that the model under-supplies relative to
         #    the data gets a higher productivity, and conversely. Then renormalise each
         #    sector to its reference area, and hold the zero-target columns where they are.
@@ -601,7 +627,8 @@ function profile_ge(alpha; kappa::Real,
     end
     # 7) Solve the aggregates at the final (T, ψ), and A in closed form from the sales shares.
     PhiF_sr = foreign_scale_by_buyer(foreign_phi(T_area), psi)
-    P_sr, Phi = expected_sector_prices(gather_T_to_ze(T_area, kappa), tau; PhiF = PhiF_sr)
+    P_sr, Phi = expected_sector_prices(gather_T_to_ze(T_area, kappa), tau; PhiF = PhiF_sr,
+                                       cost_power = cost_power)
     aggregate_solution = solve_aggregates(P_sr; aggregate_coordinates_init = coordinates, targets = targets)
     chi_L, chi_s, ell_r, s_rs, _, c_r = aggregate_shares(aggregate_solution.aggregate_coordinates, P_sr)
     A = profile_A(c_r, targets.sales_shares)
