@@ -64,20 +64,26 @@ targets0   = profile_targets(labor_share = sum(pi0 .* ell0), sector_shares = (s_
 gamma0    = gamma_T_analytical(chi_L0, chi_s0, A0, T0, kappa0, tau0)
 target0 = gamma0 ./ sum(gamma0; dims = 1)
 
-round_trip = profile_ge(alpha0; kappa = kappa0, gamma_target = target0, targets = targets0, tol = 1e-11, max_iter = 3000)
+# The planted model has ψ ≡ 1: its buyers' import shares are the customs targets.
+x_planted = vcat(chi_L0, chi_s0, A0, alpha0, kappa0, vec(permutedims(T0))[T_MASK], ones(R_downstream))
+customs0 = buyer_import_fit(x_planted).model
+round_trip = profile_ge(alpha0; kappa = kappa0, gamma_target = target0, targets = targets0, customs_share = customs0,
+                        tol = 1e-11, max_iter = 3000)
 T_error = maximum(abs.(log.(round_trip.T[act]) .- log.(T0[act])))
 chi_s_error  = maximum(abs.(round_trip.chi_s .- chi_s0)); A_error = maximum(abs.(log.(round_trip.A) .- log.(A0)))
 @printf("  iters=%d converged=%s  max|Δlog T|=%.1e |ΔχL|=%.1e max|Δχs|=%.1e max|Δlog A|=%.1e\n",
         round_trip.iterations, round_trip.converged, T_error, abs(round_trip.chi_L - chi_L0), chi_s_error, A_error)
-check("round-trip recovers (T, χ^L, χ^s, A) to 1e-6",
-      round_trip.converged && max(T_error, abs(round_trip.chi_L - chi_L0), chi_s_error, A_error) < 1e-6)
+psi_error = maximum(abs.(log.(round_trip.psi)))
+check("round-trip recovers (T, χ^L, χ^s, A) and ψ ≡ 1 to 1e-6",
+      round_trip.converged && max(T_error, abs(round_trip.chi_L - chi_L0), chi_s_error, A_error, psi_error) < 1e-6)
 
 # ── (2) Exactness at the real targets ───────────────────────────────────────
 println("\n(2) Exactness at the real targets (α = prior)")
 profile  = profile_ge(alpha0; kappa = kappa0)
 T_ls = gather_T_to_ze(profile.T, kappa0)
-aggregate_residuals   = aggregate_moment_residuals(profile.chi_L, profile.chi_s, profile.A, T_ls, build_tau(alpha0); PhiF = foreign_phi(profile.T))
-gamma_profile   = gamma_T_analytical(profile.chi_L, profile.chi_s, profile.A, profile.T, kappa0, build_tau(alpha0))
+aggregate_residuals   = aggregate_moment_residuals(profile.chi_L, profile.chi_s, profile.A, T_ls, build_tau(alpha0);
+                                                    PhiF = foreign_scale_by_buyer(foreign_phi(profile.T), profile.psi))
+gamma_profile   = gamma_T_analytical(profile.chi_L, profile.chi_s, profile.A, profile.T, kappa0, build_tau(alpha0); psi = profile.psi)
 gamma_err = maximum(abs.((gamma_profile ./ sum(gamma_profile; dims = 1))[act'] .- EMP_GAMMA_T_TILDE[act']))
 @printf("  iters=%d converged=%s | |block1|=%.1e max|block2|=%.1e max|block3|=%.1e max|γ̃|=%.1e\n",
         profile.iterations, profile.converged, aggregate_residuals.labor, aggregate_residuals.industry, aggregate_residuals.pi_r, gamma_err)
@@ -108,7 +114,7 @@ end
 
 # ── (5) Monte-Carlo gap ─────────────────────────────────────────────────────
 println("\n(5) Simulated blocks 1–3 at the profile (N_rho = $N_rho)")
-x0 = vcat(zeros(first(alpha_range()) - 1), alpha0, kappa0, vec(permutedims(T_rs_init))[T_MASK])
+x0 = vcat(zeros(first(alpha_range()) - 1), alpha0, kappa0, vec(permutedims(T_rs_init))[T_MASK], ones(R_downstream))
 profiled_theta  = profile_theta(x0)
 check("profile_theta converges and writes the profiled aggregates",
       profiled_theta.converged && profiled_theta.theta_vec[1] ≈ profile.chi_L && profiled_theta.theta_vec[2:(S + 1)] ≈ profile.chi_s)
@@ -121,16 +127,18 @@ targets = profile_targets()
 # ── (6) Fake worlds ─────────────────────────────────────────────────────────
 println("\n(6) Fake world: profile of (T, χ^L, χ^s, A) on the world's moments")
 ref = world_reference(profiled_theta.theta_vec)
-pr  = compute_prices_analytical(ref.chi_L, ref.chi_s, ref.A, gather_T_to_ze(ref.T, kappa0), build_tau(alpha0); PhiF = foreign_phi(ref.T))
+pr  = compute_prices_analytical(ref.chi_L, ref.chi_s, ref.A, gather_T_to_ze(ref.T, kappa0), build_tau(alpha0);
+                                PhiF = foreign_scale_by_buyer(foreign_phi(ref.T), ref.psi))
 ell_model = ref.chi_L .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr.c_r) .^ (1 - lambda)
 pi_model  = pr.Y_r ./ sum(pr.Y_r)
 s_rs_model   = ref.chi_s .* (pr.P_sr ./ reshape(pr.P_r, 1, :)) .^ (1 - nu)
-gamma_model   = gamma_T_analytical(ref.chi_L, ref.chi_s, ref.A, ref.T, kappa0, build_tau(alpha0))
-model_world = (gamma = gamma_model ./ sum(gamma_model; dims = 1), sales_shares = pi_model, labor_share = sum(pi_model .* ell_model),
+gamma_model   = gamma_T_analytical(ref.chi_L, ref.chi_s, ref.A, ref.T, kappa0, build_tau(alpha0); psi = ref.psi)
+model_world = (gamma = gamma_model ./ sum(gamma_model; dims = 1), buyer_import_share = buyer_import_fit(profiled_theta.theta_vec).model,
+               sales_shares = pi_model, labor_share = sum(pi_model .* ell_model),
                sector_shares = (s_rs_model * (pi_model .* (1 .- ell_model))) ./ sum(pi_model .* (1 .- ell_model)))
 model_world_profile = profile_world(ref, alpha0, kappa0, model_world)
 max_deviation_model = max(abs(model_world_profile.chi_L - ref.chi_L), maximum(abs.(model_world_profile.chi_s .- ref.chi_s)), maximum(abs.(log.(model_world_profile.A) .- log.(ref.A))),
-         maximum(abs.(log.(model_world_profile.T[act]) .- log.(ref.T[act]))))
+         maximum(abs.(log.(model_world_profile.T[act]) .- log.(ref.T[act]))), maximum(abs.(log.(model_world_profile.psi) .- log.(ref.psi))))
 @printf("  world = analytical model: converged=%s  max deviation from θ̂ = %.1e\n", model_world_profile.converged, max_deviation_model)
 check("a world equal to the model returns the estimate (1e-6)", model_world_profile.converged && max_deviation_model < 1e-6)
 N_hat = granular_report(profiled_theta.theta_vec).N_hat

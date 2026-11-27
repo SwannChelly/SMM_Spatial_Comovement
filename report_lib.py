@@ -2284,7 +2284,7 @@ def plot_jacobian_thresholded(data, threshold=IDENT_THRESHOLD, kind="elasticity"
     return ax
 
 
-CHANNEL_BLOCKS = ("Trade cost", "Density", "Comparative advantage", "Variety count")
+CHANNEL_BLOCKS = ("Trade cost", "Density", "Comparative advantage", "Variety count", "Foreign access")
 
 
 def plot_channel_elasticities(data, param_blocks=None,
@@ -2304,8 +2304,9 @@ def plot_channel_elasticities(data, param_blocks=None,
     abs_elasticities = np.abs(np.asarray(jacobian_matrix(data, kind), float))
     readable = _readable(data, kind, noise_max)
     m_names, p_names = data["moment_block_names"], data["param_block_names"]
-    if param_blocks is None:              # kappa's block is the only optional channel
-        param_blocks = tuple(param_block for param_block in CHANNEL_BLOCKS if param_block != "Density" or param_block in p_names)
+    if param_blocks is None:              # kappa's and psi's blocks are the optional channels
+        param_blocks = tuple(param_block for param_block in CHANNEL_BLOCKS
+                             if param_block not in ("Density", "Foreign access") or param_block in p_names)
     blocks, blocks_ok = _blocks_2d(data, abs_elasticities), _blocks_2d(data, readable)
     reduce = {"max": np.max, "mean": np.mean}[stat]
     stat_tex = {"max": r"\max", "mean": r"\mathrm{mean}"}[stat]
@@ -2608,7 +2609,7 @@ def theta_alpha(data):
     dimensionless number, so |eta_int| <= theta*alpha and |eta_ext| = theta*alpha E(Lambda)).
 
     `best_params` is the raw theta vector, layout
-        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA), s-major)],
+        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s,AA), s-major) | psi(R_d)],
     so alpha is the N_TAU-long slice after the A block; the length is asserted against the
     rebuilt layout, exactly as `unpack_estimated_T` does in the comparative-advantage
     section. theta follows the same rule as `model_theta` there: stats.csv when it carries
@@ -2620,7 +2621,7 @@ def theta_alpha(data):
     best_params = np.asarray(best_params, dtype=float).ravel()
     S, n_tau = data["S"], data["n_tau"]
     R_d = len(data["aa_names"])
-    expected = 1 + S + R_d + n_tau + 1 + int(data["T_ACTIVE"].sum())   # + kappa; T incl. Phi^F
+    expected = 1 + S + R_d + n_tau + 1 + int(data["T_ACTIVE"].sum()) + R_d   # + kappa; T incl. Phi^F; psi
     if best_params.size != expected:
         raise ValueError(f"best_params has {best_params.size} entries, layout rebuilt here is "
                          f"{expected} — the run's flags and the ones passed here disagree.")

@@ -35,7 +35,7 @@ pass = true
 check(name, ok) = (global pass &= ok; @printf("  [%s] %s\n", ok ? "PASS" : "FAIL", name))
 
 x = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), collect(TAU_PRIOR),
-         KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK])
+         KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK], ones(R_downstream))
 theta_vec = profile_theta(x).theta_vec
 dest1, dest2 = mktempdir(), mktempdir()
 jacobian_run1 = sensitivity_jacobian(theta_vec; K = 2, dest = dest1)

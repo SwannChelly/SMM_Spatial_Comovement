@@ -10,12 +10,12 @@
 #   (1) LAYOUT: the γ target sums to one per sector over the T columns, its foreign row
 #       is f̂_s = 1 − domestic_share, and every importing sector has a Φ^F parameter
 #       paired with an f moment.
-#   (2) ROUND-TRIP: γ and blocks 1–3 generated in closed form at a planted (T, Φ^F, χ, A)
-#       are profiled back to it from the cold start T_rs_init.
+#   (2) ROUND-TRIP: γ, blocks 1–3 and the buyers' import shares generated in closed form at
+#       a planted (T, Φ^F, ψ, χ, A) are profiled back to it from the cold start T_rs_init.
 #   (3) EXACTNESS at the data: at the profile the closed-form import share is f̂_s and
 #       the area shares are γ̂.
 #   (4) RICARDIAN CONSISTENCY: on 20 000 i.i.d. draws the simulated import share of
-#       every (sector, buyer) is the closed-form win probability Φ^F_s/Φ_rs.
+#       every (sector, buyer) is the closed-form win probability ψ_r Φ^F_s/Φ_rs.
 #   (5) SIMULATED MOMENTS at the profile on the estimation draws: γ sums to one with the
 #       reference rebuilt, the import share is f̂ up to Monte-Carlo error, and the
 #       French variety share q_s satisfies 1 − f̂ ≲ q_s ≤ 1 with N_HI = N^obs/q_s and
@@ -71,35 +71,43 @@ T0  = T_rs_init .* exp.(0.5 .* randn(rng, S, T_COL_DIM)) .* (T_rs_init .> 0)
 for s in 1:S
     T0[s, :] ./= T0[s, T_REF_REGION[s]]
 end
+psi0 = exp.(0.4 .* randn(MersenneTwister(5), R_downstream)); psi0 ./= psi0[PSI_REF_BUYER]
 tau0 = build_tau(alpha0)
-gamma0   = gamma_T_analytical(chi_L0, chi_s0, A0, T0, kappa0, tau0)
+gamma0   = gamma_T_analytical(chi_L0, chi_s0, A0, T0, kappa0, tau0; psi = psi0)
+x_planted = vcat(chi_L0, chi_s0, A0, alpha0, kappa0, vec(permutedims(T0))[T_MASK], psi0)
+customs0 = buyer_import_fit(x_planted).model        # the planted buyers' import shares
 @printf("  planted import shares: %s (data %s)\n", string(round.(gamma0[F, :], digits = 4)),
         string(round.(FOREIGN_SHARE, digits = 4)))
 # blocks 1–3 of the planted model, as `profile_ge` targets them (total purchases)
-prices0  = compute_prices_analytical(chi_L0, chi_s0, A0, gather_T_to_ze(T0, kappa0), tau0; PhiF = foreign_phi(T0))
+prices0  = compute_prices_analytical(chi_L0, chi_s0, A0, gather_T_to_ze(T0, kappa0), tau0;
+                                     PhiF = foreign_scale_by_buyer(foreign_phi(T0), psi0))
 ell0 = chi_L0 .* (regional_wages[DOWNSTREAM_REGIONS] ./ prices0.c_r) .^ (1 - lambda)
 pi0  = prices0.Y_r ./ sum(prices0.Y_r)
 s_rs0   = chi_s0 .* (prices0.P_sr ./ reshape(prices0.P_r, 1, :)) .^ (1 - nu)
 intermediate_bill0  = pi0 .* (1 .- ell0)
 targets0  = profile_targets(labor_share = sum(pi0 .* ell0), sector_shares = (s_rs0 * intermediate_bill0) ./ sum(intermediate_bill0), sales_shares = pi0)
-round_trip = profile_ge(alpha0; kappa = kappa0, gamma_target = gamma0, targets = targets0, tol = 1e-12, max_iter = 5000)
+round_trip = profile_ge(alpha0; kappa = kappa0, gamma_target = gamma0, targets = targets0, customs_share = customs0,
+                        tol = 1e-12, max_iter = 5000)
 T_error = maximum(abs.(log.(round_trip.T[act]) .- log.(T0[act])))
 PhiF_error = maximum(abs.(log.(round_trip.T[imp, F]) .- log.(T0[imp, F])))
-@printf("  iters=%d converged=%s  max|Δlog T| = %.1e  max|Δlog Φ^F| = %.1e\n", round_trip.iterations, round_trip.converged, T_error, PhiF_error)
+psi_error = maximum(abs.(log.(round_trip.psi) .- log.(psi0)))
+@printf("  iters=%d converged=%s  max|Δlog T| = %.1e  max|Δlog Φ^F| = %.1e  max|Δlog ψ| = %.1e  c = %.6f\n",
+        round_trip.iterations, round_trip.converged, T_error, PhiF_error, psi_error, round_trip.import_scale)
 A_error = maximum(abs.(log.(round_trip.A) .- log.(A0))); e_chi = max(abs(round_trip.chi_L - chi_L0), maximum(abs.(round_trip.chi_s .- chi_s0)))
 @printf("  max|Δlog A| = %.1e  max|Δχ| = %.1e\n", A_error, e_chi)
-check("round-trip recovers T, Φ^F, χ and A to 1e-7", round_trip.converged && max(T_error, PhiF_error, A_error, e_chi) < 1e-7)
+check("round-trip recovers T, Φ^F, ψ, χ and A to 1e-7", round_trip.converged && max(T_error, PhiF_error, psi_error, A_error, e_chi) < 1e-7)
 
 # ── (3) Exactness at the data ───────────────────────────────────────────────
 println("\n(3) Profile at the data (α, κ at their priors)")
 x0 = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), alpha0, kappa0,
-          vec(permutedims(T_rs_init))[T_MASK])
+          vec(permutedims(T_rs_init))[T_MASK], ones(R_downstream))
 profile = profile_theta(x0)
 theta_vec  = profile.theta_vec
-chi_L, chi_s, A, alpha, _ = unpack_params(theta_vec)
+chi_L, chi_s, A, alpha, _, _, psi_profiled = unpack_params(theta_vec)
 kappa = unpack_kappa(theta_vec)
 T_profiled = unpack_T_area(theta_vec)
-g_theta = gamma_T_analytical(chi_L, chi_s, A, T_profiled, kappa, build_tau(alpha))
+g_theta = gamma_T_analytical(chi_L, chi_s, A, T_profiled, kappa, build_tau(alpha); psi = psi_profiled)
+PhiF_profiled = foreign_scale_by_buyer(foreign_phi(T_profiled), psi_profiled)
 import_error = maximum(abs.(g_theta[F, imp] .- FOREIGN_SHARE[imp]))
 gamma_error = maximum(abs.(g_theta[act'] .- EMP_GAMMA_T[act']))
 @printf("  converged=%s iters=%d | max|f − f̂| = %.1e  max|γ − γ̂| = %.1e\n", profile.converged, profile.iterations, import_error, gamma_error)
@@ -112,7 +120,7 @@ gamma_error = maximum(abs.(g_theta[act'] .- EMP_GAMMA_T[act']))
 check("closed-form import share and area shares on target (1e-7)", profile.converged && max(import_error, gamma_error) < 1e-7)
 
 # ── (4) Ricardian consistency ───────────────────────────────────────────────
-println("\n(4) Simulated import share per (sector, buyer) vs Φ^F_s/Φ_rs (20 000 i.i.d. draws)")
+println("\n(4) Simulated import share per (sector, buyer) vs ψ_r Φ^F_s/Φ_rs (20 000 i.i.d. draws)")
 Nbig = 20_000
 u, w = generate_draws(Nbig, n_good, :mc; randomise = true, rng = MersenneTwister(77))
 net  = solve_network(theta_vec; u_draws = u, sample_weights = w, return_firm_level = true)
@@ -122,15 +130,15 @@ for i in eachindex(net.firm_exp_val)
     D_sr[net.firm_exp_s[i], pos[net.firm_exp_r[i]]] += net.firm_exp_val[i]
 end
 f_sim = net.X_F_by_r ./ (net.X_F_by_r .+ D_sr)
-phi_all = compute_Phi(gather_T_to_ze(T_profiled, kappa), build_tau(alpha); PhiF = foreign_phi(T_profiled))
-import_share_closed_form  = [foreign_phi(T_profiled)[s] / phi_all[s, dr] for s in 1:S, dr in 1:R_downstream]
+phi_all = compute_Phi(gather_T_to_ze(T_profiled, kappa), build_tau(alpha); PhiF = PhiF_profiled)
+import_share_closed_form  = [PhiF_profiled[s, dr] / phi_all[s, dr] for s in 1:S, dr in 1:R_downstream]
 max_deviation   = maximum(abs.(f_sim[imp, :] .- import_share_closed_form[imp, :]))
 for s in imp
     @printf("  sector %d: f_rs closed form in [%.3f, %.3f], simulated in [%.3f, %.3f]\n", s,
             minimum(import_share_closed_form[s, :]), maximum(import_share_closed_form[s, :]), minimum(f_sim[s, :]), maximum(f_sim[s, :]))
 end
 @printf("  max |f_sim − f_closed_form| = %.2e  (binomial sd at N = %d: ≤ %.1e)\n", max_deviation, Nbig, 0.5 / sqrt(Nbig))
-check("simulated f_rs = Φ^F/Φ_rs within 5 binomial sd", max_deviation < 5 * 0.5 / sqrt(Nbig))
+check("simulated f_rs = ψ_r Φ^F/Φ_rs within 5 binomial sd", max_deviation < 5 * 0.5 / sqrt(Nbig))
 nonimp = setdiff(1:S, imp)
 check("no import where the sector does not import", isempty(nonimp) || all(net.X_F_by_r[nonimp, :] .== 0))
 
@@ -163,26 +171,28 @@ check("N_hi = min(⌈N^obs/q⌉, N_HI_CAP, m) and ≥ N^obs",
 println("\n(6) Fake worlds")
 ref = world_reference(theta_vec)
 pr  = compute_prices_analytical(ref.chi_L, ref.chi_s, ref.A, gather_T_to_ze(ref.T, ref.kappa),
-                                build_tau(ref.alpha); PhiF = foreign_phi(ref.T))
+                                build_tau(ref.alpha); PhiF = foreign_scale_by_buyer(foreign_phi(ref.T), ref.psi))
 ell_model = ref.chi_L .* (regional_wages[DOWNSTREAM_REGIONS] ./ pr.c_r) .^ (1 - lambda)
 pi_model = pr.Y_r ./ sum(pr.Y_r)
 s_rs_model  = ref.chi_s .* (pr.P_sr ./ reshape(pr.P_r, 1, :)) .^ (1 - nu)
-model_world = (gamma = gamma_T_analytical(ref.chi_L, ref.chi_s, ref.A, ref.T, ref.kappa, build_tau(ref.alpha)),
+model_world = (gamma = gamma_T_analytical(ref.chi_L, ref.chi_s, ref.A, ref.T, ref.kappa, build_tau(ref.alpha); psi = ref.psi),
+               buyer_import_share = buyer_import_fit(theta_vec).model,
                sales_shares = pi_model, labor_share = sum(pi_model .* ell_model),
                sector_shares = (s_rs_model * (pi_model .* (1 .- ell_model))) ./ sum(pi_model .* (1 .- ell_model)))
 model_world_profile = profile_world(ref, ref.alpha, ref.kappa, model_world)
-max_deviation_model = max(maximum(abs.(log.(model_world_profile.T[act]) .- log.(ref.T[act]))), maximum(abs.(log.(model_world_profile.A) .- log.(ref.A))))
-@printf("  world = closed-form model: converged=%s  max deviation (log T, log Φ^F, log A) = %.1e\n",
-        model_world_profile.converged, max_deviation_model)
-check("a world equal to the model returns (T̂, Φ̂^F, Â) to 1e-6", model_world_profile.converged && max_deviation_model < 1e-6)
+max_deviation_model = max(maximum(abs.(log.(model_world_profile.T[act]) .- log.(ref.T[act]))), maximum(abs.(log.(model_world_profile.A) .- log.(ref.A))),
+                          maximum(abs.(log.(model_world_profile.psi) .- log.(ref.psi))))
+@printf("  world = closed-form model: converged=%s  max deviation (log T, log Φ^F, log A, log ψ) = %.1e  c = %.6f\n",
+        model_world_profile.converged, max_deviation_model, model_world_profile.import_scale)
+check("a world equal to the model returns (T̂, Φ̂^F, ψ̂, Â) to 1e-6", model_world_profile.converged && max_deviation_model < 1e-6)
 for b in 1:3
     world = draw_world(theta_vec, granular.N_hat, 51_000_000 + b)
     c  = world.ref_empty ? nothing : profile_world(ref, ref.alpha, ref.kappa, world)
     @printf("  world %d: Σγ − 1 = %.1e  f_b = %s  profile %s\n", b,
             maximum(abs.(vec(sum(world.gamma; dims = 1)) .- 1)), string(round.(world.gamma[F, :], digits = 3)),
             c === nothing ? "skipped (empty reference)" :
-            @sprintf("converged=%s, Φ^F/Φ̂^F = %s", c.converged,
-                     string(round.(c.T[imp, F] ./ ref.T[imp, F], digits = 3))))
+            @sprintf("converged=%s, Φ^F/Φ̂^F = %s, c = %.4f", c.converged,
+                     string(round.(c.T[imp, F] ./ ref.T[imp, F], digits = 3)), c.import_scale))
     check("world $b: γ sums to one", maximum(abs.(vec(sum(world.gamma; dims = 1)) .- 1)) < 1e-12)
 end
 
@@ -196,7 +206,7 @@ for rg in (:equal_T, :no_trade_cost)
             cf.mean_dist, cf_est.mean_dist)
     check("$rg holds f_rs at the estimate (1e-12)", max_deviation < 1e-12)
 end
-check("the estimate's import share is Φ^F/Φ_rs",
+check("the estimate's import share is ψ_r Φ^F/Φ_rs",
       maximum(abs.(cf_est.import_share[imp, :] .- import_share_closed_form[imp, :])) < 1e-12)
 
 println("\n", pass ? "GATE: PASS" : "GATE: FAIL")

@@ -103,7 +103,7 @@ def build(seed=11, alpha=(0.4,), category_geometry=False):
     T_area = np.zeros((S, R_D)); T_area[AA_ACTIVE] = rng.lognormal(0, .3, n_T)
     phi_f = np.random.default_rng(99).lognormal(-1, .3, S)
     T_blk = [np.append(T_area[s, AA_ACTIVE[s]], phi_f[s]) for s in range(S) if AA_ACTIVE[s].any()]
-    theta_hat = np.concatenate([head] + T_blk)
+    theta_hat = np.concatenate([head] + T_blk + [np.ones(R_D)])     # psi = 1 for every buyer
     np.save(f"{run}/step3/best_parameters_list.npy", theta_hat[:, None])
     np.save(f"{run}/step3/post_hoc_N_hat.npy", np.array([4, 7, 5]))
 

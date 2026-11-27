@@ -106,7 +106,9 @@ with `stats.csv` (`epsilon`, `labor_share`), `distances.npy`, `filter_N_upstream
 `w_rs.npy`, `regional_wages.npy`, `N_downstream_per_region.npy`, `input_share.npy`,
 `domestic_share.npy`, `emp_gamma_ls.npy`, `X_dr.csv`, `attraction_area_linkages.npy`,
 `G_K.csv`, `cells_ls.csv`, `beta_d_<n>.npy`, `beta_kappa_<n>.npy` (and `beta_d_1.npy`,
-the α prior). No data covariance is needed: Steps 2–4 draw their uncertainty from fake
+the α prior), `import_share_customs_per_region.npy` (customs import share of each downstream
+zone, zero elsewhere) and `import_share_per_region.npy` (its initial rescaled target, read
+for the report). No data covariance is needed: Steps 2–4 draw their uncertainty from fake
 worlds simulated by the model.
 
 ---
@@ -144,8 +146,20 @@ and the labour share are all shares of TOTAL purchases, imports included, as in 
 Imported varieties enter the price indices but create no French linkage. The upper bound
 of the N_s bisection becomes `N^obs_s / q_s` (q_s = share of varieties France wins for at
 least one buyer), and the draw count is sized by `N^obs_s / (1 − f̂_s)` (capped by
-`N_RHO_MAX`, 2000). A sector with `domestic_share = 1` has no foreign competitor, and then
-the code reproduces the domestic-only model bit for bit.
+`N_RHO_MAX`, 2000). A sector with `domestic_share = 1` has no foreign competitor.
+
+**Buyers' access to foreign suppliers.** Buyer r sees the foreign competitor at scale
+`ψ_r Φ^F_s` (its delivered price is `ψ_r^{−1/θ}` times the common foreign bid, from the same
+draws), so `Φ_rs = Φ^dom_rs + ψ_r Φ^F_s` and `f_rs = ψ_r Φ^F_s / Φ_rs`. ψ (R_d, last block of
+the parameter vector, ψ = 1 for the buyer with the largest sales share) is profiled with
+T and Φ^F on each buyer's import share: the customs shares rescaled at every Sinkhorn pass
+by `c = Σ_s X_s f̂_s / Σ_r X_r IS_r^customs`, so the buyers' imports add up to the sectors'
+imports and only the relative customs shares are used. It is matched exactly, like γ, and
+is not in the criterion (the per-buyer fit is in `report.txt` and `granular_diagnostics`).
+ψ does not move a buyer's domestic geography conditional on buying in France; it moves the
+amplification `D_r = 1 + (1 − ℓ_r) Σ_s s_rs (1 − f_rs)`, the sales of French suppliers per
+euro of final demand for r. `test/compare_import_access.jl` tabulates a run against one
+without ψ (read with ψ ≡ 1, which is that model exactly).
 
 1. **Step 1** — identity-weighted PSO over `[α ; κ]` on blocks 4–6. At each (α, κ), T and
    the aggregates (χ^L, χ^s, A) are profiled jointly (`profile_ge`): they reproduce the

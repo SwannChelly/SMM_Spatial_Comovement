@@ -134,8 +134,10 @@ end
 
 ##################### Parameters ###################
 
-# Positions in the level vector [χ^L | χ^s (S) | A (R_d) | α (N_TAU) | κ | T block].
+# Positions in the level vector [χ^L | χ^s (S) | A (R_d) | α (N_TAU) | κ | T block | ψ (R_d)].
 t_param_start() = S + R_downstream + 3 + N_TAU          # first T index
+t_param_range() = t_param_start():(t_param_start() + N_T_PARAMS - 1)
+psi_range()     = (t_param_start() + N_T_PARAMS):(t_param_start() + N_T_PARAMS + R_downstream - 1)
 alpha_range()   = (S + R_downstream + 2):(S + R_downstream + 1 + N_TAU)
 kappa_index()   = S + R_downstream + 2 + N_TAU
 unpack_kappa(params) = params[kappa_index()]
@@ -149,7 +151,7 @@ over `T_MASK`, reference-normalised per sector (`T[s, ref] = 1`). Its last colum
 """
 function unpack_T_area(params)
     T_full = zeros(eltype(params), T_COL_DIM * S)
-    T_full[T_MASK] = params[t_param_start():end]
+    T_full[T_MASK] = params[t_param_range()]
     T_area = permutedims(reshape(T_full, T_COL_DIM, S))
     for s in 1:S
         reference_area = T_REF_REGION[s]
@@ -180,11 +182,31 @@ foreign_phi(T_area::AbstractMatrix) =
     [FOREIGN_ACTIVE[s] ? T_area[s, FOREIGN_COL] : zero(eltype(T_area)) for s in 1:S]
 
 """
-    unpack_params(params) -> (χ^L, χ^s, A, α, vec(T_ls), Φ^F)
+    unpack_psi(params) -> ψ (R_d), the buyers' access to foreign suppliers, ψ_ref = 1
+
+ψ_r and Φ^F_s enter the model only through their product ψ_r Φ^F_s, so ψ is read
+relative to the reference buyer `PSI_REF_BUYER` (the largest downstream sales share);
+`unpack_params` multiplies Φ^F by the same ψ_ref, which leaves every product unchanged.
+"""
+unpack_psi(params) = (psi = params[psi_range()]; psi ./ psi[PSI_REF_BUYER])
+
+"""
+    foreign_scale_by_buyer(PhiF, psi) -> Matrix (S × R_d):  ψ_r Φ^F_s
+
+The foreign competitor's Fréchet scale as seen by buyer r: its delivered price to r is
+ψ_r^{−1/θ} times the common bid, so it enters Φ_rs as ψ_r Φ^F_s. Zero where s does not import.
+"""
+foreign_scale_by_buyer(PhiF::AbstractVector, psi::AbstractVector) =
+    [PhiF[s] > 0 ? PhiF[s] * psi[dr] : zero(promote_type(eltype(PhiF), eltype(psi)))
+     for s in 1:S, dr in 1:R_downstream]
+
+"""
+    unpack_params(params) -> (χ^L, χ^s, A, α, vec(T_ls), Φ^F, ψ)
 
 χ^s (S) is normalised to sum to one, A (R_d) to A[1] = 1, T is gathered to the (S × R)
-ZE level and flattened, and Φ^F (S) is the foreign Fréchet scale, in the same
-reference-normalised units as T.
+ZE level and flattened, Φ^F (S) is the foreign Fréchet scale, in the same
+reference-normalised units as T, and ψ (R_d) the buyers' access to it, ψ_ref = 1 (Φ^F
+absorbs the stored ψ_ref, so the product ψ_r Φ^F_s is the stored one).
 """
 function unpack_params(params)
     chi_L = params[1]
@@ -194,7 +216,8 @@ function unpack_params(params)
     alpha = params[alpha_range()]
     T_area = unpack_T_area(params)
     T_ls = gather_T_to_ze(T_area, unpack_kappa(params))
-    return chi_L, chi_s, A, alpha, vec(T_ls), foreign_phi(T_area)
+    PhiF = foreign_phi(T_area) .* params[psi_range()][PSI_REF_BUYER]
+    return chi_L, chi_s, A, alpha, vec(T_ls), PhiF, unpack_psi(params)
 end
 
 """
@@ -448,15 +471,17 @@ their row count). `u_draws` is `N_rho_eff × (n_good + S)` (cells, then one fore
 column per sector) and `sample_weights` `N_rho_eff × n_good`.
 
 Returns `X_ls_flat` (n_good, domestic sales of each cell), `X_F_flat` (S, imports),
-`X_F_by_r` (S × R_d, imports per unit of the buyer's cost), `c_tilde_r` and `Y_r` (R,
+`X_F_by_r` (S × R_d, imports per unit of the buyer's cost), `X_dom_by_r` (S × R_d, the
+domestic purchases per unit of the buyer's cost), `c_tilde_r` and `Y_r` (R,
 A-adjusted unit cost and sales, zero outside the downstream zones), `linkages_flat`
 (N_rho_eff × n_good, true where the cell supplies the variety to some buyer) and the
 weights. `return_firm_level` adds the per-(variety, buyer) expenditure shares (COO
 vectors), the productivity matrix `z_flat`, the markup `mu` and the price index `P`.
 
 The foreign competitor of sector s bids `p^F_ρs = (−log(1 − u^F_ρs)/Φ^F_s)^{1/θ}` for
-variety ρ, the same for every buyer (`u_draws[:, n_good + s]`); it wins where it is
-strictly cheaper than the best domestic cell. Its varieties enter the price indices and
+variety ρ (`u_draws[:, n_good + s]`, one draw per variety common to every buyer), and
+delivers it to buyer r at `ψ_r^{−1/θ} p^F_ρs`; it wins where it is strictly cheaper than
+the buyer's best domestic cell. Its varieties enter the price indices and
 the spending (`X_F_flat`, `X_F_by_r`) but create no domestic linkage, so the extensive
 margin, the win counts and the firm-level rows are French only.
 """
@@ -464,7 +489,7 @@ function solve_network(params; u_draws::Matrix{Float64},
                        sample_weights::AbstractMatrix{Float64},
                        precomputed_tau::Union{Nothing, Matrix{Float64}}=nothing,
                        return_firm_level::Bool=false)
-    chi_L, chi_s, A_r, alpha, T_vec, PhiF = unpack_params(params)
+    chi_L, chi_s, A_r, alpha, T_vec, PhiF, psi = unpack_params(params)
     tau = precomputed_tau === nothing ? build_tau(alpha) : precomputed_tau
     T_ls = reshape(T_vec, S, R)
     nu_s_mat = reshape(nu_s, 1, S)
@@ -482,7 +507,8 @@ function solve_network(params; u_draws::Matrix{Float64},
             p_F[rho, s] = foreign_scale * (-log(1.0 - u_draws[rho, n_good + s]))^(1 / theta)
         end
     end
-    X_F_by_r = zeros(S, R_downstream)
+    X_F_by_r   = zeros(S, R_downstream)
+    X_dom_by_r = zeros(S, R_downstream)
 
     # 2) Each cell's productivity draw for each variety, z = T^{1/θ} (−log(1−u))^{−1/θ},
     #    built one column at a time; only 1/z enters the cost comparison.
@@ -515,6 +541,9 @@ function solve_network(params; u_draws::Matrix{Float64},
 
     for dr in 1:R_downstream
         region = DOWNSTREAM_REGIONS[dr]
+        # The buyer's access to foreign suppliers shifts the common foreign bid by ψ_r^{−1/θ}:
+        # the same foreign draw, a buyer-specific delivered cost.
+        foreign_access_factor = psi[dr]^(-1 / theta)
 
         # 3) Ricardian selection: for each variety the buyer picks the lowest delivered cost
         #    p = w τ / z among the sector's cells; ties keep the first minimiser and a NaN
@@ -540,9 +569,10 @@ function solve_network(params; u_draws::Matrix{Float64},
                 end
                 # Foreign bid strictly below the best domestic cell (a NaN domestic price
                 # keeps winning, as above): the variety is imported (winner = −1).
-                if p_F[rho, s] < best_price
+                foreign_price = p_F[rho, s] * foreign_access_factor
+                if foreign_price < best_price
                     winner_good_idx[rho, s] = -1
-                    p_rho_s[rho, s] = p_F[rho, s]
+                    p_rho_s[rho, s] = foreign_price
                 else
                     winner_good_idx[rho, s] = sector_cells[best_position]
                     p_rho_s[rho, s] = best_price
@@ -592,6 +622,7 @@ function solve_network(params; u_draws::Matrix{Float64},
                     (P_sr_value / P_r)^(1 - nu) *
                     (P_r / c_r)^(1 - lambda)
                 X_shares_by_r[winner, dr] += exp_val
+                X_dom_by_r[s, dr] += exp_val
                 if return_firm_level
                     push!(firm_exp_rho, rho); push!(firm_exp_s, s); push!(firm_exp_g, winner)
                     push!(firm_exp_r, region); push!(firm_exp_val, exp_val)
@@ -624,7 +655,7 @@ function solve_network(params; u_draws::Matrix{Float64},
 
     # X_F_by_r: foreign spending per unit of the buyer's cost (S × R_downstream), the
     # imported part of the intermediate share; X_F_flat: in the units of X_ls_flat.
-    network = (X_ls_flat = X_ls_flat, X_F_flat = X_F_flat, X_F_by_r = X_F_by_r,
+    network = (X_ls_flat = X_ls_flat, X_F_flat = X_F_flat, X_F_by_r = X_F_by_r, X_dom_by_r = X_dom_by_r,
                c_tilde_r = c_tilde_r_full, Y_r = Y_r_full,
                linkages_flat = linkages_flat, sample_weights = sample_weights)
     return_firm_level || return network
@@ -905,7 +936,9 @@ Blocks 1–6 (labour share, industry shares, π_r, [β_d ; β_κ], γ_{s,a}, Ḡ
 non-moment diagnostics. `N_fixed` pins the variety count (finite differences: N̂_s is a
 step function of θ). `perms` replaces the block-4 network permutations (default: the
 estimation's `cell_perms`), so a draw set other than the estimation's carries its own.
-The field `gamma_ls` holds the AREA-level shares γ (T_COL_DIM × S), foreign row included.
+The field `gamma_ls` holds the AREA-level shares γ (T_COL_DIM × S), foreign row included;
+`buyer_import_share` (R_d) the realised import share of each buyer's intermediate purchases,
+matched exactly by the profile of ψ in closed form and reported, not targeted.
 """
 function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing,
                          perms::Union{Nothing, Vector{Matrix{Int32}}}=nothing)
@@ -929,6 +962,9 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
 
     # 5. Sourcing shares of total purchases: areas, and the import share on the foreign row
     gamma_area = gamma_T_from_flows(X_ls, network.X_F_flat)
+
+    # 5b. Each buyer's import share of its intermediate purchases (the customs moment).
+    buyer_import_share = buyer_import_shares(network)
 
     # 4b/6. Win counts → N̂_s (bisection) → Ḡ_s(0), Ḡ_s(K); all closed form in k.
     n_draw = size(linkages_flat, 1)
@@ -968,7 +1004,20 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
             pi_r = pi_r, reg_coef = reg_coef, gamma_ls = gamma_area, G0 = G0,
             N_hat = N_hat, N_hat_free = N_hat_free, clamped = clamped, q_hat = q_hat,
             q_french = q_french, foreign_share = gamma_area[FOREIGN_COL, :],
-            G_curve = G_curve, k_counts = k_counts, n_draw = n_draw, reg_fail = reg_fail)
+            buyer_import_share = buyer_import_share, G_curve = G_curve, k_counts = k_counts, n_draw = n_draw, reg_fail = reg_fail)
+end
+
+"""
+    buyer_import_shares(network) -> f_r (R_d)
+
+Imports over total (domestic + imported) intermediate purchases of each buyer, from the
+realised flows of `solve_network` (both per unit of the buyer's cost); 0 for a buyer with
+no intermediate purchases.
+"""
+function buyer_import_shares(network)
+    imports_r  = vec(sum(network.X_F_by_r; dims = 1))
+    purchase_r = imports_r .+ vec(sum(network.X_dom_by_r; dims = 1))
+    return [purchase_r[dr] > 0 ? imports_r[dr] / purchase_r[dr] : 0.0 for dr in 1:R_downstream]
 end
 
 """
@@ -1071,5 +1120,6 @@ function granular_report(params; u_draws=U_DRAWS, sample_weights=SAMPLE_WEIGHTS,
             reg_fail = moments.reg_fail, reg_sd = reg_sd, beta_expected = beta_expected,
             G0 = moments.G0, N_count = N_count, EK = expected_suppliers, G_curve = moments.G_curve,
             k_counts = moments.k_counts, n_draw = moments.n_draw,
-            q_french = moments.q_french, N_lo = N_lo, N_hi = N_hi, foreign_share = moments.foreign_share)
+            q_french = moments.q_french, N_lo = N_lo, N_hi = N_hi, foreign_share = moments.foreign_share,
+            buyer_import_share = moments.buyer_import_share)
 end

@@ -74,9 +74,12 @@ end
     sens_columns(theta; include_T=true, include_aggregates=true) -> Vector of NamedTuples
 
 The Jacobian's parameter axis: (label, kind, index) with `kind ∈ (:aggregate, :alpha,
-:kappa, :T, :N)`; `index` is the position in θ, or the sector for `:N`.
+:kappa, :T, :N, :psi)`; `index` is the position in θ, or the sector for `:N`. The ψ_r
+columns (every buyer but the reference, ψ_ref = 1) are partial, like T's: ψ_r moves with
+T, the aggregates and N held fixed.
 """
-function sens_columns(theta::AbstractVector; include_T::Bool = true, include_aggregates::Bool = true)
+function sens_columns(theta::AbstractVector; include_T::Bool = true, include_aggregates::Bool = true,
+                      include_psi::Bool = include_T)
     columns = NamedTuple{(:label, :kind, :index), Tuple{String, Symbol, Int}}[]
     if include_aggregates
         push!(columns, (label = PARAM_LABELS[1], kind = :aggregate, index = 1))
@@ -99,6 +102,12 @@ function sens_columns(theta::AbstractVector; include_T::Bool = true, include_agg
     end
     for s in 1:S
         push!(columns, (label = "N_s[$(SECTOR_NAMES[s])]", kind = :N, index = s))
+    end
+    if include_psi
+        for (dr, i) in enumerate(psi_range())
+            dr == PSI_REF_BUYER && continue
+            push!(columns, (label = PARAM_LABELS[i], kind = :psi, index = i))
+        end
     end
     return columns
 end
@@ -195,7 +204,7 @@ function sensitivity_jacobian(theta::AbstractVector; K::Int = 10, h::Float64 = 0
                       "m_base" => base_moments[1][1], "m_base_draws" => permutedims(reduce(hcat, (draw_result[1] for draw_result in base_moments[2:end]))),
                       "theta" => [column.kind === :N ? Float64(N_base[1][column.index]) : theta_vec[column.index] for column in columns],
                       "N_base" => Float64.(N_base[1]), "h" => [h], "K" => [Float64(K)],
-                      "kind" => [Float64(findfirst(==(column.kind), (:aggregate, :alpha, :kappa, :T, :N))) for column in columns]))
+                      "kind" => [Float64(findfirst(==(column.kind), (:aggregate, :alpha, :kappa, :T, :N, :psi))) for column in columns]))
     write(joinpath(dest, "jacobian_param_labels.txt"), join([column.label for column in columns], "\n") * "\n")
     write(joinpath(dest, "jacobian_moment_labels.txt"), join(MOMENT_LABELS, "\n") * "\n")
     n_nan = count(!isfinite, J)
@@ -308,7 +317,7 @@ function sensitivity_profiles(theta::AbstractVector; K::Int = 10, G::Int = 15,
                      Dict("grid" => Float64.(grids[j]), "m_est" => m_est, "m_mean" => m_mean,
                           "m_sd" => m_sd, "N_est" => set_results[1].N, "converged" => Float64.(set_results[1].converged),
                           "estimate" => [estimate], "targets" => Float64.(target_moments), "data" => data_moments,
-                          "kind" => [Float64(findfirst(==(column.kind), (:aggregate, :alpha, :kappa, :T, :N)))]))
+                          "kind" => [Float64(findfirst(==(column.kind), (:aggregate, :alpha, :kappa, :T, :N, :psi)))]))
         grid = Float64.(grids[j]); estimate_position = findfirst(==(estimate), grid)
         for target in target_moments
             model_curve = m_est[:, target]

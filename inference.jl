@@ -32,14 +32,20 @@
 # its import share f_b is the realised share of its N̂_s varieties won abroad, noisy
 # with N̂_s. It sits on the foreign row of γ_b, and the profile re-solves Φ^F_s on it
 # with the areas' T: the sampling noise of the import share enters the draws of T and
-# Φ^F. The counterfactuals hold Φ^F_s at the world's estimate.
+# Φ^F. The buyers' access ψ_r is treated the same way: each buyer's realised import share
+# in the world plays the customs share, and the profile re-solves ψ on it. Those shares
+# come from the same flows as the sectors' import shares, so the factor c that rescales
+# them in the profile is ≈ 1 (it differs from one by the Monte-Carlo gap between the
+# realised and the expected weights) and is reported. The counterfactuals hold each
+# buyer's import share at the world's estimate.
 
 # ── Areas that come out empty ────────────────────────────────────────────────
 # A world is ONE network, so an area active in the data can win nothing in it (γ_b = 0).
 # On the data such an area would not be active and its T would be zero; the world does
 # the same: its T is set to `EMPTY_T` and held there by `profile_ge`. Such draws are
 # reported as EMPTY rather than as a log T of −69. A world whose REFERENCE area is empty
-# cannot be normalised and is excluded (`:empty_ref`).
+# cannot be normalised and is excluded (`:empty_ref`). A world in which a buyer imports
+# nothing gives ψ_r no finite target and is excluded too (`:buyer_without_imports`).
 #
 # ── Seeds ────────────────────────────────────────────────────────────────────
 # World b uses seed_world + b for its network and seed_sim + b for its simulator (Sobol
@@ -90,6 +96,8 @@ the statistics computed on it as on the real data:
   * `sales_shares` — downstream sales shares π_r (R_d), `DOWNSTREAM_REGIONS` order;
   * `labor_share`, `sector_shares` — the labour share and the sector shares (S) of
               intermediate spending (blocks 1–2), targets of the profile with `sales_shares`;
+  * `buyer_import_share` — each buyer's import share of its intermediate purchases (R_d),
+              the world's customs shares, target of ψ in the profile;
   * `ref_empty` — true when some sector's reference area wins nothing (the world cannot
               be normalised and is excluded).
 """
@@ -124,55 +132,62 @@ function draw_world(theta::AbstractVector, N_hat::Vector{Int}, seed::Integer)
     Y_downstream = network.Y_r[DOWNSTREAM_REGIONS]
     ref_empty = any(s -> T_REF_REGION[s] > 0 && gamma_area[T_REF_REGION[s], s] <= 0, 1:S)
     return (beta = beta, ok = ok, G = G, gamma = gamma_area, sales_shares = Y_downstream ./ sum(Y_downstream), ref_empty = ref_empty,
-            labor_share = labor_share(network.c_tilde_r, theta), sector_shares = X_s ./ sum(X_s))
+            labor_share = labor_share(network.c_tilde_r, theta), sector_shares = X_s ./ sum(X_s),
+            buyer_import_share = buyer_import_shares(network))
 end
 
 """
-    world_reference(theta_hat) -> (theta_vec, chi_L, chi_s, A, alpha, kappa, T)
+    world_reference(theta_hat) -> (theta_vec, chi_L, chi_s, A, alpha, kappa, T, psi)
 
 What the worlds read off the estimate: the level vector itself (`theta_vec`), χ^L, χ^s, A
-as `unpack_params` normalises them, α̂, κ̂ and T̂ by area (S × T_COL_DIM).
+as `unpack_params` normalises them, α̂, κ̂, T̂ by area (S × T_COL_DIM) and ψ̂ (R_d), in the
+gauge ψ_ref = 1 (Φ^F in T's foreign column absorbs the stored ψ_ref, as in `unpack_params`).
 """
 function world_reference(theta_hat::AbstractVector)
-    chi_L, chi_s, A, alpha, _ = unpack_params(theta_hat)
+    chi_L, chi_s, A, alpha, _, _, psi = unpack_params(theta_hat)
+    T = Matrix(unpack_T_area(theta_hat))
+    T[:, FOREIGN_COL] .*= theta_hat[psi_range()][PSI_REF_BUYER]
     return (theta_vec = collect(Float64, theta_hat), chi_L = chi_L, chi_s = collect(chi_s), A = collect(A),
-            alpha = collect(alpha), kappa = Float64(unpack_kappa(theta_hat)),
-            T = Matrix(unpack_T_area(theta_hat)))
+            alpha = collect(alpha), kappa = Float64(unpack_kappa(theta_hat)), T = T, psi = collect(Float64, psi))
 end
 
 """
-    profile_world(ref, alpha, kappa, world; T_init, aggregate_coordinates_init)
-        -> (T, A, chi_L, chi_s, aggregate_coordinates, converged)
+    profile_world(ref, alpha, kappa, world; T_init, psi_init, aggregate_coordinates_init)
+        -> (T, psi, A, chi_L, chi_s, aggregate_coordinates, converged, import_scale)
 
-Profile T and the aggregates at (α, κ) on a world's own moments: γ (`world.gamma`) and
-blocks 1–3 (`world.labor_share`, `world.sector_shares`, `world.sales_shares`), i.e. the
-estimator applied to the fake data. An area that wins nothing in the world starts at
+Profile T, ψ and the aggregates at (α, κ) on a world's own moments: γ (`world.gamma`),
+blocks 1–3 (`world.labor_share`, `world.sector_shares`, `world.sales_shares`) and the
+buyers' import shares (`world.buyer_import_share`, in the place of the customs shares),
+i.e. the estimator applied to the fake data. `import_scale` is the factor c of the profile. An area that wins nothing in the world starts at
 `EMPTY_T` and stays there. `aggregate_coordinates_init` warm-starts the Newton solve of
 (χ^L, χ^s) (`solve_aggregates`).
 """
 function profile_world(ref, alpha, kappa, world;
-                       T_init::AbstractMatrix = ref.T, aggregate_coordinates_init = nothing)
+                       T_init::AbstractMatrix = ref.T, psi_init::AbstractVector = ref.psi,
+                       aggregate_coordinates_init = nothing)
     T = Matrix{Float64}(T_init)
     for s in 1:S, a in SECTOR_T_COLS[s]
         (world.gamma[a, s] <= 0 && a != T_REF_REGION[s]) && (T[s, a] = EMPTY_T)
     end
-    profile = profile_ge(alpha; kappa = kappa, gamma_target = world.gamma, T_init = T,
+    profile = profile_ge(alpha; kappa = kappa, gamma_target = world.gamma, T_init = T, psi_init = psi_init,
+                     customs_share = world.buyer_import_share,
                      aggregate_coordinates_init = aggregate_coordinates_init,
                      targets = profile_targets(labor_share = world.labor_share, sector_shares = world.sector_shares,
                                                sales_shares = world.sales_shares))
-    return (T = profile.T, A = profile.A, chi_L = profile.chi_L, chi_s = profile.chi_s, aggregate_coordinates = profile.aggregate_coordinates,
-            converged = profile.converged)
+    return (T = profile.T, psi = profile.psi, A = profile.A, chi_L = profile.chi_L, chi_s = profile.chi_s,
+            aggregate_coordinates = profile.aggregate_coordinates, converged = profile.converged,
+            import_scale = profile.import_scale)
 end
 
 """
     world_theta(ref, alpha, kappa, cal) -> the level vector at (α, κ) with the profiled
-    aggregates and T of `cal` (`profile_world`)
+    aggregates, T and ψ of `cal` (`profile_world`)
 """
 function world_theta(ref, alpha, kappa, world_profile)
     theta_vec = with_aggregates(ref.theta_vec, world_profile.chi_L, world_profile.chi_s, world_profile.A)
     theta_vec[alpha_range()] = alpha
     theta_vec[kappa_index()] = kappa
-    return with_T(theta_vec, world_profile.T)
+    return with_psi(with_T(theta_vec, world_profile.T), world_profile.psi)
 end
 
 """
@@ -223,13 +238,15 @@ function _world_residual(theta_hat, N_hat, ref, seed_w::Int, seed_s::Int)
         world = draw_world(theta_hat, N_hat, seed_w)
         world.ok        || return (ok = false, reason = :world_fit)
         world.ref_empty && return (ok = false, reason = :empty_ref)
+        all(>(0), world.buyer_import_share) || return (ok = false, reason = :buyer_without_imports)
         world_profile = profile_world(ref, ref.alpha, ref.kappa, world)
         world_profile.converged   || return (ok = false, reason = :T_inversion)
         beta_sim, N_world, n_fail_sim = simulate_beta(world_theta(ref, ref.alpha, ref.kappa, world_profile),
                                    world.G, world_simulator(seed_s))
         all(isfinite, beta_sim) || return (ok = false, reason = :sim_fit)
         return (ok = true, reason = :none, e = world.beta .- beta_sim, beta_world = world.beta,
-                beta_sim = beta_sim, N = N_world, n_fail = n_fail_sim, G = world.G)
+                beta_sim = beta_sim, N = N_world, n_fail = n_fail_sim, G = world.G,
+                import_scale = world_profile.import_scale)
     catch err
         return _failure(err)
     end
@@ -268,6 +285,7 @@ function world_weight_matrix(theta_hat::Vector{Float64}; B::Int = 1000, dest::Ab
                  Dict("e" => residuals, "beta_world" => rows_of(r -> r.beta_world),
                       "beta_sim" => rows_of(r -> r.beta_sim), "N_hat_world" => rows_of(r -> r.N),
                       "G_world" => rows_of(r -> r.G),
+                      "import_scale_world" => [r.import_scale for r in usable],
                       "N_hat" => N_hat, "e_data" => e_data))
 
     labels = MOMENT_LABELS[collect(BLOCK_RANGES[4])]
@@ -295,6 +313,9 @@ function world_weight_matrix(theta_hat::Vector{Float64}; B::Int = 1000, dest::Ab
             end
             n_block4 == N_TAU + 1 && println(out, "\n  Block 4 has $n_block4 entries for $n_block4 parameters (α, κ): exactly " *
                                            "identified, so W does not move the point estimate.")
+            import_scales = [r.import_scale for r in usable]
+            @printf(out, "\n  factor c of the buyers' import-share targets (≈ 1 in a fake world): mean %.4f, min %.4f, max %.4f\n",
+                    mean(import_scales), minimum(import_scales), maximum(import_scales))
             println(out, "\n  A mean residual far from zero (|t| ≫ 2) means the continuum simulator does not\n" *
                          "  reproduce, on average, the β of a finite world at the same parameters: the\n" *
                          "  estimator is biased there, and Step 4's bias column measures what it does to θ̂.")
@@ -319,7 +340,7 @@ end
 
 """
     estimate_world(world, ref, W, sim; max_iter)
-        -> (ok, alpha, kappa, T, A, chi_L, chi_s, N, loss, iterations, theta_vec)
+        -> (ok, alpha, kappa, T, A, chi_L, chi_s, psi, import_scale, N, loss, iterations, theta_vec)
 
 The estimator applied to one fake world. For each candidate (α, κ): T re-inverted on the
 world's γ and blocks 1–3 (T and the aggregates profiled), N calibrated on its G, β simulated on the world's
@@ -330,7 +351,7 @@ evaluation of the world; the fixed point is unique, so this changes cost, not va
 """
 function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
     n_alpha = N_TAU
-    T_warm = Ref(ref.T); coordinates_warm = Ref{Any}(nothing)
+    T_warm = Ref(ref.T); psi_warm = Ref(ref.psi); coordinates_warm = Ref{Any}(nothing)
     alpha_kappa_of(x) = (sort(x[1:n_alpha]), x[n_alpha + 1])
     in_box(alpha, kappa) = KAPPA_LO <= kappa <= KAPPA_HI && all(a -> 1e-4 <= a <= ALPHA_MAX, alpha)
 
@@ -338,12 +359,13 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
         alpha, kappa = alpha_kappa_of(x)
         in_box(alpha, kappa) || return WORLD_PENALTY
         world_profile = try
-            profile_world(ref, alpha, kappa, world; T_init = T_warm[], aggregate_coordinates_init = coordinates_warm[])
+            profile_world(ref, alpha, kappa, world; T_init = T_warm[], psi_init = psi_warm[],
+                          aggregate_coordinates_init = coordinates_warm[])
         catch
             return WORLD_PENALTY
         end
         world_profile.converged || return WORLD_PENALTY
-        T_warm[] = world_profile.T; coordinates_warm[] = world_profile.aggregate_coordinates
+        T_warm[] = world_profile.T; psi_warm[] = world_profile.psi; coordinates_warm[] = world_profile.aggregate_coordinates
         beta, _, _ = simulate_beta(world_theta(ref, alpha, kappa, world_profile), world.G, sim)
         all(isfinite, beta) || return WORLD_PENALTY
         residual = world.beta .- beta
@@ -356,11 +378,13 @@ function estimate_world(world, ref, W::AbstractMatrix, sim; max_iter::Int = 150)
                          Optim.Options(iterations = max_iter))
     alpha, kappa = alpha_kappa_of(Optim.minimizer(optimum))
     min_loss = Optim.minimum(optimum)
-    world_profile = profile_world(ref, alpha, kappa, world; T_init = T_warm[], aggregate_coordinates_init = coordinates_warm[])
+    world_profile = profile_world(ref, alpha, kappa, world; T_init = T_warm[], psi_init = psi_warm[],
+                                  aggregate_coordinates_init = coordinates_warm[])
     theta_vec = world_theta(ref, alpha, kappa, world_profile)
     _, N, _ = simulate_beta(theta_vec, world.G, sim)
     return (ok = world_profile.converged && min_loss < WORLD_PENALTY, alpha = alpha, kappa = kappa, T = world_profile.T,
-            A = world_profile.A, chi_L = world_profile.chi_L, chi_s = world_profile.chi_s, N = N, loss = min_loss,
+            A = world_profile.A, chi_L = world_profile.chi_L, chi_s = world_profile.chi_s, psi = world_profile.psi,
+            import_scale = world_profile.import_scale, N = N, loss = min_loss,
             iterations = Optim.iterations(optimum), theta_vec = theta_vec)
 end
 
@@ -371,22 +395,23 @@ Closed-form geography of the upstream response at `params` (analytical prices, t
 expected network): for every buyer the flows `X_lr` (R × R_d) to each upstream ZE, then the
 purchase-weighted mean sourcing distance (km) and the local shares within each radius,
 aggregated over buyers with their upstream purchases (`mean_*`) and at the median buyer
-(`med_*`). `:equal_T` sets every non-empty cell's T to one (`Equal comparative
+(`med_*`), and by buyer (`mean_dist_by_buyer`, `local_share_by_buyer`, one vector per radius). `:equal_T` sets every non-empty cell's T to one (`Equal comparative
 advantage`), `:no_trade_cost` sets τ ≡ 1; prices are re-solved in both. The flows are
 DOMESTIC (the shares are of French purchases).
 
 The counterfactuals are about the reorganisation of the DOMESTIC network, so the foreign
-margin is neutralised: each buyer's import share f_rs = Φ^F_s/Φ_rs is held at its
+margin is neutralised: each buyer's import share f_rs = ψ_r Φ^F_s/Φ_rs is held at its
 estimate. The regime's foreign scale is buyer-specific,
-`Φ^F_rs = Φ^F_s · Φ^dom_rs(regime) / Φ^dom_rs(estimate)`, with Φ^dom the French part of
+`Φ^F_rs = ψ_r Φ^F_s · Φ^dom_rs(regime) / Φ^dom_rs(estimate)`, with Φ^dom the French part of
 Φ, so f_rs, the leakage abroad and the sector mix of the domestic bill do not move for
-foreign reasons; the within-sector geography never depends on Φ^F. This also makes
+foreign reasons; the within-sector geography never depends on Φ^F or ψ. This also makes
 `:equal_T` independent of the reference area that fixes the units of T and Φ^F.
 """
 function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
                          radii = (100.0, 200.0))
     # (not called `theta`: that is the Fréchet shape used below)
-    chi_L, chi_s, A, alpha, T_vec, PhiF = unpack_params(params)
+    chi_L, chi_s, A, alpha, T_vec, PhiF_s, psi = unpack_params(params)
+    PhiF = foreign_scale_by_buyer(PhiF_s, psi)      # ψ_r Φ^F_s, the foreign scale each buyer sees
     T_ls = reshape(collect(T_vec), S, R)
     tau_est = build_tau(alpha)
     if regime !== :estimate && any(>(0), PhiF)
@@ -397,7 +422,7 @@ function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
     tau = regime === :no_trade_cost ? ones(R, R_downstream) : tau_est
     if regime !== :estimate && any(>(0), PhiF)
         Phi_domestic_regime = compute_Phi(T_ls, tau)
-        PhiF = [PhiF[s] > 0 && Phi_domestic_estimate[s, dr] > 0 ? PhiF[s] * Phi_domestic_regime[s, dr] / Phi_domestic_estimate[s, dr] : 0.0
+        PhiF = [PhiF[s, dr] > 0 && Phi_domestic_estimate[s, dr] > 0 ? PhiF[s, dr] * Phi_domestic_regime[s, dr] / Phi_domestic_estimate[s, dr] : 0.0
                 for s in 1:S, dr in 1:R_downstream]
     end
     prices  = compute_prices_analytical(chi_L, chi_s, A, T_ls, tau; PhiF = PhiF)
@@ -418,10 +443,10 @@ function incidence_stats(params::AbstractVector; regime::Symbol = :estimate,
     mean_distance_r = [sum(X_lr[:, dr] .* distance_km[:, dr]) / purchases_r[dr] for dr in 1:R_downstream]
     local_share_r  = [[sum(X_lr[distance_km[:, dr] .<= radius, dr]) / purchases_r[dr] for dr in 1:R_downstream] for radius in radii]
     buyer_weight = purchases_r ./ sum(purchases_r)
-    PhiF_sr = PhiF isa AbstractMatrix ? PhiF : [PhiF[s] for s in 1:S, dr in 1:R_downstream]
+    PhiF_sr = PhiF
     return (mean_dist = dot(buyer_weight, mean_distance_r), med_dist = median(mean_distance_r),
             mean_local = [dot(buyer_weight, shares) for shares in local_share_r], med_local = [median(shares) for shares in local_share_r],
-            import_share = PhiF_sr ./ prices.Phi)
+            import_share = PhiF_sr ./ prices.Phi, mean_dist_by_buyer = mean_distance_r, local_share_by_buyer = local_share_r)
 end
 
 const CF_REGIMES = (:estimate, :equal_T, :no_trade_cost)
@@ -448,6 +473,7 @@ function _world_estimate(theta_hat, N_hat, ref, W, seed_w::Int, seed_s::Int, max
         world = draw_world(theta_hat, N_hat, seed_w)
         world.ok        || return (ok = false, reason = :world_fit)
         world.ref_empty && return (ok = false, reason = :empty_ref)
+        all(>(0), world.buyer_import_share) || return (ok = false, reason = :buyer_without_imports)
         estimate = estimate_world(world, ref, W, world_simulator(seed_s); max_iter = max_iter)
         estimate.ok || return (ok = false, reason = :estimation)
         counterfactuals = try counterfactual_row(estimate.theta_vec) catch; fill(NaN, length(counterfactual_labels())) end
@@ -490,11 +516,11 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     T_reduced(T) = (v = vec(permutedims(T))[T_MASK]; v[v .<= EMPTY_T_CUT] .= NaN; v)
     labels = vcat(["alpha[$i]" for i in 1:N_TAU], ["kappa"], ["N_s[$s]" for s in sector_names],
                T_labels, ["A[$i]" for i in 1:R_downstream],
-               ["chi_L"], ["chi_s[$s]" for s in sector_names])
-    draw_row(alpha, kappa, N, T, A, chi_L, chi_s) = vcat(alpha, kappa, Float64.(N), T_reduced(T), A, chi_L, chi_s)
+               ["chi_L"], ["chi_s[$s]" for s in sector_names], ["psi[$i]" for i in 1:R_downstream])
+    draw_row(alpha, kappa, N, T, A, chi_L, chi_s, psi) = vcat(alpha, kappa, Float64.(N), T_reduced(T), A, chi_L, chi_s, psi)
     param_draws   = permutedims(reduce(hcat, (draw_row(r.estimate.alpha, r.estimate.kappa, r.estimate.N, r.estimate.T, r.estimate.A,
-                                       r.estimate.chi_L, r.estimate.chi_s) for r in usable)))
-    estimate_row = draw_row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A, ref.chi_L, ref.chi_s)
+                                       r.estimate.chi_L, r.estimate.chi_s, r.estimate.psi) for r in usable)))
+    estimate_row = draw_row(ref.alpha, ref.kappa, N_hat, ref.T, ref.A, ref.chi_L, ref.chi_s, ref.psi)
     T_columns  = findall(l -> startswith(l, "T["), labels)
 
     # ── the dispersion of log T ──────────────────────────────────────────────
@@ -514,7 +540,8 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
     NPZ.npzwrite(joinpath(dest, "world_inference_draws.npz"),
                  Dict("params" => param_draws, "estimate" => estimate_row,
                       "disp_logT" => dispersion_draws, "counterfactuals" => counterfactual_draws, "counterfactuals_est" => cf_est,
-                      "loss" => [r.estimate.loss for r in usable], "iters" => [r.estimate.iterations for r in usable],
+                      "loss" => [r.estimate.loss for r in usable],
+                      "import_scale" => [r.estimate.import_scale for r in usable], "iters" => [r.estimate.iterations for r in usable],
                       "thetas" => permutedims(reduce(hcat, (r.estimate.theta_vec for r in usable)))))
     write(joinpath(dest, "world_inference_labels.txt"), join(labels, "\n") * "\n")
 
@@ -541,7 +568,10 @@ function world_inference(theta_hat::Vector{Float64}, W::AbstractMatrix; B::Int =
             end
             println(out, "  sd = dispersion across worlds; CI = 2.5/97.5% quantiles; bias = mean − estimate.")
             other_columns = setdiff(eachindex(labels), T_columns)
-            print_block(out, "α, κ, N_s, A, χ^L, χ^s", labels[other_columns], param_draws[:, other_columns], estimate_row[other_columns])
+            import_scales = [r.estimate.import_scale for r in usable]
+            @printf(out, "  factor c of the buyers' import-share targets (≈ 1 in a fake world): mean %.4f, min %.4f, max %.4f\n",
+                    mean(import_scales), minimum(import_scales), maximum(import_scales))
+            print_block(out, "α, κ, N_s, A, χ^L, χ^s, ψ", labels[other_columns], param_draws[:, other_columns], estimate_row[other_columns])
             print_block(out, "T (levels, per-sector reference = 1)", labels[T_columns], param_draws[:, T_columns], estimate_row[T_columns])
             print_block(out, "log T", labels[T_columns], log.(param_draws[:, T_columns]), log.(estimate_row[T_columns]))
             share_empty = vec(mean(isnan.(param_draws[:, T_columns]); dims = 1))

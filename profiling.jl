@@ -13,13 +13,20 @@
 # shares of TOTAL purchases (Σ over the T columns = 1), so the Sinkhorn update moves the
 # areas' T and Φ^F_s with the same rule: the profile solves (T, Φ^F) jointly.
 #
+# Buyers' access to foreign suppliers: buyer r sees the foreign competitor at scale
+# ψ_r Φ^F_s, so Φ_rs = Φ^dom_rs + ψ_r Φ^F_s and f_rs = ψ_r Φ^F_s / Φ_rs. ψ_r is profiled
+# with (T, Φ^F) on each buyer's import share, the customs shares IS_r^customs rescaled at
+# every pass so that the buyers' imports add up to the sectors' imports (`profile_ge`).
+# ψ and Φ^F enter only as a product: ψ = 1 for the buyer with the largest sales share.
+#
 # Notation. Variables keep the paper's symbols in roman letters, with their indices as
 # suffixes: s an upstream sector, r (loop index `dr`) a downstream buyer in
 # `DOWNSTREAM_REGIONS` order, l an origin cell (loop index `g` over the active cells),
 # a an attraction area. The main objects are
 #   T_ls (S × R)            cell-level Fréchet scale, T_{a(l)s} · n_ls^κ
 #   T_area (S × T_COL_DIM)  area-level scale, plus the foreign scale Φ^F_s in FOREIGN_COL
-#   Phi (S × R_d)           Φ_sr = Σ_l T_ls (w_l τ_lr)^{−θ} + Φ^F_s
+#   psi (R_d)               ψ_r, the buyer's access to foreign suppliers (ψ_ref = 1)
+#   Phi (S × R_d)           Φ_sr = Σ_l T_ls (w_l τ_lr)^{−θ} + ψ_r Φ^F_s
 #   P_sr (S × R_d)          expected sector price index Γ_s Φ_sr^{−1/θ}
 #   P_r, c_r (R_d)          buyer's intermediate price index and unit cost
 #   ell_r (R_d)             buyer's labour cost share ℓ_r
@@ -32,12 +39,13 @@ using Printf
 
 """
     compute_Phi(T_ls, tau; PhiF = nothing) -> Φ (S × R_downstream),
-    Φ_{s,r} = Σ_l T_ls (w_l τ_lr)^{−θ} + Φ^F_s
+    Φ_{s,r} = Σ_l T_ls (w_l τ_lr)^{−θ} + ψ_r Φ^F_s
 
 `T_ls` (S × R) is the cell-level Fréchet scale and `tau` (R × R_downstream) the iceberg cost
-from origin cell to buyer. `PhiF` is a vector (S), the estimated foreign competitor common
-to every buyer, or a matrix (S × R_downstream), a buyer-specific foreign scale (the
-counterfactuals of `incidence_stats`, which hold each buyer's import share at its estimate).
+from origin cell to buyer. `PhiF` is a vector (S), a foreign scale common to every buyer,
+or a matrix (S × R_downstream), the foreign scale as each buyer sees it: ψ_r Φ^F_s at the
+estimate (`foreign_scale_by_buyer`), rescaled in the counterfactuals of `incidence_stats`,
+which hold each buyer's import share at its estimate.
 """
 function compute_Phi(T_ls::AbstractMatrix{FT}, tau::AbstractMatrix{FT}; PhiF = nothing) where {FT}
     Phi = zeros(FT, S, R_downstream)
@@ -108,15 +116,16 @@ function compute_prices_analytical(chi_L::FT, chi_s, A_r, T_ls::AbstractMatrix,
 end
 
 """
-    gamma_T_analytical(χ^L, χ^s, A, T_area, kappa, tau) -> γ (T_COL_DIM × S)
+    gamma_T_analytical(χ^L, χ^s, A, T_area, kappa, tau; psi = ones(R_d)) -> γ (T_COL_DIM × S)
 
 Closed-form shares of each sector's TOTAL purchases at the area level, the import share
-`Σ_r ω_sr Φ^F_s/Φ_sr / Σ_r ω_sr` on the foreign row (Σ over the columns = 1). The spending
+`Σ_r ω_sr ψ_r Φ^F_s/Φ_sr / Σ_r ω_sr` on the foreign row (Σ over the columns = 1). The spending
 weights come from the full price solve: `ω_sr = χ_s (P_sr/P_r)^{1−ν} (P_r/c_r)^{1−λ} (1−χ^L) μ Y_r`.
 """
-function gamma_T_analytical(chi_L::Real, chi_s, A, T_area::AbstractMatrix, kappa, tau::AbstractMatrix)
+function gamma_T_analytical(chi_L::Real, chi_s, A, T_area::AbstractMatrix, kappa, tau::AbstractMatrix;
+                            psi::AbstractVector = ones(R_downstream))
     T_ls = gather_T_to_ze(T_area, kappa)
-    PhiF = foreign_phi(T_area)
+    PhiF = foreign_scale_by_buyer(foreign_phi(T_area), psi)
     (; P_sr, P_r, c_r, Y_r, mu, Phi) = compute_prices_analytical(chi_L, chi_s, A, T_ls, tau; PhiF = PhiF)
     # A buyer's spending on sector s: its intermediate bill split across sectors by CES.
     omega_sr = similar(Phi)
@@ -128,13 +137,14 @@ function gamma_T_analytical(chi_L::Real, chi_s, A, T_area::AbstractMatrix, kappa
 end
 
 """
-    gamma_T_from_weights(T_ls, PhiF, tau, Phi, omega_sr) -> γ (T_COL_DIM × S)
+    gamma_T_from_weights(T_ls, PhiF_sr, tau, Phi, omega_sr) -> γ (T_COL_DIM × S)
 
-The flows `X_ls = Σ_r T_ls (w τ)^{−θ}/Φ_sr ω_sr` (R × S) and `X_F = Σ_r Φ^F_s/Φ_sr ω_sr` (S),
-with the sector expenditure `omega_sr` (S × R_d) supplied, as shares of total purchases.
-Each origin's flow is the buyer's spending times its EK probability of winning.
+The flows `X_ls = Σ_r T_ls (w τ)^{−θ}/Φ_sr ω_sr` (R × S) and `X_F = Σ_r ψ_r Φ^F_s/Φ_sr ω_sr` (S),
+with the sector expenditure `omega_sr` (S × R_d) and the foreign scale by buyer
+`PhiF_sr = ψ_r Φ^F_s` (S × R_d, `foreign_scale_by_buyer`) supplied, as shares of total
+purchases. Each origin's flow is the buyer's spending times its EK probability of winning.
 """
-function gamma_T_from_weights(T_ls::AbstractMatrix, PhiF::AbstractVector, tau::AbstractMatrix,
+function gamma_T_from_weights(T_ls::AbstractMatrix, PhiF::AbstractMatrix, tau::AbstractMatrix,
                               Phi::AbstractMatrix, omega_sr::AbstractMatrix)
     FT = promote_type(eltype(T_ls), eltype(omega_sr))
     # 1) Domestic flows: each cell sells to a buyer in proportion to its share of Φ_sr.
@@ -150,10 +160,9 @@ function gamma_T_from_weights(T_ls::AbstractMatrix, PhiF::AbstractVector, tau::A
     # 2) Imports: the foreign competitor's share of Φ_sr, buyer by buyer.
     X_F = zeros(FT, S)
     @inbounds for s in 1:S
-        PhiF[s] > 0 || continue
         for dr in 1:R_downstream
-            Phi[s, dr] < 1e-300 && continue
-            X_F[s] += PhiF[s] / Phi[s, dr] * omega_sr[s, dr]
+            (PhiF[s, dr] > 0 && Phi[s, dr] >= 1e-300) || continue
+            X_F[s] += PhiF[s, dr] / Phi[s, dr] * omega_sr[s, dr]
         end
     end
     return gamma_T_from_flows(X_ls, X_F)
@@ -165,7 +174,16 @@ end
 """
 function with_T(theta_vec::AbstractVector, T_area::AbstractMatrix)
     theta_vec_new = copy(theta_vec)
-    theta_vec_new[t_param_start():end] = vec(permutedims(T_area))[T_MASK]
+    theta_vec_new[t_param_range()] = vec(permutedims(T_area))[T_MASK]
+    return theta_vec_new
+end
+
+"""
+    with_psi(theta_vec, psi) -> copy of the level vector `theta_vec` with its ψ block set to `psi` (R_d)
+"""
+function with_psi(theta_vec::AbstractVector, psi::AbstractVector)
+    theta_vec_new = copy(theta_vec)
+    theta_vec_new[psi_range()] = psi
     return theta_vec_new
 end
 
@@ -364,33 +382,77 @@ end
 
 
 """
-    profile_ge(alpha; kappa, gamma_target=EMP_GAMMA_T_TILDE, targets=profile_targets(),
-               T_init=copy(T_rs_init), aggregate_coordinates_init=nothing,
-               max_iter=2000, tol=1e-9, damping=0.3)
-        -> (T, chi_L, chi_s, A, aggregate_coordinates, iterations, converged,
-            max_log_step_T, max_residual_aggregates)
+    buyer_import_targets(omega_sr, PhiF_sr, Phi, import_share_s, customs_share)
+        -> (model (R_d), target (R_d), scale, adding_up_gap, feasible)
 
-Joint profile of T and the aggregates at (α, κ), by a damped Sinkhorn iteration on T.
-Each pass: P_sr from the current T → (χ^L, χ^s) solved at those prices (warm-started from
-the previous pass) → ω_sr = π_r (1−ℓ_r) s_rs → closed-form γ → the multiplicative update
-`T⁺[s,a] = T[s,a] (γ_target[a,s] / γ_model[a,s])^damping`, renormalised to `T[s,ref] = 1`.
+The buyers' import shares in the model and their targets at the expenditure weights
+`omega_sr` (S × R_d, total spending of buyer r on sector s, imports included). With
+X_r = Σ_s ω_sr, X_s = Σ_r ω_sr and f_sr = ψ_r Φ^F_s / Φ_sr:
+
+  * `model[r]  = Σ_s ω_sr f_sr / X_r`, buyer r's import share;
+  * `target[r] = c · IS_r^customs`, with `c = Σ_s X_s f̂_s / Σ_r X_r IS_r^customs` (`scale`):
+    only the relative customs shares are used, and their level is set so that the buyers'
+    imports add up to the sectors' imports at the current weights;
+  * `adding_up_gap` = |Σ_r X_r target_r − Σ_s X_s f̂_s| relative to the latter (0 up to rounding);
+  * `feasible` = every target below one (otherwise no ψ can reach it).
+"""
+function buyer_import_targets(omega_sr::AbstractMatrix, PhiF_sr::AbstractMatrix, Phi::AbstractMatrix,
+                              import_share_s::AbstractVector, customs_share::AbstractVector)
+    purchases_r = vec(sum(omega_sr; dims = 1))
+    purchases_s = vec(sum(omega_sr; dims = 2))
+    imports_r = zeros(R_downstream)
+    @inbounds for dr in 1:R_downstream, s in 1:S
+        (PhiF_sr[s, dr] > 0 && Phi[s, dr] >= 1e-300) || continue
+        imports_r[dr] += omega_sr[s, dr] * PhiF_sr[s, dr] / Phi[s, dr]
+    end
+    model = [purchases_r[dr] > 0 ? imports_r[dr] / purchases_r[dr] : 0.0 for dr in 1:R_downstream]
+    sector_imports = sum(purchases_s .* import_share_s)
+    scale  = sector_imports / sum(purchases_r .* customs_share)
+    target = scale .* customs_share
+    adding_up_gap = abs(sum(purchases_r .* target) - sector_imports) / max(sector_imports, eps())
+    return (model = model, target = target, scale = scale, adding_up_gap = adding_up_gap,
+            feasible = all(target .< 1))
+end
+
+"""
+    profile_ge(alpha; kappa, gamma_target=EMP_GAMMA_T_TILDE, targets=profile_targets(),
+               customs_share=CUSTOMS_SHARE, T_init=copy(T_rs_init), psi_init=ones(R_d),
+               aggregate_coordinates_init=nothing, max_iter=2000, tol=1e-9, damping=0.3)
+        -> (T, psi, chi_L, chi_s, A, aggregate_coordinates, iterations, converged,
+            max_log_step_T, max_log_step_psi, max_residual_aggregates, buyer_import_share,
+            import_share_target, import_scale, max_adding_up_gap)
+
+Joint profile of T, ψ and the aggregates at (α, κ), by a damped Sinkhorn iteration on T and ψ.
+Each pass: P_sr from the current (T, ψ) → (χ^L, χ^s) solved at those prices (warm-started from
+the previous pass) → ω_sr = π_r (1−ℓ_r) s_rs → closed-form γ and buyer import shares f_r →
+the multiplicative updates
+`T⁺[s,a] = T[s,a] (γ_target[a,s] / γ_model[a,s])^damping`, renormalised to `T[s,ref] = 1`, and
+`ψ⁺_r = ψ_r (IS_r^target / f_r)^damping` (`buyer_import_targets`), renormalised to ψ_ref = 1
+with Φ^F_s multiplied by the same ψ_ref, so the products ψ_r Φ^F_s and every f_rs are unchanged.
 `gamma_target` is T_COL_DIM × S (areas then the foreign row, per sector); only its
 per-sector profile matters (the reference gauge absorbs the scale). A ZERO-target column
 (a fake world in which an area active in the data wins nothing) is held fixed relative to
-the reference and left out of the stopping rule. A is computed once at the end.
+the reference and left out of the stopping rule. `customs_share` (R_d) are the buyers'
+customs import shares, of which only the relative variation is used; a pass at which a
+rescaled target reaches one stops the profile as not converged. A is computed once at the end.
+`PSI_CALIBRATED[] = false` holds ψ at `psi_init` (a test device: the model without ψ).
 
-Returns `T` (S × T_COL_DIM, area level with Φ^F_s in FOREIGN_COL), the aggregates, the
-final aggregate coordinates, the number of Sinkhorn passes, `max_log_step_T` (the largest
-|Δ log T| of the last pass) and `max_residual_aggregates` (max |F| of the final aggregate
-solve). `converged` requires the T iteration and the final aggregates solve to converge.
+Returns `T` (S × T_COL_DIM, area level with Φ^F_s in FOREIGN_COL), `psi` (R_d), the
+aggregates, the final aggregate coordinates, the number of Sinkhorn passes, the largest
+|Δ log T| and |Δ log ψ| of the last pass, `max_residual_aggregates` (max |F| of the final
+aggregate solve), the buyers' model import shares, their targets and the factor c at the
+final point, and the largest relative adding-up gap over the passes. `converged` requires
+the T and ψ iteration and the final aggregates solve to converge, with feasible targets.
 """
 function profile_ge(alpha; kappa::Real,
                           gamma_target::AbstractMatrix = EMP_GAMMA_T_TILDE,
                           targets = profile_targets(),
+                          customs_share::AbstractVector = CUSTOMS_SHARE,
                           T_init::AbstractMatrix = copy(T_rs_init),
+                          psi_init::AbstractVector = ones(R_downstream),
                           aggregate_coordinates_init = nothing,
                           max_iter::Int = 2000, tol::Float64 = 1e-9, damping::Float64 = 0.3)
-    # 1) Start from T_init in the reference gauge, T[s, ref] = 1.
+    # 1) Start from T_init in the reference gauge, T[s, ref] = 1, and ψ_ref = 1.
     tau   = build_tau(alpha)
     # T_area (S × T_COL_DIM): the Fréchet scales at the AREA level, T_a,s for every attraction
     # area a and, in column FOREIGN_COL, the foreign scale Φ^F_s.
@@ -401,16 +463,22 @@ function profile_ge(alpha; kappa::Real,
         reference_area = T_REF_REGION[s]
         (reference_area > 0 && T_area[s, reference_area] > 0) && (T_area[s, :] ./= T_area[s, reference_area])
     end
+    psi = collect(Float64, psi_init)
+    rescale_psi_gauge!(T_area, psi)
+    calibrate_psi = PSI_CALIBRATED[] && any(FOREIGN_ACTIVE)
+    import_share_s = [FOREIGN_ACTIVE[s] ? gamma_target[FOREIGN_COL, s] : 0.0 for s in 1:S]
     coordinates = aggregate_coordinates_init
-    max_log_step = Inf; iterations = 0
+    max_log_step = Inf; max_log_step_psi = 0.0; iterations = 0
+    max_adding_up_gap = 0.0; feasible = true
     T_area_new = similar(T_area)
+    psi_new = similar(psi)
     omega_sr = zeros(S, R_downstream)
     for it in 1:max_iter
         iterations = it
-        # 2) Solve the aggregates (χ^L, χ^s) at the prices implied by the current T.
+        # 2) Solve the aggregates (χ^L, χ^s) at the prices implied by the current (T, ψ).
         T_ls = gather_T_to_ze(T_area, kappa)  # cell level, S × R: T_ls = T_{a(l)s} · n_ls^κ (density term)
-        PhiF = foreign_phi(T_area)            # Φ^F_s, the foreign (import) column; 0 where s does not import
-        P_sr, Phi = expected_sector_prices(T_ls, tau; PhiF = PhiF)
+        PhiF_sr = foreign_scale_by_buyer(foreign_phi(T_area), psi)   # ψ_r Φ^F_s; 0 where s does not import
+        P_sr, Phi = expected_sector_prices(T_ls, tau; PhiF = PhiF_sr)
         coordinates = solve_aggregates(P_sr; aggregate_coordinates_init = coordinates,
                                        targets = targets).aggregate_coordinates
         # 3) Compute the model γ with the expenditure weights pinned at the target sales shares.
@@ -418,7 +486,7 @@ function profile_ge(alpha; kappa::Real,
         @inbounds for dr in 1:R_downstream, s in 1:S
             omega_sr[s, dr] = targets.sales_shares[dr] * (1 - ell_r[dr]) * s_rs[s, dr]
         end
-        gamma_model = gamma_T_from_weights(T_ls, PhiF, tau, Phi, omega_sr)
+        gamma_model = gamma_T_from_weights(T_ls, PhiF_sr, tau, Phi, omega_sr)
         # 4) Move T towards the target γ: an area that the model under-supplies relative to
         #    the data gets a higher productivity, and conversely. Then renormalise each
         #    sector to its reference area, and hold the zero-target columns where they are.
@@ -437,7 +505,30 @@ function profile_ge(alpha; kappa::Real,
                 gamma_target[a, s] > 0 || (T_area_new[s, a] = T_area[s, a])
             end
         end
-        # 5) Stop when no T entry with a positive target moves by more than `tol` in logs.
+        # 5) Move ψ towards the buyers' import-share targets: a buyer that imports less in
+        #    the model than its (rescaled) customs share gets a better access to foreign
+        #    suppliers, and conversely. The targets are rescaled at the current weights, so
+        #    the buyers' imports and the sectors' imports have the same total.
+        pass_max_log_step_psi = 0.0
+        if calibrate_psi
+            buyer_imports = buyer_import_targets(omega_sr, PhiF_sr, Phi, import_share_s, customs_share)
+            max_adding_up_gap = max(max_adding_up_gap, buyer_imports.adding_up_gap)
+            if !buyer_imports.feasible
+                feasible = false
+                break
+            end
+            for dr in 1:R_downstream
+                ratio = buyer_imports.model[dr] > 1e-300 ? buyer_imports.target[dr] / buyer_imports.model[dr] : 1.0
+                psi_new[dr] = exp(log(psi[dr]) + damping * log(ratio))
+            end
+            rescale_psi_gauge!(T_area_new, psi_new)
+            for dr in 1:R_downstream
+                log_step = abs(log(psi_new[dr]) - log(psi[dr]))
+                log_step > pass_max_log_step_psi && (pass_max_log_step_psi = log_step)
+            end
+            psi .= psi_new
+        end
+        # 6) Stop when no T entry with a positive target and no ψ_r moves by more than `tol` in logs.
         pass_max_log_step = 0.0
         for s in 1:S, a in SECTOR_T_COLS[s]
             gamma_target[a, s] > 0 || continue
@@ -446,23 +537,48 @@ function profile_ge(alpha; kappa::Real,
         end
         T_area .= T_area_new
         max_log_step = pass_max_log_step
-        max_log_step < tol && break
+        max_log_step_psi = pass_max_log_step_psi
+        max(max_log_step, max_log_step_psi) < tol && break
     end
-    # 6) Solve the aggregates at the final T, and A in closed form from the sales shares.
-    P_sr, _ = expected_sector_prices(gather_T_to_ze(T_area, kappa), tau; PhiF = foreign_phi(T_area))
+    # 7) Solve the aggregates at the final (T, ψ), and A in closed form from the sales shares.
+    PhiF_sr = foreign_scale_by_buyer(foreign_phi(T_area), psi)
+    P_sr, Phi = expected_sector_prices(gather_T_to_ze(T_area, kappa), tau; PhiF = PhiF_sr)
     aggregate_solution = solve_aggregates(P_sr; aggregate_coordinates_init = coordinates, targets = targets)
-    chi_L, chi_s, _, _, _, c_r = aggregate_shares(aggregate_solution.aggregate_coordinates, P_sr)
+    chi_L, chi_s, ell_r, s_rs, _, c_r = aggregate_shares(aggregate_solution.aggregate_coordinates, P_sr)
     A = profile_A(c_r, targets.sales_shares)
-    return (T = T_area, chi_L = chi_L, chi_s = chi_s, A = A,
+    # 8) The buyers' import shares and their targets at the final point (reported).
+    omega_final = [targets.sales_shares[dr] * (1 - ell_r[dr]) * s_rs[s, dr] for s in 1:S, dr in 1:R_downstream]
+    buyer_imports = buyer_import_targets(omega_final, PhiF_sr, Phi, import_share_s, customs_share)
+    return (T = T_area, psi = psi, chi_L = chi_L, chi_s = chi_s, A = A,
             aggregate_coordinates = aggregate_solution.aggregate_coordinates, iterations = iterations,
-            converged = max_log_step < tol && aggregate_solution.converged && all(isfinite, A),
-            max_log_step_T = max_log_step, max_residual_aggregates = aggregate_solution.max_residual)
+            converged = feasible && max(max_log_step, max_log_step_psi) < tol &&
+                        aggregate_solution.converged && all(isfinite, A) && all(isfinite, psi),
+            max_log_step_T = max_log_step, max_log_step_psi = max_log_step_psi,
+            max_residual_aggregates = aggregate_solution.max_residual,
+            buyer_import_share = buyer_imports.model, import_share_target = buyer_imports.target,
+            import_scale = buyer_imports.scale, max_adding_up_gap = max_adding_up_gap)
 end
 
-# Per-worker warm start: (T*, aggregate coordinates*) of the last converged call. The fixed
+"""
+    rescale_psi_gauge!(T_area, psi) -> nothing
+
+Divide every ψ_r by ψ_ref (`PSI_REF_BUYER`) and multiply every Φ^F_s (column FOREIGN_COL
+of `T_area`) by it: the products ψ_r Φ^F_s, hence every import share f_rs, are unchanged.
+"""
+function rescale_psi_gauge!(T_area::AbstractMatrix, psi::AbstractVector)
+    psi_reference = psi[PSI_REF_BUYER]
+    psi_reference == 1 && return nothing
+    psi ./= psi_reference
+    for s in 1:S
+        FOREIGN_ACTIVE[s] && (T_area[s, FOREIGN_COL] *= psi_reference)
+    end
+    return nothing
+end
+
+# Per-worker warm start: (T*, aggregate coordinates*, ψ*) of the last converged call. The fixed
 # point is unique, so a CONVERGED result does not depend on the start; the cache is written
-# on convergence only, and a failed warm attempt is retried from T_rs_init.
-const PROFILE_WARM_CACHE = Ref{Union{Nothing, Tuple{Matrix{Float64}, Vector{Float64}}}}(nothing)
+# on convergence only, and a failed warm attempt is retried from T_rs_init and ψ ≡ 1.
+const PROFILE_WARM_CACHE = Ref{Union{Nothing, Tuple{Matrix{Float64}, Vector{Float64}, Vector{Float64}}}}(nothing)
 
 """
     profile_ge_warm(alpha; kwargs...) -> the result of `profile_ge`, warm-started from the cache
@@ -471,17 +587,18 @@ function profile_ge_warm(alpha; kwargs...)
     # Warm start. Successive objective evaluations on one worker (`profile_theta`, e.g. the
     # PSO particles a worker scores) sit at nearby (α, κ), and the Sinkhorn fixed point converges linearly
     # (≈ 0.98 per pass near α ≈ 1, hundreds of passes from T_rs_init). Starting from the last
-    # converged (T*, x*) cuts that count; it is a SPEED device only, since a converged result
+    # converged (T*, x*, ψ*) cuts that count; it is a SPEED device only, since a converged result
     # is the unique fixed point (up to the stopping tolerance, ≈ 1e-9 in logs, which is why
     # `sens_profile` clears the cache when bit-reproducibility is required).
     cached_start = PROFILE_WARM_CACHE[]
     if cached_start !== nothing && all(isfinite, cached_start[1])
         profile = profile_ge(alpha; T_init = copy(cached_start[1]),
-                             aggregate_coordinates_init = copy(cached_start[2]), kwargs...)
-        profile.converged && (PROFILE_WARM_CACHE[] = (copy(profile.T), copy(profile.aggregate_coordinates)); return profile)
+                             aggregate_coordinates_init = copy(cached_start[2]),
+                             psi_init = copy(cached_start[3]), kwargs...)
+        profile.converged && (PROFILE_WARM_CACHE[] = (copy(profile.T), copy(profile.aggregate_coordinates), copy(profile.psi)); return profile)
     end
     profile = profile_ge(alpha; kwargs...)
-    profile.converged && (PROFILE_WARM_CACHE[] = (copy(profile.T), copy(profile.aggregate_coordinates)))
+    profile.converged && (PROFILE_WARM_CACHE[] = (copy(profile.T), copy(profile.aggregate_coordinates), copy(profile.psi)))
     return profile
 end
 
@@ -518,9 +635,36 @@ function aggregate_moment_residuals(chi_L, chi_s, A, T_ls::AbstractMatrix, tau::
 end
 
 """
+    buyer_import_fit(theta_vec; customs_share = CUSTOMS_SHARE)
+        -> (model, target, scale, psi, amplification)  (each R_d but `scale`)
+
+The buyers' import shares in closed form at a level vector (expected prices, the spending
+weights of the full price solve), their targets c · IS_r^customs and the factor c
+(`buyer_import_targets`), ψ (ψ_ref = 1) and the closed-form amplification coefficient
+`D_r = 1 + (1 − ℓ_r) Σ_s s_rs (1 − f_rs)`: the sales of DOMESTIC suppliers generated by one
+euro of final demand for buyer r (imports leak abroad), on top of the buyer's own euro.
+"""
+function buyer_import_fit(theta_vec::AbstractVector; customs_share::AbstractVector = CUSTOMS_SHARE)
+    chi_L, chi_s, A, alpha, T_vec, PhiF_s, psi = unpack_params(theta_vec)
+    T_ls = reshape(collect(T_vec), S, R)
+    PhiF_sr = foreign_scale_by_buyer(PhiF_s, psi)
+    prices = compute_prices_analytical(chi_L, chi_s, A, T_ls, build_tau(alpha); PhiF = PhiF_sr)
+    # Spending of buyer r on sector s, and the shares of its unit cost.
+    intermediate_share_r = (1 - chi_L) .* (prices.P_r ./ prices.c_r) .^ (1 - lambda)       # 1 − ℓ_r
+    s_rs = [chi_s[s] * (prices.P_sr[s, dr] / prices.P_r[dr])^(1 - nu) for s in 1:S, dr in 1:R_downstream]
+    omega_sr = s_rs .* reshape(intermediate_share_r .* prices.mu .* prices.Y_r, 1, :)
+    import_share_s = [FOREIGN_ACTIVE[s] ? FOREIGN_SHARE[s] : 0.0 for s in 1:S]
+    fit = buyer_import_targets(omega_sr, PhiF_sr, prices.Phi, import_share_s, customs_share)
+    f_sr = [PhiF_sr[s, dr] > 0 ? PhiF_sr[s, dr] / prices.Phi[s, dr] : 0.0 for s in 1:S, dr in 1:R_downstream]
+    amplification = 1 .+ intermediate_share_r .* vec(sum(s_rs .* (1 .- f_sr); dims = 1))
+    return (model = fit.model, target = fit.target, scale = fit.scale, psi = collect(psi),
+            amplification = amplification)
+end
+
+"""
     profile_theta(theta_vec) -> (theta_vec, converged, max_residual, iterations, alpha)
 
-The full level vector at the (α, κ) read from `theta_vec`: (χ^L, χ^s, A, T) come from
+The full level vector at the (α, κ) read from `theta_vec`: (χ^L, χ^s, A, T, ψ) come from
 `profile_ge` (χ^s on the simplex, A_1 = 1, as `unpack_params` reads them), and every
 other entry of the input is ignored. `max_residual` is the larger of the T step and the
 aggregate residual. On `converged = false` the profiled blocks are the last iterate: the
@@ -529,8 +673,8 @@ caller must reject it, not score it.
 function profile_theta(theta_vec::AbstractVector)
     alpha = collect(theta_vec[alpha_range()])
     profile = profile_ge_warm(alpha; kappa = unpack_kappa(theta_vec))
-    return (theta_vec = with_T(with_aggregates(theta_vec, profile.chi_L, profile.chi_s, profile.A), profile.T),
+    return (theta_vec = with_psi(with_T(with_aggregates(theta_vec, profile.chi_L, profile.chi_s, profile.A), profile.T), profile.psi),
             converged = profile.converged,
-            max_residual = max(profile.max_log_step_T, profile.max_residual_aggregates),
+            max_residual = max(profile.max_log_step_T, profile.max_log_step_psi, profile.max_residual_aggregates),
             iterations = profile.iterations, alpha = alpha)
 end

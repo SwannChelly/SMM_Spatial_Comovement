@@ -384,9 +384,9 @@ def _ze_key(x):
         return t
 
 
-SENS_KINDS = {1: "aggregate", 2: "alpha", 3: "kappa", 4: "T", 5: "N"}
+SENS_KINDS = {1: "aggregate", 2: "alpha", 3: "kappa", 4: "T", 5: "N", 6: "psi"}
 SENS_BLOCK_NAMES = {1: None, 2: "Trade cost", 3: "Density", 4: "Comparative advantage",
-                    5: "Variety count"}
+                    5: "Variety count", 6: "Foreign access"}
 
 
 def _sens_aggregate_block(label):
@@ -683,6 +683,14 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         X_dr["ze2010"] = _as_ze_string(X_dr["ze2010"])
     emp_pi_r = X_dr["X_dr"].values[N_downstream != 0].astype(float)
     emp_pi_r = emp_pi_r / emp_pi_r.sum()
+    # The buyers' customs import shares (the targets of psi_r, up to the factor c of the
+    # profile) and the data notebook's initial targets, both on the downstream zones.
+    customs_path, initial_target_path = (input_folder / "import_share_customs_per_region.npy",
+                                         input_folder / "import_share_per_region.npy")
+    customs_share = (np.load(customs_path).astype(float).ravel()[N_downstream != 0]
+                     if customs_path.exists() else None)
+    import_share_target_initial = (np.load(initial_target_path).astype(float).ravel()[N_downstream != 0]
+                                   if initial_target_path.exists() else None)
 
     # Block 4 = [beta_d (n_coef) ; beta_kappa (1)]: the CELL-level cloglog of has_sup on
     # the distance regressor(s) and ln n_ls, sector x AA fixed effect -- the same files
@@ -1047,12 +1055,17 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
                       f"T[{sector_names[s]}-AA{aa_names[a]}]")
                      for s in range(S) for a in range(n_Tcol) if gamma_free[s, a]]
     param_block_sizes.append(int(gamma_free.sum()))
+    # The buyers' access to foreign suppliers psi_r, the reference buyer (largest sales
+    # share, psi = 1) normalised out, as the Jacobian's psi columns.
+    psi_reference_buyer = int(np.argmax(emp_pi_r))
+    param_labels += [f"psi[{a}]" for i, a in enumerate(aa_names) if i != psi_reference_buyer]
+    param_block_sizes.append(len(aa_names) - 1)
 
     moment_block_names = ["Labor share", "Industry shares", "Downstream sales",
                           "Extensive margin", "Regional sourcing shares"] \
         + (["Zero-supplier share"] if granular else [])
     param_block_names = ["chi_L", "Industry shares", "Productivity",
-                         "Trade cost", "Comparative advantage"]
+                         "Trade cost", "Comparative advantage", "Foreign access"]
 
     # ------------------------------------------------------------- Jacobian ---
     # Rows = the masked moments, columns = the parameters. The full free-parameter
@@ -1177,6 +1190,7 @@ def load_granular_data(industry, mu=2, base="..", profile_T=True, ca_level="aa",
         # scalars / targets
         "epsilon": epsilon, "agg_labor_share": agg_labor_share,
         "agg_industry_share": agg_industry_share, "emp_pi_r": emp_pi_r,
+        "customs_share": customs_share, "import_share_target_initial": import_share_target_initial,
         "reg_coef": reg_coef, "reg_coef_labels": reg_coef_labels, "reg_coef_cov": reg_coef_cov,
         "beta_d": beta_d, "beta_kappa": float(beta_kappa[0]), "log_n_ls": log_n_ls,
         "G_target": G_target, "N_supplier_s": N_supplier_s,
@@ -1302,7 +1316,7 @@ def unpack_estimated_T(data):
     `unpack_params` does, plus alpha.
 
     `best_params` is the RAW theta vector, layout
-        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s, col), s-major)],
+        [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s, col), s-major) | psi(R_d)],
     where the T block carries EVERY active (sector, column) including each sector's
     reference area and, for an importing sector, the foreign competitor Phi^F_s (the
     last column) — `unpack_params` divides the sector by its reference entry, which is
@@ -1310,10 +1324,11 @@ def unpack_estimated_T(data):
     layout, so a flag mismatch is an error rather than a silently shifted vector.
 
     Returns the AREA-level `T` (S, n_AA), the foreign scale `PhiF` (S, zero where the
-    sector does not import) and the CELL-level `T_cell` (S, R) the model actually
-    competes with, `T_ls = T_{a(l)s} * n_ls^kappa` (`gather_T_to_ze`), zero outside
-    CELL_MASK. The Python economy has no foreign competitor yet: it reads `T` and
-    `T_cell` only.
+    sector does not import), the buyers' access to it `psi` (R_d, AA order, psi = 1 for
+    the buyer with the largest sales share; buyer r sees the foreign competitor at scale
+    psi_r * PhiF_s, and PhiF absorbs the stored psi_ref as Julia's `unpack_params` does)
+    and the CELL-level `T_cell` (S, R) the model actually competes with,
+    `T_ls = T_{a(l)s} * n_ls^kappa` (`gather_T_to_ze`), zero outside CELL_MASK.
     """
     best_params = data.get("best_params")
     if best_params is None:
@@ -1326,23 +1341,27 @@ def unpack_estimated_T(data):
     T_ACTIVE = data["T_ACTIVE"]                       # (S, n_AA + 1): areas + foreign
     R_d = len(data["aa_names"])                       # one area per downstream region
     n_T = int(T_ACTIVE.sum())
-    expected = 1 + S + R_d + n_tau + 1 + n_T
+    expected = 1 + S + R_d + n_tau + 1 + n_T + R_d
     if best_params.size != expected:
         raise ValueError(
             f"best_params has {best_params.size} entries but the layout rebuilt here is "
-            f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T} — the run's "
-            "flags and the ones passed here disagree.")
+            f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T} (T) + {R_d} (psi) — "
+            "the run's flags and the ones passed here disagree.")
 
     offset = 1 + S + R_d
     alpha = best_params[offset: offset + n_tau]
     kappa = float(best_params[offset + n_tau])
+    T_start = offset + n_tau + 1
     T_full = np.zeros((S, n_AA + 1))
-    T_full[T_ACTIVE] = best_params[offset + n_tau + 1:]           # C-order on (S, n_AA + 1) == s-major
+    T_full[T_ACTIVE] = best_params[T_start:T_start + n_T]         # C-order on (S, n_AA + 1) == s-major
+    psi_stored = best_params[T_start + n_T:]
+    psi_reference_buyer = int(np.argmax(np.asarray(data["emp_pi_r"], dtype=float).ravel()))
     for s in range(S):
         reference_area = data["T_REF_AA"][s]
         if reference_area >= 0 and T_full[s, reference_area] > 0:
             T_full[s] = T_full[s] / T_full[s, reference_area]    # the gauge rescales Phi^F_s too
-    T, PhiF = T_full[:, :n_AA], T_full[:, n_AA]
+    T, PhiF = T_full[:, :n_AA], T_full[:, n_AA] * psi_stored[psi_reference_buyer]
+    psi = psi_stored / psi_stored[psi_reference_buyer]            # psi_ref = 1, the products psi_r PhiF_s unchanged
     log_n = data.get("log_n_ls")
     if log_n is None:
         if kappa != 0.0:
@@ -1350,7 +1369,7 @@ def unpack_estimated_T(data):
                                     f"cannot be formed at kappa = {kappa:.4g}.")
         log_n = np.zeros((S, data["R"]))
     T_cell = T[:, data["aa_of_ze"]] * np.exp(kappa * log_n) * data["CELL_MASK"]
-    return {"T": T, "PhiF": PhiF, "T_cell": T_cell, "alpha": alpha, "kappa": kappa,
+    return {"T": T, "PhiF": PhiF, "psi": psi, "T_cell": T_cell, "alpha": alpha, "kappa": kappa,
             "log_n": log_n, "theta": model_theta(data)}
 
 
@@ -1543,17 +1562,20 @@ def sourcing_geometry(data, alpha=None, equalise_T=False, kappa=None):
 
     `rho[s][:, r]` is the DOMESTIC geography: the probability that cell l wins a variety
     for buyer r GIVEN that a French cell wins it, so every column sums to one. The foreign
-    competitor (Julia's Phi^F_s, a cost common to every buyer) scales every cell's
-    unconditional probability by the same `1 - f_rs`; `f[s][r] = Phi^F_s / (sum_l psi_lr +
-    Phi^F_s)` is carried beside it (zero for a sector without foreign competitor).
+    competitor (Julia's Phi^F_s: one draw per variety, delivered to buyer r at scale
+    psi_r Phi^F_s, psi_r the buyer's access to foreign suppliers) scales every cell's
+    unconditional probability for buyer r by the same `1 - f_rs`;
+    `f[s][r] = psi_r Phi^F_s / (sum_l psi_lr + psi_r Phi^F_s)` is carried beside it (zero
+    for a sector without foreign competitor), and `rho` does not depend on psi.
 
     Counterfactuals, all closed form, about the reorganisation of the DOMESTIC network:
       `alpha=0`            distance off (a scalar is broadcast to every segment, so tau == 1);
       `equalise_T=True`    every cell's T to one (both layers; Julia's `:equal_T`);
       `equalise_T="area"`  the AREA layer only, `T_ls = n_ls^kappa`;
       `kappa=k`            the density elasticity set to k (`kappa=0`: `T_ls = T_a`).
-    In a regime each buyer's import share is held at its estimate by a buyer-specific
-    foreign scale `PhiF_r[s][r] = Phi^F_s * Phi^dom_rs(regime) / Phi^dom_rs(estimate)`, as
+    At the estimate `PhiF_r[s][r] = psi_r Phi^F_s`. In a regime each buyer's import share is
+    held at its estimate by the buyer-specific foreign scale
+    `PhiF_r[s][r] = psi_r Phi^F_s * Phi^dom_rs(regime) / Phi^dom_rs(estimate)`, as
     Julia's `incidence_stats` does, so no regime depends on the reference area that fixes
     the units of T.
 
@@ -1606,17 +1628,17 @@ def sourcing_geometry(data, alpha=None, equalise_T=False, kappa=None):
         PhiF_s = float(estimate["PhiF"][s])
         if estimate_geometry is not None and PhiF_s > 0:
             estimate_sector = estimate_geometry["by_sector"][s]                     # hold f_rs at the estimate
-            PhiF_r = PhiF_s * Phi_domestic[0] / estimate_sector["phi_dom"]
+            PhiF_r = estimate_sector["PhiF_r"] * Phi_domestic[0] / estimate_sector["phi_dom"]
             import_share = estimate_sector["f"]
         else:
-            PhiF_r = np.full(Phi_domestic.shape[1], PhiF_s)
-            import_share = PhiF_s / (Phi_domestic[0] + PhiF_s)
+            PhiF_r = PhiF_s * estimate["psi"]                                        # psi_r Phi^F_s
+            import_share = PhiF_r / (Phi_domestic[0] + PhiF_r)
         by_sector[s] = {"cells": cells, "areas": aa_of_ze[cells], "T_cell": T_cell,
                   "distance": distance, "log_tau": log_tau_lr, "elasticity": elasticity,
                   "log_psi": np.maximum(log_psi, np.log(1e-300)), "rho": rho,
                   "phi_dom": Phi_domestic[0], "PhiF": PhiF_s, "PhiF_r": PhiF_r, "f": import_share}
     return {"by_sector": by_sector, "alpha": alpha_vector, "theta": theta, "T": estimate["T"],
-            "PhiF": estimate["PhiF"], "alpha_hat": a_hat, "knots": knots,
+            "PhiF": estimate["PhiF"], "psi": estimate["psi"], "alpha_hat": a_hat, "knots": knots,
             "theta_alpha": float(np.mean(theta_alpha_by_sector)) if theta_alpha_by_sector else float(theta * alpha_vector.mean()),
             "downstream": downstream}
 
@@ -1777,11 +1799,11 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
     S, n_AA, n_tau = data["S"], data["n_AA"], data["n_tau"]
     R_d = len(data["aa_names"])
     n_T = int(data["T_ACTIVE"].sum())               # areas + Phi^F of importing sectors
-    expected = 1 + S + R_d + n_tau + 1 + n_T
+    expected = 1 + S + R_d + n_tau + 1 + n_T + R_d
     if best_params.size != expected:
         raise ValueError(
             f"best_params has {best_params.size} entries but the layout rebuilt here is "
-            f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T}.")
+            f"{expected} = 1 + {S} + {R_d} + {n_tau} + 1 (kappa) + {n_T} (T) + {R_d} (psi).")
 
     estimate = unpack_estimated_T(data)                 # T, gauge-fixed, plus alpha and theta
     if theta is None:
@@ -1821,6 +1843,7 @@ def extended_parameters(data, n_hat=None, theta=None, verbose=True):
           "T": estimate["T"],                            # (S, n_AA), T[s, ref] = 1
           "T_cell": estimate["T_cell"],                  # (S, R), T_a n_ls^kappa
           "PhiF": estimate["PhiF"],                      # (S,), the foreign competitor, same gauge as T
+          "psi": estimate["psi"],                        # (R_d,), each buyer's access to it, psi_ref = 1
           "N": n_hat[:S].copy(),
           "theta": float(theta), "theta_source": theta_source,
           "nu_s": np.full(S, float(NU_S_DEFAULT)),
@@ -1939,9 +1962,10 @@ def simulate_economy(data, theta_plus=None, *, alpha=None, equalise_T=False, kap
     # setup sits after them.
     PhiF_s = np.asarray(theta_plus.get("PhiF", np.zeros(S)), dtype=float)
     imports = PhiF_s > 0
-    # the foreign scale per (sector, buyer): Phi^F_s at the estimate, rescaled in a
+    # the foreign scale per (sector, buyer): psi_r Phi^F_s at the estimate, rescaled in a
     # counterfactual so every buyer's import share stays at its estimate (`sourcing_geometry`)
-    PhiF_r = {s: np.asarray(blocks[s].get("PhiF_r", np.full(R_d, PhiF_s[s])), dtype=float)
+    psi = np.asarray(theta_plus.get("psi", np.ones(R_d)), dtype=float)
+    PhiF_r = {s: np.asarray(blocks[s].get("PhiF_r", PhiF_s[s] * psi), dtype=float)
               for s in range(S) if imports[s] and s in blocks}
     if u_draws is None:
         if n_rep is None:

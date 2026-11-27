@@ -240,7 +240,9 @@ def _build_industry(ROOT, industry, sectors):
     np.save(f"{RUN}/step1/best_simulated_moments.npy", stages * 0.95)
     np.save(f"{RUN}/step3/best_simulated_moments.npy", stages)
     n_par = 1 + S + R_D + 1 + 1 + int(T_ACTIVE.sum())       # ... alpha | kappa | T (+ Phi^F)
+    # | psi (R_D), drawn after the rest so the stream of every other entry is unchanged
     PAR = {st: RNG.random((n_par, N_STAGES)) + 0.1 for st in ("step1", "step3")}
+    PAR = {st: np.vstack([PAR[st], RNG.random((R_D, N_STAGES)) + 0.5]) for st in ("step1", "step3")}
     for st in PAR:
         np.save(f"{RUN}/{st}/best_parameters_list.npy", PAR[st])
 
@@ -942,10 +944,11 @@ def run_checks(ns, ROOT, exp):
           [l for l in d2["moment_labels"] if l.startswith("beta")] ==
           ["beta_d[]0,50]]", "beta_d[]50,100]]", "beta_d[>100]", "beta_kappa"])
     d0 = ns["load_granular_data"]("test", mu=2, base=ROOT, parts=("core", "moments"))
-    check("parameter blocks: chi_L, chi_s-1, A-1, [alpha ; kappa], T free",
+    check("parameter blocks: chi_L, chi_s-1, A-1, [alpha ; kappa], T free, psi-1",
           list(d0["param_block_sizes"]) ==
-          [1, S - 1, exp["n_AA"] - 1, 2, exp["n_gamma_kept"]]
-          and "kappa" in d0["param_labels"])
+          [1, S - 1, exp["n_AA"] - 1, 2, exp["n_gamma_kept"], exp["n_AA"] - 1]
+          and "kappa" in d0["param_labels"]
+          and sum(l.startswith("psi[") for l in d0["param_labels"]) == exp["n_AA"] - 1)
     check("gamma moment labels and T parameter labels enumerate the same (s, AA) pairs",
           [l.replace("gamma[", "") for l in d0["moment_labels"]
            if l.startswith("gamma[")] ==

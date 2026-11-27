@@ -7,7 +7,7 @@
 # n_rho_inference, relax_n_lo. Everything is broadcast to the workers with
 # `@everywhere const`.
 #
-# Parameter vector: [χ^L(1) | χ^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK))]
+# Parameter vector: [χ^L(1) | χ^s(S) | A(R_downstream) | α(N_TAU) | κ(1) | T(sum(T_MASK)) | ψ(R_downstream)]
 # Moment vector   : [labor | industry(S) | π_r(R_d) | [β_d ; β_κ] | γ_{s,a} | Ḡ_s(0)(S)]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -260,6 +260,7 @@ end
 
 T_mask_local = vec(permutedims(aa_active_local))       # s-major over (S, n_AA)
 @everywhere const T_MASK = $T_mask_local
+@everywhere const N_T_PARAMS = $(count(T_mask_local))   # length of the T block of the parameter vector
 
 # Simulated cells ("goods"), region-major (findall over (S, R): s fastest).
 good_indices_local        = findall(cell_mask_local)
@@ -344,6 +345,38 @@ X_dr_local = X_dr_local[N_downstream_per_region_local .!= 0]
 emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 @everywhere const emp_pi_r_full = $(emp_pi_r_local)
 @everywhere const emp_pi_r      = $(emp_pi_r_local)
+
+# ── Buyers' access to foreign suppliers ψ_r and the customs import shares ─────────
+# Buyer r sees the foreign competitor at scale ψ_r Φ^F_s (its delivered price is ψ_r^{−1/θ}
+# times the common foreign bid), so f_rs = ψ_r Φ^F_s / Φ_rs. ψ is profiled with T on each
+# buyer's import share: IS_r^customs from the customs data (`build_moments.ipynb`), of which
+# only the relative variation across zones is used; `profile_ge` rescales it at every pass so
+# that the buyers' imports add up to the sectors' imports f̂_s. ψ = 1 for the buyer with the
+# largest downstream sales share (ψ and Φ^F enter only as a product). The initial targets
+# (customs shares rescaled with data weights) are read for the report only.
+customs_full_local = vec(Float64.(NPZ.npzread(joinpath(input_folder, "import_share_customs_per_region.npy"))))
+length(customs_full_local) == R_full ||
+    error("import_share_customs_per_region.npy has $(length(customs_full_local)) zones, expected R = $R_full")
+_is_buyer_zone = N_downstream_per_region_local .> 0
+all((customs_full_local .> 0) .== _is_buyer_zone) ||
+    error("the customs import shares must be strictly positive exactly on the downstream zones " *
+          "(N_downstream_per_region > 0): $(count((customs_full_local .> 0) .!= _is_buyer_zone)) zones disagree")
+customs_share_local = customs_full_local[_is_buyer_zone]
+all(customs_share_local .< 1) || error("a customs import share is ≥ 1")
+initial_import_target_local = vec(Float64.(NPZ.npzread(joinpath(input_folder, "import_share_per_region.npy"))))
+length(initial_import_target_local) == R_full ||
+    error("import_share_per_region.npy has $(length(initial_import_target_local)) zones, expected R = $R_full")
+initial_import_target_local = initial_import_target_local[_is_buyer_zone]
+any(foreign_active_local) || error("no sector imports (domestic_share ≡ 1): the customs import shares cannot be matched")
+psi_ref_buyer_local = argmax(emp_pi_r_local)
+@everywhere const CUSTOMS_SHARE         = $customs_share_local
+@everywhere const INITIAL_IMPORT_TARGET = $initial_import_target_local
+@everywhere const PSI_REF_BUYER         = $psi_ref_buyer_local
+# Test device: `false` holds ψ at its starting value in `profile_ge` (the model without ψ).
+@everywhere const PSI_CALIBRATED = Ref(true)
+@printf(" customs import shares of the %d buyers: range [%.3f, %.3f]; ψ reference buyer = downstream zone %d (π̂ = %.3f)\n",
+        length(customs_share_local), minimum(customs_share_local), maximum(customs_share_local),
+        downstream_regions_local[psi_ref_buyer_local], emp_pi_r_local[psi_ref_buyer_local])
 
 # n_coef names the specification and the files (`beta_d_<n_coef>.npy`): 1 = ln d, 4 = the
 # distance categories against the downstream ZE, i.e. 3 distance coefficients (N_REG).
@@ -682,6 +715,7 @@ for s in 1:S_;            push!(_moment_labels, "G0[$(_sector_names[s])]"); end
 @assert length(_moment_labels) == N_moments
 @everywhere const MOMENT_LABELS = $_moment_labels
 @everywhere const SECTOR_NAMES  = $_sector_names
+@everywhere const BUYER_NAMES   = $([_ze_names[r] for r in downstream_regions_local])   # ZE code of each buyer
 
 # Parameter labels over the FULL layout, and the identified T columns (reference
 # areas dropped) — the T block the inference reports.
@@ -691,7 +725,8 @@ _param_labels = vcat(["chi_L"], ["chi_s[$s]" for s in _sector_names],
                      [((p - 1) % n_Tcol_local + 1 == foreign_col_local ?
                        "PhiF[$(_sector_names[(p - 1) ÷ n_Tcol_local + 1])]" :
                        "T[$(_sector_names[(p - 1) ÷ n_Tcol_local + 1])-$(_tcol_names[(p - 1) % n_Tcol_local + 1])]")
-                      for p in findall(T_mask_local)])
+                      for p in findall(T_mask_local)],
+                     ["psi[$(_ze_names[r])]" for r in downstream_regions_local])
 _T_ref_reduced = [count(T_mask_local[1:((s - 1) * n_Tcol_local + T_REF_REGION_local[s])])
                   for s in 1:S_ if T_REF_REGION_local[s] > 0]
 @everywhere const PARAM_LABELS   = $_param_labels

@@ -350,13 +350,13 @@ def gate_untargeted():
     al_l, th_l, R_d_l = 0.35, 1.4, 3
     n_T = int(np.ones((S_l, 3), dtype=bool).sum())
     bp_l = np.concatenate([[0.1], np.full(S_l, 0.2), np.full(R_d_l, 0.3), [al_l], [0.0],
-                           T_aa.ravel()])
+                           T_aa.ravel(), np.ones(R_d_l)])
     data_l = {"industry": "auto", "mu": 1, "S": S_l, "R": R_l, "n_AA": 3, "n_tau": 1,
               "step_dir": "step1", "folder": TMP, "input_folder": inp_l,
               "aa_names": ["a", "b", "c"], "aa_of_ze": aa_of_ze,
               "AA_ACTIVE": np.ones((S_l, 3), dtype=bool), "CELL_MASK": cell_mask,
               "T_ACTIVE": np.hstack([np.ones((S_l, 3), dtype=bool), np.zeros((S_l, 1), dtype=bool)]),
-              "T_REF_AA": np.array([0, 0]), "best_params": bp_l,
+              "T_REF_AA": np.array([0, 0]), "best_params": bp_l, "emp_pi_r": np.full(R_d_l, 1.0 / R_d_l),
               "coefs": pd.DataFrame({"stat": ["theta"], "value": [th_l]}),
               "sector_names": ["s0", "s1"]}
 
@@ -502,12 +502,12 @@ def gate_untargeted():
     print("specification ladder: five rows, delta/gamma only, baseline reproduced")
 
     # theta*alpha is read off the RUN's own best_params, not carried in the markdown:
-    # layout [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | T(active (s,AA))]
+    # layout [chi_L(1) | chi_s(S) | A(R_d) | alpha(N_TAU) | kappa(1) | T(active (s,AA)) | psi(R_d)]
     S_t, R_t, n_AA_t, alpha_t = 3, 4, 5, 0.37
     aa_active = np.zeros((S_t, n_AA_t), dtype=bool)
     aa_active[:, :2] = True
     bp = np.concatenate([[0.1], np.full(S_t, 0.2), np.full(R_t, 0.3), [alpha_t], [0.0],
-                         np.full(int(aa_active.sum()), 1.0)])
+                         np.full(int(aa_active.sum()), 1.0), np.ones(R_t)])
     d_ta = {"best_params": bp, "S": S_t, "n_tau": 1, "aa_names": ["a"] * R_t,
             "AA_ACTIVE": aa_active, "coefs": None, "folder": ".", "step_dir": "step1",
             "T_ACTIVE": np.hstack([aa_active, np.zeros((S_t, 1), dtype=bool)])}
@@ -660,6 +660,7 @@ def gate_comparative_advantage():
         [ALPHA],                                   # alpha
         [0.0],                                     # kappa = 0: T_ls = T_a
         T_true[AA_ACTIVE],                         # T, s-major over (S, n_AA)
+        np.ones(n_AA),                             # psi: no foreign competitor here
     ])
 
     # sector codes deliberately NOT in the model's 0..S order, so a table that comes
@@ -1088,7 +1089,7 @@ def gate_amplification():
     T_REF_AA = np.zeros(S, dtype=int)
     T_true = rng.lognormal(0.0, 0.8, (S, n_AA))         # a real spread, so T does work
     best_params = np.concatenate([[0.3], rng.uniform(.1, .3, S), rng.uniform(.1, .3, R_d),
-                                  [ALPHA], [0.0], T_true.ravel()])   # kappa = 0
+                                  [ALPHA], [0.0], T_true.ravel(), np.ones(R_d)])   # kappa = 0; psi = 1
 
     data = {"industry": "auto", "mu": 2, "S": S, "R": R, "step_dir": "step3",
             "folder": folder, "input_folder": inp,
@@ -1098,7 +1099,7 @@ def gate_amplification():
             "aa_names": [codes[a] for a in range(n_AA)], "aa_of_ze": aa_of_ze,
             "AA_ACTIVE": AA_ACTIVE, "CELL_MASK": CELL_MASK, "T_REF_AA": T_REF_AA,
             "T_ACTIVE": np.hstack([AA_ACTIVE, np.zeros((S, 1), dtype=bool)]),   # no import here
-            "N_downstream": N_down, "best_params": best_params,
+            "N_downstream": N_down, "best_params": best_params, "emp_pi_r": np.full(R_d, 1.0 / R_d),
             "coefs": pd.DataFrame({"value": [1.0]})}     # no `theta` entry -> the default
 
     # ------------------------------------------------------------------- the frame

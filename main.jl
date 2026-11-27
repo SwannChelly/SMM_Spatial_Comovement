@@ -86,11 +86,11 @@ read_params(path) = (stored = NPZ.npzread(path); ndims(stored) > 1 ? stored[:, 1
 if run_step1
     println("\n" * "="^70 * "\nSTEP 1: identity-weighted optimisation\n" * "="^70)
     # α₀ from the data prior; with distance bins, the per-segment elasticities computed from
-    # the bin coefficients in load_parameters.jl (ALPHA_BIN_INIT). The aggregates and T
+    # the bin coefficients in load_parameters.jl (ALPHA_BIN_INIT). The aggregates, T and ψ
     # are placeholders: the profile overwrites them.
     alpha_init = N_TAU == 1 ? [P_alpha] : copy(ALPHA_BIN_INIT)
     warm_start = vcat(agg_labor_share, agg_industry_share, ones(R_downstream), alpha_init,
-                      KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK])
+                      KAPPA_PRIOR, vec(permutedims(T_rs_init))[T_MASK], ones(R_downstream))
     theta_hat_1, _ = run_optimization(; start = warm_start, output_subfolder = "step1",
                                       max_loop = K_loops)
     NPZ.npzwrite(joinpath(step1_dir, "theta_hat_1.npy"), theta_hat_1)
