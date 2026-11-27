@@ -349,11 +349,18 @@ emp_pi_r_local = X_dr_local ./ sum(X_dr_local)
 # ── Buyers' access to foreign suppliers ψ_r and the customs import shares ─────────
 # Buyer r sees the foreign competitor at scale ψ_r Φ^F_s (its delivered price is ψ_r^{−1/θ}
 # times the common foreign bid), so f_rs = ψ_r Φ^F_s / Φ_rs. ψ is profiled with T on each
-# buyer's import share: IS_r^customs from the customs data (`build_moments.ipynb`), of which
-# only the relative variation across zones is used; `profile_ge` rescales it at every pass so
-# that the buyers' imports add up to the sectors' imports f̂_s. ψ = 1 for the buyer with the
-# largest downstream sales share (ψ and Φ^F enter only as a product). The initial targets
-# (customs shares rescaled with data weights) are read for the report only.
+# buyer's import share. `build_moments.ipynb` (section "Import shares of downstream buyers")
+# writes, in the zone order of N_downstream_per_region.npy and zero outside downstream zones:
+#   import_share_customs_per_region.npy  IS_r^customs, the wage-bill-weighted mean of the
+#       zone's groups' customs imports over their raw-material purchases (FARE ACHATMP +
+#       VARMP), goods resold as such removed. A RAW ratio: only its relative variation across
+#       zones is used, so it may exceed one; `profile_ge` rescales it at every pass so that
+#       the buyers' imports add up to the sectors' imports f̂_s, and rejects a rescaled
+#       target ≥ 1.
+#   import_share_per_region.npy  the notebook's initial targets (the same shares rescaled to
+#       the IO import share with the groups' sales as weights), read for the report only.
+# `import_share_per_group.csv` is not read. ψ = 1 for the buyer with the largest downstream
+# sales share π̂_r (X_dr.csv); ψ and Φ^F enter only as a product.
 customs_full_local = vec(Float64.(NPZ.npzread(joinpath(input_folder, "import_share_customs_per_region.npy"))))
 length(customs_full_local) == R_full ||
     error("import_share_customs_per_region.npy has $(length(customs_full_local)) zones, expected R = $R_full")
@@ -362,7 +369,7 @@ all((customs_full_local .> 0) .== _is_buyer_zone) ||
     error("the customs import shares must be strictly positive exactly on the downstream zones " *
           "(N_downstream_per_region > 0): $(count((customs_full_local .> 0) .!= _is_buyer_zone)) zones disagree")
 customs_share_local = customs_full_local[_is_buyer_zone]
-all(customs_share_local .< 1) || error("a customs import share is ≥ 1")
+all(isfinite, customs_share_local) || error("import_share_customs_per_region.npy has a non-finite share on a downstream zone")
 initial_import_target_local = vec(Float64.(NPZ.npzread(joinpath(input_folder, "import_share_per_region.npy"))))
 length(initial_import_target_local) == R_full ||
     error("import_share_per_region.npy has $(length(initial_import_target_local)) zones, expected R = $R_full")

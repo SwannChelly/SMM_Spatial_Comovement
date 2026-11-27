@@ -106,8 +106,9 @@ with `stats.csv` (`epsilon`, `labor_share`), `distances.npy`, `filter_N_upstream
 `w_rs.npy`, `regional_wages.npy`, `N_downstream_per_region.npy`, `input_share.npy`,
 `domestic_share.npy`, `emp_gamma_ls.npy`, `X_dr.csv`, `attraction_area_linkages.npy`,
 `G_K.csv`, `cells_ls.csv`, `beta_d_<n>.npy`, `beta_kappa_<n>.npy` (and `beta_d_1.npy`,
-the α prior), `import_share_customs_per_region.npy` (customs import share of each downstream
-zone, zero elsewhere) and `import_share_per_region.npy` (its initial rescaled target, read
+the α prior), `import_share_customs_per_region.npy` (raw customs import share of each downstream
+zone, imports over raw-material purchases, zero elsewhere; only its relative variation is
+used, so it may exceed one) and `import_share_per_region.npy` (its initial rescaled target, read
 for the report). No data covariance is needed: Steps 2–4 draw their uncertainty from fake
 worlds simulated by the model.
 
