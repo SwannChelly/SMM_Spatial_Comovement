@@ -152,14 +152,17 @@ least one buyer), and the draw count is sized by `N^obs_s / (1 − f̂_s)` (capp
 `ψ_r Φ^F_s` (its delivered price is `ψ_r^{−1/θ}` times the common foreign bid, from the same
 draws), so `Φ_rs = Φ^dom_rs + ψ_r Φ^F_s` and `f_rs = ψ_r Φ^F_s / Φ_rs`. ψ (R_d, last block of
 the parameter vector, ψ = 1 for the buyer with the largest sales share) is profiled with
-T and Φ^F on each buyer's import share. The targets are `Λ(logit IS_r^customs + b)`, Λ the
-logistic function, with one shift b of the log-odds re-solved at every Sinkhorn pass so that
-the buyers' imports add up to the sectors' imports, `Σ_r X_r IS_r^target = Σ_s X_s f̂_s`
-(X_r = π̂_r(1 − ℓ_r), the model's weights). Only the odds ratios of the customs shares are used;
+T and Φ^F on each buyer's import share WITHIN ITS PURCHASES FROM IMPORTING SECTORS,
+`g_r = Σ_{s: f̂_s>0} ω_sr f_sr / Σ_{s: f̂_s>0} ω_sr` (over total purchases the share is
+hump-shaped in ψ_r when a sector does not import, because with ν < 1 cheaper imports move
+spending to the non-importing sectors; g_r rises from 0 to 1). The targets are
+`Λ(logit IS_r^customs + b)`, Λ the logistic function, with one shift b of the log-odds
+re-solved at every Sinkhorn pass so that the buyers' imports add up to the sectors' imports,
+`Σ_r X_r^𝓘 g_r^target = Σ_s X_s f̂_s` (X_r^𝓘 the buyer's purchases from importing sectors at
+the model's weights); (Φ^F, ψ) are solved exactly at every pass. Only the odds ratios of the customs shares are used;
 the targets always lie in (0, 1) (≈ `e^b · IS_r` for small shares, a rescaling of the domestic
-share near one). ψ is updated on the odds, `ψ_r ← ψ_r (odds(target)/odds(f_r))^0.3`. Targets the
-buyers' and sectors' import shares cannot satisfy jointly (a large buyer asked to import almost
-all its purchases while a sector imports little) make the profile fail. It is matched exactly, like γ, and
+share near one). Margins the buyers' and sectors' import shares cannot satisfy jointly make the
+profile fail. It is matched exactly, like γ, and
 is not in the criterion (the per-buyer fit is in `report.txt` and `granular_diagnostics`).
 ψ does not move a buyer's domestic geography conditional on buying in France; it moves the
 amplification `D_r = 1 + (1 − ℓ_r) Σ_s s_rs (1 − f_rs)`, the sales of French suppliers per

@@ -1,7 +1,12 @@
 """A synthetic `baseline_<industry>/` in the data notebook's export format, for running
 the Julia code (load_parameters.jl and everything above it) without the real data.
 
-    python3 test/make_synthetic_baseline.py <out_dir> [S] [R] [R_D] [seed]
+    python3 test/make_synthetic_baseline.py <out_dir> [S] [R] [R_D] [seed] [auto_like]
+
+`auto_like = 1` rewrites the imports as in the automobile data, the case where a buyer's
+import share over its TOTAL purchases is hump-shaped in its access ψ_r: the second sector
+does not import (domestic_share = 1), the others import 72% and 82% of their purchases, one
+buyer makes 57% of the downstream sales and the customs shares lie in [0.198, 0.378].
 
 Writes every file load_parameters.jl reads. The geography is a 600 km square, the
 attraction area of a ZE is its closest downstream region (the partition the loader
@@ -16,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 
-def build(out, S=3, R=60, R_D=6, seed=7):
+def build(out, S=3, R=60, R_D=6, seed=7, auto_like=0):
     rng = np.random.default_rng(seed)
     os.makedirs(out, exist_ok=True)
     xy = rng.uniform(0, 600, (R, 2))
@@ -95,6 +100,17 @@ def build(out, S=3, R=60, R_D=6, seed=7):
     customs = np.zeros(R)
     customs[down] = rng_customs.uniform(0.05, 0.6, R_D)
     np.save(f"{out}/import_share_customs_per_region.npy", customs)
+    if auto_like:
+        # Imports as in the automobile data; the geography and the cells are unchanged, the
+        # sourcing shares keep their profile within each sector and sum to the new domestic share.
+        domestic_auto = np.tile([0.28, 1.0, 0.18], S)[:S]
+        np.save(f"{out}/domestic_share.npy", domestic_auto)
+        np.save(f"{out}/emp_gamma_ls.npy", gam / gam.sum(axis=1, keepdims=True) * domestic_auto[:, None])
+        sales = np.zeros(R)
+        sales[down] = 1000 * np.r_[0.57, np.full(R_D - 1, 0.43 / (R_D - 1))]
+        pd.DataFrame({"ze2010": ze, "X_dr": sales, "downstream": N_down > 0}).to_csv(f"{out}/X_dr.csv", index=False)
+        customs[down] = np.random.default_rng([seed, 3]).uniform(0.198, 0.378, R_D)
+        np.save(f"{out}/import_share_customs_per_region.npy", customs)
     return out
 
 

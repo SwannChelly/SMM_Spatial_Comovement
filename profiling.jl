@@ -424,54 +424,78 @@ end
 
 """
     buyer_import_targets(omega_sr, PhiF_sr, Phi, import_share_s, customs_share)
-        -> (model (R_d), target (R_d), logit_shift, purchases (R_d), adding_up_gap, feasible)
+        -> (model (R_d), target (R_d), total_share (R_d), logit_shift, purchases (R_d),
+            adding_up_gap, floor (R_d), feasible)
 
 The buyers' import shares in the model and their targets at the expenditure weights
-`omega_sr` (S × R_d, total spending of buyer r on sector s, imports included). With
-X_r = Σ_s ω_sr, X_s = Σ_r ω_sr and f_sr = ψ_r Φ^F_s / Φ_sr:
+`omega_sr` (S × R_d, total spending of buyer r on sector s, imports included). The buyer's
+import share is measured within its purchases from IMPORTING sectors 𝓘 = {s : f̂_s > 0}:
+with X_r^𝓘 = Σ_{s∈𝓘} ω_sr, X_s = Σ_r ω_sr and f_sr = ψ_r Φ^F_s / Φ_sr,
 
-  * `model[r]  = Σ_s ω_sr f_sr / X_r`, buyer r's import share;
+  * `model[r] = g_r = Σ_{s∈𝓘} ω_sr f_sr / X_r^𝓘`, buyer r's import share within its
+    importable purchases, a weighted mean of its f_sr. Why not over its total purchases:
+    with ν < 1 (complements across sectors) a higher ψ_r makes the importing sectors cheaper
+    and moves spending towards the sectors that do not import (∝ P_sr^{1−ν}), so the total
+    share f_r = (X_r^𝓘 / X_r) g_r is hump-shaped in ψ_r (it tends to 0 as ψ_r → ∞) and a high
+    target can be out of reach; g_r goes from 0 to 1 as ψ_r goes from 0 to ∞, so every
+    target in (0, 1) is reachable. It also matches the customs ratio, imports of goods over
+    purchases of raw materials;
   * `target[r] = Λ(logit IS_r^customs + b)`, b = `logit_shift` (`import_logit_shift`): one
     common shift of the log-odds of the RAW customs shares, set so that the buyers' imports
-    add up to the sectors' imports at the current weights, Σ_r X_r target_r = Σ_s X_s f̂_s.
+    add up to the sectors' imports at the current weights, Σ_r X_r^𝓘 target_r = Σ_s X_s f̂_s
+    (always solvable: the right-hand side is below Σ_r X_r^𝓘 since every f̂_s < 1).
     The customs data enter through their odds ratios only, odds(target_r)/odds(target_r') =
     odds(IS_r)/odds(IS_r'); for small shares the rule is ≈ the multiplicative c · IS_r
     (c = e^b), near one it rescales the domestic share 1 − IS_r, and every target stays in
-    (0, 1). In the model odds(f_r) is proportional to ψ_r (exactly with one importing sector),
-    so b acts as a common factor e^b on the buyers' access;
-  * `purchases` = X_r, the weights of the adding-up;
+    (0, 1). In the model odds(f_sr) is proportional to ψ_r, so b acts as a common factor e^b
+    on the buyers' access;
+  * `total_share[r] = f_r`, the import share in the buyer's total purchases (reported);
+  * `purchases` = X_r^𝓘, the weights of the adding-up;
   * `adding_up_gap` = |Σ_r X_r target_r − Σ_s X_s f̂_s| relative to the latter (0 up to the
     root's tolerance);
-  * `feasible` = the shift was found (always, for shares in (0, 1) and an aggregate import
-    share in (0, 1)).
+  * `floor[r]`: the share of its importable purchases that buyer r must import whatever ψ
+    and Φ^F, because the other buyers cannot absorb a sector's imports even by importing all
+    their purchases of it; a target below it cannot be met (the profile then fails);
+  * `feasible` = the shift was found.
 """
 function buyer_import_targets(omega_sr::AbstractMatrix, PhiF_sr::AbstractMatrix, Phi::AbstractMatrix,
                               import_share_s::AbstractVector, customs_share::AbstractVector)
-    purchases_r = vec(sum(omega_sr; dims = 1))
+    total_purchases_r = vec(sum(omega_sr; dims = 1))
     purchases_s = vec(sum(omega_sr; dims = 2))
+    # 1) Each buyer's purchases from the importing sectors, and its imports.
+    importable_r = importable_purchases(omega_sr, import_share_s)
     imports_r = zeros(R_downstream)
     @inbounds for dr in 1:R_downstream, s in 1:S
         (PhiF_sr[s, dr] > 0 && Phi[s, dr] >= 1e-300) || continue
         imports_r[dr] += omega_sr[s, dr] * PhiF_sr[s, dr] / Phi[s, dr]
     end
-    model = [purchases_r[dr] > 0 ? imports_r[dr] / purchases_r[dr] : 0.0 for dr in 1:R_downstream]
+    model = [importable_r[dr] > 0 ? imports_r[dr] / importable_r[dr] : 0.0 for dr in 1:R_downstream]
+    total_share = [total_purchases_r[dr] > 0 ? imports_r[dr] / total_purchases_r[dr] : 0.0 for dr in 1:R_downstream]
+    # 2) The logit shift that makes the buyers' imports add up to the sectors' imports.
     sector_imports = sum(purchases_s .* import_share_s)
     log_odds = log.(customs_share ./ (1 .- customs_share))
-    root = import_logit_shift(log_odds, purchases_r, sector_imports)
+    root = import_logit_shift(log_odds, importable_r, sector_imports)
     target = logistic.(log_odds .+ root.shift)
-    adding_up_gap = abs(sum(purchases_r .* target) - sector_imports) / max(sector_imports, eps())
-    # Bounds on a buyer's import share that hold whatever ψ and Φ^F: at most its purchases
-    # from importing sectors (ceiling); at least what of each sector's imports the other
-    # buyers cannot absorb even if they imported all their purchases of it (floor).
-    importing = [import_share_s[s] > 0 for s in 1:S]
-    ceiling = [purchases_r[dr] > 0 ? sum(omega_sr[s, dr] for s in 1:S if importing[s]; init = 0.0) / purchases_r[dr] : 0.0
-               for dr in 1:R_downstream]
-    floor_share = [purchases_r[dr] > 0 ?
-                   sum(max(0.0, purchases_s[s] * import_share_s[s] - (purchases_s[s] - omega_sr[s, dr])) for s in 1:S) / purchases_r[dr] : 0.0
+    adding_up_gap = abs(sum(importable_r .* target) - sector_imports) / max(sector_imports, eps())
+    # 3) The floor: what of each sector's imports the other buyers cannot absorb even if
+    #    they imported all their purchases of it, as a share of the buyer's importable purchases.
+    floor_share = [importable_r[dr] > 0 ?
+                   sum(max(0.0, purchases_s[s] * import_share_s[s] - (purchases_s[s] - omega_sr[s, dr])) for s in 1:S) / importable_r[dr] : 0.0
                    for dr in 1:R_downstream]
-    return (model = model, target = target, logit_shift = root.shift, purchases = purchases_r, adding_up_gap = adding_up_gap,
-            ceiling = ceiling, floor = floor_share,
+    return (model = model, target = target, total_share = total_share, logit_shift = root.shift,
+            purchases = importable_r, adding_up_gap = adding_up_gap, floor = floor_share,
             feasible = root.converged && all(isfinite, target))
+end
+
+"""
+    importable_purchases(omega_sr, import_share_s) -> X_r^𝓘 (R_d)
+
+Each buyer's purchases from the importing sectors, Σ_{s : f̂_s > 0} ω_sr: the denominator of
+its import share and the weight of the adding-up (`buyer_import_targets`).
+"""
+function importable_purchases(omega_sr::AbstractMatrix, import_share_s::AbstractVector)
+    return [sum(omega_sr[s, dr] for s in 1:S if import_share_s[s] > 0; init = zero(eltype(omega_sr)))
+            for dr in 1:R_downstream]
 end
 
 """
@@ -480,9 +504,10 @@ end
 
 The foreign scales Φ^F_s and the buyers' access ψ_r that give, at the spending `omega_sr`
 (S × R_d) and the domestic indices `Phi_dom` (S × R_d) held fixed, EXACTLY the sectors' import
-shares `import_share_s` and the buyers' targets `target_r`:
+shares `import_share_s` and the buyers' targets `target_r` (shares of their importable
+purchases X_r^𝓘, `importable_purchases`):
 
-  Σ_r ω_sr f_sr = X_s f̂_s  (each importing s),   Σ_s ω_sr f_sr = X_r IS_r^target  (each r),
+  Σ_r ω_sr f_sr = X_s f̂_s  (each importing s),   Σ_s ω_sr f_sr = X_r^𝓘 g_r^target  (each r),
 
 with f_sr = Λ(log ψ_r + log Φ^F_s − log Φ^dom_sr), Λ the logistic. This is a matrix-scaling
 (iterative proportional fitting) problem on the odds: each sweep solves every sector's
@@ -501,7 +526,7 @@ function solve_foreign_block(omega_sr::AbstractMatrix, Phi_dom::AbstractMatrix, 
     log_Phi_dom = log.(max.(Phi_dom, 1e-300))
     solved_sectors = [s for s in 1:S if import_share_s[s] > 0 && PhiF_init[s] > 0]
     sector_imports = [sum(view(omega_sr, s, :)) * import_share_s[s] for s in 1:S]
-    buyer_imports  = [sum(view(omega_sr, :, dr)) * target_r[dr] for dr in 1:R_downstream]
+    buyer_imports  = importable_purchases(omega_sr, import_share_s) .* target_r
     importing_sectors = [s for s in 1:S if PhiF_init[s] > 0]
     log_odds_sector = zeros(R_downstream); log_odds_buyer = zeros(length(importing_sectors))
     iterations = 0
@@ -794,7 +819,8 @@ end
 
 """
     buyer_import_fit(theta_vec; customs_share = CUSTOMS_SHARE)
-        -> (model, target, logit_shift, purchases, psi, amplification)  (each R_d but `logit_shift`)
+        -> (model, target, total_share, logit_shift, purchases, floor, psi, amplification)
+           (each R_d but `logit_shift`)
 
 The buyers' import shares in closed form at a level vector (expected prices, the spending
 weights of the full price solve), their targets Λ(logit IS_r^customs + b) and the shift b
@@ -815,8 +841,8 @@ function buyer_import_fit(theta_vec::AbstractVector; customs_share::AbstractVect
     fit = buyer_import_targets(omega_sr, PhiF_sr, prices.Phi, import_share_s, customs_share)
     f_sr = [PhiF_sr[s, dr] > 0 ? PhiF_sr[s, dr] / prices.Phi[s, dr] : 0.0 for s in 1:S, dr in 1:R_downstream]
     amplification = 1 .+ intermediate_share_r .* vec(sum(s_rs .* (1 .- f_sr); dims = 1))
-    return (model = fit.model, target = fit.target, logit_shift = fit.logit_shift, purchases = fit.purchases, psi = collect(psi),
-            amplification = amplification)
+    return (model = fit.model, target = fit.target, total_share = fit.total_share, logit_shift = fit.logit_shift,
+            purchases = fit.purchases, floor = fit.floor, psi = collect(psi), amplification = amplification)
 end
 
 """

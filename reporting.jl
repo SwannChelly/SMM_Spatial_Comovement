@@ -255,6 +255,7 @@ function report_granular(theta::Vector{Float64}, folder::String; industry::Strin
                  "reg_fail" => [Float64(granular.reg_fail)], "EK" => Float64.(granular.EK),
                  "customs_share" => collect(CUSTOMS_SHARE),
                  "import_share_target" => import_fit.target, "import_share_fit" => import_fit.model,
+                 "import_share_total_fit" => import_fit.total_share, "import_share_floor" => import_fit.floor,
                  "import_share_fit_simulated" => Float64.(granular.buyer_import_share),
                  "import_logit_shift" => [import_fit.logit_shift], "psi" => import_fit.psi,
                  "amplification_r" => import_fit.amplification))
@@ -269,24 +270,26 @@ end
     buyer_import_table(params; simulated_share = nothing) -> String
 
 One row per buyer ZE: the raw customs import share IS_customs, the target
-Λ(logit IS_customs + b) at the model's weights, the model's import share in closed form (and
-on the estimation draws when `simulated_share` is given), ψ_r and the closed-form
-amplification coefficient D_r (sales of domestic suppliers per euro of final demand, the
-buyer's own euro included); the logit shift b and its multiplicative equivalent on the odds,
-e^b, on the last line.
+Λ(logit IS_customs + b) at the model's weights, the model's import share g_r within the
+purchases from importing sectors in closed form (and on the estimation draws when
+`simulated_share` is given), the floor below which no ψ can bring it, the import share f_r
+in total purchases, ψ_r and the closed-form amplification coefficient D_r (sales of domestic
+suppliers per euro of final demand, the buyer's own euro included); the logit shift b and
+its multiplicative equivalent on the odds, e^b, on the last line.
 """
 function buyer_import_table(params::AbstractVector; simulated_share = nothing)
     fit = buyer_import_fit(params)
     io = IOBuffer()
-    @printf(io, "  %-10s %10s %10s %10s %10s %10s %8s\n", "buyer ZE", "IS_customs",
-            "IS_target", "f_r model", "f_r sim", "ψ_r", "D_r")
+    @printf(io, "  %-10s %10s %10s %10s %10s %8s %10s %10s %8s\n", "buyer ZE", "IS_customs",
+            "g_target", "g_r model", "g_r sim", "floor", "f_r total", "ψ_r", "D_r")
     for dr in 1:R_downstream
-        @printf(io, "  %-10s %10.4f %10.4f %10.4f %10s %10.4g %8.4f%s\n", BUYER_NAMES[dr],
+        @printf(io, "  %-10s %10.4f %10.4f %10.4f %10s %8.4f %10.4f %10.4g %8.4f%s\n", BUYER_NAMES[dr],
                 CUSTOMS_SHARE[dr], fit.target[dr], fit.model[dr],
                 simulated_share === nothing ? "-" : @sprintf("%.4f", simulated_share[dr]),
-                fit.psi[dr], fit.amplification[dr], dr == PSI_REF_BUYER ? "  (ψ reference)" : "")
+                fit.floor[dr], fit.total_share[dr], fit.psi[dr], fit.amplification[dr],
+                dr == PSI_REF_BUYER ? "  (ψ reference)" : "")
     end
-    @printf(io, "  logit shift b = %.4f (IS_target = Λ(logit IS_customs + b); odds × %.4f); max |f_r − IS_target| = %.2e\n",
+    @printf(io, "  g_r = imports / purchases from importing sectors; logit shift b = %.4f (g_target = Λ(logit IS_customs + b); odds × %.4f); max |g_r − g_target| = %.2e\n",
             fit.logit_shift, exp(fit.logit_shift), maximum(abs.(fit.model .- fit.target)))
     return String(take!(io))
 end

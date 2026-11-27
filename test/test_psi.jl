@@ -20,9 +20,13 @@
 #   (5) TEST DEVICE: with PSI_CALIBRATED[] = false the profile holds ψ ≡ 1.
 #   (6) LARGE SHARES: with customs shares for which the multiplicative rule c · IS_r would
 #       exceed one (a small buyer at 0.95), the logit targets stay in (0, 1) and the profile
-#       converges; targets that the buyers' and sectors' import shares cannot jointly satisfy
-#       (the largest buyer at 0.97 of its purchases) are rejected, not accepted at ψ = ∞.
+#       converges; margins the buyers' and sectors' import shares cannot jointly satisfy are
+#       rejected by the foreign block, not accepted at ψ = ∞.
 #   (7) FAKE WORLDS: the logit shift b of the world's targets is ≈ 0.
+#   (8) A SECTOR WITHOUT IMPORTS (run on `make_synthetic_baseline.py ... 1`, the auto-like
+#       tree): the buyer's import share over its TOTAL purchases is hump-shaped in ψ_r, while
+#       the targeted share g_r (over purchases from importing sectors) rises to one; the
+#       profile converges at several α. Skipped when every sector imports.
 
 using Distributed
 @everywhere using Random, NPZ, DataFrames, CSV, Distributions, Statistics, QuasiMonteCarlo,
@@ -144,11 +148,22 @@ multiplicative_max = total_imports / sum(fit_large.purchases .* customs_large) *
 check("the multiplicative rule would exceed one here", multiplicative_max > 1)
 check("the logit targets stay in (0, 1) and the profile converges",
       profile_large.converged && all(0 .< profile_large.import_share_target .< 1))
-customs_joint = 0.3 .* CUSTOMS_SHARE; customs_joint[argmax(emp_pi_r)] = 0.97
-profile_joint = profile_ge(alpha0; kappa = kappa0, customs_share = customs_joint)
-@printf("  largest buyer at 0.97: converged %s, max ψ %.2e, max|f_r − target| %.1e\n", profile_joint.converged,
-        maximum(profile_joint.psi), maximum(abs.(profile_joint.buyer_import_share .- profile_joint.import_share_target)))
-check("jointly infeasible targets are rejected", !profile_joint.converged)
+# Infeasible margins are rejected: with the buyers' targets raised by 20% the buyers' and the
+# sectors' imports no longer add up, no (ψ, Φ^F) exists and the foreign block must say so.
+# (Through the logit rule itself joint infeasibility is hard to reach: the adding-up gives the
+# last unsaturated buyer whatever the others cannot absorb, i.e. at least its floor.)
+chi_L_b, chi_s_b, A_b, alpha_b, T_vec_b, PhiF_b, psi_b = unpack_params(theta_vec)
+PhiF_sr_b = foreign_scale_by_buyer(PhiF_b, psi_b)
+prices_b = compute_prices_analytical(chi_L_b, chi_s_b, A_b, reshape(collect(T_vec_b), S, R), build_tau(alpha_b); PhiF = PhiF_sr_b)
+intermediate_b = (1 - chi_L_b) .* (prices_b.P_r ./ prices_b.c_r) .^ (1 - lambda)
+omega_b = [chi_s_b[s] * (prices_b.P_sr[s, dr] / prices_b.P_r[dr])^(1 - nu) * intermediate_b[dr] * prices_b.mu * prices_b.Y_r[dr]
+           for s in 1:S, dr in 1:R_downstream]
+import_share_b = [FOREIGN_ACTIVE[s] ? FOREIGN_SHARE[s] : 0.0 for s in 1:S]
+block_exact = solve_foreign_block(omega_b, prices_b.Phi .- PhiF_sr_b, PhiF_b, psi_b, import_share_b, fit.target)
+block_bad   = solve_foreign_block(omega_b, prices_b.Phi .- PhiF_sr_b, PhiF_b, psi_b, import_share_b, min.(1.2 .* fit.target, 0.999))
+@printf("  foreign block at the profile: converged %s in %d sweeps; with targets × 1.2: converged %s\n",
+        block_exact.converged, block_exact.iterations, block_bad.converged)
+check("the foreign block solves consistent margins and rejects inconsistent ones", block_exact.converged && !block_bad.converged)
 
 # ── (7) Fake worlds ─────────────────────────────────────────────────────────
 println("\n(7) Fake worlds: the logit shift b of the world's buyer targets")
@@ -165,5 +180,32 @@ for b in 1:6
             minimum(world_profile.psi ./ ref.psi), maximum(world_profile.psi ./ ref.psi))
 end
 check("|b| < 0.1 in every usable world", !isempty(scales) && all(abs.(scales) .< 0.1))
+
+# ── (8) A sector without imports ────────────────────────────────────────────
+if all(FOREIGN_ACTIVE)
+    println("\n(8) every sector imports: skipped (run on the auto-like tree)")
+else
+    println("\n(8) A sector without imports: total share hump-shaped, targeted share monotone")
+    buyer = argmax(CUSTOMS_SHARE)
+    log_psi_grid = [-2.0, 0.0, 2.0, 4.0, 8.0, 12.0]
+    shares = [begin
+        psi_grid = copy(psi); psi_grid[buyer] *= exp(lp)
+        fit_grid = buyer_import_fit(with_psi(theta_vec, psi_grid))
+        (fit_grid.total_share[buyer], fit_grid.model[buyer])
+    end for lp in log_psi_grid]
+    for (lp, (total, within)) in zip(log_psi_grid, shares)
+        @printf("  log ψ_%d shifted by %5.1f: f_r (total purchases) %.3f   g_r (importable purchases) %.3f\n", buyer, lp, total, within)
+    end
+    check("f_r falls back as ψ_r grows (hump)", last(shares)[1] < maximum(first.(shares)) - 0.05)
+    check("g_r rises towards one", issorted(last.(shares)) && last(shares)[2] > 0.95)
+    for alpha_multiple in (0.5, 1.0, 2.0, 4.0)
+        profile_alpha = profile_ge(alpha0 .* alpha_multiple; kappa = kappa0)
+        @printf("  α × %.1f: converged %s in %d passes, max|g_r − target| %.1e, ψ in [%.3g, %.3g]\n", alpha_multiple,
+                profile_alpha.converged, profile_alpha.iterations,
+                maximum(abs.(profile_alpha.buyer_import_share .- profile_alpha.import_share_target)),
+                minimum(profile_alpha.psi), maximum(profile_alpha.psi))
+        check("profile converges at α × $alpha_multiple", profile_alpha.converged)
+    end
+end
 
 println("\n", pass ? "GATE: PASS" : "GATE: FAIL")

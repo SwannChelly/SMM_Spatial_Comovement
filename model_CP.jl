@@ -937,7 +937,7 @@ non-moment diagnostics. `N_fixed` pins the variety count (finite differences: N�
 step function of θ). `perms` replaces the block-4 network permutations (default: the
 estimation's `cell_perms`), so a draw set other than the estimation's carries its own.
 The field `gamma_ls` holds the AREA-level shares γ (T_COL_DIM × S), foreign row included;
-`buyer_import_share` (R_d) the realised import share of each buyer's intermediate purchases,
+`buyer_import_share` (R_d) the realised import share of each buyer's purchases from the importing sectors,
 matched exactly by the profile of ψ in closed form and reported, not targeted.
 """
 function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=nothing,
@@ -1008,16 +1008,18 @@ function compute_moments(network, params; N_fixed::Union{Nothing, Vector{Int}}=n
 end
 
 """
-    buyer_import_shares(network) -> f_r (R_d)
+    buyer_import_shares(network) -> g_r (R_d)
 
-Imports over total (domestic + imported) intermediate purchases of each buyer, from the
-realised flows of `solve_network` (both per unit of the buyer's cost); 0 for a buyer with
-no intermediate purchases.
+Imports over the buyer's purchases (domestic + imported) from the IMPORTING sectors
+(`FOREIGN_ACTIVE`), from the realised flows of `solve_network` (both per unit of the buyer's
+cost): the same concept as the profile's target (`buyer_import_targets`), so a fake world's
+shares play the customs shares; 0 for a buyer with no such purchases.
 """
 function buyer_import_shares(network)
     imports_r  = vec(sum(network.X_F_by_r; dims = 1))
-    purchase_r = imports_r .+ vec(sum(network.X_dom_by_r; dims = 1))
-    return [purchase_r[dr] > 0 ? imports_r[dr] / purchase_r[dr] : 0.0 for dr in 1:R_downstream]
+    importable_r = imports_r .+ [sum(network.X_dom_by_r[s, dr] for s in 1:S if FOREIGN_ACTIVE[s]; init = 0.0)
+                                 for dr in 1:R_downstream]
+    return [importable_r[dr] > 0 ? imports_r[dr] / importable_r[dr] : 0.0 for dr in 1:R_downstream]
 end
 
 """
